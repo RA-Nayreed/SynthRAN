@@ -1,0 +1,45 @@
+# Local dependency checkouts
+.deps/
+
+# Conda/Python environments and build output
+.conda/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+.coverage
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig*
+inventory/
+
+# Generated experiments and sensitive captures
+runs/
+artifacts/
+LOGS/
+*.log
+*.pcap
+*.pcapng
+
+# Firmware and simulator output
+*.cooja
+*.sky
+*.hex
+*.bin
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

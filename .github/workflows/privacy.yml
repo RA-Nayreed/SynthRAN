@@ -1,0 +1,56 @@
+name: Privacy and foundation checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: privacy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  privacy:
+    name: Sensitive-data and unit checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      # v6, pinned so a mutable action tag cannot change this workflow at runtime.
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # v4, pinned. Miniforge and the environment file define the CI toolchain.
+      - name: Create the SynthRAN Conda environment
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5
+        with:
+          activate-environment: synthran
+          environment-file: environment.yml
+          miniforge-version: "26.3.2-2"
+          auto-activate: false
+          conda-solver: libmamba
+          channel-priority: strict
+          show-channel-urls: true
+
+      - name: Run offline unit tests
+        run: conda run --no-capture-output -n synthran python -m unittest discover -s tests -v
+
+      - name: Scan tracked source for private context
+        run: conda run --no-capture-output -n synthran python -m synthran privacy scan --worktree
+
+      # v3, pinned. This is the upstream Gitleaks action with full Git history available.
+      - name: Scan Git history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

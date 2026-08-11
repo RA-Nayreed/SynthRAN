@@ -1,0 +1,240 @@
+# SynthRAN Repository Instructions
+
+## Purpose
+
+SynthRAN is a reproducible experiment orchestrator joining emulated IoT workloads, programmable 5G/Open RAN infrastructure, and intelligence-ready datasets.
+
+The initial golden path is:
+
+```text
+10 Contiki-NG/Cooja MQTT sensors
+-> RPL/6LoWPAN border router
+-> tunslip6/tun0
+-> edge Mosquitto broker
+-> Mosquitto bridge bound to tun_srsue1
+-> srsRAN gNB
+-> Open5GS UPF
+-> central Mosquitto broker
+-> JSONL audit data and derived Parquet data
+```
+
+The repository owns orchestration, contracts, integration adapters, validation, artifact collection, and reproducibility reporting. It does not reimplement the 5G core, RAN, IoT operating system, simulator, or MQTT broker.
+
+## Current Phase and Definition of Done
+
+The `v0.0.1` repository foundation, safe dependency bootstrap, and Conda-first development contract are implemented locally. The operator successfully created the real `synthran` environment and all 23 offline tests passed inside it. Publication and the first hosted GitHub Actions/Gitleaks run remain operator-controlled. The Phase 1 `5g_ansible` deployment adapter has not started.
+
+Phase 0 is complete only when the repository has:
+
+- a clear README describing the problem, golden path, supported configuration, and deferred work;
+- an Apache-2.0 license for original SynthRAN code;
+- an immutable dependency lock;
+- third-party license and provenance documentation;
+- a concise architecture description showing ownership boundaries;
+- repository ignore rules for generated, local, credential-bearing, and experimental artifacts;
+- this `AGENTS.md` working contract;
+- a local, untracked `decision.md` decision journal;
+- lightweight validation proving the foundational documents are internally consistent and do not expose secrets.
+
+Do not describe Phase 0 as complete merely because directories or placeholder files exist. Do not begin deployment or experiment execution as part of Phase 0 documentation work.
+
+## Supported and Deferred Technology
+
+The first supported configuration is deliberately narrow:
+
+- core: Open5GS;
+- RAN: srsRAN;
+- radio: RFSIM;
+- UE: one srsUE representing an IoT edge gateway;
+- IoT workload: ten deterministic Contiki-NG/Cooja sensors;
+- messaging: Mosquitto at the edge and core, with MQTT topic bridging;
+- data products: append-only JSONL as the audit record and reproducible Parquet derived from JSONL.
+
+The following are deferred until the golden path is reproducible and path-proven:
+
+- multiple UEs and slices;
+- physical radios;
+- impairment campaigns;
+- formal O-RAN A1 or E2 control;
+- RIC integration;
+- generative models;
+- synthetic-telemetry generation;
+- automated RAN-policy synthesis.
+
+Do not introduce a deferred technology into the critical path without an explicit accepted decision recorded in `decision.md` and promoted here.
+
+## Dependency Reuse and Pinning
+
+SynthRAN composes existing projects through adapters and overlays.
+
+- Use `sopnode/5g_ansible` as an external, complete, pinned checkout. Do not copy or vendor it.
+- Use Contiki-NG as an external, complete, pinned checkout and keep the SynthRAN application out of tree. Do not copy or vendor Contiki-NG.
+- Treat Open5GS Kubernetes and srsRAN Helm repositories used by `5g_ansible` as transitive dependencies and resolve every mutable branch reference to an immutable commit.
+- Pin container images by digest, not only by tag.
+- Use the named Conda environment `synthran` for development, hooks, and CI. `environment.yml` is the operational environment definition; `pyproject.toml` is package/build metadata only.
+- Use only `conda-forge` followed by `nodefaults`. Pin every direct Conda package to one exact version in both `environment.yml` and the project lock.
+- Do not add a global Python, `venv`, or implicit shell-activation fallback to documented commands, repository hooks, or CI.
+- Treat the current Conda dependency record as direct-version locking, not a complete platform artifact lock. Generate and validate platform-specific `conda-lock` files before claiming artifact-level environment reproducibility.
+- Keep downloaded dependencies in ignored local storage such as `.deps/`.
+- Never rely on a mutable branch at experiment runtime.
+- Prefer configuration, overlays, patches, and stable upstream interfaces. Fork only when a maintained upstream modification is unavoidable.
+- Vendor source only after confirming its license permits redistribution and recording why pinned external reuse is no longer practical.
+- Preserve copyright, license, provenance, and modification notices for copied material.
+- Do not publish derivative `5g_ansible` source until its licensing has been clarified; its reviewed pinned tree had no top-level license.
+
+Update dependencies one at a time. A dependency update is accepted only after its version, license, compatibility impact, and golden-path validation are recorded.
+
+`dependencies.lock.yml` intentionally uses the JSON-compatible subset of YAML so the bootstrap command can validate it without a YAML parser. `synthran deps sync` creates detached checkouts under `.deps/`; it never merges an upstream branch into SynthRAN. Direct dependencies are synchronized by default and `--all` is required to include transitive repositories for local inspection.
+
+## Repository Boundaries
+
+Use these top-level ownership boundaries when implementation begins:
+
+- `contracts/`: versioned scenario, event, metric, and manifest schemas;
+- `synthran/`: CLI, orchestration, adapters, collection, validation, and reporting;
+- `deploy/`: SynthRAN-owned Ansible roles, Kubernetes overlays, container definitions, and run-scoped configuration;
+- `docs/`: architecture and operator documentation;
+- `tests/`: offline tests and test fixtures that contain no real credentials or captured private traffic.
+
+Do not commit dependency checkouts, generated inventories, run artifacts, firmware build products, packet captures, kubeconfigs, or copied upstream repositories.
+
+Generated run data belongs under a run-scoped ignored location. Every created runtime resource must carry the run ID wherever the target system supports labels or equivalent metadata.
+
+## User and Codex Responsibilities
+
+The user is the experiment operator. The user performs:
+
+- repository creation and external account administration;
+- testbed reservations and allocations;
+- Conda installation and the first environment solve on the operator machine;
+- compilation when it requires the real toolchain or testbed;
+- network deployment;
+- experiment execution;
+- destructive or infrastructure-wide teardown.
+
+Codex may, when requested:
+
+- author and edit repository code, schemas, configuration, tests, and documentation;
+- perform read-only repository and dependency inspection;
+- run safe offline validation that does not reserve nodes, deploy infrastructure, or conduct the experiment;
+- explain each command the user should run and interpret the output the user provides.
+
+Codex must not run the SynthRAN experiment on the user's behalf. It must not reserve SLICES nodes, ignore reservation conflicts, silently deploy the 5G network, or make external infrastructure changes unless the user explicitly changes this rule.
+
+## Lifecycle and Safety Rules
+
+- Network deployment is always a separate, explicit operation.
+- An experiment run never reserves nodes and never silently deploys the network.
+- Preflight must fail when the required reservation, allocation, SSH access, Kubernetes state, dependency, or image is unavailable.
+- Reservation failure is terminal for preflight and can never be ignored automatically.
+- Every modifying command must support a dry-run mode where technically meaningful.
+- Cleanup targets only resources proven to belong to the requested run ID.
+- Experiment cleanup does not tear down the base 5G deployment unless the operator requests network teardown separately.
+- Cleanup must be idempotent and verify that the original base deployment shape remains operational.
+- A failed run must still produce a partial manifest, available logs, and a failure report.
+- Never use broad deletion targets, unresolved globs, or guessed resource names for cleanup.
+
+## Data, Credentials, and Artifacts
+
+Never commit:
+
+- generated inventories;
+- IMSIs, authentication keys, OPC values, or subscriber credentials;
+- SLICES credentials or reservation tokens;
+- kubeconfigs;
+- private keys;
+- `.env` files containing secrets;
+- unsanitized packet captures;
+- raw testbed logs containing credentials or private addresses that have not been approved for publication;
+- dependency worktrees or generated run directories.
+
+Manifests and reports must redact secrets while retaining reproducibility facts such as dependency hashes, image digests, scenario hashes, node roles, non-secret route evidence, timestamps, and validation status.
+
+JSONL is the append-only audit record. Parquet is derived output and must be reproducible from JSONL. Malformed events go to a rejected-events artifact and never enter the valid Parquet dataset.
+
+## Privacy Guardrails
+
+Privacy protection is layered because GitHub Actions runs after content reaches GitHub:
+
+1. tracked ignore rules keep known local, generated, credential-bearing, and capture paths out of normal Git status;
+2. the tracked `.githooks/pre-push` hook scans every outgoing commit before transport after the operator activates it;
+3. GitHub push protection remains enabled as an independent server-side control;
+4. the privacy workflow scans source context and runs Gitleaks with full history;
+5. generated public text is produced as a separate sanitized derivative using deterministic placeholders.
+
+Source scanning fails instead of rewriting files. It reports only the rule and location and must not print the detected value into a terminal or CI log. Fix a true finding in every affected commit and rotate an exposed credential; do not add a blanket allowlist or bypass merely to make CI pass.
+
+The text redactor may sanitize local user homes, usernames, network-share prefixes, and private IP addresses. It must never rewrite its input in place. Do not attempt to text-redact packet captures, kubeconfigs, private keys, databases, or other binary/structured credential stores; keep them local and create purpose-built sanitized derivatives.
+
+The pre-push hook must execute the privacy scanner with `conda run --no-capture-output -n synthran`. It may locate Conda through `SYNTHRAN_CONDA_EXE`, `CONDA_EXE`, or `PATH`, and may accept `SYNTHRAN_CONDA_ENV` as an explicit environment override. On Windows it may derive standard Anaconda, Miniconda, and Miniforge locations from `LOCALAPPDATA`, `USERPROFILE`, or the shared program-data root so VS Code GUI Git operations do not depend on terminal activation. Never store a username or machine-specific absolute installation path in the hook. It must never fall back to an arbitrary host Python and must fail closed when Conda or the selected environment is unavailable.
+
+All third-party GitHub Actions must be pinned to full commit SHAs and run with the minimum token permissions. Privacy workflows use read-only repository contents and do not upload finding reports that could reproduce sensitive values.
+
+## Decision Journal Procedure
+
+`decision.md` is a local, intentionally untracked engineering journal. It is excluded through `.git/info/exclude`, not the tracked `.gitignore`.
+
+At the start of every task:
+
+1. Read this file.
+2. Read the relevant entries in `decision.md`.
+3. Inspect Git status and the current project phase.
+4. Record any material new decision before implementing it.
+
+Record every nontrivial choice affecting architecture, dependencies, interfaces, repository structure, testing, security, workflow, scope, deployment, or data handling. Each entry must state context, options, the chosen decision, concise rationale, evidence or assumptions, consequences, affected components, and follow-up.
+
+Do not place credentials, subscriber data, kubeconfigs, packet contents, or other secrets in the journal. The journal documents explicit engineering rationale; it is not a transcript of hidden internal reasoning.
+
+At the end of every task:
+
+1. Complete or update the affected decision entries.
+2. Promote durable conclusions and operational constraints into this file.
+3. Confirm `decision.md` remains untracked.
+4. Report which durable rules changed.
+
+Temporary observations remain in `decision.md`. Update `AGENTS.md` only when a durable rule, command, interface, phase, ownership boundary, safety constraint, or repository invariant changes.
+
+## Repository Commands
+
+Run commands from the repository root through the named Conda environment. No separate activation is required.
+
+- `conda env create --file environment.yml`: create the `synthran` environment for a new clone.
+- `conda env update --file environment.yml --prune`: reconcile an existing environment after a definition change.
+- `conda run --no-capture-output -n synthran python -m synthran deps sync --dry-run`: validate and preview direct dependency synchronization.
+- `conda run --no-capture-output -n synthran python -m synthran deps sync`: create or update clean detached direct-dependency checkouts under `.deps/`.
+- `conda run --no-capture-output -n synthran python -m synthran deps sync --all`: also synchronize locked transitive repositories for inspection.
+- `conda run --no-capture-output -n synthran python -m synthran privacy scan --worktree`: scan tracked and unignored source without printing detected values.
+- `conda run --no-capture-output -n synthran python -m synthran privacy scan --history`: apply SynthRAN privacy rules to all commits.
+- `conda run --no-capture-output -n synthran python -m synthran privacy redact INPUT OUTPUT --dry-run`: preview creation of a sanitized text derivative.
+- `conda run --no-capture-output -n synthran python -m synthran hooks install --dry-run`: preview activation of `.githooks` for the current clone.
+- `conda run --no-capture-output -n synthran python -m unittest discover -s tests -v`: run the offline unit test suite.
+
+Dependency synchronization, hook installation, and redaction are modifying commands and must retain functional `--dry-run` behavior.
+
+## Git Workflow
+
+- Do not create a branch for each phase, task, or document section.
+- Small, safe, coherent changes may be committed directly to `main` when the user chooses to publish them.
+- Use one feature branch only for genuinely substantial or risky work that benefits from isolated review.
+- Keep commits coherent and explain their intent.
+- Never commit or push automatically merely because files were edited.
+- Preserve unrelated user changes and never reset or discard them without explicit approval.
+- Before publishing, inspect the complete diff, verify the intended file set, and confirm no secret or generated artifact is included.
+
+## Validation Required Before Completion
+
+Use validation proportional to the change. Before declaring repository work complete:
+
+- inspect Git status and the full relevant diff;
+- run applicable schema, unit, lint, formatting, build, or offline integration checks;
+- confirm pinned dependencies use immutable identifiers;
+- confirm `environment.yml` matches the direct package versions, channels, and environment name in `dependencies.lock.yml`;
+- run validation inside `synthran` when Conda is available and report explicitly when the environment could not be solved or exercised;
+- confirm generated and secret-bearing paths are ignored;
+- confirm failure paths are tested where behavior is safety-critical;
+- confirm documentation matches implemented interfaces and commands;
+- confirm `decision.md` is ignored locally and not tracked;
+- report tests not run and the reason;
+- do not claim deployment or experiment success without operator-provided evidence from the real environment.
+
+For the final SLICES acceptance run, the user executes the commands and supplies results. Codex may guide the run and analyze evidence but does not operate it.

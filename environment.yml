@@ -1,0 +1,10 @@
+name: synthran
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12.11
+  - git=2.51.0
+  - setuptools=83.0.0
+  - paho-mqtt=2.1.0
+  - pyarrow=21.0.0

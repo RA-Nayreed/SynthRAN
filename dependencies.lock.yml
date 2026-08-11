@@ -1,0 +1,112 @@
+{
+  "schema": "synthran/dependencies/v1alpha1",
+  "resolved_at_utc": "2026-08-11T13:39:00Z",
+  "git": {
+    "fiveg_ansible": {
+      "url": "https://github.com/sopnode/5g_ansible.git",
+      "commit": "a0149fc0dde39e2872945a0f3c91e804ece52d4f",
+      "checkout": "5g_ansible",
+      "sync": true,
+      "role": "network deployment adapter target",
+      "license": "NOASSERTION"
+    },
+    "contiki_ng": {
+      "url": "https://github.com/contiki-ng/contiki-ng.git",
+      "commit": "2b87baf3ebdde3c8e37ca791d2bc84bfd76c49a4",
+      "source_ref": "release/v5.1",
+      "checkout": "contiki-ng",
+      "sync": true,
+      "role": "IoT firmware and Cooja simulation base",
+      "license": "BSD-3-Clause"
+    },
+    "open5gs_k8s": {
+      "url": "https://github.com/sopnode/open5gs-k8s.git",
+      "commit": "e53601e5209425867413d45d3d01ed9a1b696de7",
+      "source_ref": "develop",
+      "checkout": "open5gs-k8s",
+      "sync": false,
+      "role": "transitive 5g_ansible Open5GS deployment",
+      "license": "MIT",
+      "ansible_variable": "repo_branch"
+    },
+    "srsran_helm": {
+      "url": "https://github.com/turletti/srsran-helm.git",
+      "commit": "8dfb9890d127734cdcd6eee9df8c5d09b1a8076a",
+      "source_ref": "csi",
+      "checkout": "srsran-helm",
+      "sync": false,
+      "role": "transitive 5g_ansible srsRAN deployment",
+      "license": "NOASSERTION",
+      "ansible_variable": "version"
+    }
+  },
+  "containers": {
+    "mosquitto": {
+      "image": "eclipse-mosquitto",
+      "tag": "2.1.2-alpine",
+      "digest": "sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797",
+      "license": "EPL-2.0 OR EDL-1.0"
+    }
+  },
+  "conda": {
+    "environment_name": "synthran",
+    "channels": [
+      "conda-forge",
+      "nodefaults"
+    ],
+    "installer": {
+      "distribution": "Miniforge3",
+      "version": "26.3.2-2",
+      "linux_x86_64_sha256": "sha256:42260ffe3830fb953d5eee1bbb32229ff06aa7c3833c1ed7a9a0420a95685d94",
+      "license": "BSD-3-Clause"
+    },
+    "packages": {
+      "python": {
+        "version": "3.12.11",
+        "role": "runtime",
+        "license": "PSF-2.0"
+      },
+      "git": {
+        "version": "2.51.0",
+        "role": "dependency synchronization and repository hooks",
+        "license": "GPL-2.0-only"
+      },
+      "setuptools": {
+      "version": "83.0.0",
+      "role": "Python build backend",
+      "license": "MIT"
+      },
+      "paho-mqtt": {
+      "version": "2.1.0",
+      "role": "dataset collector MQTT client",
+      "license": "EPL-2.0 OR EDL-1.0"
+      },
+      "pyarrow": {
+      "version": "21.0.0",
+      "role": "deterministic JSONL-to-Parquet conversion",
+      "license": "Apache-2.0"
+      }
+    },
+    "lock_status": "direct-versions-only"
+  },
+  "github_actions": {
+    "actions_checkout": {
+      "repository": "actions/checkout",
+      "source_ref": "v6",
+      "commit": "d23441a48e516b6c34aea4fa41551a30e30af803",
+      "license": "MIT"
+    },
+    "setup_miniconda": {
+      "repository": "conda-incubator/setup-miniconda",
+      "source_ref": "v4",
+      "commit": "8ee1f361103df19b6f8c8655fd3967a8ecb162d5",
+      "license": "MIT"
+    },
+    "gitleaks_action": {
+      "repository": "gitleaks/gitleaks-action",
+      "source_ref": "v3",
+      "commit": "e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e",
+      "license": "MIT"
+    }
+  }
+}
