@@ -20,11 +20,11 @@ The initial golden path is:
 
 The repository owns orchestration, contracts, integration adapters, validation, artifact collection, and reproducibility reporting. It does not reimplement the 5G core, RAN, IoT operating system, simulator, or MQTT broker.
 
-## Current Phase and Definition of Done
+## Current Status and Acceptance
 
-The `v0.0.1` repository foundation, safe dependency bootstrap, and Conda-first development contract are implemented locally. The operator successfully created the real `synthran` environment and all 23 offline tests passed inside it. Publication and the first hosted GitHub Actions/Gitleaks run remain operator-controlled. The Phase 1 `5g_ansible` deployment adapter has not started.
+The `v0.0.1` repository foundation is published on `main`. The current golden-path network milestone has an Open5GS + srsRAN + RFSIM inventory contract, offline and read-only live doctors, redacted immutable planning, evidence-gated isolated-worktree deployment, and gNB/srsUE/tunnel/UPF verification. The code is offline-tested, but the milestone remains unaccepted until the operator executes the SLICES acceptance commands and supplies path-proven evidence.
 
-Phase 0 is complete only when the repository has:
+The repository foundation is accepted only when it has:
 
 - a clear README describing the problem, golden path, supported configuration, and deferred work;
 - an Apache-2.0 license for original SynthRAN code;
@@ -36,7 +36,19 @@ Phase 0 is complete only when the repository has:
 - a local, untracked `decision.md` decision journal;
 - lightweight validation proving the foundational documents are internally consistent and do not expose secrets.
 
-Do not describe Phase 0 as complete merely because directories or placeholder files exist. Do not begin deployment or experiment execution as part of Phase 0 documentation work.
+Do not describe the foundation as accepted merely because directories or placeholder files exist. Do not begin deployment or experiment execution as part of foundation documentation work.
+
+The golden-path network is accepted only when:
+
+- current reservation and allocation ownership are verified for every selected node;
+- SSH, Kubernetes, and required-image readiness checks fail closed;
+- deployment uses an isolated detached worktree at the locked `5g_ansible` commit;
+- the locked Open5GS Kubernetes and srsRAN Helm commits are passed to Ansible;
+- network deployment remains an explicit operator command and produces redacted logs;
+- the srsRAN gNB and srsUE are discovered and healthy;
+- `tun_srsue1`, the UE PDU address, slice, and selected UPF route are verified;
+- route/tunnel evidence is recorded without committing private captures or credentials;
+- the operator executes the SLICES acceptance commands and supplies the evidence.
 
 ## Supported and Deferred Technology
 
@@ -71,9 +83,10 @@ SynthRAN composes existing projects through adapters and overlays.
 - Use Contiki-NG as an external, complete, pinned checkout and keep the SynthRAN application out of tree. Do not copy or vendor Contiki-NG.
 - Treat Open5GS Kubernetes and srsRAN Helm repositories used by `5g_ansible` as transitive dependencies and resolve every mutable branch reference to an immutable commit.
 - Pin container images by digest, not only by tag.
-- Use the named Conda environment `synthran` for development, hooks, and CI. `environment.yml` is the operational environment definition; `pyproject.toml` is package/build metadata only.
-- Use only `conda-forge` followed by `nodefaults`. Pin every direct Conda package to one exact version in both `environment.yml` and the project lock.
-- Do not add a global Python, `venv`, or implicit shell-activation fallback to documented commands, repository hooks, or CI.
+- Linux is the only supported SynthRAN host platform for development, hooks, CI, and live operation.
+- Use the named Conda environment `synthran` everywhere. `environment.yml` is the single complete Linux definition and includes deployment tooling. `pyproject.toml` is package/build metadata only.
+- Use only `conda-forge` followed by `nodefaults`. Pin every direct Conda package to one exact version in `environment.yml` and the project lock.
+- Interactive instructions must explicitly activate `synthran` before invoking `python` or environment tools directly. Repository hooks and CI may use `conda run` because they do not inherit an interactive shell. Never fall back to a global Python or `venv`.
 - Treat the current Conda dependency record as direct-version locking, not a complete platform artifact lock. Generate and validate platform-specific `conda-lock` files before claiming artifact-level environment reproducibility.
 - Keep downloaded dependencies in ignored local storage such as `.deps/`.
 - Never rely on a mutable branch at experiment runtime.
@@ -86,6 +99,10 @@ Update dependencies one at a time. A dependency update is accepted only after it
 
 `dependencies.lock.yml` intentionally uses the JSON-compatible subset of YAML so the bootstrap command can validate it without a YAML parser. `synthran deps sync` creates detached checkouts under `.deps/`; it never merges an upstream branch into SynthRAN. Direct dependencies are synchronized by default and `--all` is required to include transitive repositories for local inspection.
 
+The golden-path adapter uses direct `ansible-galaxy` and `ansible-playbook` calls against an isolated locked worktree. Do not wrap interactive `5g_ansible/deploy.sh`; it contains reservation and prompt behavior outside SynthRAN's control boundary. The SynthRAN wrapper must call only the reviewed Open5GS and srsRAN roles, never the upstream boot/setup playbook, and must stay gated by fresh matching live-doctor evidence. It installs the exact locked `kubernetes.core` collection, passes locked transitive commits, pins selected images by digest, and applies the run ID before Kubernetes resource creation.
+
+The locked golden-path boundary patch must apply cleanly before Ansible runs. It disables upstream host-package installation, kubelet/CoreDNS restart, mutable Helm/yq downloads, WebUI deployment, and slice-two expansion. Remote dependency checkouts must be unique and run-scoped. Live preflight, not deployment, owns tool readiness; deployment must fail rather than install a missing tool. The runtime graph remains exactly one slice and one srsUE.
+
 ## Repository Boundaries
 
 Use these top-level ownership boundaries when implementation begins:
@@ -97,6 +114,8 @@ Use these top-level ownership boundaries when implementation begins:
 - `tests/`: offline tests and test fixtures that contain no real credentials or captured private traffic.
 
 Do not commit dependency checkouts, generated inventories, run artifacts, firmware build products, packet captures, kubeconfigs, or copied upstream repositories.
+
+Keep root `README.md` as the public project landing page: purpose, research problem, architecture, ownership, current status, concise quick start, outputs, repository map, and roadmap. Put detailed setup, security, dependency, and operator procedures in focused files under `docs/`.
 
 Generated run data belongs under a run-scoped ignored location. Every created runtime resource must carry the run ID wherever the target system supports labels or equivalent metadata.
 
@@ -166,7 +185,7 @@ Source scanning fails instead of rewriting files. It reports only the rule and l
 
 The text redactor may sanitize local user homes, usernames, network-share prefixes, and private IP addresses. It must never rewrite its input in place. Do not attempt to text-redact packet captures, kubeconfigs, private keys, databases, or other binary/structured credential stores; keep them local and create purpose-built sanitized derivatives.
 
-The pre-push hook must execute the privacy scanner with `conda run --no-capture-output -n synthran`. It may locate Conda through `SYNTHRAN_CONDA_EXE`, `CONDA_EXE`, or `PATH`, and may accept `SYNTHRAN_CONDA_ENV` as an explicit environment override. On Windows it may derive standard Anaconda, Miniconda, and Miniforge locations from `LOCALAPPDATA`, `USERPROFILE`, or the shared program-data root so VS Code GUI Git operations do not depend on terminal activation. Never store a username or machine-specific absolute installation path in the hook. It must never fall back to an arbitrary host Python and must fail closed when Conda or the selected environment is unavailable.
+The pre-push hook must execute the privacy scanner with `conda run --no-capture-output -n synthran`. On Linux it may locate Conda through `SYNTHRAN_CONDA_EXE`, `CONDA_EXE`, or `PATH`, and may accept `SYNTHRAN_CONDA_ENV` as an explicit environment override. Never store a username or machine-specific absolute installation path in the hook. It must never fall back to an arbitrary host Python and must fail closed when Conda or the selected environment is unavailable.
 
 All third-party GitHub Actions must be pinned to full commit SHAs and run with the minimum token permissions. Privacy workflows use read-only repository contents and do not upload finding reports that could reproduce sensitive values.
 
@@ -178,7 +197,7 @@ At the start of every task:
 
 1. Read this file.
 2. Read the relevant entries in `decision.md`.
-3. Inspect Git status and the current project phase.
+3. Inspect Git status and the current project milestone.
 4. Record any material new decision before implementing it.
 
 Record every nontrivial choice affecting architecture, dependencies, interfaces, repository structure, testing, security, workflow, scope, deployment, or data handling. Each entry must state context, options, the chosen decision, concise rationale, evidence or assumptions, consequences, affected components, and follow-up.
@@ -192,28 +211,37 @@ At the end of every task:
 3. Confirm `decision.md` remains untracked.
 4. Report which durable rules changed.
 
-Temporary observations remain in `decision.md`. Update `AGENTS.md` only when a durable rule, command, interface, phase, ownership boundary, safety constraint, or repository invariant changes.
+Temporary observations remain in `decision.md`. Update `AGENTS.md` only when a durable rule, command, interface, milestone, ownership boundary, safety constraint, or repository invariant changes.
 
 ## Repository Commands
 
-Run commands from the repository root through the named Conda environment. No separate activation is required.
+Run commands from the repository root. Create or reconcile the environment, activate it once, confirm its name, and then invoke its tools directly.
 
-- `conda env create --file environment.yml`: create the `synthran` environment for a new clone.
-- `conda env update --file environment.yml --prune`: reconcile an existing environment after a definition change.
-- `conda run --no-capture-output -n synthran python -m synthran deps sync --dry-run`: validate and preview direct dependency synchronization.
-- `conda run --no-capture-output -n synthran python -m synthran deps sync`: create or update clean detached direct-dependency checkouts under `.deps/`.
-- `conda run --no-capture-output -n synthran python -m synthran deps sync --all`: also synchronize locked transitive repositories for inspection.
-- `conda run --no-capture-output -n synthran python -m synthran privacy scan --worktree`: scan tracked and unignored source without printing detected values.
-- `conda run --no-capture-output -n synthran python -m synthran privacy scan --history`: apply SynthRAN privacy rules to all commits.
-- `conda run --no-capture-output -n synthran python -m synthran privacy redact INPUT OUTPUT --dry-run`: preview creation of a sanitized text derivative.
-- `conda run --no-capture-output -n synthran python -m synthran hooks install --dry-run`: preview activation of `.githooks` for the current clone.
-- `conda run --no-capture-output -n synthran python -m unittest discover -s tests -v`: run the offline unit test suite.
+- `conda env create --file environment.yml`: create the complete Linux `synthran` environment for a new clone.
+- `conda env update --file environment.yml --prune`: reconcile the Linux environment after a definition change.
+- `conda activate synthran`: activate the required environment in the current shell.
+- `python -c "import os; assert os.environ.get('CONDA_DEFAULT_ENV') == 'synthran'"`: fail if the wrong environment is active.
+- `python -m synthran deps sync --dry-run`: validate and preview direct dependency synchronization.
+- `python -m synthran deps sync`: create or update clean detached direct-dependency checkouts under `.deps/`.
+- `python -m synthran deps sync --all`: also synchronize locked transitive repositories for inspection.
+- `python -m synthran privacy scan --worktree`: scan tracked and unignored source without printing detected values.
+- `python -m synthran privacy scan --history`: apply SynthRAN privacy rules to all commits.
+- `python -m synthran privacy redact INPUT OUTPUT --dry-run`: preview creation of a sanitized text derivative.
+- `python -m synthran hooks install --dry-run`: preview activation of `.githooks` for the current clone.
+- `python -m synthran doctor --offline --inventory PATH`: validate the static golden-path inventory, dependency lock, and pinned checkout without contacting SLICES.
+- `python -m synthran doctor --inventory PATH --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --evidence-out PATH`: run read-only live readiness checks and write sanitized evidence.
+- `python -m synthran network deploy --dry-run --inventory PATH`: emit the redacted immutable deployment plan without reserving, booting, or deploying.
+- `python -m synthran network deploy --inventory PATH --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --preflight-evidence PATH --run-id RUN_ID`: explicitly deploy the network from fresh matching evidence; operator use only.
+- `python -m synthran network verify --inventory PATH --run-id RUN_ID`: read-only verification of run-owned gNB, srsUE, `tun_srsue1`, PDU address, and UPF route evidence.
+- `python -m unittest discover -s tests -v`: run the offline unit test suite.
 
 Dependency synchronization, hook installation, and redaction are modifying commands and must retain functional `--dry-run` behavior.
 
+Live `doctor` must remain read-only and require explicit owner, reservation, allocation, and evidence-output arguments. Live `network deploy` must reject missing, stale, failed, or mismatched evidence and reused/unsafe run IDs before any mutation. It supports only separate core/RAN nodes, `profile=default`, one srsUE, monitoring disabled, and an empty ready cluster. `network verify` is read-only and may mark a matching `deployed-unverified` manifest `path-proven` only after every proof passes.
+
 ## Git Workflow
 
-- Do not create a branch for each phase, task, or document section.
+- Do not create a branch for each milestone, task, or document section.
 - Small, safe, coherent changes may be committed directly to `main` when the user chooses to publish them.
 - Use one feature branch only for genuinely substantial or risky work that benefits from isolated review.
 - Keep commits coherent and explain their intent.
@@ -228,7 +256,7 @@ Use validation proportional to the change. Before declaring repository work comp
 - inspect Git status and the full relevant diff;
 - run applicable schema, unit, lint, formatting, build, or offline integration checks;
 - confirm pinned dependencies use immutable identifiers;
-- confirm `environment.yml` matches the direct package versions, channels, and environment name in `dependencies.lock.yml`;
+- confirm `environment.yml` matches the Linux platform, direct package versions, channels, and environment name in `dependencies.lock.yml`;
 - run validation inside `synthran` when Conda is available and report explicitly when the environment could not be solved or exercised;
 - confirm generated and secret-bearing paths are ignored;
 - confirm failure paths are tested where behavior is safety-critical;

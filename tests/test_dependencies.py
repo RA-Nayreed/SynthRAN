@@ -67,6 +67,20 @@ class DependencyLockTests(unittest.TestCase):
             with self.assertRaisesRegex(DependencyError, "one exact package version"):
                 load_lock(Path("virtual-lock.yml"))
 
+    def test_conda_platform_is_linux_only(self) -> None:
+        lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
+        lock_data["conda"]["platform"] = "osx-64"
+        with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
+            with self.assertRaisesRegex(DependencyError, "must be 'linux-64'"):
+                load_lock(Path("virtual-lock.yml"))
+
+    def test_ansible_core_version_range_is_rejected(self) -> None:
+        lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
+        lock_data["conda"]["packages"]["ansible-core"]["version"] = ">=2.20"
+        with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
+            with self.assertRaisesRegex(DependencyError, "one exact package version"):
+                load_lock(Path("virtual-lock.yml"))
+
     def test_conda_channels_cannot_fall_back_to_defaults(self) -> None:
         lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
         lock_data["conda"]["channels"] = ["conda-forge", "defaults"]
@@ -79,6 +93,27 @@ class DependencyLockTests(unittest.TestCase):
         lock_data["conda"]["environment_name"] = "something-else"
         with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
             with self.assertRaisesRegex(DependencyError, "must be 'synthran'"):
+                load_lock(Path("virtual-lock.yml"))
+
+    def test_ansible_collection_version_range_is_rejected(self) -> None:
+        lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
+        lock_data["ansible_collections"]["kubernetes_core"]["version"] = ">=6.5"
+        with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
+            with self.assertRaisesRegex(DependencyError, "one exact version"):
+                load_lock(Path("virtual-lock.yml"))
+
+    def test_golden_path_tool_requires_a_full_digest(self) -> None:
+        lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
+        lock_data["tools"]["yq_linux_amd64"]["sha256"] = "latest"
+        with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
+            with self.assertRaisesRegex(DependencyError, "full sha256 digest"):
+                load_lock(Path("virtual-lock.yml"))
+
+    def test_remote_python_package_version_range_is_rejected(self) -> None:
+        lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
+        lock_data["remote_python"]["packages"]["pymongo"] = ">=4"
+        with patch.object(Path, "read_text", return_value=json.dumps(lock_data)):
+            with self.assertRaisesRegex(DependencyError, "one exact version"):
                 load_lock(Path("virtual-lock.yml"))
 
 

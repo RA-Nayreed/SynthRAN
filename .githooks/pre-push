@@ -4,34 +4,15 @@ set -eu
 remote_name=${1:-origin}
 environment_name=${SYNTHRAN_CONDA_ENV:-synthran}
 
-find_windows_conda() {
-  installation_root=$1
-  [ -n "$installation_root" ] || return 1
-  for distribution in anaconda3 miniconda3 miniforge3; do
-    candidate="${installation_root}/${distribution}/Scripts/conda.exe"
-    if [ -f "$candidate" ]; then
-      conda_command=$candidate
-      return 0
-    fi
-  done
-  return 1
-}
-
 if [ -n "${SYNTHRAN_CONDA_EXE:-}" ]; then
   conda_command=$SYNTHRAN_CONDA_EXE
 elif [ -n "${CONDA_EXE:-}" ]; then
   conda_command=$CONDA_EXE
 elif command -v conda >/dev/null 2>&1; then
   conda_command=conda
-elif find_windows_conda "${LOCALAPPDATA:-}"; then
-  :
-elif find_windows_conda "${USERPROFILE:-}"; then
-  :
-elif find_windows_conda "${PROGRAMDATA:-${ProgramData:-}}"; then
-  :
 else
   echo "SynthRAN pre-push blocked: Conda was not found." >&2
-  echo "Install Miniforge/Conda, use a standard install location, or set SYNTHRAN_CONDA_EXE." >&2
+  echo "Install Miniforge/Conda on Linux or set SYNTHRAN_CONDA_EXE." >&2
   exit 2
 fi
 

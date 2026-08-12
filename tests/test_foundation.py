@@ -44,27 +44,38 @@ class FoundationTests(unittest.TestCase):
         self.assertIn("conda run --no-capture-output -n synthran", workflow)
         self.assertNotIn("actions/setup-python", workflow)
 
-    def test_environment_matches_direct_conda_lock(self) -> None:
+    def test_linux_environment_matches_direct_conda_lock(self) -> None:
         lock = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
-        environment = (REPOSITORY_ROOT / "environment.yml").read_text(
-            encoding="utf-8"
+        environment = (REPOSITORY_ROOT / "environment.yml").read_text(encoding="utf-8")
+        self.assertEqual("linux-64", lock["conda"]["platform"])
+        self.assertEqual(
+            ["environment.yml"],
+            sorted(path.name for path in REPOSITORY_ROOT.glob("environment*.yml")),
         )
         self.assertIn(f"name: {lock['conda']['environment_name']}", environment)
         for channel in lock["conda"]["channels"]:
             self.assertIn(f"  - {channel}", environment)
-        for package, entry in lock["conda"]["packages"].items():
-            self.assertIn(f"  - {package}={entry['version']}", environment)
+        expected = {
+            f"{package}={entry['version']}"
+            for package, entry in lock["conda"]["packages"].items()
+        }
+        dependencies = environment.split("dependencies:\n", 1)[1]
+        actual = {
+            line.removeprefix("  - ")
+            for line in dependencies.splitlines()
+            if line.startswith("  - ")
+        }
+        self.assertEqual(expected, actual)
 
-    def test_pre_push_hook_uses_conda_without_python_fallback(self) -> None:
+    def test_pre_push_hook_uses_linux_conda_without_python_fallback(self) -> None:
         hook = (REPOSITORY_ROOT / ".githooks" / "pre-push").read_text(
             encoding="utf-8"
         )
         self.assertIn('"$conda_command" run --no-capture-output', hook)
         self.assertIn("SYNTHRAN_CONDA_EXE", hook)
         self.assertIn("SYNTHRAN_CONDA_ENV", hook)
-        self.assertIn("LOCALAPPDATA", hook)
-        self.assertIn("USERPROFILE", hook)
-        self.assertIn("anaconda3 miniconda3 miniforge3", hook)
+        self.assertIn("command -v conda", hook)
+        self.assertNotIn("conda.exe", hook)
         self.assertNotIn("SYNTHRAN_PYTHON", hook)
         self.assertNotIn("command -v python", hook)
 
@@ -76,6 +87,63 @@ class FoundationTests(unittest.TestCase):
         project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
         requirements = project["build-system"]["requires"]
         self.assertEqual(["setuptools==83.0.0"], requirements)
+
+    def test_readme_is_a_project_landing_page_with_focused_docs(self) -> None:
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Why SynthRAN exists", readme)
+        self.assertIn("```mermaid", readme)
+        self.assertIn("Current status", readme)
+        self.assertIn("Planned experiment output", readme)
+        for name in (
+            "architecture.md",
+            "operator-guide.md",
+            "development.md",
+            "dependencies.md",
+            "security.md",
+        ):
+            self.assertTrue((REPOSITORY_ROOT / "docs" / name).is_file(), name)
+            self.assertIn(f"docs/{name}", readme)
+
+    def test_numbered_phase_terms_exist_only_in_the_decision_journal(self) -> None:
+        excluded_parts = {".git", ".deps", ".synthran", "__pycache__"}
+        pattern = re.compile(r"phase[\s_-]*[012]", flags=re.IGNORECASE)
+        for path in REPOSITORY_ROOT.rglob("*"):
+            if (
+                not path.is_file()
+                or path.name == "decision.md"
+                or excluded_parts.intersection(path.relative_to(REPOSITORY_ROOT).parts)
+            ):
+                continue
+            relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+            self.assertIsNone(pattern.search(relative), relative)
+            if path.suffix.lower() in {
+                ".ini",
+                ".json",
+                ".md",
+                ".py",
+                ".sh",
+                ".toml",
+                ".txt",
+                ".yaml",
+                ".yml",
+            } or path.name in {"AGENTS.md", "LICENSE", "README.md", "THIRD_PARTY.md"}:
+                content = path.read_text(encoding="utf-8")
+                self.assertIsNone(pattern.search(content), relative)
+
+    def test_interactive_guides_use_direct_commands_after_activation(self) -> None:
+        paths = (
+            REPOSITORY_ROOT / "README.md",
+            REPOSITORY_ROOT / "docs" / "dependencies.md",
+            REPOSITORY_ROOT / "docs" / "development.md",
+            REPOSITORY_ROOT / "docs" / "operator-guide.md",
+            REPOSITORY_ROOT / "docs" / "security.md",
+        )
+        for path in paths:
+            content = path.read_text(encoding="utf-8")
+            self.assertNotIn("conda run", content, str(path))
+        self.assertIn("conda activate synthran", paths[0].read_text(encoding="utf-8"))
+        self.assertIn("conda activate synthran", paths[2].read_text(encoding="utf-8"))
+        self.assertIn("conda activate synthran", paths[3].read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

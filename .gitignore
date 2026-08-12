@@ -1,5 +1,6 @@
 # Local dependency checkouts
 .deps/
+.synthran/
 
 # Conda/Python environments and build output
 .conda/

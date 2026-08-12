@@ -1,4 +1,4 @@
-"""Command-line interface for repository bootstrap and privacy controls."""
+"""Command-line interface for SynthRAN repository and experiment controls."""
 
 from __future__ import annotations
 
@@ -11,6 +11,24 @@ import sys
 from typing import Sequence
 
 from synthran.dependencies import DependencyError, load_lock, sync_dependencies
+from synthran.fiveg_ansible import (
+    FiveGAnsibleError,
+    build_network_plan,
+    load_inventory,
+    run_offline_doctor,
+)
+from synthran.live_preflight import (
+    LivePreflightError,
+    run_live_preflight,
+    save_live_evidence,
+)
+from synthran.network_runtime import (
+    NetworkRuntimeError,
+    execute_network_deployment,
+    load_deployment_manifest,
+    save_network_evidence,
+    verify_network_path,
+)
 from synthran.privacy import (
     PrivacyError,
     outgoing_commits,
@@ -57,6 +75,83 @@ def _parser() -> argparse.ArgumentParser:
     hooks_commands = hooks.add_subparsers(dest="hooks_command", required=True)
     install = hooks_commands.add_parser("install", help="activate the tracked .githooks directory")
     install.add_argument("--dry-run", action="store_true")
+
+    doctor = subcommands.add_parser("doctor", help="validate deployment prerequisites")
+    doctor.add_argument("--inventory", type=Path, required=True)
+    doctor.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    doctor.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    doctor.add_argument(
+        "--offline",
+        action="store_true",
+        help="validate only inventory, lock, and pinned checkout state",
+    )
+    doctor.add_argument("--owner", help="expected current SLICES/POS owner")
+    doctor.add_argument("--reservation-id", help="expected active reservation identifier")
+    doctor.add_argument("--allocation-id", help="expected current allocation identifier")
+    doctor.add_argument(
+        "--evidence-out",
+        type=Path,
+        help="write sanitized live readiness evidence (required for live doctor)",
+    )
+    doctor.add_argument(
+        "--timeout",
+        type=int,
+        default=15,
+        help="timeout in seconds for each read-only live probe",
+    )
+
+    network = subcommands.add_parser("network", help="plan or deploy the 5G network")
+    network_commands = network.add_subparsers(dest="network_command", required=True)
+    deploy = network_commands.add_parser(
+        "deploy", help="plan the explicit 5G network deployment"
+    )
+    deploy.add_argument("--inventory", type=Path, required=True)
+    deploy.add_argument("--profile", default="default")
+    deploy.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    deploy.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    deploy.add_argument("--dry-run", action="store_true")
+    deploy.add_argument("--json", action="store_true", help="emit a redacted JSON plan")
+    deploy.add_argument("--owner", help="expected current SLICES/POS owner")
+    deploy.add_argument("--reservation-id", help="expected active reservation identifier")
+    deploy.add_argument("--allocation-id", help="expected current allocation identifier")
+    deploy.add_argument(
+        "--preflight-evidence",
+        type=Path,
+        help="fresh READY evidence written by the live doctor",
+    )
+    deploy.add_argument("--run-id", help="unique lowercase run identifier")
+    deploy.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+    deploy.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="timeout in seconds for each deployment stage",
+    )
+
+    verify = network_commands.add_parser(
+        "verify", help="record gNB, srsUE, PDU tunnel, and UPF route evidence"
+    )
+    verify.add_argument("--inventory", type=Path, required=True)
+    verify.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    verify.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    verify.add_argument("--run-id", required=True)
+    verify.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+    verify.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="timeout in seconds for each read-only proof command",
+    )
     return parser
 
 
@@ -108,6 +203,129 @@ def _hooks_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    offline_report = run_offline_doctor(
+        inventory_path=args.inventory,
+        lock_path=args.lock,
+        dependency_root=args.deps_root,
+    )
+    print(offline_report.render())
+    if args.offline:
+        return 0 if offline_report.ready else 2
+    if not offline_report.ready:
+        print("Live probes were not run because offline readiness failed.")
+        return 2
+    required = {
+        "--owner": args.owner,
+        "--reservation-id": args.reservation_id,
+        "--allocation-id": args.allocation_id,
+        "--evidence-out": args.evidence_out,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise LivePreflightError(
+            "live doctor requires " + ", ".join(missing)
+        )
+    inventory = load_inventory(args.inventory)
+    lock = load_lock(args.lock)
+    live_report = run_live_preflight(
+        inventory=inventory,
+        lock=lock,
+        owner=args.owner,
+        reservation_id=args.reservation_id,
+        allocation_id=args.allocation_id,
+        timeout_seconds=args.timeout,
+    )
+    print()
+    print(live_report.render())
+    save_live_evidence(live_report, args.evidence_out)
+    print(f"Sanitized evidence: {args.evidence_out.name}")
+    return 0 if live_report.ready else 2
+
+
+def _network_deploy(args: argparse.Namespace) -> int:
+    report = run_offline_doctor(
+        inventory_path=args.inventory,
+        lock_path=args.lock,
+        dependency_root=args.deps_root,
+    )
+    if not report.ready:
+        print(report.render(), file=sys.stderr)
+        return 2
+    lock = load_lock(args.lock)
+    inventory = load_inventory(args.inventory)
+    plan = build_network_plan(lock=lock, inventory=inventory, profile=args.profile)
+    if not args.json:
+        print(report.render())
+        print()
+    if args.dry_run:
+        print(plan.render(as_json=args.json))
+        return 0
+    if args.json:
+        raise FiveGAnsibleError("--json is supported only with --dry-run")
+    required = {
+        "--owner": args.owner,
+        "--reservation-id": args.reservation_id,
+        "--allocation-id": args.allocation_id,
+        "--preflight-evidence": args.preflight_evidence,
+        "--run-id": args.run_id,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise NetworkRuntimeError(
+            "live deployment requires " + ", ".join(missing)
+        )
+    result = execute_network_deployment(
+        plan=plan,
+        lock=lock,
+        dependency_root=args.deps_root,
+        live_evidence_path=args.preflight_evidence,
+        owner=args.owner,
+        reservation_id=args.reservation_id,
+        allocation_id=args.allocation_id,
+        run_id=args.run_id,
+        run_root=args.run_root,
+        repository_root=repository_root(),
+        timeout_seconds=args.timeout,
+    )
+    print(f"Deployment completed for run {result.run_id}; path proof is still required.")
+    print(f"Sanitized manifest: {result.manifest_path}")
+    print(f"Sanitized log: {result.log_path}")
+    return 0
+
+
+def _network_verify(args: argparse.Namespace) -> int:
+    report = run_offline_doctor(
+        inventory_path=args.inventory,
+        lock_path=args.lock,
+        dependency_root=args.deps_root,
+    )
+    if not report.ready:
+        print(report.render(), file=sys.stderr)
+        return 2
+    lock = load_lock(args.lock)
+    inventory = load_inventory(args.inventory)
+    run_directory = args.run_root.resolve() / args.run_id
+    manifest_path = run_directory / "manifest.json"
+    load_deployment_manifest(
+        path=manifest_path,
+        run_id=args.run_id,
+        inventory=inventory,
+        lock=lock,
+    )
+    verification = verify_network_path(
+        inventory=inventory,
+        lock=lock,
+        run_id=args.run_id,
+        timeout_seconds=args.timeout,
+    )
+    evidence_path = run_directory / "network-evidence.json"
+    save_network_evidence(verification, evidence_path, manifest_path)
+    print(verification.render())
+    print(f"Sanitized evidence: {evidence_path}")
+    return 0 if verification.ready else 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -120,7 +338,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "hooks" and args.hooks_command == "install":
             return _hooks_install(args)
-    except (DependencyError, PrivacyError, OSError) as exc:
+        if args.command == "doctor":
+            return _doctor(args)
+        if args.command == "network" and args.network_command == "deploy":
+            return _network_deploy(args)
+        if args.command == "network" and args.network_command == "verify":
+            return _network_verify(args)
+    except (
+        DependencyError,
+        FiveGAnsibleError,
+        LivePreflightError,
+        NetworkRuntimeError,
+        PrivacyError,
+        OSError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     raise AssertionError("unreachable command dispatch")

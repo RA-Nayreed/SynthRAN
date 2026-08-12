@@ -105,6 +105,61 @@ def load_lock(path: Path) -> DependencyLock:
         digest = entry.get("digest")
         if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
             raise DependencyError(f"containers.{name}.digest must be a full sha256 digest")
+        image = entry.get("image")
+        tag = entry.get("tag")
+        if not isinstance(image, str) or not image.strip():
+            raise DependencyError(f"containers.{name}.image must be a non-empty string")
+        if not isinstance(tag, str) or not tag.strip():
+            raise DependencyError(f"containers.{name}.tag must be a non-empty string")
+        role = entry.get("role")
+        if isinstance(role, str) and role.startswith("Golden path "):
+            if entry.get("platform") != "linux/amd64":
+                raise DependencyError(
+                    f"containers.{name}.platform must be 'linux/amd64' for the golden path"
+                )
+
+    collections = _require_mapping(
+        raw.get("ansible_collections"), "ansible_collections"
+    )
+    for name, entry_value in collections.items():
+        entry = _require_mapping(entry_value, f"ansible_collections.{name}")
+        collection_name = entry.get("name")
+        version = entry.get("version")
+        if (
+            not isinstance(collection_name, str)
+            or not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", collection_name)
+        ):
+            raise DependencyError(
+                f"ansible_collections.{name}.name must be a collection FQCN"
+            )
+        if not isinstance(version, str) or not EXACT_VERSION_RE.fullmatch(version):
+            raise DependencyError(
+                f"ansible_collections.{name}.version must be one exact version"
+            )
+
+    tools = _require_mapping(raw.get("tools"), "tools")
+    for name, entry_value in tools.items():
+        entry = _require_mapping(entry_value, f"tools.{name}")
+        version = entry.get("version")
+        digest = entry.get("sha256")
+        if not isinstance(version, str) or not EXACT_VERSION_RE.fullmatch(version):
+            raise DependencyError(f"tools.{name}.version must be one exact version")
+        if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
+            raise DependencyError(f"tools.{name}.sha256 must be a full sha256 digest")
+
+    remote_python = _require_mapping(raw.get("remote_python"), "remote_python")
+    remote_packages = _require_mapping(
+        remote_python.get("packages"), "remote_python.packages"
+    )
+    if not remote_packages:
+        raise DependencyError("remote_python.packages must not be empty")
+    for name, version in remote_packages.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            raise DependencyError("remote Python package names are invalid")
+        if not isinstance(version, str) or not EXACT_VERSION_RE.fullmatch(version):
+            raise DependencyError(
+                f"remote_python.packages.{name} must be one exact version"
+            )
 
     conda = _require_mapping(raw.get("conda"), "conda")
     environment_name = conda.get("environment_name")
@@ -116,6 +171,8 @@ def load_lock(path: Path) -> DependencyLock:
         )
     if environment_name != "synthran":
         raise DependencyError("conda.environment_name must be 'synthran'")
+    if conda.get("platform") != "linux-64":
+        raise DependencyError("conda.platform must be 'linux-64'")
     channels = conda.get("channels")
     if (
         not isinstance(channels, list)
@@ -143,6 +200,8 @@ def load_lock(path: Path) -> DependencyLock:
         )
 
     conda_packages = _require_mapping(conda.get("packages"), "conda.packages")
+    if not conda_packages:
+        raise DependencyError("conda.packages must not be empty")
     for name, entry_value in conda_packages.items():
         entry = _require_mapping(entry_value, f"conda.packages.{name}")
         version = entry.get("version")

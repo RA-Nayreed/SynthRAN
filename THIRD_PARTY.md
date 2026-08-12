@@ -11,9 +11,19 @@ The immutable identifiers below mirror `dependencies.lock.yml`. The lock file is
 | `sopnode/open5gs-k8s` | Transitive Open5GS Kubernetes deployment | `e53601e5209425867413d45d3d01ed9a1b696de7` | Referenced through the `5g_ansible` adapter | MIT license present in the pinned tree |
 | `turletti/srsran-helm` | Transitive srsRAN Helm deployment | `8dfb9890d127734cdcd6eee9df8c5d09b1a8076a` | Referenced through the `5g_ansible` adapter | License not yet asserted; inspect before copying or modifying upstream source |
 | `eclipse-mosquitto` | Edge and central MQTT brokers | `2.1.2-alpine@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797` | Container image | EPL-2.0 OR EDL-1.0; retain image notices |
+| `niloysh/open5gs` | Golden-path Open5GS NFs and SMF | `v2.6.4-aio@sha256:b41e5919f28edb1467b7c189302d7460d05e74cf5fb65f19126b5851334cb3ce` and `v2.7.0@sha256:eb8b23589c724ba2e18b783c544dbcd56f02da29f818d4cf1974853b53aee329` | Container images | License not yet asserted; retain image notices |
+| `r2labuser/open5gs-amf-patched` | Golden-path patched AMF | `v2.7.0@sha256:13818df32958781f910a61a20df8b3c856ae5ef33d941517b959885182bd4295` | Container image | License not yet asserted; retain image notices |
+| `r2labuser/mongodb` | Golden-path subscriber database | `4.4.4-debian-10-r0@sha256:95abfb776bb4e6ee34f7b5b1c811f978d132136035deacdb7143f798f0343a31` | Container image | License not yet asserted; retain image notices |
+| `r2labuser/srsran-gnb-zmq-csi` | Golden-path RFSIM gNB | `v1.0.0.21@sha256:89ceaebc6adddb9900b3cae01316fadea8660aeff6ce60e1b335ba0a9d0ff9cd` | Container image | License not yet asserted; retain image notices |
+| `ziyad-mabrouk/srsue` | Golden-path srsUE gateway | `v1.0@sha256:c1c9eb2119e48d1f5f9120c71cd539c606fca6c242a2e430409269c121610bb2` | Container image | License not yet asserted; retain image notices |
+| BusyBox | Golden-path readiness/log helpers | `1.32.0@sha256:31a54a0cf86d7354788a8265f60ae6acb4b348a67efbcf7c1007dd3cf7af05ab` and `1.36@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f` | Container images | GPL-2.0-only |
 | Miniforge3 | Conda distribution used by CI and recommended locally | `26.3.2-2`, Linux x86-64 installer `sha256:42260ffe3830fb953d5eee1bbb32229ff06aa7c3833c1ed7a9a0420a95685d94` | External environment bootstrap | Installer code is BSD-3-Clause; installed packages retain their own licenses |
 | Python | SynthRAN runtime | `3.12.11` | Conda package from `conda-forge` | PSF-2.0 |
 | Git | Detached dependency synchronization and repository hooks | `2.51.0` | Conda package from `conda-forge` | GPL-2.0-only |
+| Ansible Core | Golden-path controller | `2.20.5` | Conda package from `conda-forge` | GPL-3.0-or-later |
+| `kubernetes.core` | Golden-path Kubernetes and Helm modules | `6.5.0` | Ansible Galaxy collection | GPL-3.0-or-later |
+| yq | Locked Helm values transformation on the RAN node | `4.45.1`, Linux AMD64 `sha256:654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049` | Preinstalled external executable | MIT |
+| Open5GS Python bootstrap packages | Subscriber generation and MongoDB insertion on the core node | `dnspython==2.3.0`, `pymongo==4.5.0`, `python-dateutil==2.8.2`, `ruamel.yaml==0.18.5`, `six==1.16.0` | Preinstalled external packages, version-checked by live doctor | ISC; Apache-2.0; Apache-2.0 OR BSD-3-Clause; MIT; MIT, respectively |
 | Eclipse Paho MQTT Python | Collector MQTT client | `2.1.0` | Conda package from `conda-forge` | EPL-2.0 OR EDL-1.0 |
 | Apache PyArrow | Parquet conversion | `21.0.0` | Conda package from `conda-forge` | Apache-2.0 |
 | PyPA Setuptools | Python build backend | `83.0.0` | Conda package from `conda-forge` | MIT |

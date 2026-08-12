@@ -8,3 +8,4 @@ dependencies:
   - setuptools=83.0.0
   - paho-mqtt=2.1.0
   - pyarrow=21.0.0
+  - ansible-core=2.20.5
