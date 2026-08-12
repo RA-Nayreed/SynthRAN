@@ -239,6 +239,8 @@ Dependency synchronization, hook installation, and redaction are modifying comma
 
 Live `doctor` must remain read-only and require explicit owner, reservation, allocation, and evidence-output arguments. Live `network deploy` must reject missing, stale, failed, or mismatched evidence and reused/unsafe run IDs before any mutation. It supports only separate core/RAN nodes, `profile=default`, one srsUE, monitoring disabled, and an empty ready cluster. `network verify` is read-only and may mark a matching `deployed-unverified` manifest `path-proven` only after every proof passes.
 
+The verified POS 2.5.35 reservation interface is `pos calendar list --filter owner=OWNER --json`. It returns an array with numeric `id`, `owner`, `nodes`, `start_date`, and `end_date`; SynthRAN must select exactly one requested ID and verify ownership, node coverage, and the current UTC window. Allocation verification uses `pos allocations show NODE` and its string `id` and `owner`. Provider command or schema drift is terminal and must be adapted against operator-supplied value-free structural evidence.
+
 ## Git Workflow
 
 - Do not create a branch for each milestone, task, or document section.

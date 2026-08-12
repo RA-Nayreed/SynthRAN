@@ -25,7 +25,6 @@ DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_EVIDENCE_MAX_AGE = timedelta(minutes=15)
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-READY_STATUSES = {"active", "accepted", "confirmed", "reserved", "running"}
 
 
 class LivePreflightError(RuntimeError):
@@ -149,6 +148,21 @@ def _parse_json_object(text: str, label: str) -> Mapping[str, Any]:
     return value
 
 
+def _parse_json_objects(text: str, label: str) -> tuple[Mapping[str, Any], ...]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LivePreflightError(f"{label} did not return JSON") from exc
+    if not isinstance(value, list):
+        raise LivePreflightError(f"{label} must return one JSON array")
+    records: list[Mapping[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise LivePreflightError(f"{label} contains a non-object record")
+        records.append(item)
+    return tuple(records)
+
+
 def _first_text(
     value: Mapping[str, Any], names: Sequence[str], label: str
 ) -> str:
@@ -156,6 +170,22 @@ def _first_text(
         candidate = value.get(name)
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
+    raise LivePreflightError(f"{label} is missing from provider evidence")
+
+
+def _first_identifier(
+    value: Mapping[str, Any], names: Sequence[str], label: str
+) -> str:
+    for name in names:
+        candidate = value.get(name)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        if (
+            isinstance(candidate, int)
+            and not isinstance(candidate, bool)
+            and candidate >= 0
+        ):
+            return str(candidate)
     raise LivePreflightError(f"{label} is missing from provider evidence")
 
 
@@ -199,37 +229,38 @@ def verify_reservation(
 ) -> None:
     """Verify a current, owned POS calendar record without creating one."""
 
-    payload = _parse_json_object(
+    records = _parse_json_objects(
         _checked_output(
             runner,
-            ("pos", "calendar", "show", "--id", reservation_id),
+            (
+                "pos",
+                "calendar",
+                "list",
+                "--filter",
+                f"owner={owner}",
+                "--json",
+            ),
             timeout_seconds=timeout_seconds,
             label="POS reservation query",
         ),
         "POS reservation query",
     )
-    observed_id = _first_text(payload, ("id", "reservation_id"), "reservation id")
-    observed_owner = _first_text(
-        payload, ("owner", "username", "user"), "reservation owner"
+    matches = tuple(
+        record
+        for record in records
+        if _first_identifier(record, ("id",), "reservation id") == reservation_id
     )
-    status = _first_text(payload, ("status", "state"), "reservation status").lower()
-    observed_nodes = _node_names(
-        payload.get("nodes", payload.get("resources", payload.get("node_ids")))
-    )
-    starts_at = _parse_time(
-        payload.get("start", payload.get("starts_at", payload.get("start_time"))),
-        "reservation start",
-    )
-    ends_at = _parse_time(
-        payload.get("end", payload.get("ends_at", payload.get("end_time"))),
-        "reservation end",
-    )
-    if observed_id != reservation_id:
-        raise LivePreflightError("reservation id does not match the expected reservation")
+    if not matches:
+        raise LivePreflightError("reservation id was not found in the POS calendar")
+    if len(matches) != 1:
+        raise LivePreflightError("reservation id is ambiguous in the POS calendar")
+    payload = matches[0]
+    observed_owner = _first_text(payload, ("owner",), "reservation owner")
+    observed_nodes = _node_names(payload.get("nodes"))
+    starts_at = _parse_time(payload.get("start_date"), "reservation start")
+    ends_at = _parse_time(payload.get("end_date"), "reservation end")
     if observed_owner != owner:
         raise LivePreflightError("reservation owner does not match the expected operator")
-    if status not in READY_STATUSES:
-        raise LivePreflightError("reservation is not active")
     if not starts_at <= now < ends_at:
         raise LivePreflightError("reservation is not active at the current UTC time")
     if not nodes.issubset(observed_nodes):
@@ -256,10 +287,8 @@ def verify_allocations(
             ),
             f"POS allocation query for {node}",
         )
-        observed_id = _first_text(payload, ("id", "allocation_id"), "allocation id")
-        observed_owner = _first_text(
-            payload, ("owner", "username", "user"), "allocation owner"
-        )
+        observed_id = _first_identifier(payload, ("id",), "allocation id")
+        observed_owner = _first_text(payload, ("owner",), "allocation owner")
         if observed_id != allocation_id:
             raise LivePreflightError(
                 "a selected node is not in the expected allocation"

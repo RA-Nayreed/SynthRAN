@@ -21,6 +21,7 @@ from synthran.live_preflight import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPOSITORY_ROOT / "tests" / "fixtures" / "inventory_open5gs_srsran_rfsim.ini"
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc)
+RESERVATION_ID = "7000000001"
 
 
 class FakeRunner:
@@ -29,6 +30,8 @@ class FakeRunner:
         *,
         reservation_owner: str = "operator",
         reservation_end: str = "2026-08-12T13:00:00Z",
+        reservation_id: int = 7000000001,
+        duplicate_reservation: bool = False,
         allocation_owner: str = "operator",
         yq_digest: str = (
             "654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049"
@@ -37,6 +40,8 @@ class FakeRunner:
     ) -> None:
         self.reservation_owner = reservation_owner
         self.reservation_end = reservation_end
+        self.reservation_id = reservation_id
+        self.duplicate_reservation = duplicate_reservation
         self.allocation_owner = allocation_owner
         self.yq_digest = yq_digest
         self.pymongo_version = pymongo_version
@@ -50,19 +55,27 @@ class FakeRunner:
             return CommandResult(0, "ansible-playbook [core 2.19.3]\n")
         if argv == ("ansible-galaxy", "--version"):
             return CommandResult(0, "ansible-galaxy [core 2.19.3]\n")
-        if argv[:3] == ("pos", "calendar", "show"):
+        if argv == (
+            "pos",
+            "calendar",
+            "list",
+            "--filter",
+            "owner=operator",
+            "--json",
+        ):
+            reservation = {
+                "id": self.reservation_id,
+                "owner": self.reservation_owner,
+                "nodes": ["lab-core", "lab-ran"],
+                "start_date": "2026-08-12T11:00:00Z",
+                "end_date": self.reservation_end,
+            }
+            reservations = [reservation]
+            if self.duplicate_reservation:
+                reservations.append(dict(reservation))
             return CommandResult(
                 0,
-                json.dumps(
-                    {
-                        "id": "res-test",
-                        "owner": self.reservation_owner,
-                        "status": "active",
-                        "nodes": ["lab-core", "lab-ran"],
-                        "start": "2026-08-12T11:00:00Z",
-                        "end": self.reservation_end,
-                    }
-                ),
+                json.dumps(reservations),
             )
         if argv[:3] == ("pos", "allocations", "show"):
             return CommandResult(
@@ -157,7 +170,7 @@ class LivePreflightTests(unittest.TestCase):
             inventory=self.inventory,
             lock=self.lock,
             owner="operator",
-            reservation_id="res-test",
+            reservation_id=RESERVATION_ID,
             allocation_id="alloc-test",
             runner=fake,
             which=lambda _name: "found",
@@ -170,12 +183,29 @@ class LivePreflightTests(unittest.TestCase):
         fake, report = self.run_ready()
         self.assertTrue(report.ready, report.render())
         self.assertIn("Result: READY", report.render())
-        self.assertEqual(2, sum(call[:3] == ("pos", "allocations", "show") for call in fake.calls))
+        self.assertIn(
+            (
+                "pos",
+                "calendar",
+                "list",
+                "--filter",
+                "owner=operator",
+                "--json",
+            ),
+            fake.calls,
+        )
+        self.assertEqual(
+            2,
+            sum(
+                call[:3] == ("pos", "allocations", "show")
+                for call in fake.calls
+            ),
+        )
 
     def test_evidence_uses_fingerprints_not_provider_identifiers(self) -> None:
         _fake, report = self.run_ready()
         rendered = json.dumps(report.to_dict())
-        self.assertNotIn("res-test", rendered)
+        self.assertNotIn(f'"{RESERVATION_ID}"', rendered)
         self.assertNotIn("alloc-test", rendered)
         self.assertNotIn('"operator"', rendered)
 
@@ -190,6 +220,16 @@ class LivePreflightTests(unittest.TestCase):
         )
         self.assertFalse(report.ready)
         self.assertIn("not active at the current UTC time", report.render())
+
+    def test_missing_reservation_fails_closed(self) -> None:
+        _fake, report = self.run_ready(FakeRunner(reservation_id=7000000002))
+        self.assertFalse(report.ready)
+        self.assertIn("was not found in the POS calendar", report.render())
+
+    def test_duplicate_reservation_fails_closed(self) -> None:
+        _fake, report = self.run_ready(FakeRunner(duplicate_reservation=True))
+        self.assertFalse(report.ready)
+        self.assertIn("ambiguous in the POS calendar", report.render())
 
     def test_allocation_owner_mismatch_fails_closed(self) -> None:
         _fake, report = self.run_ready(FakeRunner(allocation_owner="someone-else"))
@@ -227,7 +267,7 @@ class LivePreflightTests(unittest.TestCase):
             inventory=self.inventory,
             lock=self.lock,
             owner="operator",
-            reservation_id="res-test",
+            reservation_id=RESERVATION_ID,
             allocation_id="alloc-test",
             runner=fake,
             which=lambda name: None if name == "pos" else "found",
@@ -253,7 +293,7 @@ class LivePreflightTests(unittest.TestCase):
                 path=path,
                 inventory=self.inventory,
                 owner="operator",
-                reservation_id="res-test",
+                reservation_id=RESERVATION_ID,
                 allocation_id="alloc-test",
                 now=NOW + timedelta(minutes=5),
             )
@@ -263,7 +303,7 @@ class LivePreflightTests(unittest.TestCase):
                     path=path,
                     inventory=self.inventory,
                     owner="operator",
-                    reservation_id="res-test",
+                    reservation_id=RESERVATION_ID,
                     allocation_id="alloc-test",
                     now=NOW + timedelta(minutes=16),
                 )
@@ -285,7 +325,7 @@ class LivePreflightTests(unittest.TestCase):
                     path=path,
                     inventory=other,
                     owner="operator",
-                    reservation_id="res-test",
+                    reservation_id=RESERVATION_ID,
                     allocation_id="alloc-test",
                     now=NOW,
                 )

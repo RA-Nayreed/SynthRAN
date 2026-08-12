@@ -68,7 +68,7 @@ python -m synthran doctor \
   --evidence-out .synthran/preflight.json
 ~~~
 
-The POS adapter currently requires JSON reservation and allocation records containing unambiguous ID, owner, state, node, and time fields. A provider output change is a terminal preflight failure; do not bypass it. Adapt and test the parser against operator-supplied sanitized output.
+The POS adapter is validated against POS 2.5.35. It calls `pos calendar list --filter owner=OPERATOR --json`, requires exactly one matching numeric calendar ID, and verifies its `owner`, `nodes`, `start_date`, and `end_date`. It verifies each node allocation through `pos allocations show NODE` using the returned string `id` and `owner`. A provider command or output change is a terminal preflight failure; do not bypass it. Adapt and test the parser against operator-supplied value-free structural output.
 
 READY evidence contains fingerprints rather than raw authority identifiers and is valid for 15 minutes. Run deployment promptly or rerun the doctor.
 
