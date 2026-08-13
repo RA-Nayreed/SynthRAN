@@ -22,7 +22,7 @@ The repository owns orchestration, contracts, integration adapters, validation, 
 
 ## Current Status and Acceptance
 
-The `v0.0.1` repository foundation is published on `main`. The current golden-path network milestone has an Open5GS + srsRAN + RFSIM inventory contract, offline and read-only live doctors, redacted immutable planning, evidence-gated isolated-worktree deployment, and gNB/srsUE/tunnel/UPF verification. The code is offline-tested, but the milestone remains unaccepted until the operator executes the SLICES acceptance commands and supplies path-proven evidence.
+The `v0.0.1` repository foundation is published on `main`. The current golden-path network milestone has a SLICES CLI controller contract, an Open5GS + srsRAN + RFSIM inventory contract, offline and read-only live doctors, redacted immutable planning, evidence-gated isolated-worktree deployment, and gNB/srsUE/tunnel/UPF verification. The code is offline-tested, but live resource preparation is blocked before POS mutation until every upstream bootstrap input is immutable and reviewed; the milestone remains unaccepted until that gate is closed and the operator supplies path-proven SLICES evidence.
 
 The repository foundation is accepted only when it has:
 
@@ -99,7 +99,9 @@ Update dependencies one at a time. A dependency update is accepted only after it
 
 `dependencies.lock.yml` intentionally uses the JSON-compatible subset of YAML so the bootstrap command can validate it without a YAML parser. `synthran deps sync` creates detached checkouts under `.deps/`; it never merges an upstream branch into SynthRAN. Direct dependencies are synchronized by default and `--all` is required to include transitive repositories for local inspection.
 
-The golden-path adapter uses direct `ansible-galaxy` and `ansible-playbook` calls against an isolated locked worktree. Do not wrap interactive `5g_ansible/deploy.sh`; it contains reservation and prompt behavior outside SynthRAN's control boundary. The SynthRAN wrapper must call only the reviewed Open5GS and srsRAN roles, never the upstream boot/setup playbook, and must stay gated by fresh matching live-doctor evidence. It installs the exact locked `kubernetes.core` collection, passes locked transitive commits, pins selected images by digest, and applies the run ID before Kubernetes resource creation.
+The golden-path adapter uses direct `ansible-galaxy` and `ansible-playbook` calls against isolated locked worktrees. Do not wrap interactive `5g_ansible/deploy.sh`; it contains reservation prompts and bypass behavior outside SynthRAN's control boundary. Explicit `network prepare` may run only when `resource_bootstrap.status=ready` after every upstream setup dependency, chart, manifest, installer, and Python transitive input has been immutably locked and reviewed. While the status is `blocked`, preparation must fail before checkout, Ansible, or POS access. The separate deployment wrapper calls only reviewed Open5GS and srsRAN roles and stays gated by fresh matching live-doctor evidence. It installs the exact locked `kubernetes.core` collection, passes locked transitive commits, pins selected images by digest, and applies the run ID before Kubernetes resource creation.
+
+The Linux SLICES Webshell, or an SSH session to its documented management host, is the only supported live controller. Every live prepare, doctor, deploy, and verify operation requires an active `synthran` Conda environment, exact locked Python and Ansible versions, POS 2.5.35, a valid SLICES login, an explicitly selected project, and an existing experiment. SynthRAN must never run `slices auth login`, change the active project, or create the experiment; those are operator actions. Public evidence stores only project and experiment fingerprints plus controller versions and the exact dependency-lock digest.
 
 The locked golden-path boundary patch must apply cleanly before Ansible runs. It disables upstream host-package installation, kubelet/CoreDNS restart, mutable Helm/yq downloads, WebUI deployment, and slice-two expansion. Remote dependency checkouts must be unique and run-scoped. Live preflight, not deployment, owns tool readiness; deployment must fail rather than install a missing tool. The runtime graph remains exactly one slice and one srsUE.
 
@@ -124,7 +126,7 @@ Generated run data belongs under a run-scoped ignored location. Every created ru
 The user is the experiment operator. The user performs:
 
 - repository creation and external account administration;
-- testbed reservations and allocations;
+- explicit testbed resource preparation, including reservations and allocations;
 - Conda installation and the first environment solve on the operator machine;
 - compilation when it requires the real toolchain or testbed;
 - network deployment;
@@ -138,11 +140,12 @@ Codex may, when requested:
 - run safe offline validation that does not reserve nodes, deploy infrastructure, or conduct the experiment;
 - explain each command the user should run and interpret the output the user provides.
 
-Codex must not run the SynthRAN experiment on the user's behalf. It must not reserve SLICES nodes, ignore reservation conflicts, silently deploy the 5G network, or make external infrastructure changes unless the user explicitly changes this rule.
+Codex must not run live resource preparation or the SynthRAN experiment on the user's behalf. It must not reserve SLICES nodes, ignore reservation conflicts, silently deploy the 5G network, or make external infrastructure changes unless the user explicitly changes this rule.
 
 ## Lifecycle and Safety Rules
 
 - Network deployment is always a separate, explicit operation.
+- Resource preparation is an explicit operator command that may reserve, jointly allocate, image, reset, and configure only the selected reviewed node pair. It must stop before 5G deployment.
 - An experiment run never reserves nodes and never silently deploys the network.
 - Preflight must fail when the required reservation, allocation, SSH access, Kubernetes state, dependency, or image is unavailable.
 - Reservation failure is terminal for preflight and can never be ignored automatically.
@@ -229,17 +232,20 @@ Run commands from the repository root. Create or reconcile the environment, acti
 - `python -m synthran privacy redact INPUT OUTPUT --dry-run`: preview creation of a sanitized text derivative.
 - `python -m synthran hooks install --dry-run`: preview activation of `.githooks` for the current clone.
 - `python -m synthran doctor --offline --inventory PATH`: validate the static golden-path inventory, dependency lock, and pinned checkout without contacting SLICES.
-- `python -m synthran doctor --inventory PATH --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --evidence-out PATH`: run read-only live readiness checks and write sanitized evidence.
+- `python -m synthran slices doctor --slices-project PROJECT --slices-experiment EXPERIMENT`: verify the supported SLICES shell, login, project, experiment, and exact controller versions without changing provider state.
+- `python -m synthran network prepare --dry-run --owner OWNER --run-id RUN_ID`: preview reservation, shared allocation, imaging, Kubernetes setup, and locked tool installation without contacting POS; report the current bootstrap gate.
+- `python -m synthran network prepare --owner OWNER --slices-project PROJECT --slices-experiment EXPERIMENT --run-id RUN_ID`: operator-only live preparation; currently required to fail before POS because the bootstrap lock is blocked.
+- `python -m synthran doctor --inventory PATH --slices-project PROJECT --slices-experiment EXPERIMENT --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --evidence-out PATH`: run read-only live readiness checks and write sanitized evidence.
 - `python -m synthran network deploy --dry-run --inventory PATH`: emit the redacted immutable deployment plan without reserving, booting, or deploying.
 - `python -m synthran network deploy --inventory PATH --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --preflight-evidence PATH --run-id RUN_ID`: explicitly deploy the network from fresh matching evidence; operator use only.
 - `python -m synthran network verify --inventory PATH --run-id RUN_ID`: read-only verification of run-owned gNB, srsUE, `tun_srsue1`, PDU address, and UPF route evidence.
 - `python -m unittest discover -s tests -v`: run the offline unit test suite.
 
-Dependency synchronization, hook installation, and redaction are modifying commands and must retain functional `--dry-run` behavior.
+Dependency synchronization, resource preparation, hook installation, and redaction are modifying commands and must retain functional `--dry-run` behavior.
 
-Live `doctor` must remain read-only and require explicit owner, reservation, allocation, and evidence-output arguments. Live `network deploy` must reject missing, stale, failed, or mismatched evidence and reused/unsafe run IDs before any mutation. It supports only separate core/RAN nodes, `profile=default`, one srsUE, monitoring disabled, and an empty ready cluster. `network verify` is read-only and may mark a matching `deployed-unverified` manifest `path-proven` only after every proof passes.
+Live `network prepare` must remain disabled until the bootstrap lock is ready. Its future enabled path must validate all local inputs and Ansible syntax before POS mutation, reject foreign/partial/split allocations, persist private recovery authority immediately as provider IDs become known, create or verify one current reservation, allocate both selected nodes together, use run-scoped trust-on-first-use for newly imaged SSH hosts and reject later key changes, preserve partial sanitized artifacts on failure, and never invoke a 5G deployment role. Live `doctor` must remain read-only and require SLICES project, experiment, owner, reservation, allocation, and evidence output. Evidence must match the exact dependency-lock digest, complete successful check set, inventory, authority, controller versions, and SLICES context. Live `network deploy` and `network verify` must revalidate the supported controller and matching context before stateful or proof work. Deployment supports only separate core/RAN nodes, `profile=default`, one srsUE, monitoring disabled, and an empty ready cluster. `network verify` may mark a matching `deployed-unverified` manifest `path-proven` only after every proof passes.
 
-The verified POS 2.5.35 reservation interface is `pos calendar list --filter owner=OWNER --json`. It returns an array with numeric `id`, `owner`, `nodes`, `start_date`, and `end_date`; SynthRAN must select exactly one requested ID and verify ownership, node coverage, and the current UTC window. Allocation verification uses `pos allocations show NODE` and its string `id` and `owner`. Provider command or schema drift is terminal and must be adapted against operator-supplied value-free structural evidence.
+The verified POS 2.5.35 reservation interface is `pos calendar list --filter owner=OWNER --json`. It returns an array with numeric `id`, `owner`, `nodes`, `start_date`, and `end_date`; SynthRAN must select exactly one requested ID and verify ownership, node coverage, and the current UTC window. Reservation creation uses `pos calendar create -d MINUTES -s now CORE RAN` and requires one numeric ID. Preparation inspects `pos allocations list --json`, allocates both nodes in one command, and verifies each with `pos allocations show NODE` using the returned string `id` and `owner`. Provider command or schema drift is terminal and must be adapted against operator-supplied value-free structural evidence.
 
 ## Git Workflow
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://synthran.invalid/contracts/network-deployment-v1alpha1.schema.json",
-  "title": "SynthRAN network deployment manifest",
+  "$id": "https://synthran.invalid/contracts/resource-preparation-v1alpha1.schema.json",
+  "title": "SynthRAN SLICES resource preparation manifest",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,28 +10,28 @@
     "status",
     "updated_at_utc",
     "inventory",
-    "profile",
     "dependencies",
     "dependency_lock_sha256",
     "slices_controller",
     "overlays",
     "authority",
     "reservation_action",
-    "worktree",
-    "deployment_log"
+    "allocation_action",
+    "inventory_file",
+    "authority_file",
+    "preparation_log",
+    "worktree"
   ],
   "properties": {
-    "schema": {"const": "synthran/network-deployment/v1alpha1"},
+    "schema": {"const": "synthran/resource-preparation/v1alpha1"},
     "run_id": {"$ref": "#/$defs/run_id"},
-    "status": {
-      "enum": ["running", "failed", "deployed-unverified", "path-proven"]
-    },
+    "status": {"enum": ["running", "failed", "prepared"]},
     "updated_at_utc": {"type": "string", "format": "date-time"},
     "inventory": {
       "type": "object",
       "required": ["file_name", "sha256", "core", "ran", "radio", "core_node", "ran_node"],
       "properties": {
-        "file_name": {"type": "string"},
+        "file_name": {"const": "hosts.ini"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "core": {"const": "open5gs"},
         "ran": {"const": "srsRAN"},
@@ -43,16 +43,22 @@
       },
       "additionalProperties": false
     },
-    "profile": {"const": "default"},
-    "dependencies": {"$ref": "#/$defs/dependencies"},
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fiveg_ansible"],
+      "properties": {
+        "fiveg_ansible": {"$ref": "#/$defs/commit"}
+      }
+    },
     "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
     "slices_controller": {"$ref": "#/$defs/controller"},
     "overlays": {
       "type": "object",
       "additionalProperties": false,
-        "required": ["ansible_overlay_sha256"],
+      "required": ["ansible_overlay_sha256"],
       "properties": {
-          "ansible_overlay_sha256": {"$ref": "#/$defs/sha256"}
+        "ansible_overlay_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "authority": {
@@ -65,15 +71,21 @@
       ],
       "properties": {
         "owner_fingerprint": {"$ref": "#/$defs/sha256"},
-        "reservation_fingerprint": {"$ref": "#/$defs/sha256"},
-        "allocation_fingerprint": {"$ref": "#/$defs/sha256"}
+        "reservation_fingerprint": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "allocation_fingerprint": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
       }
     },
-    "reservation_action": {"const": "none"},
+    "reservation_action": {"enum": ["create", "reuse"]},
+    "allocation_action": {"enum": ["pending", "create", "reuse"]},
+    "inventory_file": {"const": "hosts.ini"},
+    "authority_file": {"const": "authority.env"},
+    "preparation_log": {"const": "preparation.log"},
     "worktree": {"const": "worktree"},
-    "deployment_log": {"const": "deployment.log"},
-    "failure_stage": {"type": "string", "minLength": 1},
-    "network_evidence": {"const": "network-evidence.json"}
+    "failure_stage": {"type": "string", "minLength": 1}
   },
   "$defs": {
     "run_id": {
@@ -112,16 +124,6 @@
         "ansible_version": {"type": "string", "minLength": 1},
         "pos_version": {"type": "string", "minLength": 1},
         "slices_cli_version": {"type": "string", "minLength": 1}
-      }
-    },
-    "dependencies": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["fiveg_ansible", "open5gs_k8s", "srsran_helm"],
-      "properties": {
-        "fiveg_ansible": {"$ref": "#/$defs/commit"},
-        "open5gs_k8s": {"$ref": "#/$defs/commit"},
-        "srsran_helm": {"$ref": "#/$defs/commit"}
       }
     }
   }

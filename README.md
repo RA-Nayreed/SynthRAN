@@ -60,7 +60,7 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 ## Current status
 
-SynthRAN is in early development. The repository foundation is complete, and the golden-path network implementation is awaiting operator acceptance on SLICES.
+SynthRAN is in early development. The repository foundation is complete, and the golden-path network implementation is offline-tested but not accepted on SLICES. Live resource preparation is intentionally blocked before any POS mutation because the reviewed upstream Kubernetes bootstrap still contains mutable downloads and unversioned transitive installers.
 
 | Capability | Status |
 |---|---|
@@ -68,13 +68,15 @@ SynthRAN is in early development. The repository foundation is complete, and the
 | Pinned upstream dependency synchronization | Implemented and tested |
 | Open5GS + srsRAN + RFSIM inventory validation | Implemented and offline-tested |
 | Redacted immutable `5g_ansible` deployment plan | Implemented and offline-tested |
-| Live reservation, allocation, SSH, Kubernetes, tool and image preflight | Implemented and offline-tested; SLICES acceptance pending |
+| SLICES CLI controller, login, project and experiment verification | Implemented and offline-tested; SLICES acceptance pending |
+| Explicit SLICES reservation, shared allocation, node imaging and Kubernetes preparation | Fail-closed implementation present; live execution blocked pending immutable bootstrap closure |
+| Lock-, inventory-, authority- and SLICES-context-bound live preflight | Implemented and offline-tested; SLICES acceptance pending |
 | Isolated locked-worktree deployment and srsUE/UPF path proof | Implemented and offline-tested; operator execution pending |
 | Cooja sensors and MQTT bridge | Planned after network-path acceptance |
 | Dataset collection and path-proof report | Planned for later implementation milestones |
 | A1/E2, RIC and generative intelligence | Deliberately deferred |
 
-No SynthRAN command reserves or boots a node or runs an experiment. Network deployment is available only as a separate explicit operator command with fresh matching live-preflight evidence.
+The supported live controller is the Linux SLICES Webshell, or an SSH session to that documented management host, with the `synthran` Conda environment active. SynthRAN verifies but never changes the SLICES login, selected project, or existing experiment. Resource preparation, network deployment, and experiment execution remain separate operator actions; no experiment command reserves nodes or silently deploys the network.
 
 ## Quick start
 
@@ -106,8 +108,24 @@ Generate the non-executing deployment plan:
 python -m synthran network deploy \
   --dry-run --inventory /path/to/hosts.ini
 ```
+On the SLICES controller, verify the active CLI context without changing it:
 
-The test fixture is not a real deployment inventory. Live preflight and deployment must run from a Linux SLICES-capable controller with a real untracked inventory, operator-owned reservation/allocation identifiers, and the prerequisites in the [operator guide](docs/operator-guide.md).
+```sh
+python -m synthran slices doctor \
+  --slices-project PROJECT \
+  --slices-experiment EXPERIMENT
+```
+
+The operator performs `slices auth login`, `slices project use PROJECT`, and experiment creation when needed. SynthRAN only performs read-only `show` checks.
+
+On a SLICES controller, preview preparation of the default `sopnode-f2` core and `sopnode-f3` RAN pair:
+
+```sh
+python -m synthran network prepare \
+  --dry-run --owner OPERATOR --run-id network-001
+```
+
+The preview reports `Bootstrap: BLOCKED` until every upstream bootstrap input is immutable and reviewed. Do not remove `--dry-run` while that lock state remains. Read the exact controller and safety boundary in the [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
 
 ## Planned experiment output
 
@@ -129,8 +147,8 @@ The target baseline is 10 sensors publishing every 5 seconds for 600 seconds: 1,
 
 ```text
 synthran/                 CLI, validation, adapters and orchestration
-contracts/                Versioned readiness, deployment and evidence schemas
-deploy/                   SynthRAN-owned narrow Ansible wrapper and overlays
+contracts/                Versioned preparation, readiness, deployment and evidence schemas
+deploy/                   SynthRAN-owned preparation and narrow deployment overlays
 tests/                    Offline unit tests and sanitized fixtures
 docs/                     Architecture, development, security and operator guides
 dependencies.lock.yml     Immutable upstream and direct dependency record
@@ -139,7 +157,7 @@ THIRD_PARTY.md            License and provenance record
 AGENTS.md                 Durable repository working contract
 ```
 
-The current contracts cover golden-path readiness, deployment, and network evidence. Scenario and event contracts arrive with their implementation milestones. Upstream source remains outside this tree.
+The current contracts cover resource preparation, golden-path readiness, deployment, and network evidence. Scenario and event contracts arrive with their implementation milestones. Upstream source remains outside this tree.
 
 ## Roadmap
 

@@ -154,8 +154,8 @@ index bd9308d654bd7954182e68c5459a91faa187272c..cf23225069f8b06309ab8f0c225317c4
    ansible.builtin.shell: |
 -    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
 -    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/add-subscribers.py
-+    python3 {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
-+    python3 {{ repo_dest }}/mongo-tools/add-subscribers.py
++    /opt/synthran-venv/bin/python {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
++    /opt/synthran-venv/bin/python {{ repo_dest }}/mongo-tools/add-subscribers.py
    args:
      chdir: "{{ repo_dest }}"
 -
@@ -229,7 +229,7 @@ index 978431e6e4895d797110d3e89d0e09607f280873..a1ca5dbf81c7a3db05f463b42f641e4b
 -  become: yes
 +  ansible.builtin.command:
 +    argv:
-+      - python3
++      - /opt/synthran-venv/bin/python
 +      - -c
 +      - import kubernetes
 +  changed_when: false

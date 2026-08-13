@@ -109,6 +109,23 @@ class DependencyLockTests(unittest.TestCase):
             with self.assertRaisesRegex(DependencyError, "full sha256 digest"):
                 load_lock(Path("virtual-lock.yml"))
 
+    def test_locked_remote_tools_have_immutable_linux_sources(self) -> None:
+        lock = load_lock(REPOSITORY_ROOT / "dependencies.lock.yml")
+        tools = lock.raw["tools"]
+        self.assertEqual(
+            "sha256:f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1",
+            tools["helm_linux_amd64"]["sha256"],
+        )
+        self.assertEqual("/usr/local/bin/helm", tools["helm_linux_amd64"]["path"])
+        self.assertEqual(
+            "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64",
+            tools["yq_linux_amd64"]["url"],
+        )
+        self.assertEqual(
+            "32.0.1",
+            lock.raw["remote_python"]["packages"]["kubernetes"],
+        )
+
     def test_remote_python_package_version_range_is_rejected(self) -> None:
         lock_data = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
         lock_data["remote_python"]["packages"]["pymongo"] = ">=4"

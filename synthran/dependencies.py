@@ -142,10 +142,19 @@ def load_lock(path: Path) -> DependencyLock:
         entry = _require_mapping(entry_value, f"tools.{name}")
         version = entry.get("version")
         digest = entry.get("sha256")
+        url = entry.get("url")
+        install_path = entry.get("path")
         if not isinstance(version, str) or not EXACT_VERSION_RE.fullmatch(version):
             raise DependencyError(f"tools.{name}.version must be one exact version")
         if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
             raise DependencyError(f"tools.{name}.sha256 must be a full sha256 digest")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise DependencyError(f"tools.{name}.url must be one HTTPS URL")
+        if (
+            not isinstance(install_path, str)
+            or not PurePosixPath(install_path).is_absolute()
+        ):
+            raise DependencyError(f"tools.{name}.path must be an absolute POSIX path")
 
     remote_python = _require_mapping(raw.get("remote_python"), "remote_python")
     remote_packages = _require_mapping(
@@ -162,6 +171,17 @@ def load_lock(path: Path) -> DependencyLock:
             )
 
     conda = _require_mapping(raw.get("conda"), "conda")
+    resource_bootstrap = _require_mapping(
+        raw.get("resource_bootstrap"), "resource_bootstrap"
+    )
+    bootstrap_status = resource_bootstrap.get("status")
+    bootstrap_reason = resource_bootstrap.get("reason")
+    if bootstrap_status not in {"blocked", "ready"}:
+        raise DependencyError("resource_bootstrap.status must be 'blocked' or 'ready'")
+    if not isinstance(bootstrap_reason, str) or not bootstrap_reason.strip():
+        raise DependencyError(
+            "resource_bootstrap.reason must explain the reviewed bootstrap state"
+        )
     environment_name = conda.get("environment_name")
     if not isinstance(environment_name, str) or not CONDA_ENVIRONMENT_RE.fullmatch(
         environment_name

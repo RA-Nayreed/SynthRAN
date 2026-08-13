@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from synthran.dependencies import load_lock
 from synthran.fiveg_ansible import build_network_plan, load_inventory
@@ -239,6 +240,18 @@ class DeploymentBoundaryTests(unittest.TestCase):
             "owner_fingerprint": "sha256:owner",
             "reservation_fingerprint": "sha256:reservation",
             "allocation_fingerprint": "sha256:allocation",
+            "dependency_lock_sha256": "a" * 64,
+            "slices_controller": {
+                "schema": "synthran/slices-controller/v1alpha1",
+                "ready": True,
+                "dependency_lock_sha256": "a" * 64,
+                "project_fingerprint": "b" * 64,
+                "experiment_fingerprint": "c" * 64,
+                "python_version": "3.12.11",
+                "ansible_version": "2.20.5",
+                "pos_version": "2.5.35",
+                "slices_cli_version": "1.0.0",
+            },
         }
         calls: list[tuple[tuple[str, ...], Path, dict[str, str] | None]] = []
 
@@ -275,6 +288,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
                     "synthran.network_runtime.validate_fiveg_checkout",
                     return_value=checkout,
                 ),
+                patch(
+                    "synthran.network_runtime.verify_slices_controller",
+                    return_value=SimpleNamespace(to_dict=lambda: preflight["slices_controller"]),
+                ),
             ):
                 result = execute_network_deployment(
                     plan=self.plan,
@@ -285,6 +302,8 @@ class DeploymentBoundaryTests(unittest.TestCase):
                     reservation_id="reservation",
                     allocation_id="allocation",
                     run_id="network-proof",
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
                     run_root=root / "runs",
                     repository_root=REPOSITORY_ROOT,
                     runner=fake_runner,
@@ -330,6 +349,18 @@ class DeploymentBoundaryTests(unittest.TestCase):
             "owner_fingerprint": "sha256:owner",
             "reservation_fingerprint": "sha256:reservation",
             "allocation_fingerprint": "sha256:allocation",
+            "dependency_lock_sha256": "a" * 64,
+            "slices_controller": {
+                "schema": "synthran/slices-controller/v1alpha1",
+                "ready": True,
+                "dependency_lock_sha256": "a" * 64,
+                "project_fingerprint": "b" * 64,
+                "experiment_fingerprint": "c" * 64,
+                "python_version": "3.12.11",
+                "ansible_version": "2.20.5",
+                "pos_version": "2.5.35",
+                "slices_cli_version": "1.0.0",
+            },
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -360,6 +391,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
                     "synthran.network_runtime.validate_fiveg_checkout",
                     return_value=checkout,
                 ),
+                patch(
+                    "synthran.network_runtime.verify_slices_controller",
+                    return_value=SimpleNamespace(to_dict=lambda: preflight["slices_controller"]),
+                ),
             ):
                 with self.assertRaisesRegex(NetworkRuntimeError, "ansible-deployment"):
                     execute_network_deployment(
@@ -371,6 +406,8 @@ class DeploymentBoundaryTests(unittest.TestCase):
                         reservation_id="reservation",
                         allocation_id="allocation",
                         run_id="failed-proof",
+                        slices_project="project-test",
+                        slices_experiment="experiment-test",
                         run_root=root / "runs",
                         repository_root=REPOSITORY_ROOT,
                         runner=failing_runner,
@@ -391,9 +428,12 @@ class DeploymentBoundaryTests(unittest.TestCase):
 class ContractSchemaTests(unittest.TestCase):
     def test_network_evidence_and_manifest_schemas_are_valid_json(self) -> None:
         expected = {
-            "live-preflight-v1alpha1.schema.json": "synthran/live-preflight/v1alpha1",
+            "live-preflight-v1alpha2.schema.json": "synthran/live-preflight/v1alpha2",
             "network-deployment-v1alpha1.schema.json": DEPLOYMENT_SCHEMA,
             "network-evidence-v1alpha1.schema.json": NETWORK_EVIDENCE_SCHEMA,
+            "resource-preparation-v1alpha1.schema.json": (
+                "synthran/resource-preparation/v1alpha1"
+            ),
         }
         for filename, schema_id in expected.items():
             with self.subTest(filename=filename):

@@ -18,9 +18,17 @@ import urllib.request
 
 from synthran.dependencies import DependencyLock
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory
+from synthran.slices_controller import (
+    SlicesControllerError,
+    SlicesControllerReport,
+    dependency_lock_sha256,
+    fingerprint as context_fingerprint,
+    validate_context,
+    verify_slices_controller,
+)
 
 
-LIVE_PREFLIGHT_SCHEMA = "synthran/live-preflight/v1alpha1"
+LIVE_PREFLIGHT_SCHEMA = "synthran/live-preflight/v1alpha2"
 DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_EVIDENCE_MAX_AGE = timedelta(minutes=15)
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -48,6 +56,8 @@ class LiveCheck:
 @dataclass(frozen=True)
 class LivePreflightReport:
     generated_at_utc: datetime
+    dependency_lock_sha256: str
+    slices_controller: SlicesControllerReport | None
     inventory_sha256: str
     owner_fingerprint: str
     reservation_fingerprint: str
@@ -71,6 +81,10 @@ class LivePreflightReport:
             "schema": LIVE_PREFLIGHT_SCHEMA,
             "generated_at_utc": _format_time(self.generated_at_utc),
             "ready": self.ready,
+            "dependency_lock_sha256": self.dependency_lock_sha256,
+            "slices_controller": (
+                self.slices_controller.to_dict() if self.slices_controller else None
+            ),
             "inventory_sha256": self.inventory_sha256,
             "owner_fingerprint": self.owner_fingerprint,
             "reservation_fingerprint": self.reservation_fingerprint,
@@ -344,9 +358,9 @@ def verify_ssh_host(
 
 
 def verify_ansible_controller(
-    *, runner: Runner, timeout_seconds: int
+    *, runner: Runner, lock: DependencyLock, timeout_seconds: int
 ) -> str:
-    """Require an Ansible controller compatible with the locked collection."""
+    """Require the exact Ansible controller version recorded by the lock."""
 
     output = _checked_output(
         runner,
@@ -354,13 +368,23 @@ def verify_ansible_controller(
         timeout_seconds=timeout_seconds,
         label="Ansible controller probe",
     )
-    match = re.search(r"\bcore\s+([0-9]+)\.([0-9]+)(?:\.[0-9]+)?", output)
-    if match is None or tuple(map(int, match.groups())) < (2, 16):
-        raise LivePreflightError("ansible-core 2.16 or newer is required")
+    conda = lock.raw.get("conda")
+    packages = conda.get("packages") if isinstance(conda, dict) else None
+    entry = packages.get("ansible-core") if isinstance(packages, dict) else None
+    expected = entry.get("version") if isinstance(entry, dict) else None
+    if not isinstance(expected, str) or not expected:
+        raise LivePreflightError("dependency lock does not define ansible-core")
+    match = re.search(r"\bcore\s+([0-9]+\.[0-9]+\.[0-9]+)", output)
+    if match is None:
+        raise LivePreflightError("Ansible controller version is not parseable")
+    if match.group(1) != expected:
+        raise LivePreflightError(
+            f"ansible-core must exactly match locked version {expected}"
+        )
     galaxy = runner(("ansible-galaxy", "--version"), timeout_seconds)
     if galaxy.returncode != 0:
         raise LivePreflightError("ansible-galaxy is unavailable")
-    return "ansible-core is compatible with locked kubernetes.core"
+    return f"ansible-core exactly matches locked version {expected}"
 
 
 def verify_remote_deployment_tools(
@@ -377,6 +401,7 @@ def verify_remote_deployment_tools(
     if not isinstance(tools, dict):
         raise LivePreflightError("dependency lock tool mapping is unavailable")
     yq = tools.get("yq_linux_amd64")
+    helm = tools.get("helm_linux_amd64")
     if not isinstance(yq, dict):
         raise LivePreflightError("dependency lock does not define the golden-path yq tool")
     version = yq.get("version")
@@ -389,6 +414,19 @@ def verify_remote_deployment_tools(
         or path != "/usr/local/bin/yq"
     ):
         raise LivePreflightError("golden-path yq tool lock is malformed")
+    if not isinstance(helm, dict):
+        raise LivePreflightError("dependency lock does not define the golden-path Helm tool")
+    helm_version = helm.get("version")
+    helm_path = helm.get("path")
+    helm_digest = helm.get("sha256")
+    if (
+        not isinstance(helm_version, str)
+        or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", helm_version)
+        or helm_path != "/usr/local/bin/helm"
+        or not isinstance(helm_digest, str)
+        or not IMAGE_DIGEST_RE.fullmatch(helm_digest)
+    ):
+        raise LivePreflightError("golden-path Helm tool lock is malformed")
 
     remote_python = lock.raw.get("remote_python")
     packages = remote_python.get("packages") if isinstance(remote_python, dict) else None
@@ -409,7 +447,8 @@ def verify_remote_deployment_tools(
             core_host,
             "sh",
             "-c",
-            "command -v git && command -v jq && command -v kubectl",
+            "command -v git && command -v jq && command -v kubectl && "
+            "test -x /opt/synthran-venv/bin/python",
         ),
         timeout_seconds=timeout_seconds,
         label="core-node deployment tool probe",
@@ -423,7 +462,12 @@ def verify_remote_deployment_tools(
     observed_packages = _parse_json_object(
         _checked_output(
             runner,
-            ssh_command(core_host, "python3", "-c", package_probe),
+            ssh_command(
+                core_host,
+                "/opt/synthran-venv/bin/python",
+                "-c",
+                package_probe,
+            ),
             timeout_seconds=timeout_seconds,
             label="core-node Python package probe",
         ),
@@ -440,30 +484,63 @@ def verify_remote_deployment_tools(
             ran_host,
             "sh",
             "-c",
-            "command -v git && command -v kubectl",
+            "command -v git && command -v kubectl && "
+            "test -x /opt/synthran-venv/bin/python",
         ),
         timeout_seconds=timeout_seconds,
         label="RAN-node deployment tool probe",
     )
+    observed_ran_packages = _parse_json_object(
+        _checked_output(
+            runner,
+            ssh_command(
+                ran_host,
+                "/opt/synthran-venv/bin/python",
+                "-c",
+                package_probe,
+            ),
+            timeout_seconds=timeout_seconds,
+            label="RAN-node Python package probe",
+        ),
+        "RAN-node Python package probe",
+    )
+    if observed_ran_packages != expected_packages:
+        raise LivePreflightError(
+            "RAN-node Python package versions do not match the lock"
+        )
+    helm_output = _checked_output(
+        runner,
+        ssh_command(ran_host, helm_path, "version", "--short"),
+        timeout_seconds=timeout_seconds,
+        label="remote Helm probe",
+    ).strip()
+    if f"v{helm_version}" not in helm_output:
+        raise LivePreflightError("remote Helm version does not match the lock")
+    helm_archive = f"/opt/synthran-tools/helm-{helm_version}.tar.gz"
+    helm_archive_digest = _checked_output(
+        runner,
+        ssh_command(ran_host, "sha256sum", helm_archive),
+        timeout_seconds=timeout_seconds,
+        label="remote Helm archive digest probe",
+    )
+    if (
+        helm_archive_digest.split(maxsplit=1)[0]
+        != helm_digest.removeprefix("sha256:")
+    ):
+        raise LivePreflightError("remote Helm archive digest does not match the lock")
     _checked_output(
         runner,
         ssh_command(
             ran_host,
-            "python3",
+            "sh",
             "-c",
-            "import kubernetes; print('kubernetes-python-ready')",
+            f"cmp -s {helm_path} "
+            f"/opt/synthran-tools/{helm_version}/linux-amd64/helm "
+            "&& echo helm-binary-ready",
         ),
         timeout_seconds=timeout_seconds,
-        label="RAN-node Python Kubernetes probe",
+        label="remote Helm binary probe",
     )
-    helm_output = _checked_output(
-        runner,
-        ssh_command(ran_host, "helm", "version", "--short"),
-        timeout_seconds=timeout_seconds,
-        label="remote Helm probe",
-    ).strip()
-    if not re.search(r"\bv3\.[0-9]+\.[0-9]+\b", helm_output):
-        raise LivePreflightError("remote Helm v3 is required")
     yq_output = _checked_output(
         runner,
         ssh_command(ran_host, path, "--version"),
@@ -481,8 +558,8 @@ def verify_remote_deployment_tools(
     if digest_output.split(maxsplit=1)[0] != digest.removeprefix("sha256:"):
         raise LivePreflightError("remote yq digest does not match the lock")
     return (
-        "remote Git, kubectl, Helm v3, digest-locked yq, jq, Kubernetes Python, "
-        "and subscriber packages are ready"
+        "remote Git, kubectl, exact Helm, digest-locked yq, jq, and exact "
+        "SynthRAN Python environments are ready"
     )
 
 
@@ -673,6 +750,8 @@ def run_live_preflight(
     owner: str,
     reservation_id: str,
     allocation_id: str,
+    slices_project: str,
+    slices_experiment: str,
     runner: Runner = subprocess_runner,
     which: Which = shutil.which,
     image_probe: ImageProbe = registry_image_probe,
@@ -689,18 +768,43 @@ def run_live_preflight(
     observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     nodes = {inventory.core_node.name, inventory.ran_node.name}
     checks: list[LiveCheck] = []
+    controller: SlicesControllerReport | None = None
+    try:
+        controller = verify_slices_controller(
+            lock=lock,
+            project=slices_project,
+            experiment=slices_experiment,
+            runner=runner,
+            which=which,
+            timeout_seconds=timeout_seconds,
+        )
+    except SlicesControllerError as exc:
+        checks.append(LiveCheck("slices-controller", False, str(exc)))
+    else:
+        checks.append(
+            LiveCheck(
+                "slices-controller",
+                True,
+                "SLICES login, project, experiment, and locked controller verified",
+            )
+        )
 
-    required_tools = ("pos", "ssh", "git", "ansible-galaxy", "ansible-playbook")
+
+    required_tools = ("slices", "pos", "ssh", "git", "ansible-galaxy", "ansible-playbook")
     missing = tuple(tool for tool in required_tools if which(tool) is None)
-    tools_ready = not missing
+    tools_ready = controller is not None and not missing
     checks.append(
         LiveCheck(
             "toolchain",
             tools_ready,
             (
-                "required POS, SSH, Git, and Ansible commands are available"
+                "required SLICES, POS, SSH, Git, and Ansible commands are available"
                 if tools_ready
-                else "missing required command(s): " + ", ".join(missing)
+                else (
+                    "SLICES controller verification failed"
+                    if controller is None and not missing
+                    else "missing required command(s): " + ", ".join(missing)
+                )
             ),
         )
     )
@@ -711,6 +815,7 @@ def run_live_preflight(
             "ansible-controller",
             lambda: verify_ansible_controller(
                 runner=runner,
+                lock=lock,
                 timeout_seconds=timeout_seconds,
             ),
         )
@@ -826,20 +931,31 @@ def run_live_preflight(
                 LiveCheck(name, False, "not probed because the live toolchain is incomplete")
             )
 
-    try:
-        images = golden_path_image_references(lock)
-    except LivePreflightError as exc:
-        checks.append(LiveCheck("required-images", False, str(exc)))
+    if controller is None:
+        checks.append(
+            LiveCheck(
+                "required-images",
+                False,
+                "not probed because SLICES controller verification failed",
+            )
+        )
     else:
-        def verify_images() -> str:
-            for reference in images:
-                image_probe(reference, timeout_seconds)
-            return f"{len(images)} digest-addressed golden-path image(s) are available"
+        try:
+            images = golden_path_image_references(lock)
+        except LivePreflightError as exc:
+            checks.append(LiveCheck("required-images", False, str(exc)))
+        else:
+            def verify_images() -> str:
+                for reference in images:
+                    image_probe(reference, timeout_seconds)
+                return f"{len(images)} digest-addressed golden-path image(s) are available"
 
-        _record(checks, "required-images", verify_images)
+            _record(checks, "required-images", verify_images)
 
     return LivePreflightReport(
         generated_at_utc=observed_at,
+        dependency_lock_sha256=dependency_lock_sha256(lock),
+        slices_controller=controller,
         inventory_sha256=inventory.sha256,
         owner_fingerprint=_fingerprint(owner),
         reservation_fingerprint=_fingerprint(reservation_id),
@@ -872,6 +988,9 @@ def load_fresh_live_evidence(
     owner: str,
     reservation_id: str,
     allocation_id: str,
+    lock: DependencyLock,
+    slices_project: str,
+    slices_experiment: str,
     now: datetime | None = None,
     max_age: timedelta = DEFAULT_EVIDENCE_MAX_AGE,
 ) -> Mapping[str, Any]:
@@ -887,6 +1006,38 @@ def load_fresh_live_evidence(
         raise LivePreflightError("live preflight evidence schema is unsupported")
     if payload.get("ready") is not True:
         raise LivePreflightError("live preflight evidence is not READY")
+    lock_digest = dependency_lock_sha256(lock)
+    if payload.get("dependency_lock_sha256") != lock_digest:
+        raise LivePreflightError("live preflight evidence does not match the dependency lock")
+    try:
+        project = validate_context(slices_project, "SLICES project")
+        experiment = validate_context(slices_experiment, "SLICES experiment")
+    except SlicesControllerError as exc:
+        raise LivePreflightError(str(exc)) from exc
+    controller = payload.get("slices_controller")
+    if not isinstance(controller, dict) or controller.get("ready") is not True:
+        raise LivePreflightError("live preflight evidence lacks verified SLICES context")
+    controller_expected = {
+        "schema": "synthran/slices-controller/v1alpha1",
+        "dependency_lock_sha256": lock_digest,
+        "project_fingerprint": context_fingerprint(project),
+        "experiment_fingerprint": context_fingerprint(experiment),
+    }
+    for name, value in controller_expected.items():
+        if controller.get(name) != value:
+            raise LivePreflightError(
+                "live preflight evidence does not match the SLICES controller context"
+            )
+    for name in (
+        "python_version",
+        "ansible_version",
+        "pos_version",
+        "slices_cli_version",
+    ):
+        if not isinstance(controller.get(name), str) or not controller[name]:
+            raise LivePreflightError(
+                "live preflight evidence has incomplete SLICES controller versions"
+            )
     if payload.get("inventory_sha256") != inventory.sha256:
         raise LivePreflightError("live preflight evidence does not match the inventory")
     expected = {
@@ -905,6 +1056,39 @@ def load_fresh_live_evidence(
             raise LivePreflightError(
                 "live preflight evidence does not match the deployment authority"
             )
+    checks = payload.get("checks")
+    if not isinstance(checks, list):
+        raise LivePreflightError("live preflight evidence checks are missing")
+    expected_names = {
+        "slices-controller",
+        "toolchain",
+        "ansible-controller",
+        "reservation",
+        "allocation",
+        f"ssh:{inventory.core_node.name}",
+        "remote-deployment-tools",
+        "kubernetes-start-state",
+        "required-images",
+    }
+    if inventory.ran_node.name != inventory.core_node.name:
+        expected_names.add(f"ssh:{inventory.ran_node.name}")
+    observed_names: set[str] = set()
+    for check in checks:
+        if not isinstance(check, dict):
+            raise LivePreflightError("live preflight evidence contains an invalid check")
+        name = check.get("name")
+        detail = check.get("detail")
+        if (
+            not isinstance(name, str)
+            or name in observed_names
+            or check.get("passed") is not True
+            or not isinstance(detail, str)
+            or not detail
+        ):
+            raise LivePreflightError("live preflight evidence check set is not trustworthy")
+        observed_names.add(name)
+    if observed_names != expected_names:
+        raise LivePreflightError("live preflight evidence check set is incomplete")
     generated_at = _parse_time(payload.get("generated_at_utc"), "evidence timestamp")
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     age = current - generated_at

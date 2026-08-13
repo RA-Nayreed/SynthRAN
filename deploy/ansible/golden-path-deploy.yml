@@ -19,6 +19,7 @@
   hosts: core_node
   gather_facts: true
   vars:
+    ansible_python_interpreter: /opt/synthran-venv/bin/python
     synthran_golden_path_guard: true
     repo_dest: "{{ ansible_env.HOME }}/.synthran/{{ synthran_run_id }}/open5gs-k8s"
     open5gs_root: "{{ repo_dest }}/open5gs"
@@ -77,6 +78,7 @@
   hosts: ran_node
   gather_facts: true
   vars:
+    ansible_python_interpreter: /opt/synthran-venv/bin/python
     repo_dest: "{{ ansible_env.HOME }}/.synthran/{{ synthran_run_id }}/srsran-helm"
   pre_tasks:
     - name: Load the locked default 5G profile

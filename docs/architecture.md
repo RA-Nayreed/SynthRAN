@@ -41,7 +41,7 @@ This is composition, not a Git merge. `.deps/` is local and ignored. No upstream
 
 ## Control boundaries
 
-Dependency synchronization, privacy scanning, schema validation, and offline tests are local repository operations. Network deployment is a separate explicit operation. Experiment execution assumes a valid operator-managed reservation and an already healthy supported network.
+Dependency synchronization, privacy scanning, schema validation, and offline tests are local repository operations. Resource preparation and network deployment are separate explicit operator operations. Experiment execution assumes a valid operator-managed reservation and a path-proven supported network.
 
 The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux `conda-lock` file in a later foundation hardening step.
 
@@ -49,11 +49,15 @@ The Linux environment definition pins direct package versions and channels but s
 
 ## Golden-path adapter boundary
 
-The golden-path inventory contract accepts only Open5GS + srsRAN + RFSIM with monitoring disabled. It hashes the inventory and exposes only redacted facts. Live execution narrows this further to separate core/RAN nodes, one srsUE, the default profile, a ready pre-existing cluster, and an absent Open5GS namespace.
+The golden-path inventory contract accepts only Open5GS + srsRAN + RFSIM with monitoring disabled. It hashes the inventory and exposes only redacted facts. Live execution narrows this further to separate core/RAN nodes, one srsUE, the default profile, a ready cluster, and an absent Open5GS namespace.
 
-The read-only live doctor verifies exact operator-supplied reservation and allocation identifiers, strict SSH identity, selected Kubernetes nodes, Multus/OVS/NAD support, exact subscriber-bootstrap packages, remote tools, and eight digest-addressed Linux AMD64 images. Authority identifiers are stored only as SHA-256 fingerprints. READY evidence is inventory-bound and expires after 15 minutes.
+The SLICES controller boundary requires the Linux Webshell or a documented SSH session to its management host. A read-only doctor verifies the active `synthran` Conda environment, exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and an existing experiment. SynthRAN never establishes authentication, changes projects, or creates experiments.
 
-The deployment gate revalidates that evidence before creating `.synthran/runs/<run-id>/`. It creates a detached worktree at the locked `5g_ansible` commit, records the SynthRAN overlay hash, and applies an exact patch that removes upstream host-package installation, kubelet/CoreDNS restart, mutable tool download, WebUI deployment, and multi-slice expansion. The wrapper calls only the reviewed Open5GS and srsRAN roles. It never invokes interactive `deploy.sh` or upstream node boot/setup plays.
+The explicit resource-preparation boundary knows only reviewed node mappings from the locked upstream tree, rejects conflicting allocations, and is designed to allocate both nodes together. However, the remaining upstream setup graph still includes mutable Python upgrades, a mutable Helm installer, and unversioned charts or remote manifests. `resource_bootstrap.status=blocked` therefore stops live preparation before any POS mutation. Future provider identifiers are persisted incrementally in a mode-`0600` ignored file; manifests and logs contain only fingerprints and sanitized output.
+
+The read-only live doctor verifies exact operator-supplied reservation and allocation identifiers, strict SSH identity, selected Kubernetes nodes, Multus/OVS/NAD support, exact subscriber-bootstrap packages, remote tools, and eight digest-addressed Linux AMD64 images. READY evidence contains only fingerprints and is bound to the exact lock bytes, inventory, authority, SLICES context, controller versions, complete successful check set, and a 15-minute validity window.
+
+The deployment and path-verification gates revalidate the active controller and matching SLICES-context fingerprints. Deployment does this before creating `.synthran/runs/<run-id>/`, then creates a detached worktree at the locked `5g_ansible` commit, records the SynthRAN overlay hash, and applies an exact patch that removes upstream host-package installation, kubelet/CoreDNS restart, mutable tool download, WebUI deployment, and multi-slice expansion. The wrapper calls only the reviewed Open5GS and srsRAN roles. It never invokes interactive `deploy.sh` or repeats upstream node boot/setup plays.
 
 The wrapper passes immutable transitive Git commits, uses only the exact locked `kubernetes.core` collection, removes mutable Kustomize image transforms, pins every selected application/helper image by digest, and labels resources with the run ID from creation. Remote Open5GS and srsRAN checkouts live below a unique run-scoped directory and are refused if already present. Only slice one and `uesim01` enter the runtime graph. Output is sanitized before being written; failure leaves a partial manifest and log.
 

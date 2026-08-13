@@ -29,6 +29,12 @@ from synthran.live_preflight import (
     ssh_command,
     subprocess_runner,
 )
+from synthran.slices_controller import (
+    SlicesControllerError,
+    dependency_lock_sha256,
+    fingerprint as context_fingerprint,
+    verify_slices_controller,
+)
 
 
 DEPLOYMENT_SCHEMA = "synthran/network-deployment/v1alpha1"
@@ -94,7 +100,7 @@ def validate_run_id(value: str) -> str:
     return value
 
 
-def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+def atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     with tempfile.NamedTemporaryFile(
@@ -146,7 +152,7 @@ def golden_path_image_variables(lock: DependencyLock) -> dict[str, str]:
     }
 
 
-def _tree_sha256(root: Path) -> str:
+def tree_sha256(root: Path) -> str:
     digest = hashlib.sha256()
     try:
         files = sorted(path for path in root.rglob("*") if path.is_file())
@@ -201,6 +207,8 @@ def _deployment_manifest(
             "open5gs_k8s": plan.open5gs_k8s_commit,
             "srsran_helm": plan.srsran_helm_commit,
         },
+        "dependency_lock_sha256": preflight["dependency_lock_sha256"],
+        "slices_controller": preflight["slices_controller"],
         "overlays": {"ansible_overlay_sha256": overlay_sha256},
         "authority": {
             key: preflight[key]
@@ -236,6 +244,8 @@ def execute_network_deployment(
     owner: str,
     reservation_id: str,
     allocation_id: str,
+    slices_project: str,
+    slices_experiment: str,
     run_id: str,
     run_root: Path = Path(".synthran/runs"),
     repository_root: Path = Path("."),
@@ -253,18 +263,35 @@ def execute_network_deployment(
         )
     if timeout_seconds < 60 or timeout_seconds > 14400:
         raise NetworkRuntimeError("deployment timeout must be between 60 and 14400 seconds")
+    try:
+        active_controller = verify_slices_controller(
+            lock=lock,
+            project=slices_project,
+            experiment=slices_experiment,
+            timeout_seconds=min(timeout_seconds, 300),
+        )
+    except SlicesControllerError as exc:
+        raise NetworkRuntimeError(str(exc)) from exc
+
     preflight = load_fresh_live_evidence(
         path=live_evidence_path,
         inventory=plan.inventory,
         owner=owner,
         reservation_id=reservation_id,
         allocation_id=allocation_id,
+        lock=lock,
+        slices_project=slices_project,
+        slices_experiment=slices_experiment,
     )
+    if preflight.get("slices_controller") != active_controller.to_dict():
+        raise NetworkRuntimeError(
+            "live preflight evidence controller versions do not match the active shell"
+        )
     checkout = validate_fiveg_checkout(lock, dependency_root)
     overlay_source = repository_root.resolve() / "deploy" / "ansible"
     if not (overlay_source / "golden-path-deploy.yml").is_file():
         raise NetworkRuntimeError("SynthRAN golden-path wrapper playbook is missing")
-    overlay_sha256 = _tree_sha256(overlay_source)
+    overlay_sha256 = tree_sha256(overlay_source)
 
     run_root = run_root.resolve()
     run_root.mkdir(parents=True, exist_ok=True)
@@ -280,7 +307,7 @@ def execute_network_deployment(
     log_parts: list[str] = []
 
     def write_manifest(status: str, stage: str | None = None) -> None:
-        _atomic_json(
+        atomic_json(
             manifest_path,
             _deployment_manifest(
                 run_id=run_id,
@@ -360,7 +387,7 @@ def execute_network_deployment(
     try:
         shutil.copytree(overlay_source, overlay_directory)
         wrapper = overlay_directory / "golden-path-deploy.yml"
-        _atomic_json(
+        atomic_json(
             variables_path,
             {"synthran_images": golden_path_image_variables(lock)},
         )
@@ -797,6 +824,8 @@ def load_deployment_manifest(
     run_id: str,
     inventory: NetworkInventory,
     lock: DependencyLock,
+    slices_project: str,
+    slices_experiment: str,
 ) -> Mapping[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -820,6 +849,18 @@ def load_deployment_manifest(
     }
     if payload.get("dependencies") != expected:
         raise NetworkRuntimeError("deployment manifest dependencies do not match the lock")
+    lock_digest = dependency_lock_sha256(lock)
+    if payload.get("dependency_lock_sha256") != lock_digest:
+        raise NetworkRuntimeError("deployment manifest dependency lock does not match")
+    controller = payload.get("slices_controller")
+    if (
+        not isinstance(controller, dict)
+        or controller.get("dependency_lock_sha256") != lock_digest
+        or controller.get("project_fingerprint") != context_fingerprint(slices_project)
+        or controller.get("experiment_fingerprint") != context_fingerprint(slices_experiment)
+    ):
+        raise NetworkRuntimeError("deployment manifest SLICES context does not match")
+
     return payload
 
 
@@ -828,7 +869,7 @@ def save_network_evidence(
     destination: Path,
     manifest_path: Path | None = None,
 ) -> None:
-    _atomic_json(destination, report.to_dict())
+    atomic_json(destination, report.to_dict())
     if manifest_path is not None and report.ready:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         payload["status"] = "path-proven"
@@ -836,4 +877,4 @@ def save_network_evidence(
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         )
         payload["network_evidence"] = destination.name
-        _atomic_json(manifest_path, payload)
+        atomic_json(manifest_path, payload)

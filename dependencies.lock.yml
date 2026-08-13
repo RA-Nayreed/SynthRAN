@@ -125,19 +125,33 @@
     "yq_linux_amd64": {
       "version": "4.45.1",
       "sha256": "sha256:654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049",
+      "url": "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64",
       "path": "/usr/local/bin/yq",
       "role": "Golden path locked Helm values transformation",
       "license": "MIT"
+    },
+    "helm_linux_amd64": {
+      "version": "3.18.4",
+      "sha256": "sha256:f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1",
+      "url": "https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz",
+      "path": "/usr/local/bin/helm",
+      "role": "Golden path Kubernetes package deployment",
+      "license": "Apache-2.0"
     }
   },
   "remote_python": {
     "packages": {
       "dnspython": "2.3.0",
+      "kubernetes": "32.0.1",
       "pymongo": "4.5.0",
       "python-dateutil": "2.8.2",
       "ruamel.yaml": "0.18.5",
       "six": "1.16.0"
     }
+  },
+  "resource_bootstrap": {
+    "status": "blocked",
+    "reason": "Upstream Kubernetes setup still contains mutable downloads and unversioned transitive installers; live preparation must fail before POS mutation."
   },
   "conda": {
     "environment_name": "synthran",

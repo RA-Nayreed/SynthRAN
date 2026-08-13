@@ -22,8 +22,10 @@ The immutable identifiers below mirror `dependencies.lock.yml`. The lock file is
 | Git | Detached dependency synchronization and repository hooks | `2.51.0` | Conda package from `conda-forge` | GPL-2.0-only |
 | Ansible Core | Golden-path controller | `2.20.5` | Conda package from `conda-forge` | GPL-3.0-or-later |
 | `kubernetes.core` | Golden-path Kubernetes and Helm modules | `6.5.0` | Ansible Galaxy collection | GPL-3.0-or-later |
-| yq | Locked Helm values transformation on the RAN node | `4.45.1`, Linux AMD64 `sha256:654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049` | Preinstalled external executable | MIT |
-| Open5GS Python bootstrap packages | Subscriber generation and MongoDB insertion on the core node | `dnspython==2.3.0`, `pymongo==4.5.0`, `python-dateutil==2.8.2`, `ruamel.yaml==0.18.5`, `six==1.16.0` | Preinstalled external packages, version-checked by live doctor | ISC; Apache-2.0; Apache-2.0 OR BSD-3-Clause; MIT; MIT, respectively |
+| Helm | Golden-path Kubernetes package deployment on the RAN node | `3.18.4`, Linux AMD64 archive `sha256:f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1` | Installed by the preparation playbook | Apache-2.0 |
+| yq | Locked Helm values transformation on the RAN node | `4.45.1`, Linux AMD64 `sha256:654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049` | Installed by the preparation playbook | MIT |
+| Kubernetes Python client | Ansible Kubernetes modules on prepared nodes | `32.0.1` | Installed in `/opt/synthran-venv` and version-checked by live doctor | Apache-2.0 |
+| Open5GS Python bootstrap packages | Subscriber generation and MongoDB insertion on prepared nodes | `dnspython==2.3.0`, `pymongo==4.5.0`, `python-dateutil==2.8.2`, `ruamel.yaml==0.18.5`, `six==1.16.0` | Installed in `/opt/synthran-venv` and version-checked by live doctor | ISC; Apache-2.0; Apache-2.0 OR BSD-3-Clause; MIT; MIT, respectively |
 | Eclipse Paho MQTT Python | Collector MQTT client | `2.1.0` | Conda package from `conda-forge` | EPL-2.0 OR EDL-1.0 |
 | Apache PyArrow | Parquet conversion | `21.0.0` | Conda package from `conda-forge` | Apache-2.0 |
 | PyPA Setuptools | Python build backend | `83.0.0` | Conda package from `conda-forge` | MIT |

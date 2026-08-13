@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from synthran.dependencies import load_lock
 from synthran.fiveg_ansible import load_inventory
@@ -16,6 +17,12 @@ from synthran.live_preflight import (
     run_live_preflight,
     save_live_evidence,
 )
+from synthran.slices_controller import (
+    SlicesControllerReport,
+    dependency_lock_sha256,
+    fingerprint,
+)
+
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +43,9 @@ class FakeRunner:
         yq_digest: str = (
             "654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049"
         ),
+        helm_digest: str = (
+            "f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1"
+        ),
         pymongo_version: str = "4.5.0",
     ) -> None:
         self.reservation_owner = reservation_owner
@@ -44,6 +54,7 @@ class FakeRunner:
         self.duplicate_reservation = duplicate_reservation
         self.allocation_owner = allocation_owner
         self.yq_digest = yq_digest
+        self.helm_digest = helm_digest
         self.pymongo_version = pymongo_version
         self.calls: list[tuple[str, ...]] = []
 
@@ -52,9 +63,9 @@ class FakeRunner:
         self.calls.append(argv)
         self.assert_timeout(timeout)
         if argv == ("ansible-playbook", "--version"):
-            return CommandResult(0, "ansible-playbook [core 2.19.3]\n")
+            return CommandResult(0, "ansible-playbook [core 2.20.5]\n")
         if argv == ("ansible-galaxy", "--version"):
-            return CommandResult(0, "ansible-galaxy [core 2.19.3]\n")
+            return CommandResult(0, "ansible-galaxy [core 2.20.5]\n")
         if argv == (
             "pos",
             "calendar",
@@ -122,6 +133,7 @@ class FakeRunner:
                 json.dumps(
                     {
                         "dnspython": "2.3.0",
+                        "kubernetes": "32.0.1",
                         "pymongo": self.pymongo_version,
                         "python-dateutil": "2.8.2",
                         "ruamel.yaml": "0.18.5",
@@ -129,10 +141,15 @@ class FakeRunner:
                     }
                 ),
             )
-        if argv[0] == "ssh" and "kubernetes-python-ready" in argv[-1]:
-            return CommandResult(0, "kubernetes-python-ready\n")
         if argv[0] == "ssh" and "helm version --short" in argv[-1]:
             return CommandResult(0, "v3.18.4+g1234567\n")
+        if argv[0] == "ssh" and "sha256sum /opt/synthran-tools/helm-" in argv[-1]:
+            return CommandResult(
+                0,
+                f"{self.helm_digest}  /opt/synthran-tools/helm-3.18.4.tar.gz\n",
+            )
+        if argv[0] == "ssh" and "cmp -s /usr/local/bin/helm" in argv[-1]:
+            return CommandResult(0, "helm-binary-ready\n")
         if argv[0] == "ssh" and "/usr/local/bin/yq --version" in argv[-1]:
             return CommandResult(
                 0,
@@ -163,20 +180,35 @@ class LivePreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.inventory = load_inventory(FIXTURE)
         self.lock = load_lock(REPOSITORY_ROOT / "dependencies.lock.yml")
+        self.controller = SlicesControllerReport(
+            dependency_lock_sha256=dependency_lock_sha256(self.lock),
+            project_fingerprint=fingerprint("project-test"),
+            experiment_fingerprint=fingerprint("experiment-test"),
+            python_version="3.12.11",
+            ansible_version="2.20.5",
+            pos_version="2.5.35",
+            slices_cli_version="1.0.0",
+        )
 
     def run_ready(self, runner: FakeRunner | None = None):
         fake = runner or FakeRunner()
-        report = run_live_preflight(
-            inventory=self.inventory,
-            lock=self.lock,
-            owner="operator",
-            reservation_id=RESERVATION_ID,
-            allocation_id="alloc-test",
-            runner=fake,
-            which=lambda _name: "found",
-            image_probe=lambda _reference, _timeout: None,
-            now=NOW,
-        )
+        with patch(
+            "synthran.live_preflight.verify_slices_controller",
+            return_value=self.controller,
+        ):
+            report = run_live_preflight(
+                inventory=self.inventory,
+                lock=self.lock,
+                owner="operator",
+                reservation_id=RESERVATION_ID,
+                allocation_id="alloc-test",
+                slices_project="project-test",
+                slices_experiment="experiment-test",
+                runner=fake,
+                which=lambda _name: "found",
+                image_probe=lambda _reference, _timeout: None,
+                now=NOW,
+            )
         return fake, report
 
     def test_live_preflight_accepts_owned_current_inputs(self) -> None:
@@ -241,6 +273,11 @@ class LivePreflightTests(unittest.TestCase):
         self.assertFalse(report.ready)
         self.assertIn("remote yq digest does not match", report.render())
 
+    def test_remote_helm_digest_mismatch_fails_closed(self) -> None:
+        _fake, report = self.run_ready(FakeRunner(helm_digest="0" * 64))
+        self.assertFalse(report.ready)
+        self.assertIn("remote Helm archive digest does not match", report.render())
+
     def test_remote_python_version_mismatch_fails_closed(self) -> None:
         _fake, report = self.run_ready(FakeRunner(pymongo_version="4.6.0"))
         self.assertFalse(report.ready)
@@ -263,17 +300,23 @@ class LivePreflightTests(unittest.TestCase):
 
     def test_missing_tool_skips_all_live_commands_and_fails(self) -> None:
         fake = FakeRunner()
-        report = run_live_preflight(
-            inventory=self.inventory,
-            lock=self.lock,
-            owner="operator",
-            reservation_id=RESERVATION_ID,
-            allocation_id="alloc-test",
-            runner=fake,
-            which=lambda name: None if name == "pos" else "found",
-            image_probe=lambda _reference, _timeout: None,
-            now=NOW,
-        )
+        with patch(
+            "synthran.live_preflight.verify_slices_controller",
+            return_value=self.controller,
+        ):
+            report = run_live_preflight(
+                inventory=self.inventory,
+                lock=self.lock,
+                owner="operator",
+                reservation_id=RESERVATION_ID,
+                allocation_id="alloc-test",
+                slices_project="project-test",
+                slices_experiment="experiment-test",
+                runner=fake,
+                which=lambda name: None if name == "pos" else "found",
+                image_probe=lambda _reference, _timeout: None,
+                now=NOW,
+            )
         self.assertFalse(report.ready)
         self.assertEqual([], fake.calls)
         self.assertIn("missing required command(s): pos", report.render())
@@ -295,6 +338,9 @@ class LivePreflightTests(unittest.TestCase):
                 owner="operator",
                 reservation_id=RESERVATION_ID,
                 allocation_id="alloc-test",
+                lock=self.lock,
+                slices_project="project-test",
+                slices_experiment="experiment-test",
                 now=NOW + timedelta(minutes=5),
             )
             self.assertTrue(payload["ready"])
@@ -305,6 +351,9 @@ class LivePreflightTests(unittest.TestCase):
                     owner="operator",
                     reservation_id=RESERVATION_ID,
                     allocation_id="alloc-test",
+                    lock=self.lock,
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
                     now=NOW + timedelta(minutes=16),
                 )
 
@@ -327,8 +376,70 @@ class LivePreflightTests(unittest.TestCase):
                     owner="operator",
                     reservation_id=RESERVATION_ID,
                     allocation_id="alloc-test",
+                    lock=self.lock,
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
                     now=NOW,
                 )
+
+
+    def test_ready_boolean_cannot_replace_the_required_check_set(self) -> None:
+        _fake, report = self.run_ready()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preflight.json"
+            payload = report.to_dict()
+            payload["checks"] = [
+                check
+                for check in payload["checks"]
+                if check["name"] != "reservation"
+            ]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(LivePreflightError, "check set is incomplete"):
+                load_fresh_live_evidence(
+                    path=path,
+                    inventory=self.inventory,
+                    owner="operator",
+                    reservation_id=RESERVATION_ID,
+                    allocation_id="alloc-test",
+                    lock=self.lock,
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    now=NOW,
+                )
+
+    def test_evidence_is_bound_to_slices_context_and_lock(self) -> None:
+        _fake, report = self.run_ready()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preflight.json"
+            save_live_evidence(report, path)
+            with self.assertRaisesRegex(LivePreflightError, "SLICES controller context"):
+                load_fresh_live_evidence(
+                    path=path,
+                    inventory=self.inventory,
+                    owner="operator",
+                    reservation_id=RESERVATION_ID,
+                    allocation_id="alloc-test",
+                    lock=self.lock,
+                    slices_project="another-project",
+                    slices_experiment="experiment-test",
+                    now=NOW,
+                )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["dependency_lock_sha256"] = "0" * 64
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(LivePreflightError, "dependency lock"):
+                load_fresh_live_evidence(
+                    path=path,
+                    inventory=self.inventory,
+                    owner="operator",
+                    reservation_id=RESERVATION_ID,
+                    allocation_id="alloc-test",
+                    lock=self.lock,
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    now=NOW,
+                )
+
 
 
 if __name__ == "__main__":

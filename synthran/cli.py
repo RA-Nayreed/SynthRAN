@@ -39,11 +39,45 @@ from synthran.privacy import (
     scan_history,
     scan_worktree,
 )
+from synthran.resource_runtime import (
+    DEFAULT_DURATION_MINUTES,
+    ResourcePreparationError,
+    build_resource_preparation_plan,
+    execute_resource_preparation,
+)
+from synthran.slices_controller import (
+    SlicesControllerError,
+    verify_slices_controller,
+)
+
+
+def _add_slices_context(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--slices-project",
+        default=os.environ.get("SYNTHRAN_SLICES_PROJECT"),
+        help="selected SLICES project (or SYNTHRAN_SLICES_PROJECT)",
+    )
+    parser.add_argument(
+        "--slices-experiment",
+        default=os.environ.get("SYNTHRAN_SLICES_EXPERIMENT"),
+        help="existing SLICES experiment (or SYNTHRAN_SLICES_EXPERIMENT)",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="synthran")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    slices = subcommands.add_parser(
+        "slices", help="verify the SLICES CLI controller context"
+    )
+    slices_commands = slices.add_subparsers(dest="slices_command", required=True)
+    slices_doctor = slices_commands.add_parser(
+        "doctor", help="read-only SLICES login, project, and experiment checks"
+    )
+    slices_doctor.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    slices_doctor.add_argument("--timeout", type=int, default=15)
+    _add_slices_context(slices_doctor)
+
 
     deps = subcommands.add_parser("deps", help="manage immutable external dependencies")
     deps_commands = deps.add_subparsers(dest="deps_command", required=True)
@@ -77,6 +111,7 @@ def _parser() -> argparse.ArgumentParser:
     install.add_argument("--dry-run", action="store_true")
 
     doctor = subcommands.add_parser("doctor", help="validate deployment prerequisites")
+    _add_slices_context(doctor)
     doctor.add_argument("--inventory", type=Path, required=True)
     doctor.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
     doctor.add_argument("--deps-root", type=Path, default=Path(".deps"))
@@ -85,9 +120,21 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate only inventory, lock, and pinned checkout state",
     )
-    doctor.add_argument("--owner", help="expected current SLICES/POS owner")
-    doctor.add_argument("--reservation-id", help="expected active reservation identifier")
-    doctor.add_argument("--allocation-id", help="expected current allocation identifier")
+    doctor.add_argument(
+        "--owner",
+        default=os.environ.get("SYNTHRAN_OWNER"),
+        help="expected current SLICES/POS owner",
+    )
+    doctor.add_argument(
+        "--reservation-id",
+        default=os.environ.get("SYNTHRAN_RESERVATION_ID"),
+        help="expected active reservation identifier",
+    )
+    doctor.add_argument(
+        "--allocation-id",
+        default=os.environ.get("SYNTHRAN_ALLOCATION_ID"),
+        help="expected current allocation identifier",
+    )
     doctor.add_argument(
         "--evidence-out",
         type=Path,
@@ -102,18 +149,70 @@ def _parser() -> argparse.ArgumentParser:
 
     network = subcommands.add_parser("network", help="plan or deploy the 5G network")
     network_commands = network.add_subparsers(dest="network_command", required=True)
+    prepare = network_commands.add_parser(
+        "prepare",
+        help="explicitly reserve, allocate, image, and prepare a SLICES node pair",
+    )
+    _add_slices_context(prepare)
+    prepare.add_argument("--core-node", default="sopnode-f2")
+    prepare.add_argument("--ran-node", default="sopnode-f3")
+    prepare.add_argument(
+        "--owner",
+        default=os.environ.get("SYNTHRAN_OWNER"),
+        help="expected SLICES/POS owner (or SYNTHRAN_OWNER)",
+    )
+    prepare.add_argument(
+        "--reservation-id",
+        default=os.environ.get("SYNTHRAN_RESERVATION_ID"),
+        help="reuse an active reservation instead of creating one",
+    )
+    prepare.add_argument(
+        "--duration-minutes",
+        type=int,
+        default=DEFAULT_DURATION_MINUTES,
+    )
+    prepare.add_argument("--run-id", required=True)
+    prepare.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    prepare.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    prepare.add_argument("--dry-run", action="store_true")
+    prepare.add_argument("--json", action="store_true", help="emit a redacted JSON plan")
+    prepare.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/preparations"),
+        help=argparse.SUPPRESS,
+    )
+    prepare.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="timeout in seconds for each preparation stage",
+    )
     deploy = network_commands.add_parser(
         "deploy", help="plan the explicit 5G network deployment"
     )
+    _add_slices_context(deploy)
     deploy.add_argument("--inventory", type=Path, required=True)
     deploy.add_argument("--profile", default="default")
     deploy.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
     deploy.add_argument("--deps-root", type=Path, default=Path(".deps"))
     deploy.add_argument("--dry-run", action="store_true")
     deploy.add_argument("--json", action="store_true", help="emit a redacted JSON plan")
-    deploy.add_argument("--owner", help="expected current SLICES/POS owner")
-    deploy.add_argument("--reservation-id", help="expected active reservation identifier")
-    deploy.add_argument("--allocation-id", help="expected current allocation identifier")
+    deploy.add_argument(
+        "--owner",
+        default=os.environ.get("SYNTHRAN_OWNER"),
+        help="expected current SLICES/POS owner",
+    )
+    deploy.add_argument(
+        "--reservation-id",
+        default=os.environ.get("SYNTHRAN_RESERVATION_ID"),
+        help="expected active reservation identifier",
+    )
+    deploy.add_argument(
+        "--allocation-id",
+        default=os.environ.get("SYNTHRAN_ALLOCATION_ID"),
+        help="expected current allocation identifier",
+    )
     deploy.add_argument(
         "--preflight-evidence",
         type=Path,
@@ -136,6 +235,7 @@ def _parser() -> argparse.ArgumentParser:
     verify = network_commands.add_parser(
         "verify", help="record gNB, srsUE, PDU tunnel, and UPF route evidence"
     )
+    _add_slices_context(verify)
     verify.add_argument("--inventory", type=Path, required=True)
     verify.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
     verify.add_argument("--deps-root", type=Path, default=Path(".deps"))
@@ -153,6 +253,34 @@ def _parser() -> argparse.ArgumentParser:
         help="timeout in seconds for each read-only proof command",
     )
     return parser
+
+
+def _require_slices_context(
+    args: argparse.Namespace, operation: str
+) -> tuple[str, str]:
+    required = {
+        "--slices-project": args.slices_project,
+        "--slices-experiment": args.slices_experiment,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise SlicesControllerError(
+            f"{operation} requires " + ", ".join(missing)
+        )
+    return args.slices_project, args.slices_experiment
+
+
+def _slices_doctor(args: argparse.Namespace) -> int:
+    project, experiment = _require_slices_context(args, "SLICES doctor")
+    lock = load_lock(args.lock)
+    report = verify_slices_controller(
+        lock=lock,
+        project=project,
+        experiment=experiment,
+        timeout_seconds=args.timeout,
+    )
+    print(report.render())
+    return 0
 
 
 def _deps_sync(args: argparse.Namespace) -> int:
@@ -216,6 +344,8 @@ def _doctor(args: argparse.Namespace) -> int:
         print("Live probes were not run because offline readiness failed.")
         return 2
     required = {
+        "--slices-project": args.slices_project,
+        "--slices-experiment": args.slices_experiment,
         "--owner": args.owner,
         "--reservation-id": args.reservation_id,
         "--allocation-id": args.allocation_id,
@@ -234,6 +364,8 @@ def _doctor(args: argparse.Namespace) -> int:
         owner=args.owner,
         reservation_id=args.reservation_id,
         allocation_id=args.allocation_id,
+        slices_project=args.slices_project,
+        slices_experiment=args.slices_experiment,
         timeout_seconds=args.timeout,
     )
     print()
@@ -241,6 +373,47 @@ def _doctor(args: argparse.Namespace) -> int:
     save_live_evidence(live_report, args.evidence_out)
     print(f"Sanitized evidence: {args.evidence_out.name}")
     return 0 if live_report.ready else 2
+
+
+def _network_prepare(args: argparse.Namespace) -> int:
+    lock = load_lock(args.lock)
+    plan = build_resource_preparation_plan(
+        lock=lock,
+        core_node=args.core_node,
+        ran_node=args.ran_node,
+        duration_minutes=args.duration_minutes,
+        run_id=args.run_id,
+        reservation_id=args.reservation_id,
+    )
+    if args.dry_run:
+        print(plan.render(as_json=args.json))
+        return 0
+    if args.json:
+        raise ResourcePreparationError("--json is supported only with --dry-run")
+    project, experiment = _require_slices_context(args, "live preparation")
+    if args.owner is None:
+        raise ResourcePreparationError(
+            "live preparation requires --owner or SYNTHRAN_OWNER"
+        )
+    result = execute_resource_preparation(
+        plan=plan,
+        lock=lock,
+        dependency_root=args.deps_root,
+        owner=args.owner,
+        slices_project=project,
+        slices_experiment=experiment,
+        reservation_id=args.reservation_id,
+        run_root=args.run_root,
+        repository_root=repository_root(),
+        timeout_seconds=args.timeout,
+    )
+    print(f"SLICES resources prepared for run {result.run_id}.")
+    print("Open5GS and srsRAN were not deployed.")
+    print(f"Generated inventory: {result.inventory_path}")
+    print(f"Private authority: {result.authority_path}")
+    print(f"Sanitized manifest: {result.manifest_path}")
+    print(f"Sanitized log: {result.log_path}")
+    return 0
 
 
 def _network_deploy(args: argparse.Namespace) -> int:
@@ -264,6 +437,8 @@ def _network_deploy(args: argparse.Namespace) -> int:
     if args.json:
         raise FiveGAnsibleError("--json is supported only with --dry-run")
     required = {
+        "--slices-project": args.slices_project,
+        "--slices-experiment": args.slices_experiment,
         "--owner": args.owner,
         "--reservation-id": args.reservation_id,
         "--allocation-id": args.allocation_id,
@@ -283,6 +458,8 @@ def _network_deploy(args: argparse.Namespace) -> int:
         owner=args.owner,
         reservation_id=args.reservation_id,
         allocation_id=args.allocation_id,
+        slices_project=args.slices_project,
+        slices_experiment=args.slices_experiment,
         run_id=args.run_id,
         run_root=args.run_root,
         repository_root=repository_root(),
@@ -304,15 +481,28 @@ def _network_verify(args: argparse.Namespace) -> int:
         print(report.render(), file=sys.stderr)
         return 2
     lock = load_lock(args.lock)
+    project, experiment = _require_slices_context(args, "network verification")
+    active_controller = verify_slices_controller(
+        lock=lock,
+        project=project,
+        experiment=experiment,
+        timeout_seconds=args.timeout,
+    )
     inventory = load_inventory(args.inventory)
     run_directory = args.run_root.resolve() / args.run_id
     manifest_path = run_directory / "manifest.json"
-    load_deployment_manifest(
+    manifest = load_deployment_manifest(
         path=manifest_path,
         run_id=args.run_id,
         inventory=inventory,
         lock=lock,
+        slices_project=project,
+        slices_experiment=experiment,
     )
+    if manifest.get("slices_controller") != active_controller.to_dict():
+        raise NetworkRuntimeError(
+            "deployment manifest controller versions do not match the active shell"
+        )
     verification = verify_network_path(
         inventory=inventory,
         lock=lock,
@@ -329,6 +519,8 @@ def _network_verify(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "slices" and args.slices_command == "doctor":
+            return _slices_doctor(args)
         if args.command == "deps" and args.deps_command == "sync":
             return _deps_sync(args)
         if args.command == "privacy" and args.privacy_command == "scan":
@@ -340,6 +532,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _hooks_install(args)
         if args.command == "doctor":
             return _doctor(args)
+        if args.command == "network" and args.network_command == "prepare":
+            return _network_prepare(args)
         if args.command == "network" and args.network_command == "deploy":
             return _network_deploy(args)
         if args.command == "network" and args.network_command == "verify":
@@ -350,6 +544,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         LivePreflightError,
         NetworkRuntimeError,
         PrivacyError,
+        ResourcePreparationError,
+        SlicesControllerError,
         OSError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)

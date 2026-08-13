@@ -46,7 +46,11 @@ The pinned `5g_ansible` tree accepts its transitive repositories through Ansible
 | `sopnode/open5gs-k8s` | `repo_branch` |
 | `turletti/srsran-helm` | `version` |
 
-The golden-path planner and executor pass these exact commits. Execution also installs only `kubernetes.core==6.5.0`, requires the locked yq binary by SHA-256, verifies the exact Python packages used for subscriber bootstrap, and replaces every selected mutable image tag with a Linux AMD64 digest before Kubernetes sees a manifest. It runs from an isolated detached `5g_ansible` worktree and never invokes upstream `deploy.sh`.
+The golden-path planner and executor pass these exact commits. The SynthRAN-owned preparation overlay pins `kubernetes.core==6.5.0`, Helm `3.18.4` from its locked Linux AMD64 archive digest, yq `4.45.1` from its locked binary digest, and exact direct remote Python package versions including `kubernetes==32.0.1`. Those direct Python versions do not freeze the complete transitive installation graph.
+
+The tracked `resource-preparation-boundary.patch` applies only to the locked upstream commit. It removes per-node free/allocation tasks, skips the mutable `k9s` helper, and prevents entry into Open5GS or srsRAN roles. It does not yet remove all mutable Kubernetes bootstrap inputs: the reviewed upstream setup still upgrades Python tooling, downloads Helm through a mutable script, and uses unversioned charts or remote manifests. `dependencies.lock.yml` therefore records `resource_bootstrap.status` as `blocked`, and live preparation fails before checkout, Ansible, or POS access. Moving that state to `ready` requires complete immutable transitive inputs, clean patch application, Linux Ansible syntax validation, and a recorded review decision.
+
+Deployment is separately evidence-gated, verifies its locked inputs, and replaces every selected mutable image tag with a Linux AMD64 digest before Kubernetes sees a manifest. It uses an isolated detached `5g_ansible` worktree and never invokes upstream `deploy.sh`.
 
 The tracked `deploy/ansible/patches/golden-path-boundary.patch` applies only to the locked `5g_ansible` commit and is checked before application. It prevents the selected roles from restarting the cluster, installing or upgrading host packages, downloading mutable tools, deploying the optional WebUI, or expanding the runtime beyond slice one and one srsUE. A patch-context mismatch is terminal.
 

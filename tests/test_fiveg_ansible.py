@@ -6,9 +6,10 @@ from io import StringIO
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from synthran.dependencies import load_lock
-from synthran.cli import main
+from synthran.cli import _parser, main
 from synthran.fiveg_ansible import (
     FiveGAnsibleError,
     PLAN_SCHEMA,
@@ -64,6 +65,29 @@ class InventoryContractTests(unittest.TestCase):
 
 
 class DeploymentPlanTests(unittest.TestCase):
+    def test_live_commands_accept_preparation_authority_environment(self) -> None:
+        authority = {
+            "SYNTHRAN_OWNER": "operator",
+            "SYNTHRAN_RESERVATION_ID": "7000000001",
+            "SYNTHRAN_ALLOCATION_ID": "allocation-pair",
+        }
+        with patch.dict("os.environ", authority, clear=False):
+            doctor = _parser().parse_args(
+                ["doctor", "--inventory", str(FIXTURE)]
+            )
+            deploy = _parser().parse_args(
+                ["network", "deploy", "--inventory", str(FIXTURE)]
+            )
+            prepare = _parser().parse_args(
+                ["network", "prepare", "--run-id", "prepare-001"]
+            )
+        for args in (doctor, deploy):
+            self.assertEqual("operator", args.owner)
+            self.assertEqual("7000000001", args.reservation_id)
+            self.assertEqual("allocation-pair", args.allocation_id)
+        self.assertEqual("operator", prepare.owner)
+        self.assertEqual("7000000001", prepare.reservation_id)
+
     def test_plan_uses_every_locked_deployment_commit(self) -> None:
         lock = load_lock(REPOSITORY_ROOT / "dependencies.lock.yml")
         inventory = load_inventory(FIXTURE)
@@ -123,7 +147,8 @@ class DeploymentPlanTests(unittest.TestCase):
             result = main(["network", "deploy", "--inventory", str(FIXTURE)])
         self.assertEqual(2, result)
         self.assertIn(
-            "live deployment requires --owner, --reservation-id, --allocation-id, "
+            "live deployment requires --slices-project, --slices-experiment, --owner, "
+            "--reservation-id, --allocation-id, "
             "--preflight-evidence, --run-id",
             stderr.getvalue(),
         )
