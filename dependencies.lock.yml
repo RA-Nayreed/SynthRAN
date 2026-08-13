@@ -1,6 +1,6 @@
 {
   "schema": "synthran/dependencies/v1alpha1",
-  "resolved_at_utc": "2026-08-13T22:39:19Z",
+  "resolved_at_utc": "2026-08-13T23:00:38Z",
   "git": {
     "fiveg_ansible": {
       "url": "https://github.com/sopnode/5g_ansible.git",
@@ -125,6 +125,13 @@
       "version": "13.0.1",
       "source": "https://galaxy.ansible.com",
       "role": "Kernel module management required by locked upstream preparation",
+      "license": "GPL-3.0-or-later"
+    },
+    "ansible_posix": {
+      "name": "ansible.posix",
+      "version": "2.2.2",
+      "source": "https://galaxy.ansible.com",
+      "role": "Mount management required by locked upstream preparation",
       "license": "GPL-3.0-or-later"
     }
   },
