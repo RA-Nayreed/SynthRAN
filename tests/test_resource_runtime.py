@@ -249,6 +249,18 @@ class ResourcePreparationTests(unittest.TestCase):
                 allocate_calls,
             )
             self.assertFalse(any("free" in call for call in runner.calls))
+            collection_calls = [
+                call
+                for call in runner.calls
+                if call[:3] == ("ansible-galaxy", "collection", "install")
+            ]
+            self.assertEqual(1, len(collection_calls))
+            self.assertTrue(
+                any(
+                    part.endswith("preparation-requirements.yml")
+                    for part in collection_calls[0]
+                )
+            )
             live_playbooks = [
                 call
                 for call in runner.calls

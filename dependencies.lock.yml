@@ -1,6 +1,6 @@
 {
   "schema": "synthran/dependencies/v1alpha1",
-  "resolved_at_utc": "2026-08-11T13:39:00Z",
+  "resolved_at_utc": "2026-08-13T22:39:19Z",
   "git": {
     "fiveg_ansible": {
       "url": "https://github.com/sopnode/5g_ansible.git",
@@ -118,6 +118,13 @@
       "version": "6.5.0",
       "source": "https://galaxy.ansible.com",
       "role": "Golden path Kubernetes and Helm modules",
+      "license": "GPL-3.0-or-later"
+    },
+    "community_general": {
+      "name": "community.general",
+      "version": "13.0.1",
+      "source": "https://galaxy.ansible.com",
+      "role": "Kernel module management required by locked upstream preparation",
       "license": "GPL-3.0-or-later"
     }
   },

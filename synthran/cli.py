@@ -46,6 +46,7 @@ from synthran.resource_runtime import (
     execute_resource_preparation,
 )
 from synthran.slices_controller import (
+    DEFAULT_CONTROLLER_TIMEOUT_SECONDS,
     SlicesControllerError,
     verify_slices_controller,
 )
@@ -75,7 +76,9 @@ def _parser() -> argparse.ArgumentParser:
         "doctor", help="read-only SLICES login, project, and experiment checks"
     )
     slices_doctor.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
-    slices_doctor.add_argument("--timeout", type=int, default=15)
+    slices_doctor.add_argument(
+        "--timeout", type=int, default=DEFAULT_CONTROLLER_TIMEOUT_SECONDS
+    )
     _add_slices_context(slices_doctor)
 
 

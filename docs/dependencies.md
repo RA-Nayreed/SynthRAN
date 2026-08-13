@@ -46,7 +46,7 @@ The pinned `5g_ansible` tree accepts its transitive repositories through Ansible
 | `sopnode/open5gs-k8s` | `repo_branch` |
 | `turletti/srsran-helm` | `version` |
 
-The golden-path planner and executor pass these exact commits. The SynthRAN-owned preparation overlay pins `kubernetes.core==6.5.0`, Helm `3.18.4` from its locked Linux AMD64 archive digest, yq `4.45.1` from its locked binary digest, and exact direct remote Python package versions including `kubernetes==32.0.1`. Those direct Python versions do not freeze the complete transitive installation graph.
+The golden-path planner and executor pass these exact commits. The SynthRAN-owned preparation overlay pins `kubernetes.core==6.5.0` and `community.general==13.0.1`; the latter provides the upstream common role's required `community.general.modprobe` action. It also pins Helm `3.18.4` from its locked Linux AMD64 archive digest, yq `4.45.1` from its locked binary digest, and exact direct remote Python package versions including `kubernetes==32.0.1`. Those direct Python versions do not freeze the complete transitive installation graph.
 
 The tracked `resource-preparation-boundary.patch` applies only to the locked upstream commit. It removes per-node free/allocation tasks, skips the mutable `k9s` helper, and prevents entry into Open5GS or srsRAN roles. The first native preparation intentionally accepts the remaining upstream apt, chart, manifest, and installer transitives; it is version-pinned, not artifact-reproducible. After explicit operator acceptance, `dependencies.lock.yml` records `resource_bootstrap.status` as `ready`. Later locking should target only dependencies shown by a native run to be unstable or scientifically material.
 

@@ -558,10 +558,15 @@ def execute_resource_preparation(
     checkout = validate_fiveg_checkout(lock, dependency_root)
     overlay_source = repository_root.resolve() / "deploy" / "ansible"
     preparation_playbook = overlay_source / "prepare-tools.yml"
+    preparation_requirements = overlay_source / "preparation-requirements.yml"
     boundary_patch_source = (
         overlay_source / "patches" / "resource-preparation-boundary.patch"
     )
-    if not preparation_playbook.is_file() or not boundary_patch_source.is_file():
+    if (
+        not preparation_playbook.is_file()
+        or not preparation_requirements.is_file()
+        or not boundary_patch_source.is_file()
+    ):
         raise ResourcePreparationError(
             "SynthRAN resource preparation overlay is incomplete"
         )
@@ -765,7 +770,7 @@ def execute_resource_preparation(
             "collection",
             "install",
             "-r",
-            str(overlay_directory / "requirements.yml"),
+            str(overlay_directory / "preparation-requirements.yml"),
             "-p",
             str(collections),
         ),

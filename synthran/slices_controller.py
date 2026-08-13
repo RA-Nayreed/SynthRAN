@@ -18,6 +18,7 @@ SLICES_CONTROLLER_SCHEMA = "synthran/slices-controller/v1alpha1"
 EXPECTED_POS_VERSION = "2.5.35"
 SAFE_CONTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 VERSION_RE = re.compile(r"(?<![0-9])([0-9]+\.[0-9]+(?:\.[0-9]+)?)(?![0-9])")
+DEFAULT_CONTROLLER_TIMEOUT_SECONDS = 60
 
 
 class SlicesControllerError(RuntimeError):
@@ -140,7 +141,10 @@ def _checked_output(
     timeout_seconds: int,
     label: str,
 ) -> str:
-    result = runner(command, timeout_seconds)
+    try:
+        result = runner(command, timeout_seconds)
+    except SlicesControllerError as exc:
+        raise SlicesControllerError(f"{label} failed: {exc}") from exc
     if result.returncode != 0:
         raise SlicesControllerError(f"{label} failed")
     output = result.stdout.strip()
@@ -175,7 +179,7 @@ def verify_slices_controller(
     environment: Mapping[str, str] | None = None,
     system_name: str | None = None,
     python_version: str | None = None,
-    timeout_seconds: int = 15,
+    timeout_seconds: int = DEFAULT_CONTROLLER_TIMEOUT_SECONDS,
 ) -> SlicesControllerReport:
     """Verify the supported Linux SLICES CLI context without changing it."""
 

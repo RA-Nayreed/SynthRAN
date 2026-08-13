@@ -47,7 +47,7 @@ python -m synthran slices doctor \
   --slices-experiment EXPERIMENT
 ```
 
-This check requires Linux, the active `synthran` environment, the exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and the existing experiment. Export the non-secret context for later commands:
+This check requires Linux, the active `synthran` environment, the exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and the existing experiment. Each read-only controller probe allows 60 seconds because project lookup can be slower than local version checks. Export the non-secret context for later commands:
 
 ```sh
 export SYNTHRAN_SLICES_PROJECT=PROJECT
@@ -85,7 +85,7 @@ The command performs these guarded steps:
 
 - validate the dependency lock, selected nodes, tools, run ID, and exact locked checkout;
 - create an isolated detached worktree and apply the commit-bound preparation patch;
-- install the exact Ansible collection and syntax-check both playbooks before POS;
+- install the exact required Ansible collections and syntax-check both playbooks before POS;
 - reject foreign, partial, or split allocations;
 - create or verify one current reservation;
 - allocate both nodes together and verify their shared allocation owner;

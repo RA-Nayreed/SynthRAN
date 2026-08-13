@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+from synthran.cli import _parser
 from synthran.dependencies import load_lock
 from synthran.slices_controller import (
     ControllerCommandResult,
@@ -30,10 +31,12 @@ class ControllerRunner:
         self.project = project
         self.experiment = experiment
         self.calls: list[tuple[str, ...]] = []
+        self.timeouts: list[int] = []
 
     def __call__(self, command, _timeout):
         argv = tuple(command)
         self.calls.append(argv)
+        self.timeouts.append(_timeout)
         if argv == ("ansible-playbook", "--version"):
             return ControllerCommandResult(
                 0, f"ansible-playbook [core {self.ansible_version}]\n"
@@ -77,13 +80,25 @@ class SlicesControllerTests(unittest.TestCase):
         return verify_slices_controller(**arguments)
 
     def test_accepts_exact_locked_controller_and_slices_context(self) -> None:
-        report = self.verify()
+        runner = ControllerRunner()
+        report = self.verify(runner=runner)
         self.assertTrue(report.ready)
         self.assertEqual("2.20.5", report.ansible_version)
         self.assertEqual("2.5.35", report.pos_version)
         rendered = report.render()
         self.assertNotIn("project-test", rendered)
         self.assertNotIn("experiment-test", rendered)
+
+        self.assertEqual({60}, set(runner.timeouts))
+
+    def test_cli_uses_controller_timeout_default(self) -> None:
+        args = _parser().parse_args(
+            [
+                "slices", "doctor", "--slices-project", "project-test",
+                "--slices-experiment", "experiment-test",
+            ]
+        )
+        self.assertEqual(60, args.timeout)
 
     def test_rejects_non_linux_controller(self) -> None:
         with self.assertRaisesRegex(SlicesControllerError, "Linux"):
@@ -116,6 +131,20 @@ class SlicesControllerTests(unittest.TestCase):
             self.verify(runner=ControllerRunner(project="project-test-extra"))
         with self.assertRaisesRegex(SlicesControllerError, "experiment"):
             self.verify(runner=ControllerRunner(experiment="experiment-test-extra"))
+
+    def test_timeout_names_the_slow_controller_probe(self) -> None:
+        runner = ControllerRunner()
+
+        def timeout_project(command, timeout):
+            if tuple(command) == ("slices", "project", "show"):
+                raise SlicesControllerError("a SLICES controller probe timed out")
+            return runner(command, timeout)
+
+        with self.assertRaisesRegex(
+            SlicesControllerError,
+            r"SLICES project probe failed: .*timed out",
+        ):
+            self.verify(runner=timeout_project)
 
     def test_missing_tool_fails_before_any_probe(self) -> None:
         runner = ControllerRunner()
