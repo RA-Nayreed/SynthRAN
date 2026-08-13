@@ -158,6 +158,7 @@ class ResourcePreparationTests(unittest.TestCase):
 
     def test_plan_uses_one_shared_allocation_and_never_deploy_sh(self) -> None:
         rendered = self.plan.render()
+        self.assertEqual("ready", self.plan.bootstrap_status)
         self.assertIn(
             "pos allocations allocate sopnode-f2 sopnode-f3",
             rendered,
@@ -168,10 +169,15 @@ class ResourcePreparationTests(unittest.TestCase):
         self.assertIn("stops before Open5GS or srsRAN deployment", rendered)
 
     def test_live_preparation_is_blocked_before_any_provider_call(self) -> None:
+        blocked_plan = replace(
+            self.plan,
+            bootstrap_status="blocked",
+            bootstrap_reason="test-only blocked bootstrap",
+        )
         runner = PreparationRunner()
         with self.assertRaisesRegex(ResourcePreparationError, "blocked by the dependency lock"):
             execute_resource_preparation(
-                plan=self.plan,
+                plan=blocked_plan,
                 lock=self.lock,
                 dependency_root=Path("unused"),
                 owner="operator",

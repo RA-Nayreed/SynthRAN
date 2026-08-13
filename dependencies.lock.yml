@@ -150,8 +150,8 @@
     }
   },
   "resource_bootstrap": {
-    "status": "blocked",
-    "reason": "Upstream Kubernetes setup still contains mutable downloads and unversioned transitive installers; live preparation must fail before POS mutation."
+    "status": "ready",
+    "reason": "The operator accepted the experimental use of mutable upstream apt, chart, manifest, and installer transitives; live preparation is enabled only through the guarded Linux SLICES controller path."
   },
   "conda": {
     "environment_name": "synthran",

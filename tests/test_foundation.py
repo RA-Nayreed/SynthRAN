@@ -31,6 +31,27 @@ class FoundationTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("fetch-depth: 0", workflow)
 
+    def test_privacy_steps_run_after_unrelated_test_failure(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github" / "workflows" / "privacy.yml"
+        ).read_text(encoding="utf-8")
+        source_scan = (
+            "      - name: Scan tracked source for private context\n"
+            "        run: conda run --no-capture-output -n synthran "
+            "python -m synthran privacy scan --worktree\n"
+            "        if: ${{ !cancelled() }}\n"
+        )
+        history_scan = (
+            "      - name: Scan Git history for secrets\n"
+            "        if: ${{ !cancelled() }}\n"
+            "        uses: gitleaks/gitleaks-action@"
+            "e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e\n"
+            "        env:\n"
+            "          GITHUB_TOKEN: ${{ github.token }}\n"
+        )
+        self.assertIn(source_scan, workflow)
+        self.assertIn(history_scan, workflow)
+
     def test_workflow_uses_the_locked_conda_environment(self) -> None:
         lock = json.loads((REPOSITORY_ROOT / "dependencies.lock.yml").read_text())
         workflow = (

@@ -60,7 +60,7 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 ## Current status
 
-SynthRAN is in early development. The repository foundation is complete, and the golden-path network implementation is offline-tested but not accepted on SLICES. Live resource preparation is intentionally blocked before any POS mutation because the reviewed upstream Kubernetes bootstrap still contains mutable downloads and unversioned transitive installers.
+SynthRAN is in early development. The repository foundation is complete, and the golden-path network implementation is offline-tested but not accepted on SLICES. The operator accepted the lean Linux preparation path's experimental bootstrap risk, so guarded live preparation is enabled; its upstream transitives remain version-pinned rather than artifact-locked.
 
 | Capability | Status |
 |---|---|
@@ -69,7 +69,7 @@ SynthRAN is in early development. The repository foundation is complete, and the
 | Open5GS + srsRAN + RFSIM inventory validation | Implemented and offline-tested |
 | Redacted immutable `5g_ansible` deployment plan | Implemented and offline-tested |
 | SLICES CLI controller, login, project and experiment verification | Implemented and offline-tested; SLICES acceptance pending |
-| Explicit SLICES reservation, shared allocation, node imaging and Kubernetes preparation | Fail-closed implementation present; live execution blocked pending immutable bootstrap closure |
+| Explicit SLICES reservation, shared allocation, node imaging and Kubernetes preparation | Enabled for explicit operator-run Linux execution; SLICES acceptance pending |
 | Lock-, inventory-, authority- and SLICES-context-bound live preflight | Implemented and offline-tested; SLICES acceptance pending |
 | Isolated locked-worktree deployment and srsUE/UPF path proof | Implemented and offline-tested; operator execution pending |
 | Cooja sensors and MQTT bridge | Planned after network-path acceptance |
@@ -125,7 +125,7 @@ python -m synthran network prepare \
   --dry-run --owner OPERATOR --run-id network-001
 ```
 
-The preview reports `Bootstrap: BLOCKED` until every upstream bootstrap input is immutable and reviewed. Do not remove `--dry-run` while that lock state remains. Read the exact controller and safety boundary in the [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
+The non-executing preview reports `Bootstrap: READY` after the recorded operator acceptance. Remove `--dry-run` only from the verified Linux SLICES controller because live preparation may image and reset the selected nodes. Read the exact controller and safety boundary in the [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
 
 ## Planned experiment output
 

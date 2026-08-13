@@ -48,9 +48,11 @@ jobs:
 
       - name: Scan tracked source for private context
         run: conda run --no-capture-output -n synthran python -m synthran privacy scan --worktree
+        if: ${{ !cancelled() }}
 
       # v3, pinned. This is the upstream Gitleaks action with full Git history available.
       - name: Scan Git history for secrets
+        if: ${{ !cancelled() }}
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
           GITHUB_TOKEN: ${{ github.token }}

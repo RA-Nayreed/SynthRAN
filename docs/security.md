@@ -20,7 +20,7 @@ SynthRAN uses complementary controls:
 1. tracked ignore rules for known local and generated paths;
 2. a local pre-push hook that scans every outgoing commit;
 3. GitHub push protection for supported provider credentials;
-4. a read-only CI workflow that scans the worktree and full Git history with Gitleaks;
+4. a read-only CI workflow whose source and Gitleaks scans still run when unrelated unit tests fail;
 5. explicit sanitization for generated public text.
 
 Scanners report a rule and location, not the detected value. Source findings block publication rather than silently rewriting code.

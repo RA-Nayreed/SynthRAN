@@ -11,7 +11,7 @@ resource preparation
 -> read-only gNB/srsUE/tunnel/UPF proof
 ```
 
-Every live step is operator-executed from a verified SLICES shell. The preparation implementation can create a reservation, jointly allocate two nodes, image and reset them, build Kubernetes, and install remote tools, but live execution is currently blocked before POS mutation because the upstream bootstrap graph is not yet fully immutable.
+Every live step is operator-executed from a verified SLICES shell. The lean preparation implementation can create a reservation, jointly allocate two nodes, image and reset them, build Kubernetes, and install version-pinned remote tools. The operator accepted that upstream bootstrap transitives are not artifact-locked, so the guarded live preparation path is enabled.
 
 The supported pair defaults to `sopnode-f2` for the core and `sopnode-f3` for the RAN. The adapter also knows the locked upstream mappings for `sopnode-f1` and `sopnode-w3`. Core and RAN must be different nodes.
 
@@ -69,9 +69,9 @@ The default plan creates a 120-minute reservation for `sopnode-f2` and `sopnode-
 
 Dry-run writes nothing and does not contact POS.
 
-## 3. Resource preparation safety gate
+## 3. Live preparation
 
-Live resource preparation is deliberately disabled while `dependencies.lock.yml` records `resource_bootstrap.status` as `blocked`. The following command must fail before any Git, Ansible, or POS operation:
+`dependencies.lock.yml` records `resource_bootstrap.status` as `ready` after explicit operator acceptance. Run the modifying command only from the verified Linux SLICES controller; it may reserve, allocate, image, and reset the selected nodes:
 
 ```sh
 python -m synthran network prepare \
@@ -79,23 +79,24 @@ python -m synthran network prepare \
   --run-id network-001
 ```
 
-Do not bypass this gate. The dry-run prints the unresolved reason. Once every upstream Kubernetes, CNI, storage, Python, chart, and remote-download input has an immutable reviewed lock, the lock may be changed to `ready` through a separate reviewed decision. The existing execution path is then designed to:
+The implementation is intentionally smaller than an air-gapped or artifact-complete bootstrap. It accepts upstream apt, chart, manifest, and installer transitives for the first native experiment. Do not represent this preparation as bit-for-bit artifact reproducible.
+
+The command performs these guarded steps:
 
 - validate the dependency lock, selected nodes, tools, run ID, and exact locked checkout;
-- creates an isolated detached worktree and applies the exact preparation boundary patch;
-- installs the exact locked Ansible collection and syntax-checks both playbooks before contacting POS;
-- refuses foreign, partial, or split allocations;
-- creates and verifies one current reservation, unless an existing reservation ID was supplied;
-- allocates both nodes in one `pos allocations allocate` command;
-- verifies the shared allocation ID and owner on both nodes;
-- records newly imaged SSH host keys on first contact in a run-scoped ignored file and rejects later changes;
-- reuses upstream POS image, boot-parameter, reset, SSH-wait, Linux setup, Kubernetes, CNI, storage, and GRE roles;
-- installs exact Python packages under `/opt/synthran-venv`, digest-locked yq, and exact Helm;
-- stops before every Open5GS and srsRAN deployment role.
+- create an isolated detached worktree and apply the commit-bound preparation patch;
+- install the exact Ansible collection and syntax-check both playbooks before POS;
+- reject foreign, partial, or split allocations;
+- create or verify one current reservation;
+- allocate both nodes together and verify their shared allocation owner;
+- record newly imaged SSH host keys in a run-scoped ignored file and reject later changes;
+- reuse upstream imaging, Linux, Kubernetes, CNI, storage, and GRE roles;
+- install exact direct Python packages, checksum-verified yq, and exact Helm;
+- stop before every Open5GS and srsRAN deployment role.
 
 It never calls `deploy.sh`, never frees an allocation, never ignores reservation failure, and never rolls back a partially modified testbed automatically.
 
-After a future successful preparation, load the ignored private authority and SLICES-context variables:
+After a successful preparation, load the ignored private authority and SLICES-context variables:
 
 ```sh
 source .synthran/preparations/network-001/authority.env

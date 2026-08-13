@@ -143,8 +143,17 @@ class DeploymentPlanTests(unittest.TestCase):
 
     def test_cli_requires_every_live_deployment_gate(self) -> None:
         stderr = StringIO()
-        with redirect_stderr(stderr):
-            result = main(["network", "deploy", "--inventory", str(FIXTURE)])
+        with tempfile.TemporaryDirectory() as directory, redirect_stderr(stderr):
+            result = main(
+                [
+                    "network",
+                    "deploy",
+                    "--inventory",
+                    str(FIXTURE),
+                    "--deps-root",
+                    directory,
+                ]
+            )
         self.assertEqual(2, result)
         self.assertIn(
             "live deployment requires --slices-project, --slices-experiment, --owner, "

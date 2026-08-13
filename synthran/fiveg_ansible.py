@@ -432,7 +432,7 @@ def run_offline_doctor(
         checks.append(DoctorCheck("dependency-lock", False, detail))
         lock = None
     else:
-        checks.append(DoctorCheck("dependency-lock", True, "immutable inputs validated"))
+        checks.append(DoctorCheck("dependency-lock", True, "version-pinned inputs validated"))
 
     if lock is not None:
         try:

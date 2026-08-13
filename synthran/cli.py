@@ -417,6 +417,24 @@ def _network_prepare(args: argparse.Namespace) -> int:
 
 
 def _network_deploy(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        if args.json:
+            raise FiveGAnsibleError("--json is supported only with --dry-run")
+        required = {
+            "--slices-project": args.slices_project,
+            "--slices-experiment": args.slices_experiment,
+            "--owner": args.owner,
+            "--reservation-id": args.reservation_id,
+            "--allocation-id": args.allocation_id,
+            "--preflight-evidence": args.preflight_evidence,
+            "--run-id": args.run_id,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise NetworkRuntimeError(
+                "live deployment requires " + ", ".join(missing)
+            )
+
     report = run_offline_doctor(
         inventory_path=args.inventory,
         lock_path=args.lock,
@@ -434,22 +452,6 @@ def _network_deploy(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(plan.render(as_json=args.json))
         return 0
-    if args.json:
-        raise FiveGAnsibleError("--json is supported only with --dry-run")
-    required = {
-        "--slices-project": args.slices_project,
-        "--slices-experiment": args.slices_experiment,
-        "--owner": args.owner,
-        "--reservation-id": args.reservation_id,
-        "--allocation-id": args.allocation_id,
-        "--preflight-evidence": args.preflight_evidence,
-        "--run-id": args.run_id,
-    }
-    missing = [name for name, value in required.items() if value is None]
-    if missing:
-        raise NetworkRuntimeError(
-            "live deployment requires " + ", ".join(missing)
-        )
     result = execute_network_deployment(
         plan=plan,
         lock=lock,
