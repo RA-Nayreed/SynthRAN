@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import hashlib
 import json
 from pathlib import Path
@@ -33,6 +34,7 @@ DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_EVIDENCE_MAX_AGE = timedelta(minutes=15)
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+POS_TIMEZONE = ZoneInfo("Europe/Berlin")
 
 
 class LivePreflightError(RuntimeError):
@@ -140,15 +142,24 @@ def _format_time(value: datetime) -> str:
 def _parse_time(value: object, label: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise LivePreflightError(f"{label} is missing from provider evidence")
+
     text = value.strip()
+
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
+
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:
-        raise LivePreflightError(f"{label} is not an ISO-8601 timestamp") from exc
+        raise LivePreflightError(
+            f"{label} is not an ISO-8601 timestamp"
+        ) from exc
+
+    # POS 2.5.35 returns calendar timestamps without a UTC offset,
+    # e.g. "2026-08-15 02:30:00". These are POS-local times.
     if parsed.tzinfo is None:
-        raise LivePreflightError(f"{label} must include a timezone")
+        parsed = parsed.replace(tzinfo=POS_TIMEZONE)
+
     return parsed.astimezone(timezone.utc)
 
 

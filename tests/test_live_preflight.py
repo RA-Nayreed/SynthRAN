@@ -36,6 +36,7 @@ class FakeRunner:
         self,
         *,
         reservation_owner: str = "operator",
+        reservation_start: str = "2026-08-12T11:00:00Z",
         reservation_end: str = "2026-08-12T13:00:00Z",
         reservation_id: int = 7000000001,
         duplicate_reservation: bool = False,
@@ -49,6 +50,7 @@ class FakeRunner:
         pymongo_version: str = "4.5.0",
     ) -> None:
         self.reservation_owner = reservation_owner
+        self.reservation_start = reservation_start
         self.reservation_end = reservation_end
         self.reservation_id = reservation_id
         self.duplicate_reservation = duplicate_reservation
@@ -78,8 +80,8 @@ class FakeRunner:
                 "id": self.reservation_id,
                 "owner": self.reservation_owner,
                 "nodes": ["lab-core", "lab-ran"],
-                "start_date": "2026-08-12T11:00:00Z",
-                "end_date": self.reservation_end,
+                "start_date": self.reservation_start,
+                "end_date": self.reservation_end,   
             }
             reservations = [reservation]
             if self.duplicate_reservation:
@@ -252,6 +254,32 @@ class LivePreflightTests(unittest.TestCase):
         )
         self.assertFalse(report.ready)
         self.assertIn("not active at the current UTC time", report.render())
+    def test_pos_naive_local_reservation_timestamps_are_accepted(self) -> None:
+        # NOW is 2026-08-12 12:00 UTC, which is 14:00 CEST.
+        # POS 2.5.35 returns calendar timestamps without an explicit timezone.
+        _fake, report = self.run_ready(
+            FakeRunner(
+                reservation_start="2026-08-12 13:00:00",
+                reservation_end="2026-08-12 15:00:00",
+            )
+        )
+        self.assertTrue(report.ready, report.render())
+
+    def test_pos_naive_local_timestamp_is_not_treated_as_utc(self) -> None:
+        # At NOW=12:00 UTC / 14:00 CEST, this local reservation has already expired.
+        _fake, report = self.run_ready(
+            FakeRunner(
+                reservation_start="2026-08-12 12:00:00",
+                reservation_end="2026-08-12 13:59:59",
+            )
+        )
+        self.assertFalse(report.ready)
+        self.assertIn("not active at the current UTC time", report.render())
+
+    def test_missing_reservation_fails_closed(self) -> None:
+        _fake, report = self.run_ready(FakeRunner(reservation_id=7000000002))
+        self.assertFalse(report.ready)
+        self.assertIn("was not found in the POS calendar", report.render())
 
     def test_missing_reservation_fails_closed(self) -> None:
         _fake, report = self.run_ready(FakeRunner(reservation_id=7000000002))
@@ -439,6 +467,8 @@ class LivePreflightTests(unittest.TestCase):
                     slices_experiment="experiment-test",
                     now=NOW,
                 )
+
+    
 
 
 
