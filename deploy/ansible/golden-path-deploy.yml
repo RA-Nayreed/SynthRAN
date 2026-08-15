@@ -114,6 +114,29 @@
     - name: Apply SynthRAN RFSIM image pins
       ansible.builtin.include_tasks: tasks/pin-srsran-images.yml
 
+    - name: Lint the generated srsUE Helm chart
+      ansible.builtin.command:
+        argv:
+          - helm
+          - lint
+          - "{{ repo_dest_abs }}/charts/srsue"
+          - -f
+          - "{{ repo_dest_abs }}/charts/srsue/values-rfsim.yaml"
+      changed_when: false
+
+    - name: Render the generated srsUE Helm chart
+      ansible.builtin.command:
+        argv:
+          - helm
+          - template
+          - srsran-ue
+          - "{{ repo_dest_abs }}/charts/srsue"
+          - -n
+          - "{{ ran_ns }}"
+          - -f
+          - "{{ repo_dest_abs }}/charts/srsue/values-rfsim.yaml"
+      changed_when: false
+
     - name: Deploy the single srsUE pod
       ansible.builtin.include_role:
         name: 5g/srsRAN/deploy

@@ -2,20 +2,23 @@
 - name: Pin the RFSIM gNB image in the rendered chart
   ansible.builtin.lineinfile:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
-    regexp: '^\s*image:\s*"\{\{ .Values.image.repository \}\}:\{\{ .Values.image.tag \}\}"\s*$'
-    line: '          image: "{{ synthran_images.srsran_gnb }}"'
+    regexp: '^(\s*)image:\s*"\{\{ .Values.image.repository \}\}:\{\{ .Values.image.tag \}\}"\s*$'
+    line: '\1image: "{{ synthran_images.srsran_gnb }}"'
+    backrefs: true
 
 - name: Pin the gNB log-helper image
   ansible.builtin.lineinfile:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
-    regexp: '^\s*image:\s*busybox\s*$'
-    line: '          image: "{{ synthran_images.busybox_1_36 }}"'
+    regexp: '^(\s*)image:\s*busybox\s*$'
+    line: '\1image: "{{ synthran_images.busybox_1_36 }}"'
+    backrefs: true
 
 - name: Pin the single srsUE image in the rendered chart
   ansible.builtin.lineinfile:
     path: "{{ repo_dest_abs }}/charts/srsue/templates/deployment.yaml"
-    regexp: '^\s*image:\s*"\{\{ .Values.image.repository \}\}:\{\{ .Values.image.tag \}\}"\s*$'
-    line: '                image: "{{ synthran_images.srsran_ue }}"'
+    regexp: '^(\s*)image:\s*"\{\{ .Values.image.repository \}\}:\{\{ .Values.image.tag \}\}"\s*$'
+    line: '\1image: "{{ synthran_images.srsran_ue }}"'
+    backrefs: true
 
 - name: Verify all three RFSIM image pins are present
   ansible.builtin.command:
@@ -41,7 +44,7 @@
     marker: "{{ '{{' }}/* {mark} SYNTHRAN RUN OWNERSHIP */{{ '}}' }}"
     insertafter: '^\{\{- define "srsran-(?:gnb|ue)\.selectorLabels" -\}\}$'
     block: |
-      synthran.run/id: "{{ '{{' }} .Values.synthranRunId | quote {{ '}}' }}"
+      synthran.run/id: {{ '{{' }} .Values.synthranRunId | quote {{ '}}' }}
   loop:
     - "{{ repo_dest_abs }}/charts/srsran-gnb/templates/_helpers.tpl"
     - "{{ repo_dest_abs }}/charts/srsue/templates/_helpers.tpl"
@@ -52,7 +55,7 @@
     marker: "{{ '{{' }}/* {mark} SYNTHRAN RESOURCE OWNERSHIP */{{ '}}' }}"
     insertafter: '^\{\{- define "srsran-(?:gnb|ue)\.labels" -\}\}$'
     block: |
-      synthran.run/id: "{{ '{{' }} .Values.synthranRunId | quote {{ '}}' }}"
+      synthran.run/id: {{ '{{' }} .Values.synthranRunId | quote {{ '}}' }}
   loop:
     - "{{ repo_dest_abs }}/charts/srsran-gnb/templates/_helpers.tpl"
     - "{{ repo_dest_abs }}/charts/srsue/templates/_helpers.tpl"
