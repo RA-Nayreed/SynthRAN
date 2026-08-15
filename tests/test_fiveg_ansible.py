@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -143,7 +144,16 @@ class DeploymentPlanTests(unittest.TestCase):
 
     def test_cli_requires_every_live_deployment_gate(self) -> None:
         stderr = StringIO()
-        with tempfile.TemporaryDirectory() as directory, redirect_stderr(stderr):
+        clean_env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("SYNTHRAN_")
+        }
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, clean_env, clear=True),
+            redirect_stderr(stderr),
+        ):
             result = main(
                 [
                     "network",
