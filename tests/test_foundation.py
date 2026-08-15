@@ -166,6 +166,39 @@ class FoundationTests(unittest.TestCase):
         self.assertIn("conda activate synthran", paths[2].read_text(encoding="utf-8"))
         self.assertIn("conda activate synthran", paths[3].read_text(encoding="utf-8"))
 
+    def test_open5gs_runtime_image_matches_configuration_schema(self) -> None:
+        lock = json.loads(
+            (REPOSITORY_ROOT / "dependencies.lock.yml").read_text()
+        )
+
+        open5gs = lock["containers"]["open5gs"]
+        smf = lock["containers"]["open5gs_smf"]
+
+        self.assertEqual("ghcr.io/niloysh/open5gs", open5gs["image"])
+        self.assertEqual("v2.7.0", open5gs["tag"])
+
+        self.assertEqual(open5gs["image"], smf["image"])
+        self.assertEqual(open5gs["tag"], smf["tag"])
+        self.assertEqual(open5gs["digest"], smf["digest"])
+
+    def test_open5gs_image_pinning_replaces_legacy_upstream_image(self) -> None:
+        pinning = (
+            REPOSITORY_ROOT
+            / "deploy"
+            / "ansible"
+            / "tasks"
+            / "pin-open5gs-images.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'old: "ghcr.io/niloysh/open5gs:v2.6.4-aio"',
+            pinning,
+        )
+        self.assertIn(
+            'new: "{{ synthran_images.open5gs }}"',
+            pinning,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

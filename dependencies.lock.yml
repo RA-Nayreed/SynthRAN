@@ -49,8 +49,8 @@
     },
     "open5gs": {
       "image": "ghcr.io/niloysh/open5gs",
-      "tag": "v2.6.4-aio",
-      "digest": "sha256:b41e5919f28edb1467b7c189302d7460d05e74cf5fb65f19126b5851334cb3ce",
+      "tag": "v2.7.0",
+      "digest": "sha256:eb8b23589c724ba2e18b783c544dbcd56f02da29f818d4cf1974853b53aee329",
       "platform": "linux/amd64",
       "role": "Golden path Open5GS network functions",
       "license": "NOASSERTION"
