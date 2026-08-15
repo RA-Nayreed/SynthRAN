@@ -213,6 +213,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
         self.assertNotIn("deploy.sh", wrapper)
         self.assertIn("synthran_golden_path_guard: true", wrapper)
         self.assertIn(
+            'ansible_python_interpreter: "{{ ansible_playbook_python }}"',
+            wrapper,
+        )
+        self.assertIn(
             ".synthran/{{ synthran_run_id }}/open5gs-k8s",
             wrapper,
         )
@@ -359,6 +363,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 playbook_call[0],
             )
             self.assertEqual("True", playbook_call[2]["ANSIBLE_HOST_KEY_CHECKING"])
+            self.assertEqual(
+                "ansible.builtin.default",
+                playbook_call[2]["ANSIBLE_STDOUT_CALLBACK"],
+            )
             self.assertIn(
                 "StrictHostKeyChecking=yes",
                 playbook_call[2]["ANSIBLE_SSH_ARGS"],

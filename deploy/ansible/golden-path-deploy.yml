@@ -47,6 +47,8 @@
       delegate_to: localhost
       run_once: true
       become: false
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
 
     - name: Prepare the locked Open5GS checkout and profile
       ansible.builtin.include_role:

@@ -428,6 +428,7 @@ def execute_network_deployment(
         {
             "ANSIBLE_COLLECTIONS_PATH": str(collections),
             "ANSIBLE_HOST_KEY_CHECKING": "True",
+            "ANSIBLE_STDOUT_CALLBACK": "ansible.builtin.default",
             "ANSIBLE_SSH_ARGS": (
                 "-o ControlMaster=auto -o ControlPersist=60s "
                 "-o StrictHostKeyChecking=yes "
