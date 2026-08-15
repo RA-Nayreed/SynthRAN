@@ -248,6 +248,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
             "-- name: Deploy Open5GS Web UI",
             "-- name: Run add-admin-account.py",
             "-  ansible.builtin.package:",
+            '-    ansible_python_interpreter: "{{ ansible_playbook_python }}"',
         ):
             self.assertIn(removed_task, boundary_patch)
 

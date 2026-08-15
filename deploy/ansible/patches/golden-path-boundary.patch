@@ -236,6 +236,17 @@ index 978431e6e4895d797110d3e89d0e09607f280873..a1ca5dbf81c7a3db05f463b42f641e4b
    
  - name: Remove existing srsRAN Helm directory to ensure clean state
    ansible.builtin.file:
+@@ -43,9 +45,7 @@
+ - name: Ensure namespace exists
+   kubernetes.core.k8s:
+     api_version: v1
+     kind: Namespace
+     name: "{{ ran_ns }}"
+     state: present
+-  vars:
+-    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+ 
+ - name: Gather env facts (remote)
 diff --git a/roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml b/roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml
 index 674bfa91925ddcecf5e651b285b910ce7c99dd5f..eaf78493a6b7d7a7044754fc506c92a1158ac9db 100644
 --- a/roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml

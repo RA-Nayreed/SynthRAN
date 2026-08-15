@@ -52,7 +52,7 @@ The tracked `resource-preparation-boundary.patch` applies only to the locked ups
 
 Deployment is separately evidence-gated, verifies its locked inputs, and replaces every selected mutable image tag with a Linux AMD64 digest before Kubernetes sees a manifest. It uses an isolated detached `5g_ansible` worktree and never invokes upstream `deploy.sh`.
 
-The tracked `deploy/ansible/patches/golden-path-boundary.patch` applies only to the locked `5g_ansible` commit and is checked before application. It prevents the selected roles from restarting the cluster, installing or upgrading host packages, downloading mutable tools, deploying the optional WebUI, or expanding the runtime beyond slice one and one srsUE. A patch-context mismatch is terminal.
+The tracked `deploy/ansible/patches/golden-path-boundary.patch` applies only to the locked `5g_ansible` commit and is checked before application. It prevents the selected roles from restarting the cluster, installing or upgrading host packages, downloading mutable tools, deploying the optional WebUI, overriding remote task interpreters with the controller's local Python path, or expanding the runtime beyond slice one and one srsUE. A patch-context mismatch is terminal.
 
 ## Update procedure
 
