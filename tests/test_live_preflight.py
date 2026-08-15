@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-
+import os
 from synthran.dependencies import load_lock
 from synthran.fiveg_ansible import load_inventory
 from synthran.live_preflight import (
@@ -194,23 +194,38 @@ class LivePreflightTests(unittest.TestCase):
 
     def run_ready(self, runner: FakeRunner | None = None):
         fake = runner or FakeRunner()
-        with patch(
-            "synthran.live_preflight.verify_slices_controller",
-            return_value=self.controller,
-        ):
-            report = run_live_preflight(
-                inventory=self.inventory,
-                lock=self.lock,
-                owner="operator",
-                reservation_id=RESERVATION_ID,
-                allocation_id="alloc-test",
-                slices_project="project-test",
-                slices_experiment="experiment-test",
-                runner=fake,
-                which=lambda _name: "found",
-                image_probe=lambda _reference, _timeout: None,
-                now=NOW,
+
+        with tempfile.TemporaryDirectory() as directory:
+            known_hosts = Path(directory) / "known_hosts"
+            known_hosts.write_text(
+                "test-host ssh-ed25519 AAAATEST\n",
+                encoding="utf-8",
             )
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SYNTHRAN_KNOWN_HOSTS": str(known_hosts)},
+                ),
+                patch(
+                    "synthran.live_preflight.verify_slices_controller",
+                    return_value=self.controller,
+                ),
+            ):
+                report = run_live_preflight(
+                    inventory=self.inventory,
+                    lock=self.lock,
+                    owner="operator",
+                    reservation_id=RESERVATION_ID,
+                    allocation_id="alloc-test",
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    runner=fake,
+                    which=lambda _name: "found",
+                    image_probe=lambda _reference, _timeout: None,
+                    now=NOW,
+                )
+
         return fake, report
 
     def test_live_preflight_accepts_owned_current_inputs(self) -> None:
@@ -281,11 +296,6 @@ class LivePreflightTests(unittest.TestCase):
         self.assertFalse(report.ready)
         self.assertIn("was not found in the POS calendar", report.render())
 
-    def test_missing_reservation_fails_closed(self) -> None:
-        _fake, report = self.run_ready(FakeRunner(reservation_id=7000000002))
-        self.assertFalse(report.ready)
-        self.assertIn("was not found in the POS calendar", report.render())
-
     def test_duplicate_reservation_fails_closed(self) -> None:
         _fake, report = self.run_ready(FakeRunner(duplicate_reservation=True))
         self.assertFalse(report.ready)
@@ -319,6 +329,12 @@ class LivePreflightTests(unittest.TestCase):
         for call in ssh_calls:
             self.assertIn("BatchMode=yes", call)
             self.assertIn("StrictHostKeyChecking=yes", call)
+            self.assertTrue(
+                any(
+                    part.startswith("UserKnownHostsFile=")
+                    for part in call
+                )
+            )
             self.assertNotIn("sh", call[:-1])
         kubernetes_calls = [
             call for call in ssh_calls if "kubectl get crd" in call[-1]

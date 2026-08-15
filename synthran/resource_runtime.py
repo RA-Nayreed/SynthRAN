@@ -476,6 +476,10 @@ def _write_authority(
         f"export SYNTHRAN_OWNER={owner}",
         f"export SYNTHRAN_SLICES_PROJECT={slices_project}",
         f"export SYNTHRAN_SLICES_EXPERIMENT={slices_experiment}",
+        (
+            "export SYNTHRAN_KNOWN_HOSTS="
+            f"{shlex.quote(str(path.parent / 'known_hosts'))}"
+        ),
     ]
     if reservation_id is not None:
         lines.append(f"export SYNTHRAN_RESERVATION_ID={reservation_id}")

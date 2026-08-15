@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-
+import os
 from synthran.dependencies import load_lock
 from synthran.fiveg_ansible import build_network_plan, load_inventory
 from synthran.live_preflight import CommandResult
@@ -119,13 +119,17 @@ class NetworkVerificationTests(unittest.TestCase):
 
     def test_proves_locked_gnb_srsue_tunnel_and_upf_route(self) -> None:
         runner = VerificationRunner(self.images)
-        report = verify_network_path(
-            inventory=self.inventory,
-            lock=self.lock,
-            run_id="network-proof",
-            runner=runner,
-            now=NOW,
-        )
+        with patch.dict(
+            os.environ,
+            {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+        ):
+            report = verify_network_path(
+                inventory=self.inventory,
+                lock=self.lock,
+                run_id="network-proof",
+                runner=runner,
+                now=NOW,
+            )
         self.assertTrue(report.ready, report.render())
         self.assertEqual("12.1.1.2", report.pdu_address)
         data = report.to_dict()
@@ -138,16 +142,26 @@ class NetworkVerificationTests(unittest.TestCase):
         for call in runner.calls:
             self.assertIn("BatchMode=yes", call)
             self.assertIn("StrictHostKeyChecking=yes", call)
+            self.assertTrue(
+                any(
+                    part.startswith("UserKnownHostsFile=")
+                    for part in call
+                )
+            )
 
     def test_rejects_pods_owned_by_another_run(self) -> None:
         runner = VerificationRunner(self.images, run_id="different-run")
-        report = verify_network_path(
-            inventory=self.inventory,
-            lock=self.lock,
+        with patch.dict(
+            os.environ,
+            {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+        ):
+            report = verify_network_path(
+                inventory=self.inventory,
+                lock=self.lock,
                 run_id="network-proof",
-            runner=runner,
-            now=NOW,
-        )
+                runner=runner,
+                now=NOW,
+            )
         self.assertFalse(report.ready)
         self.assertIn("not owned by this run ID", report.render())
 
@@ -280,6 +294,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 )
 
             with (
+                patch.dict(
+                    os.environ,
+                    {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+                ),
                 patch(
                     "synthran.network_runtime.load_fresh_live_evidence",
                     return_value=preflight,
@@ -341,6 +359,14 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 playbook_call[0],
             )
             self.assertEqual("True", playbook_call[2]["ANSIBLE_HOST_KEY_CHECKING"])
+            self.assertIn(
+                "StrictHostKeyChecking=yes",
+                playbook_call[2]["ANSIBLE_SSH_ARGS"],
+            )
+            self.assertIn(
+                "UserKnownHostsFile=",
+                playbook_call[2]["ANSIBLE_SSH_ARGS"],
+            )
 
     def test_failed_deployment_keeps_a_sanitized_partial_manifest_and_log(self) -> None:
         subscriber_id = "00101" + "0000001121"
@@ -383,6 +409,10 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 return CommandResult(0, "ok")
 
             with (
+                patch.dict(
+                    os.environ,
+                    {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+                ),
                 patch(
                     "synthran.network_runtime.load_fresh_live_evidence",
                     return_value=preflight,

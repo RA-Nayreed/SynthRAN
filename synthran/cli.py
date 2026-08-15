@@ -124,6 +124,12 @@ def _parser() -> argparse.ArgumentParser:
         help="validate only inventory, lock, and pinned checkout state",
     )
     doctor.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_CONTROLLER_TIMEOUT_SECONDS,
+        help="timeout in seconds for each read-only live probe",
+    )
+    doctor.add_argument(
         "--owner",
         default=os.environ.get("SYNTHRAN_OWNER"),
         help="expected current SLICES/POS owner",
@@ -142,12 +148,6 @@ def _parser() -> argparse.ArgumentParser:
         "--evidence-out",
         type=Path,
         help="write sanitized live readiness evidence (required for live doctor)",
-    )
-    doctor.add_argument(
-        "--timeout",
-        type=int,
-        default=15,
-        help="timeout in seconds for each read-only live probe",
     )
 
     network = subcommands.add_parser("network", help="plan or deploy the 5G network")

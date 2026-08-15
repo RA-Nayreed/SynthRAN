@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import shlex
 from pathlib import Path
 import re
 import shutil
@@ -263,6 +264,17 @@ def execute_network_deployment(
         )
     if timeout_seconds < 60 or timeout_seconds > 14400:
         raise NetworkRuntimeError("deployment timeout must be between 60 and 14400 seconds")
+    known_hosts_value = os.environ.get("SYNTHRAN_KNOWN_HOSTS")
+    if not known_hosts_value:
+        raise NetworkRuntimeError(
+            "live deployment requires SYNTHRAN_KNOWN_HOSTS from preparation authority"
+        )
+
+    known_hosts_path = Path(known_hosts_value).expanduser().resolve()
+    if not known_hosts_path.is_file():
+        raise NetworkRuntimeError(
+            "SYNTHRAN_KNOWN_HOSTS does not name an existing file"
+        )
     try:
         active_controller = verify_slices_controller(
             lock=lock,
@@ -416,6 +428,12 @@ def execute_network_deployment(
         {
             "ANSIBLE_COLLECTIONS_PATH": str(collections),
             "ANSIBLE_HOST_KEY_CHECKING": "True",
+            "ANSIBLE_SSH_ARGS": (
+                "-o ControlMaster=auto -o ControlPersist=60s "
+                "-o StrictHostKeyChecking=yes "
+                "-o UserKnownHostsFile="
+                f"{shlex.quote(str(known_hosts_path))}"
+            ),
             "ANSIBLE_NOCOLOR": "True",
             "ANSIBLE_RETRY_FILES_ENABLED": "False",
             "ANSIBLE_ROLES_PATH": str(worktree / "roles"),

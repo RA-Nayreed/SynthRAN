@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -324,11 +325,27 @@ def verify_allocations(
             )
 
 
-def ssh_command(host: InventoryHost, *remote_command: str) -> tuple[str, ...]:
+def ssh_command(
+    host: InventoryHost,
+    *remote_command: str,
+) -> tuple[str, ...]:
     address = host.variables.get("ansible_host", host.name)
     user = host.variables.get("ansible_user")
     if not user:
         raise LivePreflightError("inventory host is missing ansible_user")
+
+    known_hosts_value = os.environ.get("SYNTHRAN_KNOWN_HOSTS")
+    if not known_hosts_value:
+        raise LivePreflightError(
+            "SYNTHRAN_KNOWN_HOSTS is required for strict SSH probes"
+        )
+
+    known_hosts = Path(known_hosts_value).expanduser().resolve()
+    if not known_hosts.is_file():
+        raise LivePreflightError(
+            "SYNTHRAN_KNOWN_HOSTS does not name an existing file"
+        )
+
     target = f"{user}@{address}"
     command: list[str] = [
         "ssh",
@@ -338,15 +355,21 @@ def ssh_command(host: InventoryHost, *remote_command: str) -> tuple[str, ...]:
         "ConnectTimeout=10",
         "-o",
         "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
     ]
+
     port = host.variables.get("ansible_port")
     if port:
         if not port.isdigit() or not 1 <= int(port) <= 65535:
             raise LivePreflightError("inventory ansible_port is invalid")
         command.extend(("-p", port))
+
     command.append(target)
+
     if remote_command:
         command.append(" ".join(shlex.quote(part) for part in remote_command))
+
     return tuple(command)
 
 

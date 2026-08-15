@@ -241,6 +241,8 @@ class ResourcePreparationTests(unittest.TestCase):
             self.assertIn("export SYNTHRAN_OWNER=operator", authority)
             self.assertIn("export SYNTHRAN_RESERVATION_ID=7000000001", authority)
             self.assertIn("export SYNTHRAN_ALLOCATION_ID=allocation-pair", authority)
+            self.assertIn("export SYNTHRAN_KNOWN_HOSTS=", authority)
+            self.assertIn("known_hosts", authority)
             if os.name != "nt":
                 self.assertEqual(0o600, result.authority_path.stat().st_mode & 0o777)
 
