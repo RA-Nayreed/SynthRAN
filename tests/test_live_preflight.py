@@ -341,6 +341,14 @@ class LivePreflightTests(unittest.TestCase):
         ]
         self.assertEqual(1, len(kubernetes_calls))
         self.assertIn("kubectl get namespace open5gs", kubernetes_calls[0][-1])
+        self.assertIn(
+            "test -x /opt/cni/bin/multus-shim",
+            kubernetes_calls[0][-1],
+        )
+        self.assertNotIn(
+            "test -x /opt/cni/bin/multus &&",
+            kubernetes_calls[0][-1],
+        )
 
     def test_missing_tool_skips_all_live_commands_and_fails(self) -> None:
         fake = FakeRunner()

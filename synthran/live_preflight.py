@@ -603,7 +603,7 @@ _KUBERNETES_STATE_COMMAND = (
 )
 
 _KUBERNETES_NETWORK_COMMAND = (
-    "test -x /opt/cni/bin/multus && test -x /opt/cni/bin/ovs && "
+    "test -x /opt/cni/bin/multus-shim && test -x /opt/cni/bin/ovs && "
     "! KUBECONFIG=/etc/kubernetes/admin.conf kubectl get namespace open5gs "
     ">/dev/null 2>&1 && "
     "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get crd "
