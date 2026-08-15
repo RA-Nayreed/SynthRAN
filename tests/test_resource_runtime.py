@@ -79,7 +79,10 @@ class PreparationRunner:
             self.reservation_created = True
             return CommandResult(0, "7000000001\n")
         if argv[:3] == ("pos", "allocations", "allocate"):
-            return CommandResult(0, "allocation-pair\n")
+            # Real POS 2.5.35 does not reliably return the allocation ID
+            # on stdout. The authoritative ID is discovered with
+            # `pos allocations show` after creation.
+            return CommandResult(0, "")
         if argv == (
             "pos",
             "calendar",

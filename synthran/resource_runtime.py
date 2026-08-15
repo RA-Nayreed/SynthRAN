@@ -925,7 +925,7 @@ def execute_resource_preparation(
     )
 
     if current_allocation is None:
-        allocation_create = stage(
+        stage(
             "allocation-create",
             (
                 "pos",
@@ -937,13 +937,10 @@ def execute_resource_preparation(
             repository_root,
             retain_output=False,
         )
-        candidate = allocation_create.stdout.strip()
-        if not SAFE_IDENTIFIER_RE.fullmatch(candidate):
-            fail("allocation-create", "POS did not return one safe allocation ID")
-            raise ResourcePreparationError(
-                "created allocation did not return one safe identifier"
-            )
-        current_allocation = candidate
+
+        # POS does not guarantee that allocation creation returns the
+        # allocation identifier on stdout. Discover and verify the
+        # allocation from authoritative per-node provider state below.
         persist_authority()
         write_manifest("running")
     allocation_outputs = {
