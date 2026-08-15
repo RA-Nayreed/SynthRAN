@@ -381,6 +381,49 @@ class ResourcePreparationTests(unittest.TestCase):
                 )
             )
 
+    def test_preparation_progress_stream_reports_stages(self) -> None:
+        from io import StringIO
+
+        runner = PreparationRunner()
+        progress = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            with (
+                patch(
+                    "synthran.resource_runtime.validate_fiveg_checkout",
+                    return_value=checkout,
+                ),
+                patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
+                patch(
+                    "synthran.resource_runtime.verify_slices_controller",
+                    return_value=self.controller,
+                ),
+            ):
+                execute_resource_preparation(
+                    plan=self.ready_plan,
+                    lock=self.lock,
+                    dependency_root=root / "deps",
+                    owner="operator",
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    run_root=root / "preparations",
+                    repository_root=REPOSITORY_ROOT,
+                    runner=runner,
+                    now=NOW,
+                    progress=progress,
+                )
+
+            text = progress.getvalue()
+            self.assertIn("[synthran]", text)
+            self.assertIn("preparation started: run=prepare-001", text)
+            self.assertIn("controller-preflight: running...", text)
+            self.assertIn("controller-preflight: OK", text)
+            self.assertIn("isolated-worktree: running...", text)
+            self.assertIn("isolated-worktree: OK", text)
+            self.assertIn("resource preparation: COMPLETE", text)
+
 
 if __name__ == "__main__":
     unittest.main()

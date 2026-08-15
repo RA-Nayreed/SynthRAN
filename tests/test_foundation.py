@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import tomllib
@@ -128,28 +129,27 @@ class FoundationTests(unittest.TestCase):
     def test_numbered_phase_terms_exist_only_in_the_decision_journal(self) -> None:
         excluded_parts = {".git", ".deps", ".synthran", "__pycache__"}
         pattern = re.compile(r"phase[\s_-]*[012]", flags=re.IGNORECASE)
-        for path in REPOSITORY_ROOT.rglob("*"):
-            if (
-                not path.is_file()
-                or path.name == "decision.md"
-                or excluded_parts.intersection(path.relative_to(REPOSITORY_ROOT).parts)
-            ):
-                continue
-            relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-            self.assertIsNone(pattern.search(relative), relative)
-            if path.suffix.lower() in {
-                ".ini",
-                ".json",
-                ".md",
-                ".py",
-                ".sh",
-                ".toml",
-                ".txt",
-                ".yaml",
-                ".yml",
-            } or path.name in {"AGENTS.md", "LICENSE", "README.md", "THIRD_PARTY.md"}:
-                content = path.read_text(encoding="utf-8")
-                self.assertIsNone(pattern.search(content), relative)
+        for root, dirs, files in os.walk(REPOSITORY_ROOT):
+            dirs[:] = [d for d in dirs if d not in excluded_parts]
+            for filename in files:
+                if filename == "decision.md":
+                    continue
+                path = Path(root) / filename
+                relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+                self.assertIsNone(pattern.search(relative), relative)
+                if path.suffix.lower() in {
+                    ".ini",
+                    ".json",
+                    ".md",
+                    ".py",
+                    ".sh",
+                    ".toml",
+                    ".txt",
+                    ".yaml",
+                    ".yml",
+                } or path.name in {"AGENTS.md", "LICENSE", "README.md", "THIRD_PARTY.md"}:
+                    content = path.read_text(encoding="utf-8")
+                    self.assertIsNone(pattern.search(content), relative)
 
     def test_interactive_guides_use_direct_commands_after_activation(self) -> None:
         paths = (

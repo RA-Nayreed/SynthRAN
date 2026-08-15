@@ -14,7 +14,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Callable, Mapping, Sequence
+from time import monotonic
+from typing import Any, Callable, Mapping, Sequence, TextIO
 
 from synthran.dependencies import DependencyLock
 from synthran.fiveg_ansible import (
@@ -252,8 +253,15 @@ def execute_network_deployment(
     repository_root: Path = Path("."),
     runner: RunCommand = run_command,
     timeout_seconds: int = DEFAULT_DEPLOY_TIMEOUT_SECONDS,
+    progress: TextIO | None = None,
 ) -> DeploymentResult:
     """Execute the narrow operator-authorized deployment in a detached worktree."""
+
+    def report(message: str) -> None:
+        if progress is not None:
+            print(f"[synthran] {message}", file=progress, flush=True)
+
+    report(f"network deployment started: run={run_id}")
 
     run_id = validate_run_id(run_id)
     if plan.profile != "default":
@@ -354,20 +362,34 @@ def execute_network_deployment(
         environment: Mapping[str, str] | None = None,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
+
+        report(f"{name}: running...")
+        started = monotonic()
+
         try:
             result = runner(command, cwd, environment, timeout_seconds)
         except (NetworkRuntimeError, OSError):
+            elapsed = monotonic() - started
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
             write_manifest("failed", name)
             finish_log()
             raise
+
+        elapsed = monotonic() - started
+
         log_parts.append(result.stdout)
         log_parts.append(result.stderr)
+
         if result.returncode != 0:
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
             write_manifest("failed", name)
             finish_log()
             raise NetworkRuntimeError(
-                f"deployment stage {name} failed; see the sanitized run log"
+                f"deployment stage {name} failed; "
+                "see the sanitized run log"
             )
+
+        report(f"{name}: OK ({elapsed:.1f}s)")
         return result
 
     write_manifest("running")
@@ -488,6 +510,7 @@ def execute_network_deployment(
     )
     write_manifest("deployed-unverified")
     finish_log()
+    report("network deployment: DEPLOYED, verification still required")
     return DeploymentResult(run_id, run_directory, manifest_path, log_path)
 
 

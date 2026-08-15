@@ -12,7 +12,8 @@ import re
 import shlex
 import shutil
 import tempfile
-from typing import Any, Mapping, Sequence
+from time import monotonic
+from typing import Any, Mapping, Sequence, TextIO
 
 from synthran.dependencies import DependencyLock
 from synthran.fiveg_ansible import NetworkInventory, parse_inventory, validate_fiveg_checkout
@@ -519,8 +520,18 @@ def execute_resource_preparation(
     runner: RunCommand = run_command,
     timeout_seconds: int = DEFAULT_PREPARATION_TIMEOUT_SECONDS,
     now: datetime | None = None,
+    progress: TextIO | None = None,
 ) -> ResourcePreparationResult:
     """Prepare an operator-authorized node pair and stop before 5G deployment."""
+
+    def report(message: str) -> None:
+        if progress is not None:
+            print(f"[synthran] {message}", file=progress, flush=True)
+
+    report(
+        f"preparation started: run={plan.run_id} "
+        f"core={plan.core_node.name} ran={plan.ran_node.name}"
+    )
 
     owner = _validate_authority(owner, "owner")
     if plan.reservation_action == "reuse":
@@ -539,6 +550,7 @@ def execute_resource_preparation(
             "live resource preparation is blocked by the dependency lock: "
             + plan.bootstrap_reason
         )
+    report("controller-preflight: running...")
     try:
         controller_report = verify_slices_controller(
             lock=lock,
@@ -547,7 +559,9 @@ def execute_resource_preparation(
             timeout_seconds=min(timeout_seconds, 300),
         )
     except SlicesControllerError as exc:
+        report("controller-preflight: FAILED")
         raise ResourcePreparationError(str(exc)) from exc
+    report("controller-preflight: OK")
 
     missing_tools = [
         name
@@ -683,22 +697,37 @@ def execute_resource_preparation(
         retain_output: bool = True,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
+
+        report(f"{name}: running...")
+        started = monotonic()
+
         try:
             result = runner(command, cwd, environment, timeout_seconds)
         except (OSError, RuntimeError) as exc:
+            elapsed = monotonic() - started
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
+
             fail(name, f"{name} could not be completed")
             raise ResourcePreparationError(
                 f"preparation stage {name} could not be completed"
             ) from exc
+
+        elapsed = monotonic() - started
+
         if retain_output:
             log_parts.extend((result.stdout, result.stderr))
         else:
             log_parts.append("provider output was intentionally not retained")
+
         if result.returncode != 0:
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
             fail(name, f"{name} returned nonzero")
             raise ResourcePreparationError(
-                f"preparation stage {name} failed; see the sanitized preparation log"
+                f"preparation stage {name} failed; "
+                "see the sanitized preparation log"
             )
+
+        report(f"{name}: OK ({elapsed:.1f}s)")
         return result
 
     write_manifest("running")
@@ -993,6 +1022,7 @@ def execute_resource_preparation(
     )
     write_manifest("prepared")
     finish_log()
+    report("resource preparation: COMPLETE")
     return ResourcePreparationResult(
         plan.run_id,
         run_directory,

@@ -462,6 +462,86 @@ class DeploymentBoundaryTests(unittest.TestCase):
             self.assertNotIn(subscriber_key, log)
             self.assertNotIn("192.168.7.9", log)
 
+    def test_deployment_progress_stream_reports_stages(self) -> None:
+        from io import StringIO
+
+        preflight = {
+            "owner_fingerprint": "sha256:owner",
+            "reservation_fingerprint": "sha256:reservation",
+            "allocation_fingerprint": "sha256:allocation",
+            "dependency_lock_sha256": "a" * 64,
+            "slices_controller": {
+                "schema": "synthran/slices-controller/v1alpha1",
+                "ready": True,
+                "dependency_lock_sha256": "a" * 64,
+                "project_fingerprint": "b" * 64,
+                "experiment_fingerprint": "c" * 64,
+                "python_version": "3.12.11",
+                "ansible_version": "2.20.5",
+                "pos_version": "2.5.35",
+                "slices_cli_version": "1.0.0",
+            },
+        }
+        progress = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "locked-checkout"
+            checkout.mkdir()
+
+            def fake_runner(command, _cwd, _environment, _timeout):
+                argv = tuple(command)
+                if argv[:3] == ("git", "-C", str(checkout)):
+                    Path(argv[-2]).mkdir(parents=True)
+                    return CommandResult(0, "detached worktree created")
+                if argv == ("git", "rev-parse", "HEAD"):
+                    return CommandResult(0, self.plan.fiveg_ansible_commit + "\n")
+                return CommandResult(0, "ok")
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+                ),
+                patch(
+                    "synthran.network_runtime.load_fresh_live_evidence",
+                    return_value=preflight,
+                ),
+                patch(
+                    "synthran.network_runtime.validate_fiveg_checkout",
+                    return_value=checkout,
+                ),
+                patch(
+                    "synthran.network_runtime.verify_slices_controller",
+                    return_value=SimpleNamespace(to_dict=lambda: preflight["slices_controller"]),
+                ),
+            ):
+                execute_network_deployment(
+                    plan=self.plan,
+                    lock=self.lock,
+                    dependency_root=root / "deps",
+                    live_evidence_path=root / "preflight.json",
+                    owner="operator",
+                    reservation_id="reservation",
+                    allocation_id="allocation",
+                    run_id="network-proof",
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    run_root=root / "runs",
+                    repository_root=REPOSITORY_ROOT,
+                    runner=fake_runner,
+                    progress=progress,
+                )
+
+            text = progress.getvalue()
+            self.assertIn("[synthran]", text)
+            self.assertIn("network deployment started: run=network-proof", text)
+            self.assertIn("isolated-worktree: running...", text)
+            self.assertIn("isolated-worktree: OK", text)
+            self.assertIn("ansible-deployment: running...", text)
+            self.assertIn("ansible-deployment: OK", text)
+            self.assertIn("network deployment: DEPLOYED, verification still required", text)
+
 
 class ContractSchemaTests(unittest.TestCase):
     def test_network_evidence_and_manifest_schemas_are_valid_json(self) -> None:

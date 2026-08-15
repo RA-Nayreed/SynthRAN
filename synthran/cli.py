@@ -409,6 +409,7 @@ def _network_prepare(args: argparse.Namespace) -> int:
         run_root=args.run_root,
         repository_root=repository_root(),
         timeout_seconds=args.timeout,
+        progress=sys.stdout,
     )
     print(f"SLICES resources prepared for run {result.run_id}.")
     print("Open5GS and srsRAN were not deployed.")
@@ -469,6 +470,7 @@ def _network_deploy(args: argparse.Namespace) -> int:
         run_root=args.run_root,
         repository_root=repository_root(),
         timeout_seconds=args.timeout,
+        progress=sys.stdout,
     )
     print(f"Deployment completed for run {result.run_id}; path proof is still required.")
     print(f"Sanitized manifest: {result.manifest_path}")

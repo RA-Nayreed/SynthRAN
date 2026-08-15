@@ -44,3 +44,4 @@ LOGS/
 .vscode/
 .DS_Store
 Thumbs.db
+clean.sh
