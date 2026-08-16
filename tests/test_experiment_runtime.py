@@ -8,6 +8,9 @@ from unittest.mock import patch
 from synthran.experiment import ExperimentError, ExperimentScenario
 from synthran.experiment_runtime import (
     _core_address,
+    _discover_ue_deployment,
+    _discover_ue_pod,
+    _one_name,
     _prepare_cooja_checkout,
     _render_manifest,
 )
@@ -184,6 +187,121 @@ class CoojaCheckoutPreparationTests(unittest.TestCase):
                 "^Cooja checkout does not match the revision pinned by Contiki-NG$",
             ):
                 _prepare_cooja_checkout(contiki)
+
+
+
+class UEDiscoveryTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost("lab-core", {"ip": "192.0.2.10"}),
+            ran_node=InventoryHost("lab-ran", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+
+    def test_discover_ue_deployment_uses_helm_name_and_exact_run_id(self) -> None:
+        inventory = self._sample_inventory()
+        captured: dict[str, object] = {}
+
+        def fake_remote_json(
+            inv: NetworkInventory,
+            cmd: str,
+            *,
+            label: str,
+            timeout_seconds: int = 60,
+        ) -> dict[str, object]:
+            captured["inventory"] = inv
+            captured["cmd"] = cmd
+            captured["label"] = label
+            return {"items": [{"metadata": {"name": "srsran-ue-test-deploy"}}]}
+
+        with patch("synthran.experiment_runtime._remote_json", side_effect=fake_remote_json):
+            name = _discover_ue_deployment(inventory, "net-run-12345")
+
+        self.assertEqual(name, "srsran-ue-test-deploy")
+        self.assertEqual(captured["label"], "srsUE Deployment discovery")
+        cmd_str = str(captured["cmd"])
+        self.assertIn("kubectl get deployments", cmd_str)
+        self.assertIn("-l app.kubernetes.io/name=srsran-ue,synthran.run/id=net-run-12345", cmd_str)
+        self.assertNotIn("app=srsran", cmd_str)
+        self.assertNotIn("component=ue", cmd_str)
+
+    def test_discover_ue_pod_continues_to_use_component_ue_and_exact_run_id(self) -> None:
+        inventory = self._sample_inventory()
+        captured: dict[str, object] = {}
+
+        def fake_remote_json(
+            inv: NetworkInventory,
+            cmd: str,
+            *,
+            label: str,
+            timeout_seconds: int = 60,
+        ) -> dict[str, object]:
+            captured["inventory"] = inv
+            captured["cmd"] = cmd
+            captured["label"] = label
+            return {"items": [{"metadata": {"name": "srsran-ue-pod-xyz"}}]}
+
+        with patch("synthran.experiment_runtime._remote_json", side_effect=fake_remote_json):
+            name = _discover_ue_pod(inventory, "net-run-12345")
+
+        self.assertEqual(name, "srsran-ue-pod-xyz")
+        self.assertEqual(captured["label"], "srsUE pod discovery")
+        cmd_str = str(captured["cmd"])
+        self.assertIn("kubectl get pods", cmd_str)
+        self.assertIn("-l app=srsran,component=ue,synthran.run/id=net-run-12345", cmd_str)
+
+
+class OneNameExtractionTests(unittest.TestCase):
+    def test_one_name_extracts_name_successfully(self) -> None:
+        payload = {"items": [{"metadata": {"name": "srsran-ue-resource"}}]}
+        name = _one_name(payload, label="run-owned srsUE Deployment")
+        self.assertEqual(name, "srsran-ue-resource")
+
+    def test_one_name_fails_when_items_is_not_a_list(self) -> None:
+        for malformed_payload in ({}, {"items": None}, {"items": "not-a-list"}, {"items": 123}):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"^run-owned srsUE Deployment discovery returned malformed data$",
+            ):
+                _one_name(malformed_payload, label="run-owned srsUE Deployment")
+
+    def test_one_name_fails_when_no_resource_found(self) -> None:
+        with self.assertRaisesRegex(
+            ExperimentError,
+            r"^no run-owned srsUE Deployment was found$",
+        ):
+            _one_name({"items": []}, label="run-owned srsUE Deployment")
+
+    def test_one_name_fails_when_multiple_resources_found(self) -> None:
+        payload = {
+            "items": [
+                {"metadata": {"name": "dep-1"}},
+                {"metadata": {"name": "dep-2"}},
+            ]
+        }
+        with self.assertRaisesRegex(
+            ExperimentError,
+            r"^multiple run-owned srsUE Deployment resources were found; refusing to choose one$",
+        ):
+            _one_name(payload, label="run-owned srsUE Deployment")
+
+    def test_one_name_fails_when_metadata_is_malformed(self) -> None:
+        invalid_payloads = (
+            {"items": ["not-a-dict"]},
+            {"items": [{}]},
+            {"items": [{"metadata": "not-a-dict"}]},
+            {"items": [{"metadata": {}}]},
+            {"items": [{"metadata": {"name": None}}]},
+            {"items": [{"metadata": {"name": 12345}}]},
+        )
+        for payload in invalid_payloads:
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"^run-owned srsUE Deployment metadata is malformed$",
+            ):
+                _one_name(payload, label="run-owned srsUE Deployment")
 
 
 if __name__ == "__main__":

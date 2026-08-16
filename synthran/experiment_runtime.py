@@ -176,10 +176,21 @@ def _remote_json(
 
 def _one_name(payload: Mapping[str, Any], *, label: str) -> str:
     items = payload.get("items")
-    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
-        raise ExperimentError(f"expected exactly one {label}")
-    metadata = items[0].get("metadata")
-    if not isinstance(metadata, dict) or not isinstance(metadata.get("name"), str):
+    if not isinstance(items, list):
+        raise ExperimentError(f"{label} discovery returned malformed data")
+    if not items:
+        raise ExperimentError(f"no {label} was found")
+    if len(items) > 1:
+        raise ExperimentError(
+            f"multiple {label} resources were found; refusing to choose one"
+        )
+    item = items[0]
+    if not isinstance(item, dict):
+        raise ExperimentError(f"{label} metadata is malformed")
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict) or not isinstance(
+        metadata.get("name"), str
+    ):
         raise ExperimentError(f"{label} metadata is malformed")
     return str(metadata["name"])
 
@@ -390,12 +401,16 @@ def _wait_rollout(inventory: NetworkInventory, deployment: str, *, label: str) -
     )
 
 
-def _discover_ue_deployment(inventory: NetworkInventory, network_run_id: str) -> str:
+def _discover_ue_deployment(
+    inventory: NetworkInventory,
+    network_run_id: str,
+) -> str:
     payload = _remote_json(
         inventory,
         "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get deployments "
         f"-n {KUBERNETES_NAMESPACE} "
-        f"-l app=srsran,component=ue,synthran.run/id={shlex.quote(network_run_id)} "
+        f"-l app.kubernetes.io/name=srsran-ue,"
+        f"synthran.run/id={shlex.quote(network_run_id)} "
         "-o json",
         label="srsUE Deployment discovery",
     )
