@@ -9,6 +9,7 @@ from synthran.experiment import ExperimentError
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory
 from synthran.live_preflight import CommandResult
 from synthran.rfsim_runtime import (
+    RFSIM_RECOVERY_ATTEMPTS,
     UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
     _current_pdu_address,
     _deployment_owner_for_pod,
@@ -145,7 +146,7 @@ class RfsimRuntimeTests(unittest.TestCase):
             UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
         )
         command = str(captured["command"])
-        self.assertIn("seq 1 150", command)
+        self.assertIn("seq 1 60", command)
         self.assertIn("ip link show tun_srsue1", command)
         self.assertIn("pgrep -af", command)
 
@@ -224,6 +225,78 @@ class RfsimRuntimeTests(unittest.TestCase):
         wait_cell.assert_called_once_with(inventory, "gnb-new")
         wait_broker.assert_called_once_with(inventory, "ue-new")
         wait_tunnel.assert_called_once_with(inventory, "ue-new")
+
+    def test_reconcile_retries_complete_recovery_after_stalled_attach(self) -> None:
+        inventory = self._inventory()
+        discovery = iter(("ue-new", "gnb-old", "gnb-attempt-1", "gnb-attempt-2"))
+        tunnel_attempts = iter((ExperimentError("stalled attach"), None))
+        labels: list[str] = []
+
+        def fake_discover(*args, **kwargs):
+            return next(discovery)
+
+        def fake_remote(inv, command, *, label, timeout_seconds=60):
+            labels.append(label)
+            return ""
+
+        def fake_wait_tunnel(*args, **kwargs):
+            outcome = next(tunnel_attempts)
+            if outcome is not None:
+                raise outcome
+
+        with (
+            patch("synthran.rfsim_runtime._discover_pod", side_effect=fake_discover),
+            patch(
+                "synthran.rfsim_runtime._deployment_owner_for_pod",
+                return_value="srsran-gnb",
+            ),
+            patch("synthran.rfsim_runtime._remote", side_effect=fake_remote),
+            patch("synthran.rfsim_runtime._wait_for_gnb_cell"),
+            patch("synthran.rfsim_runtime._wait_for_broker"),
+            patch("synthran.rfsim_runtime._wait_for_ue_tunnel", side_effect=fake_wait_tunnel),
+            patch(
+                "synthran.rfsim_runtime._current_pdu_address",
+                return_value="12.1.0.6",
+            ),
+        ):
+            state = reconcile_rfsim_runtime(
+                inventory,
+                network_run_id="network-run-01",
+            )
+
+        self.assertEqual(state.gnb_pod, "gnb-attempt-2")
+        self.assertEqual(state.pdu_address, "12.1.0.6")
+        self.assertEqual(labels.count("stale RFSIM process cleanup"), 2)
+        self.assertEqual(labels.count("gNB runtime restart request"), 2)
+        self.assertEqual(labels.count("GNU Radio broker start"), 2)
+        self.assertEqual(labels.count("srsUE start"), 2)
+
+    def test_reconcile_reports_all_failed_attempts(self) -> None:
+        inventory = self._inventory()
+        discovery = iter(("ue-new", "gnb-old", "gnb-1", "gnb-2"))
+
+        with (
+            patch("synthran.rfsim_runtime._discover_pod", side_effect=lambda *a, **k: next(discovery)),
+            patch(
+                "synthran.rfsim_runtime._deployment_owner_for_pod",
+                return_value="srsran-gnb",
+            ),
+            patch("synthran.rfsim_runtime._remote", return_value=""),
+            patch("synthran.rfsim_runtime._wait_for_gnb_cell"),
+            patch("synthran.rfsim_runtime._wait_for_broker"),
+            patch(
+                "synthran.rfsim_runtime._wait_for_ue_tunnel",
+                side_effect=ExperimentError("stalled attach"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                f"failed after {RFSIM_RECOVERY_ATTEMPTS} attempts",
+            ):
+                reconcile_rfsim_runtime(
+                    inventory,
+                    network_run_id="network-run-01",
+                )
 
     def test_reconcile_persists_network_ownership_on_restarted_gnb(self) -> None:
         inventory = self._inventory()
