@@ -16,6 +16,7 @@ dependencies = []
 
 [project.scripts]
 synthran = "synthran.cli:main"
+synthran-phase3 = "synthran.phase3_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["synthran*"]
