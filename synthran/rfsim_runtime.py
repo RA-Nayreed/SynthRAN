@@ -1,8 +1,8 @@
 """Runtime reconciliation for the supported srsRAN RFSIM path.
 
 Kubernetes readiness does not imply that the process-level RFSIM runtime is
-active.  The pinned upstream srsUE pod is intentionally kept alive while GNU
-Radio and srsUE are started after deployment.  Any srsUE pod rollout therefore
+active. The pinned upstream srsUE pod is intentionally kept alive while GNU
+Radio and srsUE are started after deployment. Any srsUE pod rollout therefore
 requires an explicit, ordered reconciliation before the accepted network path
 can be reproven.
 """
@@ -140,7 +140,10 @@ def _deployment_owner_for_pod(inventory: NetworkInventory, pod: str) -> str:
         f"-n {KUBERNETES_NAMESPACE} {shlex.quote(pod)} -o json",
         label="gNB pod owner discovery",
     )
-    owners = payload.get("metadata", {}).get("ownerReferences")
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ExperimentError("gNB pod metadata is malformed")
+    owners = metadata.get("ownerReferences")
     if not isinstance(owners, list):
         raise ExperimentError("gNB pod has no ReplicaSet owner")
     replica_sets = [
@@ -160,7 +163,10 @@ def _deployment_owner_for_pod(inventory: NetworkInventory, pod: str) -> str:
         f"-n {KUBERNETES_NAMESPACE} {shlex.quote(replica_set)} -o json",
         label="gNB ReplicaSet owner discovery",
     )
-    rs_owners = replica_payload.get("metadata", {}).get("ownerReferences")
+    replica_metadata = replica_payload.get("metadata")
+    if not isinstance(replica_metadata, dict):
+        raise ExperimentError("gNB ReplicaSet metadata is malformed")
+    rs_owners = replica_metadata.get("ownerReferences")
     if not isinstance(rs_owners, list):
         raise ExperimentError("gNB ReplicaSet has no Deployment owner")
     deployments = [
@@ -295,7 +301,7 @@ def reconcile_rfsim_runtime(
         f"-n {KUBERNETES_NAMESPACE} {shlex.quote(ue_pod)} -c ue -- /bin/sh -lc "
         + shlex.quote(
             "pkill -9 srsue 2>/dev/null || true; "
-            "pkill -9 -f '/srsran/config/multi_ue_scenario.py' 2>/dev/null || true; "
+            "pkill -9 python3 2>/dev/null || true; "
             "tmux kill-session -t ran 2>/dev/null || true"
         ),
         label="stale RFSIM process cleanup",
