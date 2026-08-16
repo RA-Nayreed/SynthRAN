@@ -22,6 +22,7 @@ EDGE_RUNTIME_VOLUME = "synthran-experiment-edge-runtime"
 CENTRAL_PORT = 18884
 RUN_LABEL = "synthran.experiment/run"
 ROLE_LABEL = "synthran.experiment/role"
+DEFAULT_CONTAINER_ANNOTATION = "kubectl.kubernetes.io/default-container"
 MOSQUITTO_BINARY = "/usr/sbin/mosquitto"
 
 
@@ -72,6 +73,7 @@ def render_edge_patch(
                     },
                     "annotations": {
                         RUN_LABEL: scenario.run_id,
+                        DEFAULT_CONTAINER_ANNOTATION: "ue",
                     },
                 },
                 "spec": {
@@ -127,7 +129,12 @@ def render_edge_cleanup_patch() -> Mapping[str, Any]:
     return {
         "spec": {
             "template": {
-                "metadata": {"annotations": {RUN_LABEL: None}},
+                "metadata": {
+                    "annotations": {
+                        RUN_LABEL: None,
+                        DEFAULT_CONTAINER_ANNOTATION: None,
+                    }
+                },
                 "spec": {
                     "volumes": [
                         {"name": EDGE_VOLUME, "$patch": "delete"},
