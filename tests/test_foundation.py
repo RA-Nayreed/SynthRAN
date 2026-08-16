@@ -118,6 +118,7 @@ class FoundationTests(unittest.TestCase):
         self.assertIn("Planned experiment output", readme)
         for name in (
             "architecture.md",
+            "experiment.md",
             "operator-guide.md",
             "development.md",
             "dependencies.md",
@@ -128,7 +129,7 @@ class FoundationTests(unittest.TestCase):
 
     def test_numbered_phase_terms_exist_only_in_the_decision_journal(self) -> None:
         excluded_parts = {".git", ".deps", ".synthran", "__pycache__"}
-        pattern = re.compile(r"phase[\s_-]*[012]", flags=re.IGNORECASE)
+        pattern = re.compile(r"phase[\s_-]*[0-9]", flags=re.IGNORECASE)
         for root, dirs, files in os.walk(REPOSITORY_ROOT):
             dirs[:] = [d for d in dirs if d not in excluded_parts]
             for filename in files:
@@ -156,6 +157,7 @@ class FoundationTests(unittest.TestCase):
             REPOSITORY_ROOT / "README.md",
             REPOSITORY_ROOT / "docs" / "dependencies.md",
             REPOSITORY_ROOT / "docs" / "development.md",
+            REPOSITORY_ROOT / "docs" / "experiment.md",
             REPOSITORY_ROOT / "docs" / "operator-guide.md",
             REPOSITORY_ROOT / "docs" / "security.md",
         )

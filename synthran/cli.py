@@ -11,6 +11,8 @@ import sys
 from typing import Sequence
 
 from synthran.dependencies import DependencyError, load_lock, sync_dependencies
+from synthran.experiment import ExperimentError
+from synthran.experiment_cli import add_experiment_parser, dispatch_experiment
 from synthran.fiveg_ansible import (
     FiveGAnsibleError,
     build_network_plan,
@@ -68,6 +70,7 @@ def _add_slices_context(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="synthran")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    add_experiment_parser(subcommands)
     slices = subcommands.add_parser(
         "slices", help="verify the SLICES CLI controller context"
     )
@@ -526,6 +529,8 @@ def _network_verify(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "experiment":
+            return dispatch_experiment(args)
         if args.command == "slices" and args.slices_command == "doctor":
             return _slices_doctor(args)
         if args.command == "deps" and args.deps_command == "sync":
@@ -547,6 +552,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _network_verify(args)
     except (
         DependencyError,
+        ExperimentError,
         FiveGAnsibleError,
         LivePreflightError,
         NetworkRuntimeError,

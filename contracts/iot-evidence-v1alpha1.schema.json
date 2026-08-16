@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "synthran/iot-evidence/v1alpha1",
+  "title": "SynthRAN IoT-to-5G evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "network_run_id", "generated_at_utc", "scenario_sha256", "jsonl_sha256", "parquet_sha256", "checks", "ready"],
+  "properties": {
+    "schema": {"const": "synthran/iot-evidence/v1alpha1"},
+    "run_id": {"type": "string"},
+    "network_run_id": {"type": "string"},
+    "generated_at_utc": {"type": "string"},
+    "scenario_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "jsonl_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "parquet_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "passed", "detail"],
+        "properties": {
+          "name": {"type": "string"},
+          "passed": {"type": "boolean"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "ready": {"type": "boolean"}
+  }
+}
