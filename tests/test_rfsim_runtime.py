@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+
+from synthran.experiment import ExperimentError
+from synthran.fiveg_ansible import InventoryHost, NetworkInventory
+from synthran.live_preflight import CommandResult
+from synthran.rfsim_runtime import (
+    _current_pdu_address,
+    _deployment_owner_for_pod,
+    _one_active_name,
+    reconcile_rfsim_runtime,
+)
+
+
+class RfsimRuntimeTests(unittest.TestCase):
+    def _inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "lab-core",
+                {
+                    "ansible_host": "192.0.2.10",
+                    "ansible_user": "root",
+                    "ip": "192.0.2.10",
+                },
+            ),
+            ran_node=InventoryHost(
+                "lab-ran",
+                {
+                    "ansible_host": "192.0.2.11",
+                    "ansible_user": "root",
+                    "ip": "192.0.2.11",
+                },
+            ),
+            all_vars={},
+        )
+
+    def test_one_active_name_ignores_terminating_pod(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "old",
+                        "deletionTimestamp": "2026-08-16T14:00:00Z",
+                    }
+                },
+                {"metadata": {"name": "current"}},
+            ]
+        }
+        self.assertEqual(_one_active_name(payload, label="gNB pod"), "current")
+
+    def test_current_pdu_address_accepts_live_address_in_slice_network(self) -> None:
+        inventory = self._inventory()
+        output = json.dumps(
+            [
+                {
+                    "ifname": "tun_srsue1",
+                    "addr_info": [
+                        {
+                            "family": "inet",
+                            "local": "12.1.0.2",
+                            "prefixlen": 24,
+                        }
+                    ],
+                }
+            ]
+        )
+        with patch(
+            "synthran.rfsim_runtime._remote",
+            return_value=output,
+        ):
+            self.assertEqual(
+                _current_pdu_address(inventory, "ue-pod"),
+                "12.1.0.2",
+            )
+
+    def test_current_pdu_address_rejects_address_outside_accepted_network(self) -> None:
+        inventory = self._inventory()
+        output = json.dumps(
+            [
+                {
+                    "ifname": "tun_srsue1",
+                    "addr_info": [{"family": "inet", "local": "10.0.0.8"}],
+                }
+            ]
+        )
+        with patch("synthran.rfsim_runtime._remote", return_value=output):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                "expected exactly one UE PDU address",
+            ):
+                _current_pdu_address(inventory, "ue-pod")
+
+    def test_deployment_owner_is_resolved_through_replicaset(self) -> None:
+        inventory = self._inventory()
+        responses = [
+            {
+                "metadata": {
+                    "ownerReferences": [
+                        {"kind": "ReplicaSet", "name": "srsran-gnb-abc"}
+                    ]
+                }
+            },
+            {
+                "metadata": {
+                    "ownerReferences": [
+                        {"kind": "Deployment", "name": "srsran-gnb"}
+                    ]
+                }
+            },
+        ]
+        with patch(
+            "synthran.rfsim_runtime._remote_json",
+            side_effect=responses,
+        ):
+            self.assertEqual(
+                _deployment_owner_for_pod(inventory, "gnb-pod"),
+                "srsran-gnb",
+            )
+
+    def test_reconcile_orders_stop_restart_broker_ue_route_and_returns_live_pdu(self) -> None:
+        inventory = self._inventory()
+        calls: list[str] = []
+        discovery = iter(("ue-new", "gnb-old", "gnb-new"))
+
+        def fake_discover(*args, **kwargs):
+            return next(discovery)
+
+        def fake_remote(inv, command, *, label, timeout_seconds=60):
+            calls.append(label)
+            return ""
+
+        with (
+            patch("synthran.rfsim_runtime._discover_pod", side_effect=fake_discover),
+            patch(
+                "synthran.rfsim_runtime._deployment_owner_for_pod",
+                return_value="srsran-gnb",
+            ),
+            patch("synthran.rfsim_runtime._remote", side_effect=fake_remote),
+            patch("synthran.rfsim_runtime._wait_for_gnb_cell") as wait_cell,
+            patch("synthran.rfsim_runtime._wait_for_broker") as wait_broker,
+            patch("synthran.rfsim_runtime._wait_for_ue_tunnel") as wait_tunnel,
+            patch(
+                "synthran.rfsim_runtime._current_pdu_address",
+                return_value="12.1.0.2",
+            ),
+        ):
+            state = reconcile_rfsim_runtime(
+                inventory,
+                network_run_id="network-run-01",
+            )
+
+        self.assertEqual(state.ue_pod, "ue-new")
+        self.assertEqual(state.gnb_pod, "gnb-new")
+        self.assertEqual(state.gnb_deployment, "srsran-gnb")
+        self.assertEqual(state.pdu_address, "12.1.0.2")
+        self.assertEqual(
+            calls,
+            [
+                "stale RFSIM process cleanup",
+                "gNB runtime restart request",
+                "gNB runtime rollout",
+                "RFSIM tmux session creation",
+                "GNU Radio broker start",
+                "srsUE start",
+                "srsUE route restoration",
+            ],
+        )
+        wait_cell.assert_called_once_with(inventory, "gnb-new")
+        wait_broker.assert_called_once_with(inventory, "ue-new")
+        wait_tunnel.assert_called_once_with(inventory, "ue-new")
+
+    def test_reconcile_persists_network_ownership_on_restarted_gnb(self) -> None:
+        inventory = self._inventory()
+        commands: list[str] = []
+        discovery = iter(("ue-new", "gnb-old", "gnb-new"))
+
+        def fake_remote(inv, command, *, label, timeout_seconds=60):
+            commands.append(command)
+            return ""
+
+        with (
+            patch("synthran.rfsim_runtime._discover_pod", side_effect=lambda *a, **k: next(discovery)),
+            patch(
+                "synthran.rfsim_runtime._deployment_owner_for_pod",
+                return_value="srsran-gnb",
+            ),
+            patch("synthran.rfsim_runtime._remote", side_effect=fake_remote),
+            patch("synthran.rfsim_runtime._wait_for_gnb_cell"),
+            patch("synthran.rfsim_runtime._wait_for_broker"),
+            patch("synthran.rfsim_runtime._wait_for_ue_tunnel"),
+            patch(
+                "synthran.rfsim_runtime._current_pdu_address",
+                return_value="12.1.0.2",
+            ),
+        ):
+            reconcile_rfsim_runtime(inventory, network_run_id="network-run-01")
+
+        patch_command = next(
+            command for command in commands if "kubectl patch deployment" in command
+        )
+        self.assertIn("synthran.run/id", patch_command)
+        self.assertIn("network-run-01", patch_command)
+        self.assertIn("kubectl.kubernetes.io/restartedAt", patch_command)
+
+
+if __name__ == "__main__":
+    unittest.main()
