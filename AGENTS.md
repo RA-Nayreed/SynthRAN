@@ -151,6 +151,8 @@ The deterministic scenario is:
 
 Do not move the cellular bridge to the controller: `tun_srsue1` and its PDU address exist in the srsUE pod network namespace.
 
+For the supported RFSIM path, Kubernetes `Ready` is not sufficient evidence that the UE runtime exists. The pinned srsUE pod is kept alive independently of the GNU Radio broker and `srsue` process, so every experiment-caused srsUE Deployment rollout must reconcile the process-level runtime before network reproof. Reconciliation is limited to resources already owned by the accepted network run and follows this order: stop stale srsUE/broker processes, restart the run-owned gNB while the broker is absent, wait for fresh gNB cell activation, start GNU Radio, start srsUE, wait for `tun_srsue1`, restore routes, then verify the accepted network path. The UE host address inside the accepted PDU network may change during this recovery; discover the live address from `tun_srsue1` and use it for bridge binding and experiment evidence rather than assuming a historical host address. This recovery does not authorize reservation, allocation, imaging, or base-network deployment.
+
 Experiment acceptance requires all of:
 
 - deterministic Cooja/Serial Socket startup;
