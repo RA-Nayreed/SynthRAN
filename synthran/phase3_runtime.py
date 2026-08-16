@@ -1,8 +1,8 @@
 """Phase 3 deterministic IoT-to-5G experiment contracts and artifact handling.
 
-The live runner intentionally assumes an already path-proven Phase 2 network.
+The live runner intentionally assumes an already path-proven network baseline.
 It never reserves SLICES resources and never deploys or tears down the base 5G
-network.  This module owns deterministic scenario rendering, MQTT bridge
+network. This module owns deterministic scenario rendering, MQTT bridge
 configuration, telemetry validation, JSONL/Parquet production, and acceptance
 report generation.
 """
@@ -76,47 +76,51 @@ def load_path_proven_network(
     manifest_path: Path,
     evidence_path: Path,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
-    """Load and validate the immutable Phase 2 prerequisite evidence."""
+    """Load and validate the immutable accepted-network prerequisite evidence."""
 
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise Phase3Error("Phase 2 path-proven evidence is missing") from exc
+        raise Phase3Error("path-proven network evidence is missing") from exc
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise Phase3Error("Phase 2 evidence must be readable JSON") from exc
+        raise Phase3Error("network acceptance evidence must be readable JSON") from exc
 
     if not isinstance(manifest, dict) or manifest.get("status") != "path-proven":
-        raise Phase3Error("Phase 3 requires a Phase 2 manifest with status=path-proven")
+        raise Phase3Error("Phase 3 requires a network manifest with status=path-proven")
     if (
         not isinstance(evidence, dict)
         or evidence.get("schema") != "synthran/network-evidence/v1alpha1"
         or evidence.get("ready") is not True
     ):
-        raise Phase3Error("Phase 3 requires ready Phase 2 network evidence")
+        raise Phase3Error("Phase 3 requires ready network acceptance evidence")
     if manifest.get("network_evidence") != evidence_path.name:
-        raise Phase3Error("Phase 2 manifest does not reference the supplied network evidence")
+        raise Phase3Error("network manifest does not reference the supplied evidence")
     if manifest.get("run_id") != evidence.get("run_id"):
-        raise Phase3Error("Phase 2 manifest/evidence run IDs do not match")
+        raise Phase3Error("network manifest/evidence run IDs do not match")
 
     path = evidence.get("path")
     if not isinstance(path, dict):
-        raise Phase3Error("Phase 2 path evidence is malformed")
+        raise Phase3Error("network path evidence is malformed")
     pdu_address = path.get("pdu_address")
     pdu_network = path.get("pdu_network")
     if not isinstance(pdu_address, str) or not isinstance(pdu_network, str):
-        raise Phase3Error("Phase 2 evidence does not contain a PDU address/network")
+        raise Phase3Error("network evidence does not contain a PDU address/network")
     try:
         observed_address = ipaddress.ip_address(pdu_address)
         observed_network = ipaddress.ip_network(pdu_network)
     except ValueError as exc:
-        raise Phase3Error("Phase 2 PDU evidence contains invalid IP data") from exc
+        raise Phase3Error("network PDU evidence contains invalid IP data") from exc
     if observed_network != EXPECTED_PDU_NETWORK or observed_address not in observed_network:
-        raise Phase3Error("Phase 2 PDU path does not match the accepted golden path")
+        raise Phase3Error("PDU path does not match the accepted golden path")
     if path.get("ue_interface") != "tun_srsue1":
-        raise Phase3Error("Phase 2 UE interface is not tun_srsue1")
-    if path.get("slice") != "slice1" or path.get("sst") != 1 or path.get("dnn") != "internet":
-        raise Phase3Error("Phase 2 slice evidence does not match the accepted golden path")
+        raise Phase3Error("accepted UE interface is not tun_srsue1")
+    if (
+        path.get("slice") != "slice1"
+        or path.get("sst") != 1
+        or path.get("dnn") != "internet"
+    ):
+        raise Phase3Error("slice evidence does not match the accepted golden path")
     return manifest, evidence
 
 
@@ -147,7 +151,7 @@ class Phase3Scenario:
         except ValueError as exc:
             raise Phase3Error("PDU address is invalid") from exc
         if pdu not in EXPECTED_PDU_NETWORK:
-            raise Phase3Error("PDU address is outside the accepted Phase 2 network")
+            raise Phase3Error("PDU address is outside the accepted network")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", self.topic_prefix):
             raise Phase3Error("topic prefix contains unsupported characters")
 
@@ -211,7 +215,7 @@ def render_edge_mosquitto_config(
     central_broker_address: str,
     central_broker_port: int = 1883,
 ) -> str:
-    """Render an edge broker that can only bridge from the accepted UE address."""
+    """Render an edge broker whose bridge is bound to the accepted UE address."""
 
     try:
         central = ipaddress.ip_address(central_broker_address)
@@ -219,9 +223,6 @@ def render_edge_mosquitto_config(
         raise Phase3Error("central broker address must be a literal IP address") from exc
     if central_broker_port <= 0 or central_broker_port > 65535:
         raise Phase3Error("central broker port is invalid")
-
-    # The bridge is bound to the UE PDU address.  This is a contract, not a
-    # best-effort preference: if the address is absent the connection must fail.
     return "\n".join(
         (
             "per_listener_settings true",
@@ -280,7 +281,11 @@ class TelemetryEvent:
     value_milli: int
 
     @classmethod
-    def from_payload(cls, payload: bytes | str, expected_run_id: str) -> "TelemetryEvent":
+    def from_payload(
+        cls,
+        payload: bytes | str,
+        expected_run_id: str,
+    ) -> "TelemetryEvent":
         validate_run_id(expected_run_id)
         try:
             text = payload.decode("utf-8") if isinstance(payload, bytes) else payload
@@ -302,8 +307,14 @@ class TelemetryEvent:
             raise Phase3Error("telemetry sensor ID is outside the 10-sensor contract")
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
             raise Phase3Error("telemetry sequence must be a positive integer")
-        if not isinstance(sensor_time_ms, int) or isinstance(sensor_time_ms, bool) or sensor_time_ms < 0:
-            raise Phase3Error("telemetry sensor_time_ms must be a non-negative integer")
+        if (
+            not isinstance(sensor_time_ms, int)
+            or isinstance(sensor_time_ms, bool)
+            or sensor_time_ms < 0
+        ):
+            raise Phase3Error(
+                "telemetry sensor_time_ms must be a non-negative integer"
+            )
         if not isinstance(value_milli, int) or isinstance(value_milli, bool):
             raise Phase3Error("telemetry value_milli must be an integer")
         return cls(run_id, sensor_id, sequence, sensor_time_ms, value_milli)
@@ -334,8 +345,6 @@ def append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
 
 
 def append_rejected(path: Path, *, reason: str, topic: str) -> None:
-    # Rejected artifacts deliberately omit the raw payload so malformed or
-    # credential-like input is not copied into an evidence artifact.
     append_jsonl(
         path,
         {
@@ -372,13 +381,18 @@ def load_jsonl(path: Path, *, expected_run_id: str) -> list[dict[str, Any]]:
     return records
 
 
-def deterministic_records(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def deterministic_records(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     canonical = [dict(record) for record in records]
     canonical.sort(key=lambda item: (str(item["sensor_id"]), int(item["sequence"])))
     return canonical
 
 
-def write_parquet(records: Sequence[Mapping[str, Any]], destination: Path) -> None:
+def write_parquet(
+    records: Sequence[Mapping[str, Any]],
+    destination: Path,
+) -> None:
     """Write the deterministic derived dataset using the locked PyArrow runtime."""
 
     try:
@@ -491,7 +505,9 @@ class Phase3Evidence:
             lines.append(
                 f"[{'PASS' if check.passed else 'FAIL'}] {check.name}: {check.detail}"
             )
-        lines.append(f"Result: {'IOT-TO-5G PATH PROVEN' if self.ready else 'NOT PROVEN'}")
+        lines.append(
+            f"Result: {'IOT-TO-5G PATH PROVEN' if self.ready else 'NOT PROVEN'}"
+        )
         return "\n".join(lines)
 
 
@@ -506,12 +522,16 @@ def build_offline_data_evidence(
     now: datetime | None = None,
 ) -> Phase3Evidence:
     records = load_jsonl(jsonl_path, expected_run_id=scenario.run_id)
-    failures = validate_sequence_integrity(records, minimum_per_sensor=minimum_per_sensor)
+    failures = validate_sequence_integrity(
+        records,
+        minimum_per_sensor=minimum_per_sensor,
+    )
     sensors = {str(record["sensor_id"]) for record in records}
     checks = [
         Phase3Check(
             "sensor-coverage",
-            sensors == set(f"sensor-{index:02d}" for index in range(1, SENSOR_COUNT + 1)),
+            sensors
+            == set(f"sensor-{index:02d}" for index in range(1, SENSOR_COUNT + 1)),
             f"observed {len(sensors)}/10 deterministic sensors",
         ),
         Phase3Check(
