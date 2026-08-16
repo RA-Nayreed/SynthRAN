@@ -620,8 +620,18 @@ def _remote_json(
 def _one_ready_pod(payload: Any, label: str, run_id: str) -> Mapping[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         raise NetworkRuntimeError(f"{label} pod evidence is malformed")
-    items = payload["items"]
-    if len(items) != 1 or not isinstance(items[0], dict):
+    raw_items = payload["items"]
+    if not all(isinstance(item, dict) for item in raw_items):
+        raise NetworkRuntimeError(f"{label} pod evidence is malformed")
+    items = [
+        item
+        for item in raw_items
+        if not (
+            isinstance(item.get("metadata"), dict)
+            and item["metadata"].get("deletionTimestamp") is not None
+        )
+    ]
+    if len(items) != 1:
         raise NetworkRuntimeError(f"expected exactly one {label} pod")
     pod = items[0]
     metadata = pod.get("metadata")

@@ -50,7 +50,11 @@ from synthran.ingress import CountedTcpIngress
 from synthran.iot import write_run_inputs
 from synthran.live_preflight import CommandResult, LivePreflightError, ssh_command
 from synthran.mqtt_collector import collect_mqtt
-from synthran.network_runtime import sanitize_deployment_text, verify_network_path
+from synthran.network_runtime import (
+    NetworkVerificationReport,
+    sanitize_deployment_text,
+    verify_network_path,
+)
 
 
 DEFAULT_RUN_ROOT = Path(".synthran/experiments")
@@ -178,15 +182,23 @@ def _one_name(payload: Mapping[str, Any], *, label: str) -> str:
     items = payload.get("items")
     if not isinstance(items, list):
         raise ExperimentError(f"{label} discovery returned malformed data")
-    if not items:
+    if not all(isinstance(item, dict) for item in items):
+        raise ExperimentError(f"{label} metadata is malformed")
+    active_items = [
+        item
+        for item in items
+        if not (
+            isinstance(item.get("metadata"), dict)
+            and item["metadata"].get("deletionTimestamp") is not None
+        )
+    ]
+    if not active_items:
         raise ExperimentError(f"no {label} was found")
-    if len(items) > 1:
+    if len(active_items) > 1:
         raise ExperimentError(
             f"multiple {label} resources were found; refusing to choose one"
         )
-    item = items[0]
-    if not isinstance(item, dict):
-        raise ExperimentError(f"{label} metadata is malformed")
+    item = active_items[0]
     metadata = item.get("metadata")
     if not isinstance(metadata, dict) or not isinstance(
         metadata.get("name"), str
@@ -407,14 +419,19 @@ def _collect_rollout_diagnostics(
     network_run_id: str,
     log_path: Path,
     private_paths: Sequence[Path],
+    verification: NetworkVerificationReport | None = None,
 ) -> None:
-    """Collect sanitized pod status, events, and sidecar logs on rollout failure."""
+    """Collect sanitized pod status, events, sidecar logs, and verification checks on failure."""
 
     log_parts: list[str] = [
         f"=== SynthRAN Rollout Diagnostics ({datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}) ===",
         f"Network Run ID: {network_run_id}",
         "",
     ]
+    if verification is not None:
+        log_parts.append("=== Network Verification Checks ===")
+        log_parts.append(verification.render())
+        log_parts.append("")
 
     def _safe_remote(command_str: str) -> str:
         try:
@@ -848,7 +865,29 @@ def execute_experiment(
             timeout_seconds=120,
         )
         if not after_patch.ready:
-            raise ExperimentError("srsUE sidecar patch broke the accepted network path")
+            report("srsUE post-patch network verification: FAILED")
+            for check in after_patch.checks:
+                if check.passed:
+                    report(f"[PASS] {check.name}")
+                else:
+                    report(f"[FAIL] {check.name}: {check.detail}")
+            _collect_rollout_diagnostics(
+                inventory,
+                network_run_id=scenario.network_run_id,
+                log_path=logs / "srsue-mqtt-rollout-diagnostics.log",
+                private_paths=(
+                    repository_root,
+                    dependency_root,
+                    run_directory,
+                    inventory.path,
+                ),
+                verification=after_patch,
+            )
+            failing = [f"{c.name}: {c.detail}" for c in after_patch.checks if not c.passed]
+            failing_summary = "; ".join(failing) if failing else "verification checks failed"
+            raise ExperimentError(
+                f"srsUE sidecar patch broke the accepted network path ({failing_summary})"
+            )
 
         _add_ue_route(inventory, ue_pod, core_address)
         _restart_edge_sidecar(inventory, ue_pod)

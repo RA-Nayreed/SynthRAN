@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import io
 import json
 from pathlib import Path
@@ -22,6 +23,7 @@ from synthran.experiment_runtime import (
     execute_experiment,
 )
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
+from synthran.network_runtime import NetworkVerificationReport, VerificationCheck
 from synthran.resource_runtime import build_preparation_inventory
 
 
@@ -310,6 +312,21 @@ class OneNameExtractionTests(unittest.TestCase):
             ):
                 _one_name(payload, label="run-owned srsUE Deployment")
 
+    def test_one_name_ignores_terminating_items_with_deletion_timestamp(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "srsran-ue-old",
+                        "deletionTimestamp": "2026-08-16T14:00:00Z",
+                    }
+                },
+                {"metadata": {"name": "srsran-ue-active"}},
+            ]
+        }
+        name = _one_name(payload, label="run-owned srsUE pod")
+        self.assertEqual(name, "srsran-ue-active")
+
 
 class RolloutDiagnosticsTests(unittest.TestCase):
     def _sample_inventory(self) -> NetworkInventory:
@@ -523,6 +540,159 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(
                     manifest_data["failure"],
                     "edge MQTT sidecar did not become Ready; diagnostic log saved",
+                )
+
+    def test_execute_experiment_post_patch_verification_failure_renders_checks_and_saves_diagnostics(
+        self,
+    ) -> None:
+        inventory = self._sample_inventory()
+        progress_buffer = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
+            network_dir = root / "runs" / "net-01"
+            network_dir.mkdir(parents=True)
+            manifest_path = network_dir / "manifest.json"
+            evidence_path = network_dir / "network-evidence.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "synthran/network-deployment/v1alpha1",
+                        "run_id": "net-01",
+                        "status": "path-proven",
+                        "network_evidence": evidence_path.name,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "synthran/network-evidence/v1alpha1",
+                        "run_id": "net-01",
+                        "ready": True,
+                        "path": {
+                            "pdu_address": "12.1.0.1",
+                            "pdu_network": "12.1.0.0/16",
+                            "ue_interface": "tun_srsue1",
+                            "slice": "slice1",
+                            "sst": 1,
+                            "dnn": "internet",
+                        },
+                        "checks": [{"name": "upf-path", "passed": True}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lock = load_lock(Path("dependencies.lock.yml"))
+
+            failed_checks = (
+                VerificationCheck("gnb", True, "one run-owned pod has healthy digest-locked containers"),
+                VerificationCheck("srsue", False, "srsue pod is not owned by this run ID"),
+                VerificationCheck("slice1-upf", True, "one run-owned pod has healthy digest-locked containers"),
+                VerificationCheck("ue-tunnel", False, "not probed because the srsUE pod check failed"),
+            )
+            failed_verification = NetworkVerificationReport(
+                run_id="net-01",
+                generated_at_utc=datetime(2026, 8, 16, 14, 0, tzinfo=timezone.utc),
+                inventory_sha256="0" * 64,
+                dependencies={},
+                checks=failed_checks,
+            )
+
+            call_count = 0
+
+            def mock_verify(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return MagicMock(ready=True)
+                if call_count == 2:
+                    return failed_verification
+                return MagicMock(ready=True)
+
+            with (
+                patch("sys.platform", "linux"),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "CONDA_DEFAULT_ENV": "synthran",
+                        "SYNTHRAN_KNOWN_HOSTS": str(known_hosts),
+                    },
+                ),
+                patch(
+                    "synthran.experiment_runtime.verify_network_path",
+                    side_effect=mock_verify,
+                ),
+                patch(
+                    "synthran.experiment_runtime._validate_contiki_checkout",
+                    return_value=root / "contiki",
+                ),
+                patch("synthran.experiment_runtime._prepare_cooja_checkout"),
+                patch("synthran.experiment_runtime._checked"),
+                patch(
+                    "synthran.experiment_runtime._discover_ue_deployment",
+                    return_value="srsran-ue-deploy",
+                ),
+                patch("synthran.experiment_runtime._kubectl_apply_object"),
+                patch("synthran.experiment_runtime._remote"),
+                patch("synthran.experiment_runtime._kubectl_patch_deployment"),
+                patch("synthran.experiment_runtime._wait_rollout"),
+                patch(
+                    "synthran.experiment_runtime._discover_ue_pod",
+                    return_value="srsran-ue-pod",
+                ),
+                patch(
+                    "synthran.experiment_runtime._collect_rollout_diagnostics"
+                ) as mock_diagnostics,
+                patch(
+                    "synthran.experiment_runtime._cleanup_live_resources",
+                    return_value=ExperimentCheck("cleanup", True, "cleaned up"),
+                ),
+            ):
+                result = execute_experiment(
+                    inventory=inventory,
+                    lock=lock,
+                    dependency_root=root / "deps",
+                    network_manifest=manifest_path,
+                    network_evidence=evidence_path,
+                    run_id="exp-postpatch-fail",
+                    repository_root=Path(__file__).parent.parent,
+                    run_root=root / "experiments",
+                    progress=progress_buffer,
+                )
+
+                self.assertFalse(result.ready)
+                mock_diagnostics.assert_called_once()
+                self.assertEqual(
+                    mock_diagnostics.call_args.kwargs.get("verification"),
+                    failed_verification,
+                )
+                output = progress_buffer.getvalue()
+                self.assertIn(
+                    "[synthran] srsUE post-patch network verification: FAILED", output
+                )
+                self.assertIn("[synthran] [PASS] gnb", output)
+                self.assertIn(
+                    "[synthran] [FAIL] srsue: srsue pod is not owned by this run ID",
+                    output,
+                )
+                self.assertIn("[synthran] [PASS] slice1-upf", output)
+                self.assertIn(
+                    "[synthran] [FAIL] ue-tunnel: not probed because the srsUE pod check failed",
+                    output,
+                )
+                self.assertIn("[synthran] experiment path NOT PROVEN", output)
+
+                manifest_file = result.run_directory / "manifest.json"
+                self.assertTrue(manifest_file.is_file())
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                self.assertEqual(manifest_data["status"], "failed")
+                self.assertIn(
+                    "srsue: srsue pod is not owned by this run ID",
+                    manifest_data["failure"],
                 )
 
 

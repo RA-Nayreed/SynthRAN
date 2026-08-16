@@ -65,7 +65,14 @@ def render_edge_patch(
     return {
         "spec": {
             "template": {
-                "metadata": {"annotations": {RUN_LABEL: scenario.run_id}},
+                "metadata": {
+                    "labels": {
+                        "synthran.run/id": scenario.network_run_id,
+                    },
+                    "annotations": {
+                        RUN_LABEL: scenario.run_id,
+                    },
+                },
                 "spec": {
                     "volumes": [
                         {

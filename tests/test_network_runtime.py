@@ -29,9 +29,15 @@ NOW = datetime(2026, 8, 12, 14, 0, tzinfo=timezone.utc)
 
 
 class VerificationRunner:
-    def __init__(self, images: dict[str, str], run_id: str = "network-proof") -> None:
+    def __init__(
+        self,
+        images: dict[str, str],
+        run_id: str = "network-proof",
+        ue_items: list[dict[str, object]] | None = None,
+    ) -> None:
         self.images = images
         self.run_id = run_id
+        self.ue_items = ue_items
         self.calls: list[tuple[str, ...]] = []
 
     def _pod(self, name: str, container: str, reference: str) -> dict[str, object]:
@@ -76,6 +82,8 @@ class VerificationRunner:
             payload = self._pod("gnb-pod", "gnb", self.images["srsran_gnb"])
             return CommandResult(0, json.dumps({"items": [payload]}))
         if "app=srsran,component=ue" in remote:
+            if self.ue_items is not None:
+                return CommandResult(0, json.dumps({"items": self.ue_items}))
             payload = self._pod("ue-pod", "ue", self.images["srsran_ue"])
             return CommandResult(0, json.dumps({"items": [payload]}))
         if "app=open5gs,nf=upf,name=upf1" in remote:
@@ -148,6 +156,70 @@ class NetworkVerificationTests(unittest.TestCase):
                     for part in call
                 )
             )
+
+    def test_ignores_terminating_pods_with_deletion_timestamp(self) -> None:
+        runner_helper = VerificationRunner(self.images)
+        terminating_pod = runner_helper._pod("ue-old", "ue", self.images["srsran_ue"])
+        terminating_pod["metadata"]["deletionTimestamp"] = "2026-08-16T14:00:00Z"
+        active_pod = runner_helper._pod("ue-pod", "ue", self.images["srsran_ue"])
+        runner = VerificationRunner(
+            self.images,
+            ue_items=[terminating_pod, active_pod],
+        )
+        with patch.dict(
+            os.environ,
+            {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+        ):
+            report = verify_network_path(
+                inventory=self.inventory,
+                lock=self.lock,
+                run_id="network-proof",
+                runner=runner,
+                now=NOW,
+            )
+        self.assertTrue(report.ready, report.render())
+
+    def test_fails_closed_when_zero_or_multiple_non_terminating_pods(self) -> None:
+        runner_helper = VerificationRunner(self.images)
+        terminating_pod = runner_helper._pod("ue-old", "ue", self.images["srsran_ue"])
+        terminating_pod["metadata"]["deletionTimestamp"] = "2026-08-16T14:00:00Z"
+        runner_zero = VerificationRunner(
+            self.images,
+            ue_items=[terminating_pod],
+        )
+        with patch.dict(
+            os.environ,
+            {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+        ):
+            report_zero = verify_network_path(
+                inventory=self.inventory,
+                lock=self.lock,
+                run_id="network-proof",
+                runner=runner_zero,
+                now=NOW,
+            )
+        self.assertFalse(report_zero.ready)
+        self.assertIn("expected exactly one srsue pod", report_zero.render())
+
+        active_1 = runner_helper._pod("ue-1", "ue", self.images["srsran_ue"])
+        active_2 = runner_helper._pod("ue-2", "ue", self.images["srsran_ue"])
+        runner_multi = VerificationRunner(
+            self.images,
+            ue_items=[active_1, active_2],
+        )
+        with patch.dict(
+            os.environ,
+            {"SYNTHRAN_KNOWN_HOSTS": str(FIXTURE.resolve())},
+        ):
+            report_multi = verify_network_path(
+                inventory=self.inventory,
+                lock=self.lock,
+                run_id="network-proof",
+                runner=runner_multi,
+                now=NOW,
+            )
+        self.assertFalse(report_multi.ready)
+        self.assertIn("expected exactly one srsue pod", report_multi.render())
 
     def test_rejects_pods_owned_by_another_run(self) -> None:
         runner = VerificationRunner(self.images, run_id="different-run")

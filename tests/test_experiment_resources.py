@@ -30,6 +30,10 @@ class ExperimentResourceTests(unittest.TestCase):
             core_address="192.0.2.10",
         )
         template = patch["spec"]["template"]
+        self.assertEqual(
+            template["metadata"]["labels"]["synthran.run/id"],
+            "network-accepted-01",
+        )
         self.assertEqual(template["metadata"]["annotations"][RUN_LABEL], "experiment-01")
         container = template["spec"]["containers"][0]
         self.assertEqual(container["name"], EDGE_CONTAINER)
@@ -37,7 +41,10 @@ class ExperimentResourceTests(unittest.TestCase):
 
     def test_cleanup_deletes_only_injected_sidecar_and_volume(self) -> None:
         patch = render_edge_cleanup_patch()
-        spec = patch["spec"]["template"]["spec"]
+        template = patch["spec"]["template"]
+        self.assertEqual(template["metadata"], {"annotations": {RUN_LABEL: None}})
+        self.assertNotIn("labels", template["metadata"])
+        spec = template["spec"]
         self.assertEqual(spec["containers"][0]["$patch"], "delete")
         self.assertEqual(spec["volumes"][0]["$patch"], "delete")
 
