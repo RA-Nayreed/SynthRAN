@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "phase3-generated.h"
+#include "experiment-generated.h"
 
 #define LOG_MODULE "synthran-sensor"
 #define LOG_LEVEL LOG_LEVEL_INFO
@@ -144,7 +144,7 @@ PROCESS_THREAD(synthran_sensor_process, ev, data)
     PROCESS_EXIT();
   }
 
-  snprintf(client_id, sizeof(client_id), "synthran-p3-sensor-%02u", number);
+  snprintf(client_id, sizeof(client_id), "synthran-sensor-%02u", number);
   snprintf(topic, sizeof(topic),
            "%s/%s/sensor/sensor-%02u",
            SYNTHRAN_TOPIC_PREFIX, SYNTHRAN_RUN_ID, number);
