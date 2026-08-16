@@ -9,9 +9,11 @@ from synthran.experiment import ExperimentError
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory
 from synthran.live_preflight import CommandResult
 from synthran.rfsim_runtime import (
+    UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
     _current_pdu_address,
     _deployment_owner_for_pod,
     _one_active_name,
+    _wait_for_ue_tunnel,
     reconcile_rfsim_runtime,
 )
 
@@ -122,6 +124,54 @@ class RfsimRuntimeTests(unittest.TestCase):
                 _deployment_owner_for_pod(inventory, "gnb-pod"),
                 "srsran-gnb",
             )
+
+    def test_wait_for_ue_tunnel_accepts_delayed_attachment(self) -> None:
+        inventory = self._inventory()
+        captured: dict[str, object] = {}
+
+        def fake_remote_result(inv, command, *, timeout_seconds=60):
+            captured["command"] = command
+            captured["timeout_seconds"] = timeout_seconds
+            return CommandResult(0, "", "")
+
+        with patch(
+            "synthran.rfsim_runtime._remote_result",
+            side_effect=fake_remote_result,
+        ):
+            _wait_for_ue_tunnel(inventory, "ue-pod")
+
+        self.assertEqual(
+            captured["timeout_seconds"],
+            UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
+        )
+        command = str(captured["command"])
+        self.assertIn("seq 1 150", command)
+        self.assertIn("ip link show tun_srsue1", command)
+        self.assertIn("pgrep -af", command)
+
+    def test_wait_for_ue_tunnel_distinguishes_dead_process(self) -> None:
+        inventory = self._inventory()
+        with patch(
+            "synthran.rfsim_runtime._remote_result",
+            return_value=CommandResult(2, "", ""),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                "srsUE process exited before tun_srsue1 became ready",
+            ):
+                _wait_for_ue_tunnel(inventory, "ue-pod")
+
+    def test_wait_for_ue_tunnel_reports_live_process_timeout(self) -> None:
+        inventory = self._inventory()
+        with patch(
+            "synthran.rfsim_runtime._remote_result",
+            return_value=CommandResult(1, "", ""),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                "timed out while the srsUE process remained alive",
+            ):
+                _wait_for_ue_tunnel(inventory, "ue-pod")
 
     def test_reconcile_orders_stop_restart_broker_ue_route_and_returns_live_pdu(self) -> None:
         inventory = self._inventory()
