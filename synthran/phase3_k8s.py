@@ -1,8 +1,8 @@
 """Run-scoped Kubernetes overlay for the Phase 3 MQTT path.
 
-The accepted Phase 2 network is not redeployed.  Phase 3 temporarily adds one
+The accepted Phase 2 network is not redeployed. Phase 3 temporarily adds one
 Mosquitto sidecar to the existing run-owned srsUE Deployment so that the edge
-bridge shares the network namespace containing ``tun_srsue1``.  Cleanup removes
+bridge shares the network namespace containing ``tun_srsue1``. Cleanup removes
 the sidecar and recreates the original pod shape.
 """
 
@@ -14,13 +14,19 @@ import json
 from typing import Any, Mapping
 
 from synthran.dependencies import DependencyLock
-from synthran.phase3_runtime import Phase3Error, Phase3Scenario, render_central_mosquitto_config, render_edge_mosquitto_config
+from synthran.phase3_runtime import (
+    Phase3Error,
+    Phase3Scenario,
+    render_central_mosquitto_config,
+    render_edge_mosquitto_config,
+)
 
 
 EDGE_CONTAINER = "synthran-edge-mqtt"
 EDGE_VOLUME = "synthran-phase3-edge-config"
 CENTRAL_PORT = 18884
 RUN_LABEL = "synthran.phase3/run"
+MOSQUITTO_BINARY = "/usr/sbin/mosquitto"
 
 
 def _mosquitto_image(lock: DependencyLock) -> str:
@@ -79,7 +85,7 @@ def render_edge_patch(
                             "name": EDGE_CONTAINER,
                             "image": _mosquitto_image(lock),
                             "imagePullPolicy": "IfNotPresent",
-                            "args": ["mosquitto", "-c", "/synthran/mosquitto.conf"],
+                            "args": [MOSQUITTO_BINARY, "-c", "/synthran/mosquitto.conf"],
                             "ports": [{"name": "mqtt-edge", "containerPort": 1883}],
                             "volumeMounts": [
                                 {
@@ -174,10 +180,18 @@ def render_phase3_objects(
         },
         "spec": {
             "replicas": 1,
-            "selector": {"matchLabels": {RUN_LABEL: scenario.run_id, "synthran.phase3/role": "central-mqtt"}},
+            "selector": {
+                "matchLabels": {
+                    RUN_LABEL: scenario.run_id,
+                    "synthran.phase3/role": "central-mqtt",
+                }
+            },
             "template": {
                 "metadata": {
-                    "labels": {RUN_LABEL: scenario.run_id, "synthran.phase3/role": "central-mqtt"}
+                    "labels": {
+                        RUN_LABEL: scenario.run_id,
+                        "synthran.phase3/role": "central-mqtt",
+                    }
                 },
                 "spec": {
                     "hostNetwork": True,
@@ -188,7 +202,7 @@ def render_phase3_objects(
                             "name": "central-mqtt",
                             "image": _mosquitto_image(lock),
                             "imagePullPolicy": "IfNotPresent",
-                            "args": ["mosquitto", "-c", "/synthran/mosquitto.conf"],
+                            "args": [MOSQUITTO_BINARY, "-c", "/synthran/mosquitto.conf"],
                             "ports": [
                                 {
                                     "name": "mqtt-central",
