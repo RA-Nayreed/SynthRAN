@@ -18,6 +18,7 @@ from synthran.experiment import (
 
 EDGE_CONTAINER = "synthran-edge-mqtt"
 EDGE_VOLUME = "synthran-experiment-edge-config"
+EDGE_RUNTIME_VOLUME = "synthran-experiment-edge-runtime"
 CENTRAL_PORT = 18884
 RUN_LABEL = "synthran.experiment/run"
 ROLE_LABEL = "synthran.experiment/role"
@@ -78,21 +79,36 @@ def render_edge_patch(
                         {
                             "name": EDGE_VOLUME,
                             "configMap": {"name": resource_names["edge_config"]},
-                        }
+                        },
+                        {
+                            "name": EDGE_RUNTIME_VOLUME,
+                            "emptyDir": {},
+                        },
                     ],
                     "containers": [
                         {
                             "name": EDGE_CONTAINER,
                             "image": _mosquitto_image(lock),
                             "imagePullPolicy": "IfNotPresent",
-                            "args": [MOSQUITTO_BINARY, "-c", "/synthran/mosquitto.conf"],
+                            "command": ["/bin/sh", "-c"],
+                            "args": [
+                                "set -eu; "
+                                "if [ ! -f /synthran/mosquitto.conf ]; then "
+                                "cp /synthran-source/mosquitto.conf /synthran/mosquitto.conf; "
+                                "fi; "
+                                f"exec {MOSQUITTO_BINARY} -c /synthran/mosquitto.conf"
+                            ],
                             "ports": [{"name": "mqtt-edge", "containerPort": 1883}],
                             "volumeMounts": [
                                 {
                                     "name": EDGE_VOLUME,
-                                    "mountPath": "/synthran",
+                                    "mountPath": "/synthran-source",
                                     "readOnly": True,
-                                }
+                                },
+                                {
+                                    "name": EDGE_RUNTIME_VOLUME,
+                                    "mountPath": "/synthran",
+                                },
                             ],
                             "readinessProbe": {
                                 "tcpSocket": {"port": 1883},
@@ -113,7 +129,10 @@ def render_edge_cleanup_patch() -> Mapping[str, Any]:
             "template": {
                 "metadata": {"annotations": {RUN_LABEL: None}},
                 "spec": {
-                    "volumes": [{"name": EDGE_VOLUME, "$patch": "delete"}],
+                    "volumes": [
+                        {"name": EDGE_VOLUME, "$patch": "delete"},
+                        {"name": EDGE_RUNTIME_VOLUME, "$patch": "delete"},
+                    ],
                     "containers": [{"name": EDGE_CONTAINER, "$patch": "delete"}],
                 },
             }
