@@ -1,6 +1,6 @@
 """Run-scoped Kubernetes overlay for the Phase 3 MQTT path.
 
-The accepted Phase 2 network is not redeployed. Phase 3 temporarily adds one
+The accepted network baseline is not redeployed. Phase 3 temporarily adds one
 Mosquitto sidecar to the existing run-owned srsUE Deployment so that the edge
 bridge shares the network namespace containing ``tun_srsue1``. Cleanup removes
 the sidecar and recreates the original pod shape.
