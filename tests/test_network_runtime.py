@@ -91,7 +91,7 @@ class VerificationRunner:
             return CommandResult(0, json.dumps({"items": [payload]}))
         if "gnb-pod -c gnb-logs" in remote:
             return CommandResult(0, "")
-        if "ip -j address show dev tun_srsue1" in remote:
+        if "ue-pod -c ue -- ip -j address show dev tun_srsue1" in remote:
             return CommandResult(
                 0,
                 json.dumps(
@@ -106,7 +106,7 @@ class VerificationRunner:
                     ]
                 ),
             )
-        if "ue-pod -- ip -j route show" in remote:
+        if "ue-pod -c ue -- ip -j route show" in remote:
             return CommandResult(
                 0,
                 json.dumps([{"dst": "12.1.0.0/16", "dev": "tun_srsue1"}]),
@@ -156,6 +156,12 @@ class NetworkVerificationTests(unittest.TestCase):
                     for part in call
                 )
             )
+        self.assertTrue(
+            any("ue-pod -c ue -- ip -j address show dev tun_srsue1" in " ".join(call) for call in runner.calls)
+        )
+        self.assertTrue(
+            any("ue-pod -c ue -- ip -j route show" in " ".join(call) for call in runner.calls)
+        )
 
     def test_ignores_terminating_pods_with_deletion_timestamp(self) -> None:
         runner_helper = VerificationRunner(self.images)
@@ -338,7 +344,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 "dependency_lock_sha256": "a" * 64,
                 "project_fingerprint": "b" * 64,
                 "experiment_fingerprint": "c" * 64,
-                "python_version": "3.12.11",
+                "python_version": "3.12.13",
                 "ansible_version": "2.20.5",
                 "pos_version": "2.5.35",
                 "slices_cli_version": "1.0.0",
@@ -463,7 +469,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 "dependency_lock_sha256": "a" * 64,
                 "project_fingerprint": "b" * 64,
                 "experiment_fingerprint": "c" * 64,
-                "python_version": "3.12.11",
+                "python_version": "3.12.13",
                 "ansible_version": "2.20.5",
                 "pos_version": "2.5.35",
                 "slices_cli_version": "1.0.0",
@@ -549,7 +555,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
                 "dependency_lock_sha256": "a" * 64,
                 "project_fingerprint": "b" * 64,
                 "experiment_fingerprint": "c" * 64,
-                "python_version": "3.12.11",
+                "python_version": "3.12.13",
                 "ansible_version": "2.20.5",
                 "pos_version": "2.5.35",
                 "slices_cli_version": "1.0.0",

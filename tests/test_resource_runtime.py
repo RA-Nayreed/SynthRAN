@@ -120,7 +120,7 @@ class ResourcePreparationTests(unittest.TestCase):
             dependency_lock_sha256=dependency_lock_sha256(self.lock),
             project_fingerprint=fingerprint("project-test"),
             experiment_fingerprint=fingerprint("experiment-test"),
-            python_version="3.12.11",
+            python_version="3.12.13",
             ansible_version="2.20.5",
             pos_version="2.5.35",
             slices_cli_version="1.4.0",

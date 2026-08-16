@@ -18,7 +18,8 @@ The immutable identifiers below mirror `dependencies.lock.yml`. The lock file is
 | `ziyad-mabrouk/srsue` | Golden-path srsUE gateway | `v1.0@sha256:c1c9eb2119e48d1f5f9120c71cd539c606fca6c242a2e430409269c121610bb2` | Container image | License not yet asserted; retain image notices |
 | BusyBox | Golden-path readiness/log helpers | `1.32.0@sha256:31a54a0cf86d7354788a8265f60ae6acb4b348a67efbcf7c1007dd3cf7af05ab` and `1.36@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f` | Container images | GPL-2.0-only |
 | Miniforge3 | Conda distribution used by CI and recommended locally | `26.3.2-2`, Linux x86-64 installer `sha256:42260ffe3830fb953d5eee1bbb32229ff06aa7c3833c1ed7a9a0420a95685d94` | External environment bootstrap | Installer code is BSD-3-Clause; installed packages retain their own licenses |
-| Python | SynthRAN runtime | `3.12.11` | Conda package from `conda-forge` | PSF-2.0 |
+| Python | SynthRAN runtime | `3.12.13` | Conda package from `conda-forge` | PSF-2.0 |
+| OpenJDK | Java runtime required by Cooja | `21.0.9` | Conda package from `conda-forge` | GPL-2.0-with-classpath-exception |
 | Git | Detached dependency synchronization and repository hooks | `2.51.0` | Conda package from `conda-forge` | GPL-2.0-only |
 | Ansible Core | Golden-path controller | `2.20.5` | Conda package from `conda-forge` | GPL-3.0-or-later |
 | `kubernetes.core` | Golden-path Kubernetes and Helm modules | `6.5.0` | Ansible Galaxy collection | GPL-3.0-or-later |

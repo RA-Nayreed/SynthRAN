@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -284,11 +285,47 @@ def _prepare_cooja_checkout(contiki: Path) -> Path:
 def _copy_sensor_source(repository_root: Path, run_directory: Path) -> None:
     source = repository_root.resolve() / "deploy" / "iot" / "sensor"
     destination = run_directory / "sensor"
-    for name in ("Makefile", "synthran-sensor.c"):
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ("Makefile", "synthran-sensor.c", "project-conf.h"):
         candidate = source / name
         if not candidate.is_file():
             raise ExperimentError(f"sensor source is missing: {name}")
         shutil.copy2(candidate, destination / name)
+
+
+def _validate_java_runtime() -> Path:
+    """Ensure Java 21 is available in the synthran environment and return JAVA_HOME."""
+    java_executable = shutil.which("java")
+    if java_executable is None:
+        raise ExperimentError("Cooja requires Java 21 in the synthran environment")
+
+    java_path = Path(java_executable).resolve()
+    try:
+        completed = subprocess.run(
+            [str(java_path), "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        raise ExperimentError(
+            "Cooja requires Java 21 in the synthran environment"
+        ) from exc
+
+    if completed.returncode != 0:
+        raise ExperimentError("Cooja requires Java 21 in the synthran environment")
+
+    output = f"{completed.stdout}\n{completed.stderr}"
+    match = re.search(r'version "(\d+)(?:\.|\+|-|_|")', output)
+    if not match or match.group(1) != "21":
+        raise ExperimentError("Cooja requires Java 21 in the synthran environment")
+
+    java_home = java_path.parent.parent
+    if (java_home / "lib" / "jvm").is_dir():
+        java_home = java_home / "lib" / "jvm"
+    return java_home
 
 
 def _wait_tcp(
@@ -297,9 +334,20 @@ def _wait_tcp(
     *,
     timeout_seconds: int = 60,
     family: int = socket.AF_INET,
+    process: ManagedProcess | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        if process is not None and process.process.poll() is not None:
+            try:
+                process.log_stream.flush()
+            except Exception:
+                pass
+            exit_code = process.process.poll()
+            raise ExperimentError(
+                f"{process.name} exited with code {exit_code} before TCP endpoint {host}:{port} became ready; "
+                f"see {process.log_path}"
+            )
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(1.0)
         try:
@@ -309,6 +357,16 @@ def _wait_tcp(
             time.sleep(0.5)
         finally:
             sock.close()
+    if process is not None and process.process.poll() is not None:
+        try:
+            process.log_stream.flush()
+        except Exception:
+            pass
+        exit_code = process.process.poll()
+        raise ExperimentError(
+            f"{process.name} exited with code {exit_code} before TCP endpoint {host}:{port} became ready; "
+            f"see {process.log_path}"
+        )
     raise ExperimentError(f"TCP endpoint {host}:{port} did not become ready")
 
 
@@ -318,6 +376,7 @@ def _start_process(
     *,
     cwd: Path,
     log_path: Path,
+    env: Mapping[str, str] | None = None,
 ) -> ManagedProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stream = log_path.open("w", encoding="utf-8", newline="\n")
@@ -325,6 +384,7 @@ def _start_process(
         process = subprocess.Popen(
             list(command),
             cwd=cwd,
+            env=dict(env) if env is not None else None,
             text=True,
             stdin=subprocess.DEVNULL,
             stdout=stream,
@@ -780,6 +840,7 @@ def execute_experiment(
         network_evidence=network_evidence,
     )
     contiki = _validate_contiki_checkout(lock, dependency_root)
+    java_home = _validate_java_runtime()
     core_address = _core_address(inventory)
 
     report("network-prerequisite: verifying path-proven baseline...")
@@ -806,6 +867,7 @@ def execute_experiment(
     _, csc, scenario_path = write_run_inputs(
         scenario,
         run_directory=run_directory,
+        contiki_directory=contiki,
     )
     _copy_sensor_source(repository_root, run_directory)
     manifest_path = run_directory / "manifest.json"
@@ -923,6 +985,7 @@ def execute_experiment(
         _, csc, scenario_path = write_run_inputs(
             scenario,
             run_directory=run_directory,
+            contiki_directory=contiki,
         )
         edge_config = render_edge_mosquitto_config(
             scenario,
@@ -985,7 +1048,12 @@ def execute_experiment(
             log_path=logs / "edge-port-forward.log",
         )
         processes.append(edge_forward)
-        _wait_tcp("127.0.0.1", LOCAL_EDGE_FORWARD_PORT, timeout_seconds=30)
+        _wait_tcp(
+            "127.0.0.1",
+            LOCAL_EDGE_FORWARD_PORT,
+            timeout_seconds=30,
+            process=edge_forward,
+        )
 
         central_forward = _start_process(
             "central MQTT port-forward",
@@ -1005,21 +1073,36 @@ def execute_experiment(
             log_path=logs / "central-port-forward.log",
         )
         processes.append(central_forward)
-        _wait_tcp("127.0.0.1", LOCAL_CENTRAL_FORWARD_PORT, timeout_seconds=30)
+        _wait_tcp(
+            "127.0.0.1",
+            LOCAL_CENTRAL_FORWARD_PORT,
+            timeout_seconds=30,
+            process=central_forward,
+        )
 
         report("cooja: starting deterministic 10-sensor simulation...")
+        cooja_env = os.environ.copy()
+        cooja_env["JAVA_HOME"] = str(java_home)
         cooja = _start_process(
             "Cooja",
             (
                 str(contiki / "tools" / "cooja" / "gradlew"),
+                "--no-daemon",
+                "--console=plain",
                 "run",
                 f"--args=--no-gui {csc}",
             ),
             cwd=contiki / "tools" / "cooja",
             log_path=logs / "cooja.log",
+            env=cooja_env,
         )
         processes.append(cooja)
-        _wait_tcp("127.0.0.1", scenario.serial_socket_port, timeout_seconds=180)
+        _wait_tcp(
+            "127.0.0.1",
+            scenario.serial_socket_port,
+            timeout_seconds=180,
+            process=cooja,
+        )
         extra_checks.append(
             ExperimentCheck(
                 "cooja",

@@ -800,7 +800,7 @@ def verify_network_path(
                 runner,
                 inventory,
                 "KUBECONFIG=/etc/kubernetes/admin.conf "
-                f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {ue_name} -- "
+                f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {ue_name} -c ue -- "
                 f"ip -j address show dev {GOLDEN_PATH_INTERFACE}",
                 timeout_seconds,
                 "UE tunnel probe",
@@ -834,7 +834,7 @@ def verify_network_path(
                 runner,
                 inventory,
                 "KUBECONFIG=/etc/kubernetes/admin.conf "
-                f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {ue_name} -- ip -j route show",
+                f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {ue_name} -c ue -- ip -j route show",
                 timeout_seconds,
                 "UE route probe",
             )

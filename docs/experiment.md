@@ -43,6 +43,15 @@ Each sensor publishes `synthran/telemetry/v1alpha1` JSON containing the run ID, 
 
 The experiment command does not create a reservation, allocate or image nodes, deploy Open5GS, deploy the gNB, or tear down the accepted network. It requires the referenced network manifest to have `status=path-proven` and the referenced network evidence to have `ready=true` before creating the experiment run directory.
 
+Local Cooja runtime prerequisites are strictly validated before any live cluster or 5G mutations occur:
+- Java 21 (`openjdk=21.0.9`) must be present in the active `synthran` Conda environment;
+- the pinned Contiki-NG checkout is validated;
+- the deterministic MQTT sensor includes `project-conf.h` enabling Contiki TCP socket support (`#define UIP_CONF_TCP 1`);
+- sensor compilation commands in generated Cooja scenarios explicitly embed the validated absolute Contiki checkout path (`CONTIKI=<path>`) rather than relying on unexpanded `[CONTIKI_DIR]` placeholders or ambient parent environment variables;
+- child processes (`cooja`, SSH port-forwards) are actively monitored during readiness checks so early process exits fail immediately with the exit code and log file path instead of waiting for TCP socket timeouts.
+
+Network verification explicitly addresses the `ue` container (`kubectl exec ... -c ue -- ...`) when probing `tun_srsue1` and UE routing tables.
+
 Live experiment changes are limited to:
 
 - run-labeled MQTT ConfigMaps and a central MQTT Deployment;

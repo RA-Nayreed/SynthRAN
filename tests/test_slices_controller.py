@@ -74,7 +74,7 @@ class SlicesControllerTests(unittest.TestCase):
             "which": lambda _name: "/tool",
             "environment": {"CONDA_DEFAULT_ENV": "synthran"},
             "system_name": "Linux",
-            "python_version": "3.12.11",
+            "python_version": "3.12.13",
         }
         arguments.update(overrides)
         return verify_slices_controller(**arguments)

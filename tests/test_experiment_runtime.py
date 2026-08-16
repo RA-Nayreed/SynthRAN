@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import io
 import json
@@ -13,14 +14,18 @@ from synthran.dependencies import load_lock
 from synthran.experiment import ExperimentCheck, ExperimentError, ExperimentScenario
 from synthran.experiment_runtime import (
     CommandResult,
+    ManagedProcess,
     _cleanup_live_resources,
     _collect_rollout_diagnostics,
+    _copy_sensor_source,
     _core_address,
     _discover_ue_deployment,
     _discover_ue_pod,
     _one_name,
     _prepare_cooja_checkout,
     _render_manifest,
+    _validate_java_runtime,
+    _wait_tcp,
     execute_experiment,
 )
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
@@ -487,6 +492,7 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                     "synthran.experiment_runtime._validate_contiki_checkout",
                     return_value=root / "contiki",
                 ),
+                patch("synthran.experiment_runtime._validate_java_runtime"),
                 patch("synthran.experiment_runtime._prepare_cooja_checkout"),
                 patch("synthran.experiment_runtime._checked"),
                 patch(
@@ -608,6 +614,7 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                     "synthran.experiment_runtime._validate_contiki_checkout",
                     return_value=root / "contiki",
                 ),
+                patch("synthran.experiment_runtime._validate_java_runtime"),
                 patch("synthran.experiment_runtime._prepare_cooja_checkout"),
                 patch("synthran.experiment_runtime._checked"),
                 patch(
@@ -702,6 +709,177 @@ class RolloutDiagnosticsTests(unittest.TestCase):
 
         self.assertTrue(result.passed)
         self.assertEqual(order, ["patch", "rollout", "reconcile", "delete", "verify"])
+
+    def test_execute_experiment_propagates_contiki_and_java_home(self) -> None:
+        inventory = self._sample_inventory()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text("lab-core ssh-ed25519 AAA...\n", encoding="utf-8")
+            manifest_path, evidence_path = self._network_artifacts(root)
+            lock = load_lock(Path("dependencies.lock.yml"))
+            contiki_path = root / "contiki"
+            contiki_path.mkdir(parents=True)
+            java_home_path = root / "jvm_home"
+            java_home_path.mkdir(parents=True)
+
+            mock_cooja_proc = MagicMock()
+            mock_cooja_proc.poll.return_value = None
+
+            with ExitStack() as stack:
+                stack.enter_context(patch("sys.platform", "linux"))
+                stack.enter_context(patch.dict("os.environ", {"CONDA_DEFAULT_ENV": "synthran", "SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}))
+                stack.enter_context(patch("synthran.experiment_runtime.verify_network_path", return_value=MagicMock(ready=True)))
+                stack.enter_context(patch("synthran.experiment_runtime._validate_contiki_checkout", return_value=contiki_path))
+                stack.enter_context(patch("synthran.experiment_runtime._validate_java_runtime", return_value=java_home_path))
+                stack.enter_context(patch("synthran.experiment_runtime._prepare_cooja_checkout"))
+                stack.enter_context(patch("synthran.experiment_runtime._checked"))
+                stack.enter_context(patch("synthran.experiment_runtime._discover_ue_deployment", return_value="srsran-ue-deploy"))
+                stack.enter_context(patch("synthran.experiment_runtime._kubectl_apply_object"))
+                stack.enter_context(patch("synthran.experiment_runtime._remote"))
+                stack.enter_context(patch("synthran.experiment_runtime._kubectl_patch_deployment"))
+                stack.enter_context(patch("synthran.experiment_runtime._wait_rollout"))
+                stack.enter_context(patch("synthran.experiment_runtime.reconcile_rfsim_runtime", return_value=RfsimRuntimeState("ue", "gnb", "srsran-gnb", "12.1.0.9")))
+                stack.enter_context(patch("synthran.experiment_runtime._replace_edge_runtime_config"))
+                stack.enter_context(patch("synthran.experiment_runtime._restart_edge_sidecar"))
+                stack.enter_context(patch("synthran.experiment_runtime._add_ue_route"))
+                stack.enter_context(patch("synthran.experiment_runtime._interface_counter", return_value=0))
+                stack.enter_context(patch("synthran.experiment_runtime.time.sleep"))
+
+                def stop_at_cooja(host: str, port: int, *args, **kwargs):
+                    if port == 60001:
+                        raise ExperimentError("stop-at-cooja")
+
+                mock_write_inputs = stack.enter_context(patch("synthran.experiment_runtime.write_run_inputs", return_value=(Path("h"), Path("c"), Path("s"))))
+                mock_start_proc = stack.enter_context(patch("synthran.experiment_runtime._start_process"))
+                stack.enter_context(patch("synthran.experiment_runtime._wait_tcp", side_effect=stop_at_cooja))
+                stack.enter_context(patch("synthran.experiment_runtime._cleanup_live_resources", return_value=ExperimentCheck("cleanup", True, "cleaned up")))
+
+                mock_start_proc.return_value = ManagedProcess("Cooja", mock_cooja_proc, root / "cooja.log", MagicMock())
+                result = execute_experiment(
+                    inventory=inventory,
+                    lock=lock,
+                    dependency_root=root / "deps",
+                    network_manifest=manifest_path,
+                    network_evidence=evidence_path,
+                    run_id="exp-prop-test",
+                    repository_root=Path(__file__).parent.parent,
+                    run_root=root / "experiments",
+                )
+                self.assertEqual(mock_write_inputs.call_count, 2)
+                for call in mock_write_inputs.call_args_list:
+                    self.assertEqual(call.kwargs.get("contiki_directory"), contiki_path)
+
+                cooja_calls = [c for c in mock_start_proc.call_args_list if c[0][0] == "Cooja"]
+                self.assertEqual(len(cooja_calls), 1)
+                cooja_call = cooja_calls[0]
+                self.assertEqual(cooja_call.kwargs["env"]["JAVA_HOME"], str(java_home_path))
+                self.assertIn("--no-daemon", cooja_call[0][1])
+                self.assertIn("--console=plain", cooja_call[0][1])
+
+
+class ExperimentPrerequisitesTests(unittest.TestCase):
+    def test_copy_sensor_source_copies_all_required_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "deploy" / "iot" / "sensor"
+            source.mkdir(parents=True)
+            (source / "Makefile").write_text("all:\n", encoding="utf-8")
+            (source / "synthran-sensor.c").write_text("int main(){}\n", encoding="utf-8")
+            (source / "project-conf.h").write_text("#define UIP_CONF_TCP 1\n", encoding="utf-8")
+
+            run_dir = root / "runs" / "exp-01"
+            _copy_sensor_source(root, run_dir)
+
+            dest = run_dir / "sensor"
+            self.assertTrue((dest / "Makefile").is_file())
+            self.assertTrue((dest / "synthran-sensor.c").is_file())
+            self.assertTrue((dest / "project-conf.h").is_file())
+            self.assertEqual(
+                (dest / "project-conf.h").read_text(encoding="utf-8"),
+                "#define UIP_CONF_TCP 1\n",
+            )
+
+    def test_copy_sensor_source_missing_project_conf_raises_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "deploy" / "iot" / "sensor"
+            source.mkdir(parents=True)
+            (source / "Makefile").write_text("all:\n", encoding="utf-8")
+            (source / "synthran-sensor.c").write_text("int main(){}\n", encoding="utf-8")
+
+            run_dir = root / "runs" / "exp-01"
+            with self.assertRaisesRegex(ExperimentError, "sensor source is missing: project-conf.h"):
+                _copy_sensor_source(root, run_dir)
+
+    def test_validate_java_runtime_accepts_java_21_on_stderr_and_derives_java_home(self) -> None:
+        fake_result = MagicMock(returncode=0, stdout="", stderr='openjdk version "21.0.9" 2025-01-21\nOpenJDK Runtime Environment\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = Path(temporary) / "env" / "bin" / "java"
+            fake_bin.parent.mkdir(parents=True)
+            fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            with (
+                patch("shutil.which", return_value=str(fake_bin)),
+                patch("subprocess.run", return_value=fake_result),
+            ):
+                java_home = _validate_java_runtime()
+                self.assertEqual(java_home.resolve(), (Path(temporary) / "env").resolve())
+
+    def test_validate_java_runtime_rejects_java_17(self) -> None:
+        fake_result = MagicMock(returncode=0, stdout="", stderr='openjdk version "17.0.2" 2022-01-18\n')
+        with (
+            patch("shutil.which", return_value="/usr/bin/java"),
+            patch("subprocess.run", return_value=fake_result),
+        ):
+            with self.assertRaisesRegex(ExperimentError, "Cooja requires Java 21 in the synthran environment"):
+                _validate_java_runtime()
+
+    def test_validate_java_runtime_rejects_java_22(self) -> None:
+        fake_result = MagicMock(returncode=0, stdout="", stderr='openjdk version "22.0.1" 2024-04-16\n')
+        with (
+            patch("shutil.which", return_value="/usr/bin/java"),
+            patch("subprocess.run", return_value=fake_result),
+        ):
+            with self.assertRaisesRegex(ExperimentError, "Cooja requires Java 21 in the synthran environment"):
+                _validate_java_runtime()
+
+    def test_validate_java_runtime_rejects_malformed_version(self) -> None:
+        fake_result = MagicMock(returncode=0, stdout="not-a-java-version\n", stderr="")
+        with (
+            patch("shutil.which", return_value="/usr/bin/java"),
+            patch("subprocess.run", return_value=fake_result),
+        ):
+            with self.assertRaisesRegex(ExperimentError, "Cooja requires Java 21 in the synthran environment"):
+                _validate_java_runtime()
+
+    def test_validate_java_runtime_rejects_missing_java(self) -> None:
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(ExperimentError, "Cooja requires Java 21 in the synthran environment"):
+                _validate_java_runtime()
+
+    def test_validate_java_runtime_rejects_nonzero_exit(self) -> None:
+        fake_result = MagicMock(returncode=1, stdout="", stderr="error")
+        with (
+            patch("shutil.which", return_value="/usr/bin/java"),
+            patch("subprocess.run", return_value=fake_result),
+        ):
+            with self.assertRaisesRegex(ExperimentError, "Cooja requires Java 21 in the synthran environment"):
+                _validate_java_runtime()
+
+    def test_wait_tcp_fails_immediately_when_process_exits_early(self) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 1
+        managed = ManagedProcess(
+            name="Cooja",
+            process=mock_proc,
+            log_path=Path("logs/cooja.log"),
+            log_stream=MagicMock(),
+        )
+        with self.assertRaisesRegex(
+            ExperimentError,
+            r"Cooja exited with code 1 before TCP endpoint 127\.0\.0\.1:60001 became ready; see logs[/\\]cooja\.log",
+        ):
+            _wait_tcp("127.0.0.1", 60001, timeout_seconds=10, process=managed)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ SynthRAN composes upstream systems; it does not absorb them.
 
 - Git dependencies are complete detached checkouts at immutable commits.
 - Container images use immutable digests.
-- Direct Conda dependencies use exact versions under `conda.packages`, and the lock declares `linux-64` as the only supported platform.
+- Direct Conda dependencies use exact versions under `conda.packages` (including Python 3.12.13 and OpenJDK 21.0.9 required by Cooja), and the lock declares `linux-64` as the only supported platform.
 - Mutable upstream branch names are provenance notes only and are never runtime selectors.
 - No Git submodules are used.
 - Dependency source belongs under ignored `.deps/` storage.

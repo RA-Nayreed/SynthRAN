@@ -18,6 +18,8 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual(4, len(lock.git))
         self.assertTrue(all(len(item.commit) == 40 for item in lock.git))
         self.assertEqual(2, sum(item.sync for item in lock.git))
+        self.assertEqual("3.12.13", lock.raw["conda"]["packages"]["python"]["version"])
+        self.assertEqual("21.0.9", lock.raw["conda"]["packages"]["openjdk"]["version"])
 
     def test_dry_run_selects_direct_dependencies_without_writing(self) -> None:
         lock = load_lock(REPOSITORY_ROOT / "dependencies.lock.yml")

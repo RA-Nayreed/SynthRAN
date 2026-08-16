@@ -107,7 +107,7 @@ The accepted network contract must not regress:
 
 Linux is the supported host platform for CI, hooks, live network control, and live experiment execution.
 
-Use the named Conda environment `synthran`. `environment.yml` is the complete Linux environment definition; `pyproject.toml` is package/build metadata. Never fall back to an arbitrary host Python or `venv`.
+Use the named Conda environment `synthran`. `environment.yml` is the complete Linux environment definition (including Python 3.12.13 and OpenJDK 21.0.9 for Cooja); `pyproject.toml` is package/build metadata. Never fall back to an arbitrary host Python or `venv`.
 
 The Linux SLICES Webshell, or a documented SSH session to its management host, is the supported live controller. SynthRAN must never perform `slices auth login`, change the active project, or create the SLICES experiment. Those are operator actions.
 
@@ -121,7 +121,7 @@ Resource preparation, network deployment, network verification, experiment execu
 - Network deployment is explicit and requires fresh matching live-preflight evidence.
 - Deployment uses an isolated detached worktree at the locked `5g_ansible` commit.
 - The supported runtime graph is exactly one slice and one srsUE.
-- Network verification is read-only with respect to provider authority and does not redeploy the network.
+- Network verification is read-only with respect to provider authority and does not redeploy the network. Verification probes entering the srsUE pod explicitly target container `ue` (`-c ue`).
 - Failed or orphaned preparation/deployment run IDs are immutable evidence and are never reused.
 - Provider ownership is fail-closed: unknown/foreign owner, expired authority, partial/split allocation, missing reservation, or provider schema drift prevents mutation.
 
@@ -139,6 +139,9 @@ The deterministic scenario is:
 - exactly ten sensor motes, IDs 1 through 10;
 - one non-sensor RPL border-router mote;
 - fixed Cooja seed and topology;
+- Java 21 verified before any live Kubernetes/5G mutation;
+- `deploy/iot/sensor/project-conf.h` enables Contiki-NG TCP socket support (`#define UIP_CONF_TCP 1`);
+- sensor compilation commands embed the validated absolute Contiki checkout path (`CONTIKI=<path>`);
 - Cooja Serial Socket;
 - `tunslip6` creates `tun0` with `fd00::1/64`;
 - sensors publish run-scoped MQTT telemetry to the `fd00::1` edge address;

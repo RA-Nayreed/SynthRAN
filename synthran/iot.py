@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shlex
 from xml.sax.saxutils import escape
 
 from synthran.experiment import ExperimentError, ExperimentScenario
@@ -67,7 +68,11 @@ def _mote(mote_id: int, x: float, y: float) -> str:
       </mote>"""
 
 
-def render_cooja_scenario(scenario: ExperimentScenario) -> str:
+def render_cooja_scenario(
+    scenario: ExperimentScenario,
+    *,
+    contiki_directory: Path,
+) -> str:
     """Render one border router plus exactly ten deterministic MQTT sensors."""
 
     if scenario.sensor_count != 10:
@@ -89,9 +94,11 @@ def render_cooja_scenario(scenario: ExperimentScenario) -> str:
         _mote(index, x, y)
         for index, (x, y) in enumerate(positions, start=1)
     )
+    resolved_contiki = str(contiki_directory.resolve()).replace("\\", "/")
+    contiki_cmd_path = escape(shlex.quote(resolved_contiki))
 
-    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<simconf version=\"2022112801\">
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<simconf version="2022112801">
   <simulation>
     <title>SynthRAN {escape(scenario.run_id)}</title>
     <speedlimit>1.0</speedlimit>
@@ -122,8 +129,8 @@ $(MAKE) -j$(CPUS) border-router.cooja TARGET=cooja</commands>
       <identifier>synthran-sensor</identifier>
       <description>SynthRAN deterministic MQTT sensor</description>
       <source>[CONFIG_DIR]/../sensor/synthran-sensor.c</source>
-      <commands>$(MAKE) TARGET=cooja CONTIKI=[CONTIKI_DIR] clean
-$(MAKE) -j$(CPUS) TARGET=cooja CONTIKI=[CONTIKI_DIR] synthran-sensor.cooja</commands>
+      <commands>$(MAKE) TARGET=cooja CONTIKI={contiki_cmd_path} clean
+$(MAKE) -j$(CPUS) TARGET=cooja CONTIKI={contiki_cmd_path} synthran-sensor.cooja</commands>
 {_interfaces()}
 {sensor_motes}
     </motetype>
@@ -135,7 +142,7 @@ $(MAKE) -j$(CPUS) TARGET=cooja CONTIKI=[CONTIKI_DIR] synthran-sensor.cooja</comm
       <port>{scenario.serial_socket_port}</port>
       <bound>true</bound>
     </plugin_config>
-    <bounds x=\"10\" y=\"10\" height=\"120\" width=\"380\" z=\"1\" />
+    <bounds x="10" y="10" height="120" width="380" z="1" />
   </plugin>
   <plugin>
     org.contikios.cooja.plugins.ScriptRunner
@@ -145,7 +152,7 @@ sim.setSpeedLimit(1.0);
 while (true) {{ YIELD(); }}</script>
       <active>true</active>
     </plugin_config>
-    <bounds x=\"400\" y=\"10\" height=\"500\" width=\"600\" />
+    <bounds x="400" y="10" height="500" width="600" />
   </plugin>
 </simconf>
 """
@@ -155,6 +162,7 @@ def write_run_inputs(
     scenario: ExperimentScenario,
     *,
     run_directory: Path,
+    contiki_directory: Path,
 ) -> tuple[Path, Path, Path]:
     """Materialize run-scoped generated inputs below the ignored run directory."""
 
@@ -168,7 +176,11 @@ def write_run_inputs(
     scenario_json = run_directory / "scenario.json"
 
     header.write_text(render_generated_header(scenario), encoding="utf-8", newline="\n")
-    csc.write_text(render_cooja_scenario(scenario), encoding="utf-8", newline="\n")
+    csc.write_text(
+        render_cooja_scenario(scenario, contiki_directory=contiki_directory),
+        encoding="utf-8",
+        newline="\n",
+    )
     scenario_json.write_text(
         json.dumps(scenario.to_dict(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -182,7 +182,7 @@
     },
     "packages": {
       "python": {
-        "version": "3.12.11",
+        "version": "3.12.13",
         "role": "runtime",
         "license": "PSF-2.0"
       },
@@ -192,24 +192,29 @@
         "license": "GPL-2.0-only"
       },
       "setuptools": {
-      "version": "83.0.0",
-      "role": "Python build backend",
-      "license": "MIT"
+        "version": "83.0.0",
+        "role": "Python build backend",
+        "license": "MIT"
       },
       "paho-mqtt": {
-      "version": "2.1.0",
-      "role": "dataset collector MQTT client",
-      "license": "EPL-2.0 OR EDL-1.0"
+        "version": "2.1.0",
+        "role": "dataset collector MQTT client",
+        "license": "EPL-2.0 OR EDL-1.0"
       },
       "pyarrow": {
-      "version": "21.0.0",
-      "role": "deterministic JSONL-to-Parquet conversion",
-      "license": "Apache-2.0"
+        "version": "21.0.0",
+        "role": "deterministic JSONL-to-Parquet conversion",
+        "license": "Apache-2.0"
       },
       "ansible-core": {
         "version": "2.20.5",
         "role": "Golden path controller and isolated wrapper execution",
         "license": "GPL-3.0-or-later"
+      },
+      "openjdk": {
+        "version": "21.0.9",
+        "role": "Java runtime required by Cooja",
+        "license": "GPL-2.0-with-classpath-exception"
       }
     },
     "lock_status": "direct-versions-only"
