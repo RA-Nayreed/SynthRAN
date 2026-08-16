@@ -23,13 +23,13 @@ class IoTRenderTests(unittest.TestCase):
             self.assertEqual(rendered.count(f"<id>{sensor}</id>"), 1)
         self.assertIn("<randomseed>424242</randomseed>", rendered)
         self.assertIn("<port>60001</port>", rendered)
-        self.assertNotIn("phase3", rendered.lower())
+        self.assertIn("<title>SynthRAN experiment-01</title>", rendered)
 
     def test_generated_header_contains_run_contract(self) -> None:
         header = render_generated_header(self.scenario)
         self.assertIn('#define SYNTHRAN_RUN_ID "experiment-01"', header)
         self.assertIn('#define SYNTHRAN_EDGE_BROKER_IPV6 "fd00::1"', header)
-        self.assertNotIn("PHASE3", header)
+        self.assertIn("SYNTHRAN_EXPERIMENT_GENERATED_H_", header)
 
     def test_run_inputs_use_product_names(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
