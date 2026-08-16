@@ -4,7 +4,7 @@
 
 SynthRAN connects networked IoT simulation to a real 5G user plane and preserves enough evidence to prove what happened. Its first target is a deterministic stream of Contiki-NG/Cooja sensor measurements transported through an srsUE tunnel, an srsRAN gNB, and an Open5GS core into auditable JSONL and reproducible Parquet datasets.
 
-SynthRAN is the integration and experiment-control layer. It reuses the upstream systems that already implement 5G deployment, radio access, constrained IoT networking, and MQTT instead of copying them into another fork.
+SynthRAN is the integration and experiment-control layer. It reuses upstream systems that already implement 5G deployment, radio access, constrained IoT networking, and MQTT instead of copying them into another fork.
 
 ## Why SynthRAN exists
 
@@ -45,7 +45,7 @@ flowchart LR
     O -. validates records .-> D
 ```
 
-The initial experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The actual edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the accepted UE PDU address, and is explicitly routed through `tun_srsue1`.
+The initial experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the accepted UE PDU address, and is explicitly routed through `tun_srsue1`.
 
 ## What is reused
 
@@ -63,7 +63,7 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 The repository foundation and the Open5GS + srsRAN + RFSIM network baseline are implemented. A live SLICES acceptance run has reached `path-proven`, including a healthy run-owned gNB, srsUE and UPF, cell activation, `tun_srsue1`, the expected PDU address and UE/UPF routes.
 
-The integrated Phase 3 implementation is now developed on its feature branch. It includes the deterministic ten-sensor Cooja scenario, RPL border-router/tun0 ingress, run-scoped UE-side and central Mosquitto brokers, explicit UE-path routing, central collection, JSONL/Parquet derivation, evidence generation, exact-run cleanup, and base-network reproof. It is not accepted until an operator executes the complete live command and the persisted report returns `IOT-TO-5G PATH PROVEN`.
+The integrated IoT-to-5G experiment implementation includes the deterministic ten-sensor Cooja scenario, RPL border-router/tun0 ingress, run-scoped UE-side and central Mosquitto brokers, explicit UE-path routing, central collection, JSONL/Parquet derivation, evidence generation, exact-run cleanup, and base-network reproof. It is not accepted until an operator executes the complete live command and the persisted report returns `IOT-TO-5G PATH PROVEN`.
 
 | Capability | Status |
 |---|---|
@@ -121,24 +121,30 @@ python -m synthran slices doctor \
 
 The operator performs `slices auth login`, `slices project use PROJECT`, and experiment creation when needed. SynthRAN only performs read-only `show` checks.
 
-Once a network run is `path-proven`, preview the deterministic integrated IoT scenario without changing live state:
+Once a network run is `path-proven`, preview the deterministic IoT scenario without changing live state:
 
 ```sh
-synthran-phase3 plan \
+synthran experiment plan \
   --network-run-id NETWORK_RUN_ID \
   --run-id EXPERIMENT_RUN_ID
 ```
 
-The live integrated command is intentionally separate:
+Execute the integrated experiment explicitly:
 
 ```sh
-synthran-phase3 run \
+synthran experiment run \
   --inventory .synthran/preparations/NETWORK_RUN_ID/hosts.ini \
   --network-run-id NETWORK_RUN_ID \
   --run-id EXPERIMENT_RUN_ID
 ```
 
-Read the exact safety and acceptance boundary in the [integrated IoT-to-5G guide](docs/phase3.md) and [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
+Render the persisted experiment evidence without modifying live state:
+
+```sh
+synthran experiment verify --run-id EXPERIMENT_RUN_ID
+```
+
+Read the exact safety and acceptance boundary in the [integrated IoT-to-5G experiment guide](docs/experiment.md) and [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
 
 ## Planned experiment output
 
@@ -151,7 +157,7 @@ Every accepted integrated experiment produces a run-scoped evidence bundle conta
 - rejected-message metadata and sequence-integrity evidence;
 - tunnel and route proof plus broker-delivery evidence;
 - Cooja, `tunslip6`, SSH forwarding and controller logs retained locally;
-- a final `phase3-evidence.json` report.
+- a final `experiment-evidence.json` report.
 
 The first integrated acceptance contract uses ten sensors publishing every 10 seconds and requires at least three contiguous events from every sensor by default. Missing sensors, duplicate sequences, sequence gaps, malformed events, absent tunnel growth, cleanup failure, or a failed base-network reproof prevents acceptance.
 
@@ -187,7 +193,7 @@ Formal O-RAN A1/E2 control and generative models are not shortcuts around the ba
 
 - [Architecture and responsibility boundaries](docs/architecture.md)
 - [Operator guide and safety gates](docs/operator-guide.md)
-- [Integrated IoT-to-5G workflow](docs/phase3.md)
+- [Integrated IoT-to-5G experiment](docs/experiment.md)
 - [Development environment and tests](docs/development.md)
 - [Dependency reuse and update policy](docs/dependencies.md)
 - [Security, privacy and artifact handling](docs/security.md)
