@@ -15,6 +15,7 @@ import tempfile
 from time import monotonic
 from typing import Any, Mapping, Sequence, TextIO
 
+from synthran.ansible_streaming import parse_ansible_line, run_streaming_ansible_command
 from synthran.dependencies import DependencyLock
 from synthran.fiveg_ansible import NetworkInventory, parse_inventory, validate_fiveg_checkout
 from synthran.live_preflight import (
@@ -695,6 +696,7 @@ def execute_resource_preparation(
         environment: Mapping[str, str] | None = None,
         *,
         retain_output: bool = True,
+        streaming: bool = False,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
 
@@ -702,7 +704,31 @@ def execute_resource_preparation(
         started = monotonic()
 
         try:
-            result = runner(command, cwd, environment, timeout_seconds)
+            if streaming:
+                if runner is run_command:
+                    result = run_streaming_ansible_command(
+                        command,
+                        cwd,
+                        environment,
+                        timeout_seconds,
+                        report=report,
+                    )
+                else:
+                    result = runner(command, cwd, environment, timeout_seconds)
+                    if progress is not None:
+                        for line in result.stdout.splitlines():
+                            parsed = parse_ansible_line(line)
+                            if parsed is not None:
+                                report(parsed)
+            else:
+                result = runner(command, cwd, environment, timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            elapsed = monotonic() - started
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
+            fail(name, f"{name} exceeded its timeout")
+            raise ResourcePreparationError(
+                f"preparation stage {name} exceeded its timeout"
+            ) from exc
         except (OSError, RuntimeError) as exc:
             elapsed = monotonic() - started
             report(f"{name}: FAILED ({elapsed:.1f}s)")
@@ -1013,12 +1039,14 @@ def execute_resource_preparation(
         upstream_command,
         worktree,
         environment,
+        streaming=True,
     )
     stage(
         "locked-tool-preparation",
         tools_command,
         worktree,
         environment,
+        streaming=True,
     )
     write_manifest("prepared")
     finish_log()

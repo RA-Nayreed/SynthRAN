@@ -17,6 +17,7 @@ import tempfile
 from time import monotonic
 from typing import Any, Callable, Mapping, Sequence, TextIO
 
+from synthran.ansible_streaming import parse_ansible_line, run_streaming_ansible_command
 from synthran.dependencies import DependencyLock
 from synthran.fiveg_ansible import (
     NetworkDeploymentPlan,
@@ -360,6 +361,8 @@ def execute_network_deployment(
         command: Sequence[str],
         cwd: Path,
         environment: Mapping[str, str] | None = None,
+        *,
+        streaming: bool = False,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
 
@@ -367,7 +370,32 @@ def execute_network_deployment(
         started = monotonic()
 
         try:
-            result = runner(command, cwd, environment, timeout_seconds)
+            if streaming:
+                if runner is run_command:
+                    result = run_streaming_ansible_command(
+                        command,
+                        cwd,
+                        environment,
+                        timeout_seconds,
+                        report=report,
+                    )
+                else:
+                    result = runner(command, cwd, environment, timeout_seconds)
+                    if progress is not None:
+                        for line in result.stdout.splitlines():
+                            parsed = parse_ansible_line(line)
+                            if parsed is not None:
+                                report(parsed)
+            else:
+                result = runner(command, cwd, environment, timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            elapsed = monotonic() - started
+            report(f"{name}: FAILED ({elapsed:.1f}s)")
+            write_manifest("failed", name)
+            finish_log()
+            raise NetworkRuntimeError(
+                f"deployment stage {name} exceeded its timeout"
+            ) from exc
         except (NetworkRuntimeError, OSError):
             elapsed = monotonic() - started
             report(f"{name}: FAILED ({elapsed:.1f}s)")
@@ -507,6 +535,7 @@ def execute_network_deployment(
         playbook_command,
         worktree,
         environment,
+        streaming=True,
     )
     write_manifest("deployed-unverified")
     finish_log()
