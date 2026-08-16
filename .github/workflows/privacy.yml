@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: privacy-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   privacy:
@@ -38,7 +38,7 @@ jobs:
           activate-environment: synthran
           environment-file: environment.yml
           miniforge-version: "26.3.2-2"
-          auto-activate: false
+          auto-activate-base: false
           conda-solver: libmamba
           channel-priority: strict
           show-channel-urls: true
