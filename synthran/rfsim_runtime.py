@@ -24,6 +24,10 @@ from synthran.live_preflight import CommandResult, LivePreflightError, ssh_comma
 
 KUBERNETES_NAMESPACE = "open5gs"
 NETWORK_RUN_LABEL = "synthran.run/id"
+UE_TUNNEL_WAIT_ATTEMPTS = 150
+UE_TUNNEL_WAIT_INTERVAL_SECONDS = 2
+UE_PROCESS_START_GRACE_ATTEMPTS = 15
+UE_TUNNEL_COMMAND_TIMEOUT_SECONDS = 310
 
 
 @dataclass(frozen=True)
@@ -216,21 +220,41 @@ def _wait_for_broker(inventory: NetworkInventory, pod: str) -> None:
 
 
 def _wait_for_ue_tunnel(inventory: NetworkInventory, pod: str) -> None:
-    command = (
-        "set -eu; "
-        "for i in $(seq 1 60); do "
+    process_probe = (
         "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec "
         f"-n {KUBERNETES_NAMESPACE} {shlex.quote(pod)} -c ue -- "
-        "/bin/sh -lc \"pgrep -af 'srsue .*ue_1\\.conf' >/dev/null "
-        "&& ip link show tun_srsue1 >/dev/null 2>&1\" >/dev/null 2>&1 && exit 0; "
-        "sleep 2; done; exit 1"
+        "/bin/sh -lc \"pgrep -af 'srsue .*ue_1\\.conf' >/dev/null\""
     )
-    _remote(
+    tunnel_probe = (
+        "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec "
+        f"-n {KUBERNETES_NAMESPACE} {shlex.quote(pod)} -c ue -- "
+        "ip link show tun_srsue1 >/dev/null 2>&1"
+    )
+    command = (
+        "set -u; seen=0; "
+        f"for i in $(seq 1 {UE_TUNNEL_WAIT_ATTEMPTS}); do "
+        f"if {process_probe} >/dev/null 2>&1; then seen=1; "
+        "else "
+        f"if [ \"$seen\" -eq 1 ] || [ \"$i\" -ge {UE_PROCESS_START_GRACE_ATTEMPTS} ]; then exit 2; fi; "
+        f"sleep {UE_TUNNEL_WAIT_INTERVAL_SECONDS}; continue; fi; "
+        f"{tunnel_probe} && exit 0; "
+        f"sleep {UE_TUNNEL_WAIT_INTERVAL_SECONDS}; "
+        "done; exit 1"
+    )
+    result = _remote_result(
         inventory,
         command,
-        label="srsUE tunnel readiness",
-        timeout_seconds=130,
+        timeout_seconds=UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
     )
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        raise ExperimentError(
+            "srsUE tunnel readiness timed out while the srsUE process remained alive"
+        )
+    if result.returncode == 2:
+        raise ExperimentError("srsUE process exited before tun_srsue1 became ready")
+    raise ExperimentError("srsUE tunnel readiness probe failed")
 
 
 def _current_pdu_address(inventory: NetworkInventory, pod: str) -> str:
