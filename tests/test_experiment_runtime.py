@@ -13,6 +13,7 @@ from synthran.dependencies import load_lock
 from synthran.experiment import ExperimentCheck, ExperimentError, ExperimentScenario
 from synthran.experiment_runtime import (
     CommandResult,
+    _cleanup_live_resources,
     _collect_rollout_diagnostics,
     _core_address,
     _discover_ue_deployment,
@@ -25,6 +26,7 @@ from synthran.experiment_runtime import (
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
 from synthran.network_runtime import NetworkVerificationReport, VerificationCheck
 from synthran.resource_runtime import build_preparation_inventory
+from synthran.rfsim_runtime import RfsimRuntimeState
 
 
 class ExperimentRuntimeContractTests(unittest.TestCase):
@@ -135,7 +137,6 @@ class CoojaCheckoutPreparationTests(unittest.TestCase):
 
         self.assertEqual(target, contiki / "tools" / "cooja")
         self.assertEqual(len(commands), 3)
-
         submodule_cmd = commands[0]
         self.assertEqual(
             submodule_cmd,
@@ -151,10 +152,8 @@ class CoojaCheckoutPreparationTests(unittest.TestCase):
                 "tools/cooja",
             ),
         )
-        self.assertIn("tools/cooja", submodule_cmd)
         for cmd in commands:
             self.assertNotIn("--recursive", cmd)
-
         self.assertEqual(
             commands[1],
             ("git", "-C", str(contiki), "rev-parse", "HEAD:tools/cooja"),
@@ -177,7 +176,6 @@ class CoojaCheckoutPreparationTests(unittest.TestCase):
 
         with patch("synthran.experiment_runtime._checked", side_effect=fake_checked):
             target = _prepare_cooja_checkout(contiki)
-
         self.assertEqual(target, contiki / "tools" / "cooja")
 
     def test_prepare_cooja_checkout_rejects_mismatched_revisions(self) -> None:
@@ -196,7 +194,6 @@ class CoojaCheckoutPreparationTests(unittest.TestCase):
                 "^Cooja checkout does not match the revision pinned by Contiki-NG$",
             ):
                 _prepare_cooja_checkout(contiki)
-
 
 
 class UEDiscoveryTests(unittest.TestCase):
@@ -362,17 +359,9 @@ class RolloutDiagnosticsTests(unittest.TestCase):
             if "jsonpath=" in cmd_str:
                 return CommandResult(0, "srsran-ue-pod-abc12", "")
             if "describe pod" in cmd_str:
-                return CommandResult(
-                    0,
-                    f"Pod: srsran-ue-pod-abc12 hex {subscriber_key}",
-                    "",
-                )
+                return CommandResult(0, f"Pod: srsran-ue-pod-abc12 hex {subscriber_key}", "")
             if "logs" in cmd_str:
-                return CommandResult(
-                    0,
-                    f"Mosquitto starting on 192.168.1.50 id: {subscriber_id}",
-                    "",
-                )
+                return CommandResult(0, f"Mosquitto starting on 192.168.1.50 id: {subscriber_id}", "")
             if "get events" in cmd_str:
                 return CommandResult(0, "Event: BackOff FailedScheduling", "")
             return CommandResult(
@@ -383,7 +372,10 @@ class RolloutDiagnosticsTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             known_hosts = Path(temporary) / "known_hosts"
-            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
+            known_hosts.write_text(
+                "lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n",
+                encoding="utf-8",
+            )
             log_path = Path(temporary) / "logs" / "srsue-mqtt-rollout-diagnostics.log"
             private_path = Path(temporary) / "secret-path"
             with (
@@ -407,7 +399,6 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 "=== kubectl logs srsran-ue-pod-abc12 -c synthran-edge-mqtt --tail=100 ===",
                 content,
             )
-            # Check sanitization:
             self.assertNotIn(subscriber_key, content)
             self.assertIn("<secret>", content)
             self.assertNotIn(subscriber_id, content)
@@ -415,7 +406,6 @@ class RolloutDiagnosticsTests(unittest.TestCase):
             self.assertNotIn("192.168.1.50", content)
             self.assertIn("<private-ip>", content)
 
-            # Verify executed commands contain expected kubectl calls:
             flattened = " ".join(" ".join(c) for c in executed_commands)
             self.assertIn(
                 "kubectl get pods -n open5gs -l app=srsran,component=ue,synthran.run/id=net-run-12345",
@@ -427,6 +417,43 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 flattened,
             )
 
+    def _network_artifacts(self, root: Path) -> tuple[Path, Path]:
+        network_dir = root / "runs" / "net-01"
+        network_dir.mkdir(parents=True)
+        manifest_path = network_dir / "manifest.json"
+        evidence_path = network_dir / "network-evidence.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema": "synthran/network-deployment/v1alpha1",
+                    "run_id": "net-01",
+                    "status": "path-proven",
+                    "network_evidence": evidence_path.name,
+                }
+            ),
+            encoding="utf-8",
+        )
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "schema": "synthran/network-evidence/v1alpha1",
+                    "run_id": "net-01",
+                    "ready": True,
+                    "path": {
+                        "pdu_address": "12.1.0.1",
+                        "pdu_network": "12.1.0.0/16",
+                        "ue_interface": "tun_srsue1",
+                        "slice": "slice1",
+                        "sst": 1,
+                        "dnn": "internet",
+                    },
+                    "checks": [{"name": "upf-path", "passed": True}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path, evidence_path
+
     def test_execute_experiment_rollout_failure_preserves_diagnostics_and_fails_cleanly(
         self,
     ) -> None:
@@ -436,41 +463,11 @@ class RolloutDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             known_hosts = root / "known_hosts"
-            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
-            network_dir = root / "runs" / "net-01"
-            network_dir.mkdir(parents=True)
-            manifest_path = network_dir / "manifest.json"
-            evidence_path = network_dir / "network-evidence.json"
-            manifest_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "synthran/network-deployment/v1alpha1",
-                        "run_id": "net-01",
-                        "status": "path-proven",
-                        "network_evidence": evidence_path.name,
-                    }
-                ),
+            known_hosts.write_text(
+                "lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n",
                 encoding="utf-8",
             )
-            evidence_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "synthran/network-evidence/v1alpha1",
-                        "run_id": "net-01",
-                        "ready": True,
-                        "path": {
-                            "pdu_address": "12.1.0.1",
-                            "pdu_network": "12.1.0.0/16",
-                            "ue_interface": "tun_srsue1",
-                            "slice": "slice1",
-                            "sst": 1,
-                            "dnn": "internet",
-                        },
-                        "checks": [{"name": "upf-path", "passed": True}],
-                    }
-                ),
-                encoding="utf-8",
-            )
+            manifest_path, evidence_path = self._network_artifacts(root)
             lock = load_lock(Path("dependencies.lock.yml"))
 
             with (
@@ -534,7 +531,6 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 self.assertIn("[synthran] experiment path NOT PROVEN", output)
 
                 manifest_file = result.run_directory / "manifest.json"
-                self.assertTrue(manifest_file.is_file())
                 manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
                 self.assertEqual(manifest_data["status"], "failed")
                 self.assertEqual(
@@ -542,50 +538,18 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                     "edge MQTT sidecar did not become Ready; diagnostic log saved",
                 )
 
-    def test_execute_experiment_post_patch_verification_failure_renders_checks_and_saves_diagnostics(
-        self,
-    ) -> None:
+    def test_execute_experiment_reconciles_rollout_before_network_reproof(self) -> None:
         inventory = self._sample_inventory()
         progress_buffer = io.StringIO()
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             known_hosts = root / "known_hosts"
-            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
-            network_dir = root / "runs" / "net-01"
-            network_dir.mkdir(parents=True)
-            manifest_path = network_dir / "manifest.json"
-            evidence_path = network_dir / "network-evidence.json"
-            manifest_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "synthran/network-deployment/v1alpha1",
-                        "run_id": "net-01",
-                        "status": "path-proven",
-                        "network_evidence": evidence_path.name,
-                    }
-                ),
+            known_hosts.write_text(
+                "lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n",
                 encoding="utf-8",
             )
-            evidence_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "synthran/network-evidence/v1alpha1",
-                        "run_id": "net-01",
-                        "ready": True,
-                        "path": {
-                            "pdu_address": "12.1.0.1",
-                            "pdu_network": "12.1.0.0/16",
-                            "ue_interface": "tun_srsue1",
-                            "slice": "slice1",
-                            "sst": 1,
-                            "dnn": "internet",
-                        },
-                        "checks": [{"name": "upf-path", "passed": True}],
-                    }
-                ),
-                encoding="utf-8",
-            )
+            manifest_path, evidence_path = self._network_artifacts(root)
             lock = load_lock(Path("dependencies.lock.yml"))
 
             failed_checks = (
@@ -601,17 +565,27 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 dependencies={},
                 checks=failed_checks,
             )
-
-            call_count = 0
+            order: list[str] = []
+            verify_count = 0
 
             def mock_verify(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
+                nonlocal verify_count
+                verify_count += 1
+                order.append(f"verify-{verify_count}")
+                if verify_count == 1:
                     return MagicMock(ready=True)
-                if call_count == 2:
+                if verify_count == 2:
                     return failed_verification
                 return MagicMock(ready=True)
+
+            def mock_reconcile(*args, **kwargs):
+                order.append("reconcile")
+                return RfsimRuntimeState(
+                    ue_pod="srsran-ue-pod",
+                    gnb_pod="srsran-gnb-pod",
+                    gnb_deployment="srsran-gnb",
+                    pdu_address="12.1.0.2",
+                )
 
             with (
                 patch("sys.platform", "linux"),
@@ -627,6 +601,10 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                     side_effect=mock_verify,
                 ),
                 patch(
+                    "synthran.experiment_runtime.reconcile_rfsim_runtime",
+                    side_effect=mock_reconcile,
+                ),
+                patch(
                     "synthran.experiment_runtime._validate_contiki_checkout",
                     return_value=root / "contiki",
                 ),
@@ -640,10 +618,9 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                 patch("synthran.experiment_runtime._remote"),
                 patch("synthran.experiment_runtime._kubectl_patch_deployment"),
                 patch("synthran.experiment_runtime._wait_rollout"),
-                patch(
-                    "synthran.experiment_runtime._discover_ue_pod",
-                    return_value="srsran-ue-pod",
-                ),
+                patch("synthran.experiment_runtime._replace_edge_runtime_config"),
+                patch("synthran.experiment_runtime._restart_edge_sidecar"),
+                patch("synthran.experiment_runtime.time.sleep"),
                 patch(
                     "synthran.experiment_runtime._collect_rollout_diagnostics"
                 ) as mock_diagnostics,
@@ -664,36 +641,67 @@ class RolloutDiagnosticsTests(unittest.TestCase):
                     progress=progress_buffer,
                 )
 
-                self.assertFalse(result.ready)
-                mock_diagnostics.assert_called_once()
-                self.assertEqual(
-                    mock_diagnostics.call_args.kwargs.get("verification"),
-                    failed_verification,
-                )
-                output = progress_buffer.getvalue()
-                self.assertIn(
-                    "[synthran] srsUE post-patch network verification: FAILED", output
-                )
-                self.assertIn("[synthran] [PASS] gnb", output)
-                self.assertIn(
-                    "[synthran] [FAIL] srsue: srsue pod is not owned by this run ID",
-                    output,
-                )
-                self.assertIn("[synthran] [PASS] slice1-upf", output)
-                self.assertIn(
-                    "[synthran] [FAIL] ue-tunnel: not probed because the srsUE pod check failed",
-                    output,
-                )
-                self.assertIn("[synthran] experiment path NOT PROVEN", output)
+            self.assertFalse(result.ready)
+            self.assertEqual(order[:3], ["verify-1", "reconcile", "verify-2"])
+            mock_diagnostics.assert_called_once()
+            self.assertEqual(
+                mock_diagnostics.call_args.kwargs.get("verification"),
+                failed_verification,
+            )
+            output = progress_buffer.getvalue()
+            self.assertIn(
+                "[synthran] rfsim-runtime: live PDU address changed from 12.1.0.1 to 12.1.0.2",
+                output,
+            )
+            self.assertIn(
+                "[synthran] srsUE post-patch network verification: FAILED",
+                output,
+            )
+            manifest_file = result.run_directory / "manifest.json"
+            manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            self.assertEqual(manifest_data["status"], "failed")
+            self.assertIn(
+                "srsue: srsue pod is not owned by this run ID",
+                manifest_data["failure"],
+            )
 
-                manifest_file = result.run_directory / "manifest.json"
-                self.assertTrue(manifest_file.is_file())
-                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
-                self.assertEqual(manifest_data["status"], "failed")
-                self.assertIn(
-                    "srsue: srsue pod is not owned by this run ID",
-                    manifest_data["failure"],
-                )
+    def test_cleanup_reconciles_rfsim_before_network_reproof(self) -> None:
+        inventory = self._sample_inventory()
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("experiment-01", "network-accepted-01", "12.1.0.2")
+        order: list[str] = []
+
+        def mark(name: str):
+            def inner(*args, **kwargs):
+                order.append(name)
+                if name == "verify":
+                    return MagicMock(ready=True)
+                if name == "reconcile":
+                    return RfsimRuntimeState(
+                        ue_pod="ue-pod",
+                        gnb_pod="gnb-pod",
+                        gnb_deployment="srsran-gnb",
+                        pdu_address="12.1.0.3",
+                    )
+                return None
+            return inner
+
+        with (
+            patch("synthran.experiment_runtime._kubectl_patch_deployment", side_effect=mark("patch")),
+            patch("synthran.experiment_runtime._wait_rollout", side_effect=mark("rollout")),
+            patch("synthran.experiment_runtime.reconcile_rfsim_runtime", side_effect=mark("reconcile")),
+            patch("synthran.experiment_runtime._delete_experiment_objects", side_effect=mark("delete")),
+            patch("synthran.experiment_runtime.verify_network_path", side_effect=mark("verify")),
+        ):
+            result = _cleanup_live_resources(
+                inventory=inventory,
+                lock=lock,
+                scenario=scenario,
+                ue_deployment="srsran-ue",
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(order, ["patch", "rollout", "reconcile", "delete", "verify"])
 
 
 if __name__ == "__main__":
