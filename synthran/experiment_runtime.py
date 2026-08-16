@@ -185,14 +185,16 @@ def _one_name(payload: Mapping[str, Any], *, label: str) -> str:
 
 
 def _core_address(inventory: NetworkInventory) -> str:
-    value = inventory.core_node.variables.get("ansible_host", inventory.core_node.name)
+    value = inventory.core_node.variables.get("ip")
+    if not value:
+        raise ExperimentError("prepared inventory is missing the core node IP address")
     try:
         ipaddress.ip_address(value)
     except ValueError as exc:
         raise ExperimentError(
-            "experiment execution requires the core ansible_host to be a literal IP address"
+            "prepared inventory has an invalid core node IP address; expected a literal IPv4 or IPv6 address"
         ) from exc
-    return value
+    return str(value)
 
 
 def _validate_contiki_checkout(lock: DependencyLock, dependency_root: Path) -> Path:

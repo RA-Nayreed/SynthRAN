@@ -32,6 +32,64 @@ class AnsibleStreamingParserTests(unittest.TestCase):
             "  HANDLER: restart mosquitto",
         )
 
+    def test_task_lines_strip_argument_decorations(self) -> None:
+        self.assertEqual(
+            parse_ansible_line("TASK [command argv=['helm', 'status']] ****************************************"),
+            "  TASK: command",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [file path=/etc/systemd/system/mosquitto.service] *************************"),
+            "  TASK: file",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [k8s definition={'apiVersion': 'v1'}] *************************************"),
+            "  TASK: k8s",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [assert that=['result.rc == 0']] ******************************************"),
+            "  TASK: assert",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [shell _raw_params=systemctl restart mosquitto] ***************************"),
+            "  TASK: shell",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [include_tasks apply={'tags': ['deploy']}] ********************************"),
+            "  TASK: include_tasks",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : command argv=['kubectl', 'apply']] ******************************"),
+            "  TASK: open5gs : command",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : file path=/etc/open5gs/upf.yaml] ********************************"),
+            "  TASK: open5gs : file",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : k8s definition={'apiVersion': 'v1'}] ****************************"),
+            "  TASK: open5gs : k8s",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : assert that=['result.rc == 0']] *********************************"),
+            "  TASK: open5gs : assert",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : shell _raw_params=systemctl restart mosquitto] ******************"),
+            "  TASK: open5gs : shell",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [open5gs : include_tasks apply={'tags': ['deploy']}] ***********************"),
+            "  TASK: open5gs : include_tasks",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [Label every namespaced golden-path resource] ******************************"),
+            "  TASK: Label every namespaced golden-path resource",
+        )
+        self.assertEqual(
+            parse_ansible_line("RUNNING HANDLER [service name=mosquitto state=restarted] ************************"),
+            "  HANDLER: service",
+        )
+
     def test_host_status_recognition(self) -> None:
         self.assertEqual(
             parse_ansible_line("ok: [sopnode-f2]"),

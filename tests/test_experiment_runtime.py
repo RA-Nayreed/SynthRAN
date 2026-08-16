@@ -4,9 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from synthran.experiment import ExperimentScenario
+from synthran.experiment import ExperimentError, ExperimentScenario
 from synthran.experiment_runtime import _core_address, _render_manifest
-from synthran.fiveg_ansible import load_inventory
+from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
+from synthran.resource_runtime import build_preparation_inventory
 
 
 class ExperimentRuntimeContractTests(unittest.TestCase):
@@ -59,6 +60,44 @@ monitoring_enabled=false
             path.write_text(inventory_text, encoding="utf-8")
             inventory = load_inventory(path)
             self.assertEqual(_core_address(inventory), "192.0.2.10")
+
+    def test_core_address_accepts_generated_preparation_inventory(self) -> None:
+        _text, inventory = build_preparation_inventory(
+            core_node="sopnode-f2",
+            ran_node="sopnode-f3",
+            source=Path("hosts.ini"),
+        )
+        self.assertEqual(inventory.core_node.name, "sopnode-f2")
+        self.assertEqual(inventory.core_node.variables.get("ip"), "172.28.2.77")
+        self.assertEqual(_core_address(inventory), "172.28.2.77")
+
+    def test_core_address_missing_ip_raises_experiment_error(self) -> None:
+        inventory = NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost("lab-core", {}),
+            ran_node=InventoryHost("lab-ran", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+        with self.assertRaisesRegex(
+            ExperimentError,
+            "^prepared inventory is missing the core node IP address$",
+        ):
+            _core_address(inventory)
+
+    def test_core_address_malformed_ip_raises_experiment_error(self) -> None:
+        inventory = NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost("lab-core", {"ip": "not-an-ip"}),
+            ran_node=InventoryHost("lab-ran", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+        with self.assertRaisesRegex(
+            ExperimentError,
+            "^prepared inventory has an invalid core node IP address; expected a literal IPv4 or IPv6 address$",
+        ):
+            _core_address(inventory)
 
 
 if __name__ == "__main__":

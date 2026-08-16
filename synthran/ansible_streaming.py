@@ -14,9 +14,9 @@ from typing import Callable, Mapping, Sequence
 from synthran.live_preflight import CommandResult
 
 
-PLAY_RE = re.compile(r"^PLAY\s+\[(.*)\](?:\s*\*+)?$")
-TASK_RE = re.compile(r"^TASK\s+\[(.*)\](?:\s*\*+)?$")
-HANDLER_RE = re.compile(r"^RUNNING HANDLER\s+\[(.*)\](?:\s*\*+)?$")
+PLAY_RE = re.compile(r"^PLAY\s+\[(.*)\](?:\s*.*)?$")
+TASK_RE = re.compile(r"^TASK\s+\[(.*)\](?:\s*.*)?$")
+HANDLER_RE = re.compile(r"^RUNNING HANDLER\s+\[(.*)\](?:\s*.*)?$")
 HOST_STATUS_RE = re.compile(
     r"^(ok|changed|failed|fatal|skipping|unreachable):\s+\[([^\]]+)\]",
     re.IGNORECASE,
@@ -32,6 +32,16 @@ STATUS_MAP = {
 }
 
 
+def _clean_ansible_title(raw_name: str) -> str:
+    name = raw_name.strip()
+    match = re.search(r"(?:\s+|:\s*)[a-zA-Z_][a-zA-Z0-9_]*\s*=", name)
+    if match:
+        cleaned = name[: match.start()].strip().rstrip(":")
+        if cleaned:
+            return cleaned.strip()
+    return name
+
+
 def parse_ansible_line(line: str) -> str | None:
     """Parse one raw Ansible line into a sanitized high-level event or None."""
     stripped = line.strip()
@@ -40,17 +50,17 @@ def parse_ansible_line(line: str) -> str | None:
 
     match = PLAY_RE.match(stripped)
     if match:
-        name = match.group(1).strip()
+        name = _clean_ansible_title(match.group(1))
         return f"  PLAY: {name}"
 
     match = TASK_RE.match(stripped)
     if match:
-        name = match.group(1).strip()
+        name = _clean_ansible_title(match.group(1))
         return f"  TASK: {name}"
 
     match = HANDLER_RE.match(stripped)
     if match:
-        name = match.group(1).strip()
+        name = _clean_ansible_title(match.group(1))
         return f"  HANDLER: {name}"
 
     match = HOST_STATUS_RE.match(stripped)
