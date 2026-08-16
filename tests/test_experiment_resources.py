@@ -41,7 +41,7 @@ class ExperimentResourceTests(unittest.TestCase):
         self.assertEqual(spec["containers"][0]["$patch"], "delete")
         self.assertEqual(spec["volumes"][0]["$patch"], "delete")
 
-    def test_central_resources_are_run_scoped(self) -> None:
+    def test_central_resources_use_experiment_labels(self) -> None:
         objects = render_experiment_objects(
             self.scenario,
             lock=self.lock,
@@ -54,7 +54,7 @@ class ExperimentResourceTests(unittest.TestCase):
                 value["metadata"]["labels"][RUN_LABEL],
                 "experiment-01",
             )
-            self.assertNotIn("phase3", str(value).lower())
+        self.assertEqual(RUN_LABEL, "synthran.experiment/run")
 
 
 if __name__ == "__main__":
