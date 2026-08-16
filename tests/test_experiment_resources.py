@@ -6,6 +6,7 @@ import unittest
 from synthran.dependencies import load_lock
 from synthran.experiment import ExperimentScenario
 from synthran.experiment_resources import (
+    DEFAULT_CONTAINER_ANNOTATION,
     EDGE_CONTAINER,
     EDGE_RUNTIME_VOLUME,
     EDGE_VOLUME,
@@ -37,6 +38,10 @@ class ExperimentResourceTests(unittest.TestCase):
             "network-accepted-01",
         )
         self.assertEqual(template["metadata"]["annotations"][RUN_LABEL], "experiment-01")
+        self.assertEqual(
+            template["metadata"]["annotations"][DEFAULT_CONTAINER_ANNOTATION],
+            "ue",
+        )
         container = template["spec"]["containers"][0]
         self.assertEqual(container["name"], EDGE_CONTAINER)
         self.assertIn("@sha256:", container["image"])
@@ -54,14 +59,24 @@ class ExperimentResourceTests(unittest.TestCase):
         self.assertTrue(mounts[EDGE_VOLUME]["readOnly"])
         self.assertEqual(mounts[EDGE_RUNTIME_VOLUME]["mountPath"], "/synthran")
 
-    def test_cleanup_deletes_only_injected_sidecar_and_volumes(self) -> None:
+    def test_cleanup_deletes_only_injected_sidecar_volumes_and_annotations(self) -> None:
         patch = render_edge_cleanup_patch()
         template = patch["spec"]["template"]
-        self.assertEqual(template["metadata"], {"annotations": {RUN_LABEL: None}})
+        self.assertEqual(
+            template["metadata"],
+            {
+                "annotations": {
+                    RUN_LABEL: None,
+                    DEFAULT_CONTAINER_ANNOTATION: None,
+                }
+            },
+        )
         self.assertNotIn("labels", template["metadata"])
         spec = template["spec"]
         self.assertEqual(spec["containers"][0]["$patch"], "delete")
-        deleted_volumes = {item["name"] for item in spec["volumes"] if item["$patch"] == "delete"}
+        deleted_volumes = {
+            item["name"] for item in spec["volumes"] if item["$patch"] == "delete"
+        }
         self.assertEqual(deleted_volumes, {EDGE_VOLUME, EDGE_RUNTIME_VOLUME})
 
     def test_central_resources_use_experiment_labels(self) -> None:
