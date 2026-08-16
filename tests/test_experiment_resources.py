@@ -7,6 +7,8 @@ from synthran.dependencies import load_lock
 from synthran.experiment import ExperimentScenario
 from synthran.experiment_resources import (
     EDGE_CONTAINER,
+    EDGE_RUNTIME_VOLUME,
+    EDGE_VOLUME,
     RUN_LABEL,
     render_edge_cleanup_patch,
     render_edge_patch,
@@ -23,7 +25,7 @@ class ExperimentResourceTests(unittest.TestCase):
         )
         self.lock = load_lock(Path("dependencies.lock.yml"))
 
-    def test_edge_sidecar_is_digest_locked_and_run_owned(self) -> None:
+    def test_edge_sidecar_is_digest_locked_run_owned_and_refreshable(self) -> None:
         patch = render_edge_patch(
             self.scenario,
             lock=self.lock,
@@ -38,15 +40,29 @@ class ExperimentResourceTests(unittest.TestCase):
         container = template["spec"]["containers"][0]
         self.assertEqual(container["name"], EDGE_CONTAINER)
         self.assertIn("@sha256:", container["image"])
+        self.assertEqual(container["command"], ["/bin/sh", "-c"])
+        self.assertIn("/synthran-source/mosquitto.conf", container["args"][0])
+        self.assertIn("/synthran/mosquitto.conf", container["args"][0])
 
-    def test_cleanup_deletes_only_injected_sidecar_and_volume(self) -> None:
+        volumes = {item["name"]: item for item in template["spec"]["volumes"]}
+        self.assertIn(EDGE_VOLUME, volumes)
+        self.assertIn(EDGE_RUNTIME_VOLUME, volumes)
+        self.assertEqual(volumes[EDGE_RUNTIME_VOLUME]["emptyDir"], {})
+
+        mounts = {item["name"]: item for item in container["volumeMounts"]}
+        self.assertEqual(mounts[EDGE_VOLUME]["mountPath"], "/synthran-source")
+        self.assertTrue(mounts[EDGE_VOLUME]["readOnly"])
+        self.assertEqual(mounts[EDGE_RUNTIME_VOLUME]["mountPath"], "/synthran")
+
+    def test_cleanup_deletes_only_injected_sidecar_and_volumes(self) -> None:
         patch = render_edge_cleanup_patch()
         template = patch["spec"]["template"]
         self.assertEqual(template["metadata"], {"annotations": {RUN_LABEL: None}})
         self.assertNotIn("labels", template["metadata"])
         spec = template["spec"]
         self.assertEqual(spec["containers"][0]["$patch"], "delete")
-        self.assertEqual(spec["volumes"][0]["$patch"], "delete")
+        deleted_volumes = {item["name"] for item in spec["volumes"] if item["$patch"] == "delete"}
+        self.assertEqual(deleted_volumes, {EDGE_VOLUME, EDGE_RUNTIME_VOLUME})
 
     def test_central_resources_use_experiment_labels(self) -> None:
         objects = render_experiment_objects(
