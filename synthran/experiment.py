@@ -219,7 +219,7 @@ def render_edge_mosquitto_config(
     return "\n".join(
         (
             "per_listener_settings true",
-            "listener 1883 ::",
+            "listener 1883",
             "allow_anonymous true",
             "persistence false",
             "log_type all",

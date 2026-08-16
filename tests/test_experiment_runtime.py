@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 import tempfile
+from typing import Sequence
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from synthran.experiment import ExperimentError, ExperimentScenario
+from synthran.dependencies import load_lock
+from synthran.experiment import ExperimentCheck, ExperimentError, ExperimentScenario
 from synthran.experiment_runtime import (
+    CommandResult,
+    _collect_rollout_diagnostics,
     _core_address,
     _discover_ue_deployment,
     _discover_ue_pod,
     _one_name,
     _prepare_cooja_checkout,
     _render_manifest,
+    execute_experiment,
 )
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
 from synthran.resource_runtime import build_preparation_inventory
@@ -302,6 +309,221 @@ class OneNameExtractionTests(unittest.TestCase):
                 r"^run-owned srsUE Deployment metadata is malformed$",
             ):
                 _one_name(payload, label="run-owned srsUE Deployment")
+
+
+class RolloutDiagnosticsTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "lab-core",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost(
+                "lab-ran",
+                {"ansible_host": "192.0.2.11", "ansible_user": "root", "ip": "192.0.2.11"},
+            ),
+            all_vars={},
+        )
+
+    def test_collect_rollout_diagnostics_gathers_and_sanitizes(self) -> None:
+        inventory = self._sample_inventory()
+        executed_commands: list[Sequence[str]] = []
+        subscriber_id = "00101" + "0000001121"
+        subscriber_key = "fec86ba6" + "eb707ed0" + "8905757b" + "1bb44b8f"
+
+        def fake_run(
+            cmd: Sequence[str],
+            *,
+            timeout_seconds: int = 60,
+            cwd: Path | None = None,
+            input_text: str | None = None,
+        ) -> CommandResult:
+            executed_commands.append(cmd)
+            cmd_str = " ".join(cmd)
+            if "jsonpath=" in cmd_str:
+                return CommandResult(0, "srsran-ue-pod-abc12", "")
+            if "describe pod" in cmd_str:
+                return CommandResult(
+                    0,
+                    f"Pod: srsran-ue-pod-abc12 hex {subscriber_key}",
+                    "",
+                )
+            if "logs" in cmd_str:
+                return CommandResult(
+                    0,
+                    f"Mosquitto starting on 192.168.1.50 id: {subscriber_id}",
+                    "",
+                )
+            if "get events" in cmd_str:
+                return CommandResult(0, "Event: BackOff FailedScheduling", "")
+            return CommandResult(
+                0,
+                "NAME READY STATUS\nsrsran-ue-pod-abc12 1/2 CrashLoopBackOff",
+                "",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            known_hosts = Path(temporary) / "known_hosts"
+            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
+            log_path = Path(temporary) / "logs" / "srsue-mqtt-rollout-diagnostics.log"
+            private_path = Path(temporary) / "secret-path"
+            with (
+                patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}),
+                patch("synthran.experiment_runtime._run", side_effect=fake_run),
+            ):
+                _collect_rollout_diagnostics(
+                    inventory,
+                    network_run_id="net-run-12345",
+                    log_path=log_path,
+                    private_paths=(private_path,),
+                )
+
+            self.assertTrue(log_path.is_file())
+            content = log_path.read_text(encoding="utf-8")
+            self.assertIn("=== SynthRAN Rollout Diagnostics", content)
+            self.assertIn("=== kubectl get pods (srsran-ue) ===", content)
+            self.assertIn("=== kubectl get events ===", content)
+            self.assertIn("=== kubectl describe pod srsran-ue-pod-abc12 ===", content)
+            self.assertIn(
+                "=== kubectl logs srsran-ue-pod-abc12 -c synthran-edge-mqtt --tail=100 ===",
+                content,
+            )
+            # Check sanitization:
+            self.assertNotIn(subscriber_key, content)
+            self.assertIn("<secret>", content)
+            self.assertNotIn(subscriber_id, content)
+            self.assertIn("<subscriber-id>", content)
+            self.assertNotIn("192.168.1.50", content)
+            self.assertIn("<private-ip>", content)
+
+            # Verify executed commands contain expected kubectl calls:
+            flattened = " ".join(" ".join(c) for c in executed_commands)
+            self.assertIn(
+                "kubectl get pods -n open5gs -l app=srsran,component=ue,synthran.run/id=net-run-12345",
+                flattened,
+            )
+            self.assertIn("kubectl describe pod srsran-ue-pod-abc12 -n open5gs", flattened)
+            self.assertIn(
+                "kubectl logs srsran-ue-pod-abc12 -n open5gs -c synthran-edge-mqtt --tail=100",
+                flattened,
+            )
+
+    def test_execute_experiment_rollout_failure_preserves_diagnostics_and_fails_cleanly(
+        self,
+    ) -> None:
+        inventory = self._sample_inventory()
+        progress_buffer = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text("lab-core ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n", encoding="utf-8")
+            network_dir = root / "runs" / "net-01"
+            network_dir.mkdir(parents=True)
+            manifest_path = network_dir / "manifest.json"
+            evidence_path = network_dir / "network-evidence.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "synthran/network-deployment/v1alpha1",
+                        "run_id": "net-01",
+                        "status": "path-proven",
+                        "network_evidence": evidence_path.name,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "synthran/network-evidence/v1alpha1",
+                        "run_id": "net-01",
+                        "ready": True,
+                        "path": {
+                            "pdu_address": "12.1.0.1",
+                            "pdu_network": "12.1.0.0/16",
+                            "ue_interface": "tun_srsue1",
+                            "slice": "slice1",
+                            "sst": 1,
+                            "dnn": "internet",
+                        },
+                        "checks": [{"name": "upf-path", "passed": True}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lock = load_lock(Path("dependencies.lock.yml"))
+
+            with (
+                patch("sys.platform", "linux"),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "CONDA_DEFAULT_ENV": "synthran",
+                        "SYNTHRAN_KNOWN_HOSTS": str(known_hosts),
+                    },
+                ),
+                patch(
+                    "synthran.experiment_runtime.verify_network_path",
+                    return_value=MagicMock(ready=True),
+                ),
+                patch(
+                    "synthran.experiment_runtime._validate_contiki_checkout",
+                    return_value=root / "contiki",
+                ),
+                patch("synthran.experiment_runtime._prepare_cooja_checkout"),
+                patch("synthran.experiment_runtime._checked"),
+                patch(
+                    "synthran.experiment_runtime._discover_ue_deployment",
+                    return_value="srsran-ue-deploy",
+                ),
+                patch("synthran.experiment_runtime._kubectl_apply_object"),
+                patch("synthran.experiment_runtime._remote"),
+                patch("synthran.experiment_runtime._kubectl_patch_deployment"),
+                patch(
+                    "synthran.experiment_runtime._wait_rollout",
+                    side_effect=ExperimentError("srsUE MQTT rollout failed"),
+                ),
+                patch(
+                    "synthran.experiment_runtime._collect_rollout_diagnostics"
+                ) as mock_diagnostics,
+                patch(
+                    "synthran.experiment_runtime._cleanup_live_resources",
+                    return_value=ExperimentCheck("cleanup", True, "cleaned up"),
+                ),
+            ):
+                result = execute_experiment(
+                    inventory=inventory,
+                    lock=lock,
+                    dependency_root=root / "deps",
+                    network_manifest=manifest_path,
+                    network_evidence=evidence_path,
+                    run_id="exp-rollout-fail",
+                    repository_root=Path(__file__).parent.parent,
+                    run_root=root / "experiments",
+                    progress=progress_buffer,
+                )
+
+                self.assertFalse(result.ready)
+                mock_diagnostics.assert_called_once()
+                output = progress_buffer.getvalue()
+                self.assertIn("[synthran] srsUE MQTT rollout: FAILED", output)
+                self.assertIn(
+                    "[synthran] error: edge MQTT sidecar did not become Ready; diagnostic log saved",
+                    output,
+                )
+                self.assertIn("[synthran] experiment path NOT PROVEN", output)
+
+                manifest_file = result.run_directory / "manifest.json"
+                self.assertTrue(manifest_file.is_file())
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                self.assertEqual(manifest_data["status"], "failed")
+                self.assertEqual(
+                    manifest_data["failure"],
+                    "edge MQTT sidecar did not become Ready; diagnostic log saved",
+                )
 
 
 if __name__ == "__main__":

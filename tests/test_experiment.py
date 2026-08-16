@@ -92,6 +92,8 @@ class ExperimentContractTests(unittest.TestCase):
             central_broker_address="192.0.2.10",
             central_broker_port=18884,
         )
+        self.assertIn("listener 1883", config.splitlines())
+        self.assertNotIn("listener 1883 ::", config)
         self.assertIn("bridge_bind_address 12.1.0.1", config)
         self.assertIn("address 192.0.2.10:18884", config)
         self.assertIn("topic synthran/experiment-01/# out 1", config)

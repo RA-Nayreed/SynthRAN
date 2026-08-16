@@ -50,7 +50,7 @@ from synthran.ingress import CountedTcpIngress
 from synthran.iot import write_run_inputs
 from synthran.live_preflight import CommandResult, LivePreflightError, ssh_command
 from synthran.mqtt_collector import collect_mqtt
-from synthran.network_runtime import verify_network_path
+from synthran.network_runtime import sanitize_deployment_text, verify_network_path
 
 
 DEFAULT_RUN_ROOT = Path(".synthran/experiments")
@@ -401,6 +401,114 @@ def _wait_rollout(inventory: NetworkInventory, deployment: str, *, label: str) -
     )
 
 
+def _collect_rollout_diagnostics(
+    inventory: NetworkInventory,
+    *,
+    network_run_id: str,
+    log_path: Path,
+    private_paths: Sequence[Path],
+) -> None:
+    """Collect sanitized pod status, events, and sidecar logs on rollout failure."""
+
+    log_parts: list[str] = [
+        f"=== SynthRAN Rollout Diagnostics ({datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}) ===",
+        f"Network Run ID: {network_run_id}",
+        "",
+    ]
+
+    def _safe_remote(command_str: str) -> str:
+        try:
+            cmd = ssh_command(inventory.core_node, "sh", "-c", command_str)
+            result = _run(cmd, timeout_seconds=30)
+            output = result.stdout
+            if result.stderr:
+                output = (
+                    f"{output}\n[stderr]\n{result.stderr}"
+                    if output
+                    else f"[stderr]\n{result.stderr}"
+                )
+            return output.strip()
+        except Exception as exc:
+            return f"<diagnostic command failed: {exc}>"
+
+    log_parts.append("=== kubectl get pods (srsran-ue) ===")
+    log_parts.append(
+        _safe_remote(
+            f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -n {KUBERNETES_NAMESPACE} "
+            f"-l app=srsran,component=ue,synthran.run/id={shlex.quote(network_run_id)} -o wide"
+        )
+    )
+    log_parts.append("")
+
+    log_parts.append("=== kubectl get pods (namespace) ===")
+    log_parts.append(
+        _safe_remote(
+            f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -n {KUBERNETES_NAMESPACE} -o wide"
+        )
+    )
+    log_parts.append("")
+
+    log_parts.append("=== kubectl get events ===")
+    log_parts.append(
+        _safe_remote(
+            f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl get events -n {KUBERNETES_NAMESPACE} "
+            "--sort-by=.metadata.creationTimestamp"
+        )
+    )
+    log_parts.append("")
+
+    pod_names_raw = _safe_remote(
+        f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -n {KUBERNETES_NAMESPACE} "
+        f"-l app=srsran,component=ue,synthran.run/id={shlex.quote(network_run_id)} "
+        "-o jsonpath='{.items[*].metadata.name}'"
+    )
+    pod_names: list[str] = []
+    if not pod_names_raw.startswith("<"):
+        pod_names = [
+            name.strip("'\"")
+            for name in pod_names_raw.split()
+            if name and not name.startswith("<")
+        ]
+    if not pod_names:
+        fallback_names = _safe_remote(
+            f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -n {KUBERNETES_NAMESPACE} "
+            "-o jsonpath='{.items[*].metadata.name}'"
+        )
+        if not fallback_names.startswith("<"):
+            pod_names = [
+                name.strip("'\"")
+                for name in fallback_names.split()
+                if name and not name.startswith("<")
+            ]
+
+    for pod_name in pod_names:
+        log_parts.append(f"=== kubectl describe pod {pod_name} ===")
+        log_parts.append(
+            _safe_remote(
+                f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl describe pod "
+                f"{shlex.quote(pod_name)} -n {KUBERNETES_NAMESPACE}"
+            )
+        )
+        log_parts.append("")
+        log_parts.append(f"=== kubectl logs {pod_name} -c {EDGE_CONTAINER} --tail=100 ===")
+        log_parts.append(
+            _safe_remote(
+                f"KUBECONFIG=/etc/kubernetes/admin.conf kubectl logs "
+                f"{shlex.quote(pod_name)} -n {KUBERNETES_NAMESPACE} "
+                f"-c {EDGE_CONTAINER} --tail=100"
+            )
+        )
+        log_parts.append("")
+
+    raw_text = "\n".join(log_parts)
+    sanitized = sanitize_deployment_text(raw_text, private_paths)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(sanitized, encoding="utf-8", newline="\n")
+    except OSError:
+        pass
+
+
 def _discover_ue_deployment(
     inventory: NetworkInventory,
     network_run_id: str,
@@ -713,7 +821,24 @@ def execute_experiment(
             render_edge_patch(scenario, lock=lock, core_address=core_address),
             label="srsUE MQTT sidecar patch",
         )
-        _wait_rollout(inventory, ue_deployment, label="srsUE MQTT rollout")
+        try:
+            _wait_rollout(inventory, ue_deployment, label="srsUE MQTT rollout")
+        except Exception as exc:
+            report("srsUE MQTT rollout: FAILED")
+            _collect_rollout_diagnostics(
+                inventory,
+                network_run_id=scenario.network_run_id,
+                log_path=logs / "srsue-mqtt-rollout-diagnostics.log",
+                private_paths=(
+                    repository_root,
+                    dependency_root,
+                    run_directory,
+                    inventory.path,
+                ),
+            )
+            raise ExperimentError(
+                "edge MQTT sidecar did not become Ready; diagnostic log saved"
+            ) from exc
         ue_pod = _discover_ue_pod(inventory, scenario.network_run_id)
 
         after_patch = verify_network_path(
@@ -925,7 +1050,7 @@ def execute_experiment(
 
     except Exception as exc:
         failure = str(exc)
-        report(f"experiment failed: {failure}")
+        report(f"error: {failure}")
     finally:
         if ingress is not None:
             try:
