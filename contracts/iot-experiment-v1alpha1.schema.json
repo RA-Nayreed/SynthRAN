@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "synthran/iot-experiment/v1alpha1",
-  "title": "SynthRAN Phase 3 deterministic IoT experiment",
+  "title": "SynthRAN deterministic IoT experiment",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "run_id", "network_run_id", "pdu_address", "ue_interface", "sensor_count", "sensor_period_seconds", "cooja_seed", "serial_socket_port", "topic_root", "rpl_prefix", "edge_broker_address", "data_contract"],
