@@ -24,10 +24,11 @@ from synthran.live_preflight import CommandResult, LivePreflightError, ssh_comma
 
 KUBERNETES_NAMESPACE = "open5gs"
 NETWORK_RUN_LABEL = "synthran.run/id"
-UE_TUNNEL_WAIT_ATTEMPTS = 150
+RFSIM_RECOVERY_ATTEMPTS = 2
+UE_TUNNEL_WAIT_ATTEMPTS = 60
 UE_TUNNEL_WAIT_INTERVAL_SECONDS = 2
 UE_PROCESS_START_GRACE_ATTEMPTS = 15
-UE_TUNNEL_COMMAND_TIMEOUT_SECONDS = 310
+UE_TUNNEL_COMMAND_TIMEOUT_SECONDS = 240
 
 
 @dataclass(frozen=True)
@@ -298,31 +299,13 @@ def _current_pdu_address(inventory: NetworkInventory, pod: str) -> str:
     return candidates[0]
 
 
-def reconcile_rfsim_runtime(
+def _reconcile_attempt(
     inventory: NetworkInventory,
     *,
     network_run_id: str,
+    ue_pod: str,
+    gnb_deployment: str,
 ) -> RfsimRuntimeState:
-    """Restore the process-level RFSIM runtime after an srsUE pod rollout.
-
-    The ordering is deliberate and mirrors the live-proven recovery contract:
-    stop stale UE/broker state, restart the gNB while the broker is absent,
-    wait for the fresh cell, start GNU Radio, start srsUE, wait for the tunnel,
-    restore routes, and discover the newly assigned PDU address.
-    """
-
-    ue_pod = _discover_pod(
-        inventory,
-        component="ue",
-        network_run_id=network_run_id,
-    )
-    old_gnb_pod = _discover_pod(
-        inventory,
-        component="gnb",
-        network_run_id=network_run_id,
-    )
-    gnb_deployment = _deployment_owner_for_pod(inventory, old_gnb_pod)
-
     _remote(
         inventory,
         "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec "
@@ -415,3 +398,51 @@ def reconcile_rfsim_runtime(
         gnb_deployment=gnb_deployment,
         pdu_address=pdu_address,
     )
+
+
+def reconcile_rfsim_runtime(
+    inventory: NetworkInventory,
+    *,
+    network_run_id: str,
+) -> RfsimRuntimeState:
+    """Restore the process-level RFSIM runtime after an srsUE pod rollout.
+
+    A stalled srsUE attach can leave every ZMQ TCP leg established while no
+    useful RF samples progress to RACH. Live acceptance showed that a complete
+    second reset of UE, broker, and the run-owned gNB can recover that state.
+    Therefore each retry repeats the full recovery contract instead of merely
+    extending one tunnel wait.
+    """
+
+    ue_pod = _discover_pod(
+        inventory,
+        component="ue",
+        network_run_id=network_run_id,
+    )
+    old_gnb_pod = _discover_pod(
+        inventory,
+        component="gnb",
+        network_run_id=network_run_id,
+    )
+    gnb_deployment = _deployment_owner_for_pod(inventory, old_gnb_pod)
+
+    failures: list[str] = []
+    for attempt in range(1, RFSIM_RECOVERY_ATTEMPTS + 1):
+        try:
+            return _reconcile_attempt(
+                inventory,
+                network_run_id=network_run_id,
+                ue_pod=ue_pod,
+                gnb_deployment=gnb_deployment,
+            )
+        except ExperimentError as exc:
+            failures.append(f"attempt {attempt}: {exc}")
+            if attempt == RFSIM_RECOVERY_ATTEMPTS:
+                raise ExperimentError(
+                    "RFSIM runtime recovery failed after "
+                    f"{RFSIM_RECOVERY_ATTEMPTS} attempts ("
+                    + "; ".join(failures)
+                    + ")"
+                ) from exc
+
+    raise AssertionError("unreachable")
