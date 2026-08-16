@@ -9,7 +9,11 @@ import sys
 
 from synthran.dependencies import DependencyError, load_lock
 from synthran.fiveg_ansible import FiveGAnsibleError, load_inventory
-from synthran.phase3_live import DEFAULT_COLLECTION_SECONDS, DEFAULT_MINIMUM_PER_SENSOR, execute_phase3
+from synthran.phase3_live import (
+    DEFAULT_COLLECTION_SECONDS,
+    DEFAULT_MINIMUM_PER_SENSOR,
+    execute_phase3,
+)
 from synthran.phase3_runtime import Phase3Error, build_scenario
 from synthran.privacy import repository_root
 
@@ -20,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
 
     plan = commands.add_parser(
         "plan",
-        help="validate Phase 2 evidence and print the deterministic Phase 3 scenario",
+        help="validate accepted network evidence and print the deterministic Phase 3 scenario",
     )
     plan.add_argument("--network-run-id", required=True)
     plan.add_argument("--run-id", required=True)
@@ -124,7 +128,10 @@ def _verify(args: argparse.Namespace) -> int:
         raise Phase3Error("Phase 3 manifest/evidence is missing") from exc
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise Phase3Error("Phase 3 manifest/evidence must be readable JSON") from exc
-    if not isinstance(evidence, dict) or evidence.get("schema") != "synthran/iot-evidence/v1alpha1":
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("schema") != "synthran/iot-evidence/v1alpha1"
+    ):
         raise Phase3Error("Phase 3 evidence schema is unsupported")
     if not isinstance(manifest, dict) or manifest.get("run_id") != args.run_id:
         raise Phase3Error("Phase 3 manifest does not match the requested run")
@@ -138,7 +145,10 @@ def _verify(args: argparse.Namespace) -> int:
             raise Phase3Error("Phase 3 evidence contains a malformed check")
         state = "PASS" if check.get("passed") is True else "FAIL"
         print(f"[{state}] {check.get('name')}: {check.get('detail')}")
-    ready = evidence.get("ready") is True and manifest.get("status") == "iot-to-5g-path-proven"
+    ready = (
+        evidence.get("ready") is True
+        and manifest.get("status") == "iot-to-5g-path-proven"
+    )
     print(f"Result: {'IOT-TO-5G PATH PROVEN' if ready else 'NOT PROVEN'}")
     return 0 if ready else 2
 
