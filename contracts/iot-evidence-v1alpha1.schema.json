@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "synthran/iot-evidence/v1alpha1",
-  "title": "SynthRAN Phase 3 IoT-to-5G evidence",
+  "title": "SynthRAN IoT-to-5G evidence",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "run_id", "network_run_id", "generated_at_utc", "scenario_sha256", "jsonl_sha256", "parquet_sha256", "checks", "ready"],
