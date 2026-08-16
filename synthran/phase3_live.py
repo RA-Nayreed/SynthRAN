@@ -1,9 +1,9 @@
 """Operator-triggered integrated Phase 3 runtime.
 
-This runner consumes an already path-proven Phase 2 deployment. It creates
+This runner consumes an already path-proven network deployment. It creates
 only run-scoped Phase 3 resources, temporarily adds an MQTT sidecar to the
 run-owned srsUE Deployment, collects deterministic telemetry, restores the
-srsUE Deployment, and reproves the Phase 2 network after cleanup.
+srsUE Deployment, and reproves the accepted network after cleanup.
 """
 
 from __future__ import annotations
@@ -524,9 +524,9 @@ def _cleanup_live_resources(
             timeout_seconds=120,
         )
         if not restored.ready:
-            errors.append("Phase 2 path did not reprove after cleanup")
+            errors.append("accepted network path did not reprove after cleanup")
     except Exception as exc:
-        errors.append(f"Phase 2 reproof: {exc}")
+        errors.append(f"accepted network reproof: {exc}")
     if errors:
         return Phase3Check(
             "cleanup-base-network",
@@ -536,7 +536,7 @@ def _cleanup_live_resources(
     return Phase3Check(
         "cleanup-base-network",
         True,
-        "Phase 3 resources removed and Phase 2 path reproven",
+        "Phase 3 resources removed and accepted network path reproven",
     )
 
 
@@ -554,7 +554,7 @@ def execute_phase3(
     minimum_per_sensor: int = DEFAULT_MINIMUM_PER_SENSOR,
     progress: TextIO | None = None,
 ) -> Phase3RunResult:
-    """Run the complete 10-sensor Phase 3 path against a proven Phase 2 network."""
+    """Run the complete 10-sensor path against a proven network baseline."""
 
     def report(message: str) -> None:
         if progress is not None:
@@ -579,7 +579,7 @@ def execute_phase3(
     contiki = _validate_contiki_checkout(lock, dependency_root)
     core_address = _core_address(inventory)
 
-    report("phase2-prerequisite: verifying path-proven network...")
+    report("network-prerequisite: verifying path-proven baseline...")
     base = verify_network_path(
         inventory=inventory,
         lock=lock,
@@ -587,8 +587,8 @@ def execute_phase3(
         timeout_seconds=120,
     )
     if not base.ready:
-        raise Phase3Error("Phase 2 network no longer satisfies path proof")
-    report("phase2-prerequisite: OK")
+        raise Phase3Error("accepted network no longer satisfies path proof")
+    report("network-prerequisite: OK")
 
     run_root = run_root.resolve()
     run_root.mkdir(parents=True, exist_ok=True)
@@ -690,7 +690,7 @@ def execute_phase3(
             timeout_seconds=120,
         )
         if not after_patch.ready:
-            raise Phase3Error("srsUE sidecar patch broke the Phase 2 path")
+            raise Phase3Error("srsUE sidecar patch broke the accepted network path")
 
         _add_ue_route(inventory, ue_pod, core_address)
         _restart_edge_sidecar(inventory, ue_pod)
@@ -861,7 +861,7 @@ def execute_phase3(
             timeout_seconds=120,
         )
         if not live_network.ready:
-            raise Phase3Error("Phase 2 UPF path was not valid after telemetry delivery")
+            raise Phase3Error("accepted UPF path was not valid after telemetry delivery")
         extra_checks.append(
             Phase3Check(
                 "upf-path",
