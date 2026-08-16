@@ -19,7 +19,12 @@ from synthran.phase3_runtime import (
 
 
 class Phase3RuntimeTests(unittest.TestCase):
-    def _phase2(self, root: Path, status: str = "path-proven", ready: bool = True) -> tuple[Path, Path]:
+    def _network_baseline(
+        self,
+        root: Path,
+        status: str = "path-proven",
+        ready: bool = True,
+    ) -> tuple[Path, Path]:
         manifest = root / "manifest.json"
         evidence = root / "network-evidence.json"
         manifest.write_text(
@@ -52,15 +57,18 @@ class Phase3RuntimeTests(unittest.TestCase):
         )
         return manifest, evidence
 
-    def test_phase3_requires_path_proven_phase2(self) -> None:
+    def test_phase3_requires_path_proven_network(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            manifest, evidence = self._phase2(Path(temporary), status="deployed-unverified")
+            manifest, evidence = self._network_baseline(
+                Path(temporary),
+                status="deployed-unverified",
+            )
             with self.assertRaisesRegex(Phase3Error, "status=path-proven"):
                 load_path_proven_network(manifest, evidence)
 
     def test_build_scenario_binds_to_accepted_pdu(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            manifest, evidence = self._phase2(Path(temporary))
+            manifest, evidence = self._network_baseline(Path(temporary))
             scenario = build_scenario(
                 run_id="phase3-01",
                 network_manifest=manifest,
@@ -71,7 +79,11 @@ class Phase3RuntimeTests(unittest.TestCase):
             self.assertEqual(scenario.sensor_topic, "synthran/phase3-01/sensor/+")
 
     def test_edge_bridge_is_run_scoped_and_pdu_bound(self) -> None:
-        scenario = Phase3Scenario("phase3-01", "acceptance-20260815-05", "12.1.0.1")
+        scenario = Phase3Scenario(
+            "phase3-01",
+            "acceptance-20260815-05",
+            "12.1.0.1",
+        )
         config = render_edge_mosquitto_config(
             scenario,
             central_broker_address="172.28.2.77",
@@ -94,7 +106,9 @@ class Phase3RuntimeTests(unittest.TestCase):
             }
         )
         event = TelemetryEvent.from_payload(payload, "phase3-01")
-        record = event.to_record(received_at_utc=datetime(2026, 8, 16, tzinfo=timezone.utc))
+        record = event.to_record(
+            received_at_utc=datetime(2026, 8, 16, tzinfo=timezone.utc)
+        )
         self.assertEqual(record["sensor_id"], "sensor-10")
         self.assertEqual(record["sequence"], 3)
 
@@ -104,8 +118,17 @@ class Phase3RuntimeTests(unittest.TestCase):
             for index in range(1, 11)
             for sequence in (1, 2, 3)
         ]
-        self.assertEqual(validate_sequence_integrity(records, minimum_per_sensor=3), ())
-        broken = [record for record in records if not (record["sensor_id"] == "sensor-04" and record["sequence"] == 2)]
+        self.assertEqual(
+            validate_sequence_integrity(records, minimum_per_sensor=3),
+            (),
+        )
+        broken = [
+            record
+            for record in records
+            if not (
+                record["sensor_id"] == "sensor-04" and record["sequence"] == 2
+            )
+        ]
         failures = validate_sequence_integrity(broken, minimum_per_sensor=3)
         self.assertTrue(any("sensor-04" in failure for failure in failures))
 
