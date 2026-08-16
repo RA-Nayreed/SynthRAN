@@ -8,7 +8,7 @@ srsUE Deployment, and reproves the accepted network after cleanup.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import ipaddress
 import json
@@ -31,6 +31,7 @@ from synthran.experiment import (
     build_data_evidence,
     build_scenario,
     load_jsonl,
+    render_edge_mosquitto_config,
     save_experiment_evidence,
     validate_run_id,
     write_parquet,
@@ -55,6 +56,7 @@ from synthran.network_runtime import (
     sanitize_deployment_text,
     verify_network_path,
 )
+from synthran.rfsim_runtime import reconcile_rfsim_runtime
 
 
 DEFAULT_RUN_ROOT = Path(".synthran/experiments")
@@ -606,6 +608,27 @@ def _add_ue_route(inventory: NetworkInventory, pod: str, core_address: str) -> N
         raise ExperimentError("central MQTT destination is not routed through tun_srsue1")
 
 
+def _replace_edge_runtime_config(
+    inventory: NetworkInventory,
+    pod: str,
+    config: str,
+) -> None:
+    try:
+        command = ssh_command(
+            inventory.core_node,
+            "sh",
+            "-c",
+            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec -i "
+            f"-n {KUBERNETES_NAMESPACE} {shlex.quote(pod)} -c {EDGE_CONTAINER} -- "
+            "/bin/sh -c 'cat > /synthran/mosquitto.conf'",
+        )
+    except LivePreflightError as exc:
+        raise ExperimentError(str(exc)) from exc
+    result = _run(command, input_text=config, timeout_seconds=30)
+    if result.returncode != 0:
+        raise ExperimentError("edge MQTT runtime config refresh failed")
+
+
 def _restart_edge_sidecar(inventory: NetworkInventory, pod: str) -> None:
     _remote(
         inventory,
@@ -671,6 +694,7 @@ def _cleanup_live_resources(
     ue_deployment: str | None,
 ) -> ExperimentCheck:
     errors: list[str] = []
+    cleanup_rollout_completed = False
     if ue_deployment is not None:
         try:
             _kubectl_patch_deployment(
@@ -680,8 +704,17 @@ def _cleanup_live_resources(
                 label="srsUE sidecar cleanup",
             )
             _wait_rollout(inventory, ue_deployment, label="srsUE cleanup rollout")
+            cleanup_rollout_completed = True
         except Exception as exc:
             errors.append(f"sidecar restore: {exc}")
+    if cleanup_rollout_completed:
+        try:
+            reconcile_rfsim_runtime(
+                inventory,
+                network_run_id=scenario.network_run_id,
+            )
+        except Exception as exc:
+            errors.append(f"RFSIM runtime restore: {exc}")
     try:
         _delete_experiment_objects(inventory, scenario.run_id)
     except Exception as exc:
@@ -856,7 +889,50 @@ def execute_experiment(
             raise ExperimentError(
                 "edge MQTT sidecar did not become Ready; diagnostic log saved"
             ) from exc
-        ue_pod = _discover_ue_pod(inventory, scenario.network_run_id)
+
+        report("rfsim-runtime: reconciling after srsUE rollout...")
+        try:
+            runtime_state = reconcile_rfsim_runtime(
+                inventory,
+                network_run_id=scenario.network_run_id,
+            )
+        except Exception as exc:
+            report("rfsim-runtime: FAILED")
+            _collect_rollout_diagnostics(
+                inventory,
+                network_run_id=scenario.network_run_id,
+                log_path=logs / "rfsim-runtime-diagnostics.log",
+                private_paths=(
+                    repository_root,
+                    dependency_root,
+                    run_directory,
+                    inventory.path,
+                ),
+            )
+            raise ExperimentError(
+                "RFSIM runtime did not recover after srsUE rollout; diagnostic log saved"
+            ) from exc
+
+        ue_pod = runtime_state.ue_pod
+        if runtime_state.pdu_address != scenario.pdu_address:
+            report(
+                "rfsim-runtime: live PDU address changed from "
+                f"{scenario.pdu_address} to {runtime_state.pdu_address}"
+            )
+        scenario = replace(scenario, pdu_address=runtime_state.pdu_address)
+        _, csc, scenario_path = write_run_inputs(
+            scenario,
+            run_directory=run_directory,
+        )
+        edge_config = render_edge_mosquitto_config(
+            scenario,
+            central_broker_address=core_address,
+            central_broker_port=CENTRAL_PORT,
+        )
+        _replace_edge_runtime_config(inventory, ue_pod, edge_config)
+        _restart_edge_sidecar(inventory, ue_pod)
+        time.sleep(3)
+        report("rfsim-runtime: OK")
 
         after_patch = verify_network_path(
             inventory=inventory,
@@ -890,8 +966,6 @@ def execute_experiment(
             )
 
         _add_ue_route(inventory, ue_pod, core_address)
-        _restart_edge_sidecar(inventory, ue_pod)
-        time.sleep(3)
         tx_before = _interface_counter(inventory, ue_pod, "tun_srsue1", "tx_bytes")
         rx_before = _interface_counter(inventory, ue_pod, "tun_srsue1", "rx_bytes")
 
@@ -1034,7 +1108,7 @@ def execute_experiment(
             ExperimentCheck(
                 "ue-binding",
                 True,
-                f"edge bridge is bound to accepted UE PDU address {scenario.pdu_address}",
+                f"edge bridge is bound to live UE PDU address {scenario.pdu_address}",
             )
         )
 
