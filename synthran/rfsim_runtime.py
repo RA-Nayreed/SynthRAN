@@ -292,7 +292,11 @@ def reconcile_rfsim_runtime(
         component="ue",
         network_run_id=network_run_id,
     )
-    old_gnb_pod = _discover_pod(inventory, component="gnb")
+    old_gnb_pod = _discover_pod(
+        inventory,
+        component="gnb",
+        network_run_id=network_run_id,
+    )
     gnb_deployment = _deployment_owner_for_pod(inventory, old_gnb_pod)
 
     _remote(
