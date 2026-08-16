@@ -20,7 +20,7 @@ SynthRAN CLI and contracts
 
 SynthRAN owns the interfaces between these systems. Upstream repositories own their internal deployment, radio, simulation, and broker implementations.
 
-Linux is the only supported SynthRAN host platform. Development, repository hooks, GitHub Actions, and the network controller all use the named Conda environment `synthran`. `environment.yml` is the single complete definition and includes Ansible tooling; `pyproject.toml` remains package metadata. Interactive shells activate the environment once and invoke its tools directly; non-interactive hooks and CI select it explicitly and never fall back to an arbitrary host Python.
+Linux is the supported SynthRAN host platform. Development, repository hooks, GitHub Actions, and the network controller use the named Conda environment `synthran`. `environment.yml` is the complete environment definition and includes Ansible tooling; `pyproject.toml` remains package metadata.
 
 ## Why complete pinned checkouts are reused
 
@@ -38,21 +38,21 @@ This is composition, not a Git merge. `.deps/` is local and ignored. No upstream
 4. Sensors publish run-scoped MQTT telemetry toward `fd00::1:1883`.
 5. A counted controller-side TCP ingress forwards the MQTT byte stream through a strict SSH/kubectl port-forward to a temporary Mosquitto sidecar in the run-owned srsUE pod.
 6. That Mosquitto sidecar shares the srsUE network namespace containing `tun_srsue1`. Its bridge binds to the accepted UE PDU address and targets a literal core-node address.
-7. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the accepted bridge connection is used.
+7. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the bridge connection is accepted.
 8. The srsRAN/Open5GS user plane transports the bridge traffic to a run-owned host-network Mosquitto broker on the core node.
 9. A central collector subscribes only to the current run topic, validates events, and appends canonical JSONL.
 10. PyArrow derives deterministic Parquet from the accepted JSONL record.
 11. Route proof, `tun_srsue1` counters, broker receipt, message integrity, the accepted UPF route, and post-cleanup network reproof form the default path evidence.
 
-The controller-side TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the accepted PDU address actually exist.
+The controller-side TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the accepted PDU address exist.
 
 ## Control boundaries
 
-Dependency synchronization, privacy scanning, schema validation, scenario rendering, and offline tests are local repository operations. Resource preparation and base-network deployment are separate explicit operator operations. Phase 3 experiment execution assumes a valid operator-managed reservation and an existing `path-proven` supported network.
+Dependency synchronization, privacy scanning, schema validation, scenario rendering, and offline tests are local repository operations. Resource preparation and base-network deployment are separate explicit operator operations. Experiment execution assumes a valid operator-managed reservation and an existing `path-proven` supported network.
 
-The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux `conda-lock` file in a later hardening step.
+The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux artifact lock in a later hardening step.
 
-The Phase 3 run command never reserves nodes, allocates nodes, images nodes, or deploys Open5GS/srsRAN. Its manifest records `reservation_action=none` and `network_deployment_action=none`.
+The experiment run command never reserves nodes, allocates nodes, images nodes, or deploys Open5GS/srsRAN. Its manifest records `reservation_action=none` and `network_deployment_action=none`.
 
 ## Accepted network boundary
 
@@ -66,11 +66,11 @@ The deployment gate revalidates fresh live evidence before creating `.synthran/r
 
 The wrapper passes immutable transitive Git commits, uses the exact locked Ansible collections, removes mutable image transforms, pins selected application/helper images by digest, validates generated srsUE Helm YAML before deployment, and labels runtime resources with the network run ID. Deployment ends in `deployed-unverified`.
 
-A separate read-only verifier discovers exactly one run-owned gNB, srsUE, and slice-one UPF, checks digest-locked running containers, requires gNB cell activation, validates `tun_srsue1` and its PDU address/route, and verifies the UPF `ogstun` route. Only that proof changes the network manifest to `path-proven`. A live operator acceptance run has satisfied this contract and the accepted network is the prerequisite for the integrated IoT workflow.
+A separate read-only verifier discovers exactly one run-owned gNB, srsUE, and slice-one UPF, checks digest-locked running containers, requires gNB cell activation, validates `tun_srsue1` and its PDU address/route, and verifies the UPF `ogstun` route. Only that proof changes the network manifest to `path-proven`. The accepted network is the prerequisite for the integrated IoT workflow.
 
-## Phase 3 mutation boundary
+## Experiment mutation boundary
 
-Phase 3 makes only narrow, reversible changes on top of the accepted network:
+The experiment makes only narrow, reversible changes on top of the accepted network:
 
 - create two run-labeled Mosquitto ConfigMaps;
 - create one run-labeled central Mosquitto Deployment on the selected core node;
