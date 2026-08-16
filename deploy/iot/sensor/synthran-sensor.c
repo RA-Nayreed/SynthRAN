@@ -18,7 +18,7 @@
 #define MQTT_SEGMENT_SIZE 128
 #define PAYLOAD_SIZE 256
 #define TOPIC_SIZE 128
-#define CLIENT_ID_SIZE 64
+#define CLIENT_ID_SIZE 24
 #define RETRY_PERIOD (2 * CLOCK_SECOND)
 #define PUBLISH_PERIOD (SYNTHRAN_SENSOR_PERIOD_SECONDS * CLOCK_SECOND)
 
@@ -144,8 +144,7 @@ PROCESS_THREAD(synthran_sensor_process, ev, data)
     PROCESS_EXIT();
   }
 
-  snprintf(client_id, sizeof(client_id),
-           "synthran-%s-%02u", SYNTHRAN_RUN_ID, number);
+  snprintf(client_id, sizeof(client_id), "synthran-p3-sensor-%02u", number);
   snprintf(topic, sizeof(topic),
            "%s/%s/sensor/sensor-%02u",
            SYNTHRAN_TOPIC_PREFIX, SYNTHRAN_RUN_ID, number);
