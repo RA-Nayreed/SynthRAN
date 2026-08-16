@@ -85,19 +85,43 @@ class ManagedProcess:
 
     def stop(self) -> None:
         if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
+            pid = getattr(self.process, "pid", None)
+            if isinstance(pid, int) and pid > 1 and hasattr(os, "killpg"):
                 try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    os.killpg(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
                     pass
-                self.process.wait(timeout=5)
-        self.log_stream.close()
+                try:
+                    self.process.wait(timeout=8)
+                except (subprocess.TimeoutExpired, Exception):
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    try:
+                        self.process.wait(timeout=5)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.process.terminate()
+                except Exception:
+                    pass
+                try:
+                    self.process.wait(timeout=8)
+                except (subprocess.TimeoutExpired, Exception):
+                    try:
+                        self.process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        self.process.wait(timeout=5)
+                    except Exception:
+                        pass
+        try:
+            self.log_stream.close()
+        except Exception:
+            pass
 
 
 def _run(

@@ -4,7 +4,9 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 import io
 import json
+import os
 from pathlib import Path
+import signal
 import tempfile
 from typing import Sequence
 import unittest
@@ -724,7 +726,7 @@ class RolloutDiagnosticsTests(unittest.TestCase):
             java_home_path.mkdir(parents=True)
 
             mock_cooja_proc = MagicMock()
-            mock_cooja_proc.poll.return_value = None
+            mock_cooja_proc.poll.return_value = 0
 
             with ExitStack() as stack:
                 stack.enter_context(patch("sys.platform", "linux"))
@@ -880,6 +882,40 @@ class ExperimentPrerequisitesTests(unittest.TestCase):
             r"Cooja exited with code 1 before TCP endpoint 127\.0\.0\.1:60001 became ready; see logs[/\\]cooja\.log",
         ):
             _wait_tcp("127.0.0.1", 60001, timeout_seconds=10, process=managed)
+
+    def test_managed_process_stop_handles_running_and_stopped_processes(self) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+        mock_stream = MagicMock()
+        managed = ManagedProcess(
+            name="Cooja",
+            process=mock_proc,
+            log_path=Path("logs/cooja.log"),
+            log_stream=mock_stream,
+        )
+        with patch.object(os, "killpg", create=True) as mock_killpg:
+            managed.stop()
+            mock_killpg.assert_called_with(99999, signal.SIGTERM)
+            mock_proc.wait.assert_called()
+            mock_stream.close.assert_called()
+
+        # Non-integer or pid <= 1 should fall back to terminate() without calling os.killpg
+        mock_proc_fallback = MagicMock()
+        mock_proc_fallback.poll.return_value = None
+        mock_proc_fallback.pid = 1
+        mock_stream_fallback = MagicMock()
+        managed_fallback = ManagedProcess(
+            name="Cooja",
+            process=mock_proc_fallback,
+            log_path=Path("logs/cooja.log"),
+            log_stream=mock_stream_fallback,
+        )
+        with patch.object(os, "killpg", create=True) as mock_killpg:
+            managed_fallback.stop()
+            mock_killpg.assert_not_called()
+            mock_proc_fallback.terminate.assert_called()
+            mock_stream_fallback.close.assert_called()
 
 
 if __name__ == "__main__":
