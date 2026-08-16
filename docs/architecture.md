@@ -12,7 +12,8 @@ SynthRAN CLI and contracts
   |-- dependency lock and detached checkouts
   |-- 5g_ansible adapter ------------------> Open5GS + srsRAN + srsUE
   |-- Contiki adapter ----------------------> Cooja + tunslip6 + tun0
-  |-- MQTT configuration ------------------> edge and central Mosquitto
+  |-- counted ingress ----------------------> UE-side Mosquitto bridge
+  |-- central MQTT -------------------------> run-owned core broker
   |-- collector and validator -------------> JSONL + Parquet + report
   `-- run-scoped cleanup and evidence
 ```
@@ -25,52 +26,78 @@ Linux is the only supported SynthRAN host platform. Development, repository hook
 
 `5g_ansible` behavior is distributed across its inventory variables, playbooks, roles, templates, Helm integration, and shell entry points. Extracting only a few files would silently inherit dependencies on the rest of the tree and make SynthRAN responsible for reconstructing upstream behavior.
 
-A complete detached checkout preserves those relationships. SynthRAN still executes only the Open5GS + srsRAN + RFSIM path and exposes it through a narrow adapter. Contiki-NG follows the same rule: the upstream checkout remains complete while the SynthRAN sensor application stays out of tree.
+A complete detached checkout preserves those relationships. SynthRAN executes only the Open5GS + srsRAN + RFSIM path through a narrow adapter. Contiki-NG follows the same rule: the upstream checkout remains complete and pinned while the SynthRAN sensor application stays out of tree under `deploy/iot/sensor/`.
 
-This is composition, not a Git merge. `.deps/` is local and ignored. No upstream history or source is added to the SynthRAN repository.
+This is composition, not a Git merge. `.deps/` is local and ignored. No upstream history or copied source tree is added to the SynthRAN repository.
 
 ## Golden-path data flow
 
-1. Ten deterministic Cooja sensors join an RPL/6LoWPAN network.
-2. `tunslip6` exposes the border router through `tun0` at the edge.
-3. Sensors publish MQTT telemetry to the edge broker.
-4. The edge broker rewrites only the current run topic and binds its bridge connection to the srsUE PDU address on `tun_srsue1`.
-5. The srsRAN/Open5GS user plane carries the bridge connection to a core-node broker address that cannot be reached through an alternate Kubernetes Service path.
-6. The collector appends valid events to JSONL and derives Parquet deterministically.
-7. Route lookup, interface counters, packet capture, broker receipt, and the selected UPF route provide path proof.
+1. Ten deterministic Cooja sensors join one RPL/6LoWPAN network.
+2. A Cooja border router exposes its serial link through a deterministic Serial Socket.
+3. Pinned Contiki-NG `tunslip6` creates `tun0` with `fd00::1/64` on the Linux controller.
+4. Sensors publish run-scoped MQTT telemetry toward `fd00::1:1883`.
+5. A counted controller-side TCP ingress forwards the MQTT byte stream through a strict SSH/kubectl port-forward to a temporary Mosquitto sidecar in the run-owned srsUE pod.
+6. That Mosquitto sidecar shares the srsUE network namespace containing `tun_srsue1`. Its bridge binds to the accepted UE PDU address and targets a literal core-node address.
+7. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the accepted bridge connection is used.
+8. The srsRAN/Open5GS user plane transports the bridge traffic to a run-owned host-network Mosquitto broker on the core node.
+9. A central collector subscribes only to the current run topic, validates events, and appends canonical JSONL.
+10. PyArrow derives deterministic Parquet from the accepted JSONL record.
+11. Route proof, `tun_srsue1` counters, broker receipt, message integrity, the accepted UPF route, and post-cleanup network reproof form the default path evidence.
+
+The controller-side TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the accepted PDU address actually exist.
 
 ## Control boundaries
 
-Dependency synchronization, privacy scanning, schema validation, and offline tests are local repository operations. Resource preparation and network deployment are separate explicit operator operations. Experiment execution assumes a valid operator-managed reservation and a path-proven supported network.
+Dependency synchronization, privacy scanning, schema validation, scenario rendering, and offline tests are local repository operations. Resource preparation and base-network deployment are separate explicit operator operations. Phase 3 experiment execution assumes a valid operator-managed reservation and an existing `path-proven` supported network.
 
-The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux `conda-lock` file in a later foundation hardening step.
+The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux `conda-lock` file in a later hardening step.
 
-`run` must never reserve nodes or deploy the network. Cleanup removes only resources carrying the requested run ID and does not tear down the base deployment.
+The Phase 3 run command never reserves nodes, allocates nodes, images nodes, or deploys Open5GS/srsRAN. Its manifest records `reservation_action=none` and `network_deployment_action=none`.
 
-## Golden-path adapter boundary
+## Accepted network boundary
 
-The golden-path inventory contract accepts only Open5GS + srsRAN + RFSIM with monitoring disabled. It hashes the inventory and exposes only redacted facts. Live execution narrows this further to separate core/RAN nodes, one srsUE, the default profile, a ready cluster, and an absent Open5GS namespace.
+The golden-path inventory contract accepts only Open5GS + srsRAN + RFSIM with monitoring disabled. Live execution narrows this further to separate core/RAN nodes, one srsUE, the default profile, and one slice.
 
 The SLICES controller boundary requires the Linux Webshell or a documented SSH session to its management host. A read-only doctor verifies the active `synthran` Conda environment, exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and an existing experiment. SynthRAN never establishes authentication, changes projects, or creates experiments.
 
-The explicit resource-preparation boundary uses reviewed node mappings from the locked upstream tree, rejects conflicting allocations, allocates both nodes together, syntax-checks the isolated patched worktree before POS mutation, and stops before 5G deployment. It deliberately accepts upstream apt and installer transitives for the first native experiment, so it is version-pinned rather than artifact-reproducible. After explicit operator acceptance, `resource_bootstrap.status=ready` enables this guarded Linux path. Future provider identifiers are persisted incrementally in a mode-`0600` ignored file; manifests and logs contain only fingerprints and sanitized output.
+The explicit resource-preparation boundary uses reviewed node mappings from the locked upstream tree, rejects conflicting allocations, allocates both nodes together, syntax-checks the isolated patched worktree before POS mutation, and stops before 5G deployment. Provider identifiers are persisted in a mode-`0600` ignored authority file; public manifests and logs contain only fingerprints and sanitized output.
 
-The read-only live doctor verifies exact operator-supplied reservation and allocation identifiers, strict SSH identity, selected Kubernetes nodes, Multus/OVS/NAD support, exact subscriber-bootstrap packages, remote tools, and eight digest-addressed Linux AMD64 images. READY evidence contains only fingerprints and is bound to the exact lock bytes, inventory, authority, SLICES context, controller versions, complete successful check set, and a 15-minute validity window.
+The deployment gate revalidates fresh live evidence before creating `.synthran/runs/<run-id>/`, creates a detached worktree at the locked `5g_ansible` commit, records the SynthRAN overlay hash, and applies a reviewed boundary patch. The wrapper calls only the supported Open5GS and srsRAN roles and never invokes interactive `deploy.sh`.
 
-The deployment and path-verification gates revalidate the active controller and matching SLICES-context fingerprints. Deployment does this before creating `.synthran/runs/<run-id>/`, then creates a detached worktree at the locked `5g_ansible` commit, records the SynthRAN overlay hash, and applies an exact patch that removes upstream host-package installation, kubelet/CoreDNS restart, mutable tool download, WebUI deployment, and multi-slice expansion. The wrapper calls only the reviewed Open5GS and srsRAN roles. It never invokes interactive `deploy.sh` or repeats upstream node boot/setup plays.
+The wrapper passes immutable transitive Git commits, uses the exact locked Ansible collections, removes mutable image transforms, pins selected application/helper images by digest, validates generated srsUE Helm YAML before deployment, and labels runtime resources with the network run ID. Deployment ends in `deployed-unverified`.
 
-The wrapper passes immutable transitive Git commits, uses only the exact locked `kubernetes.core` collection, removes mutable Kustomize image transforms, pins every selected application/helper image by digest, and labels resources with the run ID from creation. Remote Open5GS and srsRAN checkouts live below a unique run-scoped directory and are refused if already present. Only slice one and `uesim01` enter the runtime graph. Output is sanitized before being written; failure leaves a partial manifest and log.
+A separate read-only verifier discovers exactly one run-owned gNB, srsUE, and slice-one UPF, checks digest-locked running containers, requires gNB cell activation, validates `tun_srsue1` and its PDU address/route, and verifies the UPF `ogstun` route. Only that proof changes the network manifest to `path-proven`. A live operator acceptance run has satisfied this contract and the accepted network is the prerequisite for the integrated IoT workflow.
 
-Deployment ends in `deployed-unverified`. A separate read-only verifier discovers exactly one run-owned gNB, srsUE, and slice-one UPF, checks the primary and helper image digests and running state, requires the gNB cell-activation signal, validates `tun_srsue1` and its PDU address/route, and verifies the UPF `ogstun` route. Only that proof changes the manifest to `path-proven`. SLICES acceptance remains an operator action and has not yet been claimed.
+## Phase 3 mutation boundary
+
+Phase 3 makes only narrow, reversible changes on top of the accepted network:
+
+- create two run-labeled Mosquitto ConfigMaps;
+- create one run-labeled central Mosquitto Deployment on the selected core node;
+- strategic-patch the existing run-owned srsUE Deployment with one digest-pinned Mosquitto sidecar and one run-owned config volume;
+- add one temporary route inside the srsUE pod network namespace;
+- run local Cooja, `tunslip6`, strict SSH port-forward and counted ingress processes.
+
+The sidecar patch does not replace the UE container, its image, credentials, or radio configuration. After the route is installed the edge sidecar is restarted so its bridge reconnects against the proven route.
+
+Cleanup is fail-closed and run-scoped. Local process groups are terminated, the sidecar and volume are removed by exact strategic patch, run-labeled Kubernetes objects are deleted by the exact experiment run label, the srsUE rollout is allowed to recover, and the accepted network verifier is run again. A cleanup or network-reproof failure prevents `iot-to-5g-path-proven` status.
+
+## Data boundary
+
+The telemetry contract is `synthran/telemetry/v1alpha1`. The initial topology accepts only `sensor-01` through `sensor-10`. Every event carries the run ID, sensor ID, positive sequence, sensor time, and deterministic integer measurement.
+
+Valid records are appended to JSONL in canonical JSON form. Malformed messages never enter the accepted dataset. Rejection records contain validation reason and topic but intentionally do not copy the raw payload. Parquet is a deterministic derivative of the JSONL record and is not a second source of truth.
+
+The default acceptance window requires all ten sensor identities plus a contiguous, duplicate-free sequence window for each sensor. Missing sensors, gaps, duplicates, malformed data, missing tunnel growth, broker-delivery failure, cleanup failure, or an invalid accepted-network reproof prevents the final ready state.
 
 ## Privacy boundary
 
 Protection is layered:
 
-1. Ignore rules prevent known generated and credential-bearing paths from entering Git status.
+1. Ignore rules prevent dependency trees, generated experiments and credential-bearing paths from entering normal Git status.
 2. A local pre-push hook scans every outgoing commit before transport.
 3. GitHub push protection can block supported credentials at the server boundary.
 4. CI scans the complete checkout with SynthRAN privacy rules and Gitleaks.
 5. Generated public text is produced through the deterministic redactor; raw sensitive artifacts remain local.
 
-Checks fail closed. They report a rule and location without copying the detected value into terminal or Actions logs. Automatic source rewriting is intentionally avoided because it can corrupt code and conceal a leaked secret in earlier Git history.
+Checks fail closed. They report a rule and location without copying the detected value into terminal or Actions logs. The default integrated acceptance does not require a packet capture: route proof, interface counters, broker receipt and the accepted UPF path provide evidence without introducing raw-capture privacy risk.
