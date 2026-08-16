@@ -4,7 +4,7 @@
 
 SynthRAN connects networked IoT simulation to a real 5G user plane and preserves enough evidence to prove what happened. Its first target is a deterministic stream of Contiki-NG/Cooja sensor measurements transported through an srsUE tunnel, an srsRAN gNB, and an Open5GS core into auditable JSONL and reproducible Parquet datasets.
 
-SynthRAN is the integration and experiment-control layer. It reuses the upstream systems that already implement 5G deployment, radio access, constrained IoT networking, and MQTT instead of copying them into another fork.
+SynthRAN is the integration and experiment-control layer. It reuses upstream systems that already implement 5G deployment, radio access, constrained IoT networking, and MQTT instead of copying them into another fork.
 
 ## Why SynthRAN exists
 
@@ -18,7 +18,7 @@ SynthRAN owns the missing experiment contract:
 - validation of one supported network configuration;
 - explicit orchestration across IoT, edge, RAN, core, broker, and collector boundaries;
 - run-scoped resource ownership and cleanup;
-- route, interface, capture, broker, and message-integrity evidence;
+- route, interface, broker, and message-integrity evidence;
 - append-only raw records and reproducible analytical datasets.
 
 ## Golden path
@@ -30,8 +30,9 @@ flowchart LR
     end
 
     R --> T["tunslip6 / tun0"]
-    T --> E["Edge Mosquitto broker"]
-    E --> U["srsUE / tun_srsue1"]
+    T --> E["Counted edge ingress"]
+    E --> M["Mosquitto bridge in srsUE namespace"]
+    M --> U["tun_srsue1"]
     U --> G["srsRAN gNB"]
     G --> C["Open5GS user plane"]
     C --> B["Central Mosquitto broker"]
@@ -44,7 +45,7 @@ flowchart LR
     O -. validates records .-> D
 ```
 
-The initial experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0; the edge-to-core bridge uses QoS 1 and must bind to the UE PDU address.
+The initial experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the accepted UE PDU address, and is explicitly routed through `tun_srsue1`.
 
 ## What is reused
 
@@ -53,27 +54,28 @@ The initial experiment uses RFSIM rather than physical RF. One srsUE represents 
 | `sopnode/5g_ansible` | SLICES node setup and 5G deployment | Complete detached checkout pinned to a commit; wrapped through a narrow adapter |
 | Open5GS Kubernetes deployment | 5G core and UPF | Transitive repository pinned to a commit passed into Ansible |
 | srsRAN Helm deployment | gNB, srsUE and RFSIM integration | Transitive repository pinned to a commit passed into Ansible |
-| Contiki-NG and Cooja | RPL/6LoWPAN firmware and IoT simulation | Complete pinned checkout with a future out-of-tree SynthRAN application |
+| Contiki-NG and Cooja | RPL/6LoWPAN firmware and IoT simulation | Complete pinned checkout with an out-of-tree SynthRAN sensor application |
 | Eclipse Mosquitto | Edge and central MQTT brokers | Containers pinned by digest with run-scoped configuration |
 
 These repositories are not merged into SynthRAN, copied selectively, or tracked as submodules. Local detached checkouts live under ignored `.deps/` storage. See [dependency reuse and provenance](docs/dependencies.md) and [third-party licenses](THIRD_PARTY.md).
 
 ## Current status
 
-SynthRAN is in early development. The repository foundation is complete, and the golden-path network implementation is offline-tested but not accepted on SLICES. The operator accepted the lean Linux preparation path's experimental bootstrap risk, so guarded live preparation is enabled; its upstream transitives remain version-pinned rather than artifact-locked.
+The repository foundation and the Open5GS + srsRAN + RFSIM network baseline are implemented. A live SLICES acceptance run has reached `path-proven`, including a healthy run-owned gNB, srsUE and UPF, cell activation, `tun_srsue1`, the expected PDU address and UE/UPF routes.
+
+The integrated IoT-to-5G experiment implementation includes the deterministic ten-sensor Cooja scenario, RPL border-router/tun0 ingress, run-scoped UE-side and central Mosquitto brokers, explicit UE-path routing, central collection, JSONL/Parquet derivation, evidence generation, exact-run cleanup, and base-network reproof. It is not accepted until an operator executes the complete live command and the persisted report returns `IOT-TO-5G PATH PROVEN`.
 
 | Capability | Status |
 |---|---|
 | Conda environment, immutable dependency metadata and privacy controls | Implemented and tested |
 | Pinned upstream dependency synchronization | Implemented and tested |
-| Open5GS + srsRAN + RFSIM inventory validation | Implemented and offline-tested |
-| Redacted immutable `5g_ansible` deployment plan | Implemented and offline-tested |
-| SLICES CLI controller, login, project and experiment verification | Implemented and offline-tested; SLICES acceptance pending |
-| Explicit SLICES reservation, shared allocation, node imaging and Kubernetes preparation | Enabled for explicit operator-run Linux execution; SLICES acceptance pending |
-| Lock-, inventory-, authority- and SLICES-context-bound live preflight | Implemented and offline-tested; SLICES acceptance pending |
-| Isolated locked-worktree deployment and srsUE/UPF path proof | Implemented and offline-tested; operator execution pending |
-| Cooja sensors and MQTT bridge | Planned after network-path acceptance |
-| Dataset collection and path-proof report | Planned for later implementation milestones |
+| Open5GS + srsRAN + RFSIM inventory validation | Implemented and tested |
+| Explicit SLICES preparation and evidence-gated network deployment | Implemented and live accepted |
+| srsUE/UPF path proof | Implemented and live accepted (`path-proven`) |
+| Deterministic ten-sensor Cooja/RPL workload | Implemented; live integrated acceptance pending |
+| `tunslip6/tun0` ingress and UE-side Mosquitto bridge | Implemented; live integrated acceptance pending |
+| Central MQTT collection and JSONL/Parquet derivation | Implemented; live integrated acceptance pending |
+| Integrated IoT-to-5G evidence and cleanup reproof | Implemented; live integrated acceptance pending |
 | A1/E2, RIC and generative intelligence | Deliberately deferred |
 
 The supported live controller is the Linux SLICES Webshell, or an SSH session to that documented management host, with the `synthran` Conda environment active. SynthRAN verifies but never changes the SLICES login, selected project, or existing experiment. Resource preparation, network deployment, and experiment execution remain separate operator actions; no experiment command reserves nodes or silently deploys the network.
@@ -102,12 +104,13 @@ python -m synthran doctor \
   --offline --inventory /path/to/hosts.ini
 ```
 
-Generate the non-executing deployment plan:
+Generate the non-executing network deployment plan:
 
 ```sh
 python -m synthran network deploy \
   --dry-run --inventory /path/to/hosts.ini
 ```
+
 On the SLICES controller, verify the active CLI context without changing it:
 
 ```sh
@@ -118,37 +121,52 @@ python -m synthran slices doctor \
 
 The operator performs `slices auth login`, `slices project use PROJECT`, and experiment creation when needed. SynthRAN only performs read-only `show` checks.
 
-On a SLICES controller, preview preparation of the default `sopnode-f2` core and `sopnode-f3` RAN pair:
+Once a network run is `path-proven`, preview the deterministic IoT scenario without changing live state:
 
 ```sh
-python -m synthran network prepare \
-  --dry-run --owner OPERATOR --run-id network-001
+synthran experiment plan \
+  --network-run-id NETWORK_RUN_ID \
+  --run-id EXPERIMENT_RUN_ID
 ```
 
-The non-executing preview reports `Bootstrap: READY` after the recorded operator acceptance. Remove `--dry-run` only from the verified Linux SLICES controller because live preparation may image and reset the selected nodes. Read the exact controller and safety boundary in the [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
+Execute the integrated experiment explicitly:
+
+```sh
+synthran experiment run \
+  --inventory .synthran/preparations/NETWORK_RUN_ID/hosts.ini \
+  --network-run-id NETWORK_RUN_ID \
+  --run-id EXPERIMENT_RUN_ID
+```
+
+Render the persisted experiment evidence without modifying live state:
+
+```sh
+synthran experiment verify --run-id EXPERIMENT_RUN_ID
+```
+
+Read the exact safety and acceptance boundary in the [integrated IoT-to-5G experiment guide](docs/experiment.md) and [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
 
 ## Planned experiment output
 
-Every experiment will produce a run-scoped evidence bundle containing:
+Every accepted integrated experiment produces a run-scoped evidence bundle containing:
 
-- the validated scenario and a redacted manifest;
-- exact dependency commits and container digests;
+- the deterministic scenario and a manifest referencing the accepted network run;
+- exact dependency commits and digest-pinned runtime images through the repository lock;
 - append-only sensor messages in JSONL;
 - Parquet derived reproducibly from the JSONL record;
-- rejected-message and sequence-integrity reports;
-- network metrics and route proof;
-- a UE-tunnel packet capture retained locally by default;
-- broker, Cooja, srsUE, gNB, and deployment logs;
-- a final reproducibility and validation report.
+- rejected-message metadata and sequence-integrity evidence;
+- tunnel and route proof plus broker-delivery evidence;
+- Cooja, `tunslip6`, SSH forwarding and controller logs retained locally;
+- a final `experiment-evidence.json` report.
 
-The target baseline is 10 sensors publishing every 5 seconds for 600 seconds: 1,200 expected measurements after warm-up. At least 99% must arrive, and every loss, duplicate, malformed event, or sequence gap must be reported.
+The first integrated acceptance contract uses ten sensors publishing every 10 seconds and requires at least three contiguous events from every sensor by default. Missing sensors, duplicate sequences, sequence gaps, malformed events, absent tunnel growth, cleanup failure, or a failed base-network reproof prevents acceptance.
 
 ## Repository map
 
 ```text
-synthran/                 CLI, validation, adapters and orchestration
-contracts/                Versioned preparation, readiness, deployment and evidence schemas
-deploy/                   SynthRAN-owned preparation and narrow deployment overlays
+synthran/                 CLI, validation, adapters, collection and orchestration
+contracts/                Versioned preparation, network, telemetry and evidence schemas
+deploy/                   SynthRAN-owned network overlays and out-of-tree IoT source
 tests/                    Offline unit tests and sanitized fixtures
 docs/                     Architecture, development, security and operator guides
 dependencies.lock.yml     Immutable upstream and direct dependency record
@@ -157,26 +175,25 @@ THIRD_PARTY.md            License and provenance record
 AGENTS.md                 Durable repository working contract
 ```
 
-The current contracts cover resource preparation, golden-path readiness, deployment, and network evidence. Scenario and event contracts arrive with their implementation milestones. Upstream source remains outside this tree.
+Upstream source remains outside this tree. Generated experiments, dependency checkouts and live evidence remain below ignored local storage.
 
 ## Roadmap
 
 | Milestone | Outcome |
 |---|---|
 | `v0.0.1` | Repository foundation, dependency lock, privacy controls and CI |
-| `v0.0.2` | SLICES/`5g_ansible` adapter and verified srsUE tunnel |
-| `v0.0.3` | Deterministic Contiki-NG/Cooja MQTT workload |
-| `v0.0.4` | Edge-to-central Mosquitto bridge over the UE path |
-| `v0.0.5` | JSONL/Parquet collector, integrity validation and path proof |
-| `v0.1.0` | Reproducible one-command experiment lifecycle |
+| `v0.0.2` | SLICES/`5g_ansible` adapter and live-accepted srsUE/UPF path |
+| `v0.0.3` | Integrated deterministic Cooja -> MQTT -> 5G -> JSONL/Parquet acceptance |
+| `v0.1.0` | Hardened reproducible experiment lifecycle and release documentation |
 | `v0.2+` | Multi-UE/slice experiments, impairments, synthesis and later RIC adapters |
 
-Formal O-RAN A1/E2 control and generative models are not shortcuts around the baseline. They begin only after the measured data path is reproducible and independently provable.
+Formal O-RAN A1/E2 control and generative models are not shortcuts around the baseline. They remain deferred until the integrated measured data path is independently accepted.
 
 ## Documentation
 
 - [Architecture and responsibility boundaries](docs/architecture.md)
 - [Operator guide and safety gates](docs/operator-guide.md)
+- [Integrated IoT-to-5G experiment](docs/experiment.md)
 - [Development environment and tests](docs/development.md)
 - [Dependency reuse and update policy](docs/dependencies.md)
 - [Security, privacy and artifact handling](docs/security.md)

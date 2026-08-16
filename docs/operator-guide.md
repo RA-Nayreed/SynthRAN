@@ -2,13 +2,14 @@
 
 ## Current capability
 
-SynthRAN provides an offline-tested guarded network lifecycle:
+SynthRAN provides an offline-tested guarded network and experiment lifecycle:
 
 ```text
 resource preparation
 -> read-only live preflight
 -> explicit 5G deployment
 -> read-only gNB/srsUE/tunnel/UPF proof
+-> integrated IoT-to-5G experiment
 ```
 
 Every live step is operator-executed from a verified SLICES shell. The lean preparation implementation can create a reservation, jointly allocate two nodes, image and reset them, build Kubernetes, and install version-pinned remote tools. The operator accepted that upstream bootstrap transitives are not artifact-locked, so the guarded live preparation path is enabled.
@@ -137,10 +138,34 @@ A successful deployment ends as `deployed-unverified`; that is not path proof.
 ```sh
 python -m synthran network verify \
   --inventory "$INVENTORY" \
-  --run-id network-001
+  --run-id network-001 \
+  --timeout 120
 ```
 
 Verification requires exactly one run-owned Ready gNB, srsUE, and selected UPF. It checks locked image IDs, gNB cell activation, `tun_srsue1`, its PDU address and route, and the UPF `ogstun` route. Full success writes ignored network evidence and marks the deployment manifest `path-proven`.
+
+## 7. Run the integrated IoT-to-5G experiment
+
+Once the network manifest is `path-proven` and `network-evidence.json` is ready, preview and execute the deterministic ten-sensor experiment:
+
+```sh
+synthran experiment plan \
+  --network-run-id network-001 \
+  --run-id exp-001
+
+synthran experiment run \
+  --inventory "$INVENTORY" \
+  --network-run-id network-001 \
+  --run-id exp-001
+```
+
+Render persisted acceptance evidence without touching live state:
+
+```sh
+synthran experiment verify --run-id exp-001
+```
+
+See the [integrated experiment guide](experiment.md) for full scenario details, topology, artifacts, and acceptance criteria.
 
 ## Failure and recovery
 
