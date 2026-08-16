@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "synthran/iot-experiment/v1alpha1",
+  "title": "SynthRAN Phase 3 deterministic IoT experiment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "network_run_id", "pdu_address", "ue_interface", "sensor_count", "sensor_period_seconds", "cooja_seed", "serial_socket_port", "topic_root", "rpl_prefix", "edge_broker_address", "data_contract"],
+  "properties": {
+    "schema": {"const": "synthran/iot-experiment/v1alpha1"},
+    "run_id": {"type": "string"},
+    "network_run_id": {"type": "string"},
+    "pdu_address": {"type": "string"},
+    "ue_interface": {"const": "tun_srsue1"},
+    "sensor_count": {"const": 10},
+    "sensor_period_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "cooja_seed": {"type": "integer", "minimum": 0},
+    "serial_socket_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+    "topic_root": {"type": "string"},
+    "rpl_prefix": {"const": "fd00::/64"},
+    "edge_broker_address": {"const": "fd00::1"},
+    "data_contract": {"const": "synthran/telemetry/v1alpha1"}
+  }
+}
