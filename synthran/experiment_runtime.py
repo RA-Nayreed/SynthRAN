@@ -226,6 +226,36 @@ def _validate_contiki_checkout(lock: DependencyLock, dependency_root: Path) -> P
     return checkout
 
 
+def _prepare_cooja_checkout(contiki: Path) -> Path:
+    cooja_directory = contiki / "tools" / "cooja"
+    _checked(
+        (
+            "git",
+            "-C",
+            str(contiki),
+            "submodule",
+            "update",
+            "--init",
+            "--checkout",
+            "--",
+            "tools/cooja",
+        ),
+        label="Cooja submodule preparation",
+        timeout_seconds=600,
+    )
+    expected = _checked(
+        ("git", "-C", str(contiki), "rev-parse", "HEAD:tools/cooja"),
+        label="Cooja expected revision check",
+    ).strip()
+    actual = _checked(
+        ("git", "-C", str(cooja_directory), "rev-parse", "HEAD"),
+        label="Cooja actual revision check",
+    ).strip()
+    if not expected or not actual or expected != actual:
+        raise ExperimentError("Cooja checkout does not match the revision pinned by Contiki-NG")
+    return cooja_directory
+
+
 def _copy_sensor_source(repository_root: Path, run_directory: Path) -> None:
     source = repository_root.resolve() / "deploy" / "iot" / "sensor"
     destination = run_directory / "sensor"
@@ -622,21 +652,9 @@ def execute_experiment(
     failure: str | None = None
 
     try:
-        report("contiki-submodules: synchronizing pinned submodules...")
-        _checked(
-            (
-                "git",
-                "-C",
-                str(contiki),
-                "submodule",
-                "update",
-                "--init",
-                "--recursive",
-            ),
-            label="Contiki-NG submodule synchronization",
-            timeout_seconds=600,
-        )
-        report("contiki-submodules: OK")
+        report("cooja-dependency: preparing pinned checkout...")
+        _prepare_cooja_checkout(contiki)
+        report("cooja-dependency: OK")
 
         report("tunslip6-build: running...")
         _checked(

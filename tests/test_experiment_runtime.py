@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from synthran.experiment import ExperimentError, ExperimentScenario
-from synthran.experiment_runtime import _core_address, _render_manifest
+from synthran.experiment_runtime import (
+    _core_address,
+    _prepare_cooja_checkout,
+    _render_manifest,
+)
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory, load_inventory
 from synthran.resource_runtime import build_preparation_inventory
 
@@ -98,6 +103,87 @@ monitoring_enabled=false
             "^prepared inventory has an invalid core node IP address; expected a literal IPv4 or IPv6 address$",
         ):
             _core_address(inventory)
+
+
+class CoojaCheckoutPreparationTests(unittest.TestCase):
+    def test_prepare_cooja_checkout_scopes_to_tools_cooja_without_recursive(self) -> None:
+        contiki = Path("/opt/contiki-ng")
+        commands: list[tuple[str, ...]] = []
+
+        def fake_checked(command: tuple[str, ...], **kwargs: object) -> str:
+            commands.append(tuple(command))
+            if "HEAD:tools/cooja" in command:
+                return "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n"
+            if command[-2:] == ("rev-parse", "HEAD"):
+                return "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n"
+            return ""
+
+        with patch("synthran.experiment_runtime._checked", side_effect=fake_checked):
+            target = _prepare_cooja_checkout(contiki)
+
+        self.assertEqual(target, contiki / "tools" / "cooja")
+        self.assertEqual(len(commands), 3)
+
+        submodule_cmd = commands[0]
+        self.assertEqual(
+            submodule_cmd,
+            (
+                "git",
+                "-C",
+                str(contiki),
+                "submodule",
+                "update",
+                "--init",
+                "--checkout",
+                "--",
+                "tools/cooja",
+            ),
+        )
+        self.assertIn("tools/cooja", submodule_cmd)
+        for cmd in commands:
+            self.assertNotIn("--recursive", cmd)
+
+        self.assertEqual(
+            commands[1],
+            ("git", "-C", str(contiki), "rev-parse", "HEAD:tools/cooja"),
+        )
+        self.assertEqual(
+            commands[2],
+            ("git", "-C", str(contiki / "tools" / "cooja"), "rev-parse", "HEAD"),
+        )
+
+    def test_prepare_cooja_checkout_accepts_matching_revisions(self) -> None:
+        contiki = Path("/opt/contiki-ng")
+        revision = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+        def fake_checked(command: tuple[str, ...], **kwargs: object) -> str:
+            if "HEAD:tools/cooja" in command:
+                return f"{revision}\n"
+            if command[-2:] == ("rev-parse", "HEAD"):
+                return f"{revision}\n"
+            return ""
+
+        with patch("synthran.experiment_runtime._checked", side_effect=fake_checked):
+            target = _prepare_cooja_checkout(contiki)
+
+        self.assertEqual(target, contiki / "tools" / "cooja")
+
+    def test_prepare_cooja_checkout_rejects_mismatched_revisions(self) -> None:
+        contiki = Path("/opt/contiki-ng")
+
+        def fake_checked(command: tuple[str, ...], **kwargs: object) -> str:
+            if "HEAD:tools/cooja" in command:
+                return "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n"
+            if command[-2:] == ("rev-parse", "HEAD"):
+                return "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2\n"
+            return ""
+
+        with patch("synthran.experiment_runtime._checked", side_effect=fake_checked):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                "^Cooja checkout does not match the revision pinned by Contiki-NG$",
+            ):
+                _prepare_cooja_checkout(contiki)
 
 
 if __name__ == "__main__":
