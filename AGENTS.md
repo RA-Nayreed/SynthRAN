@@ -4,51 +4,43 @@
 
 SynthRAN is a reproducible experiment orchestrator joining emulated IoT workloads, programmable 5G/Open RAN infrastructure, and intelligence-ready datasets.
 
-The initial golden path is:
+The supported golden path is:
 
 ```text
-10 Contiki-NG/Cooja MQTT sensors
+10 deterministic Contiki-NG/Cooja MQTT sensors
 -> RPL/6LoWPAN border router
+-> Cooja Serial Socket
 -> tunslip6/tun0
--> edge Mosquitto broker
--> Mosquitto bridge bound to tun_srsue1
+-> counted controller ingress
+-> Mosquitto bridge in the srsUE network namespace
+-> tun_srsue1
 -> srsRAN gNB
 -> Open5GS UPF
--> central Mosquitto broker
--> JSONL audit data and derived Parquet data
+-> run-owned central Mosquitto broker
+-> canonical JSONL
+-> deterministic Parquet
 ```
 
-The repository owns orchestration, contracts, integration adapters, validation, artifact collection, and reproducibility reporting. It does not reimplement the 5G core, RAN, IoT operating system, simulator, or MQTT broker.
+SynthRAN owns orchestration, contracts, integration adapters, validation, artifact collection, cleanup, and reproducibility reporting. It does not reimplement Open5GS, srsRAN, Contiki-NG, Cooja, or Mosquitto.
 
 ## Current Status and Acceptance
 
-The `v0.0.1` repository foundation is published on `main`. The current golden-path network milestone has a SLICES CLI controller contract, an Open5GS + srsRAN + RFSIM inventory contract, offline and read-only live doctors, redacted immutable planning, evidence-gated isolated-worktree deployment, and gNB/srsUE/tunnel/UPF verification. The code is offline-tested. The operator accepted the lean Linux preparation path's version-pinned experimental bootstrap risk, so guarded live preparation is enabled; the milestone remains unaccepted until the operator supplies path-proven SLICES evidence.
+The repository foundation is accepted and published on `main`.
 
-The repository foundation is accepted only when it has:
+The supported Open5GS + srsRAN + RFSIM network baseline has completed live SLICES acceptance. The accepted run reached `path-proven` only after proving:
 
-- a clear README describing the problem, golden path, supported configuration, and deferred work;
-- an Apache-2.0 license for original SynthRAN code;
-- an immutable dependency lock;
-- third-party license and provenance documentation;
-- a concise architecture description showing ownership boundaries;
-- repository ignore rules for generated, local, credential-bearing, and experimental artifacts;
-- this `AGENTS.md` working contract;
-- a local, untracked `decision.md` decision journal;
-- lightweight validation proving the foundational documents are internally consistent and do not expose secrets.
+- one run-owned digest-locked gNB is Running and Ready;
+- one run-owned digest-locked srsUE is Running and Ready;
+- one run-owned digest-locked slice-one UPF is Running and Ready;
+- the gNB cell activated;
+- `tun_srsue1` is UP;
+- the UE has an address in the expected `12.1.0.0/16` PDU network;
+- the UE route selects `tun_srsue1`;
+- the selected UPF routes the PDU network through `ogstun`.
 
-Do not describe the foundation as accepted merely because directories or placeholder files exist. Do not begin deployment or experiment execution as part of foundation documentation work.
+Deployment success alone remains `deployed-unverified`. Only the separate read-only network verifier may promote a matching manifest to `path-proven`.
 
-The golden-path network is accepted only when:
-
-- current reservation and allocation ownership are verified for every selected node;
-- SSH, Kubernetes, and required-image readiness checks fail closed;
-- deployment uses an isolated detached worktree at the locked `5g_ansible` commit;
-- the locked Open5GS Kubernetes and srsRAN Helm commits are passed to Ansible;
-- network deployment remains an explicit operator command and produces redacted logs;
-- the srsRAN gNB and srsUE are discovered and healthy;
-- `tun_srsue1`, the UE PDU address, slice, and selected UPF route are verified;
-- route/tunnel evidence is recorded without committing private captures or credentials;
-- the operator executes the SLICES acceptance commands and supplies the evidence.
+The active implementation milestone is the integrated deterministic IoT-to-5G experiment. Its repository-side implementation includes the ten-sensor Cooja workload, RPL border-router path, MQTT ingress, UE-side bridge, central broker, collector, JSONL/Parquet pipeline, evidence, exact-run cleanup, and accepted-network reproof. Do not describe this experiment milestone as accepted until an operator-run live experiment persists `IOT-TO-5G PATH PROVEN`.
 
 ## Supported and Deferred Technology
 
@@ -57,14 +49,16 @@ The first supported configuration is deliberately narrow:
 - core: Open5GS;
 - RAN: srsRAN;
 - radio: RFSIM;
-- UE: one srsUE representing an IoT edge gateway;
-- IoT workload: ten deterministic Contiki-NG/Cooja sensors;
-- messaging: Mosquitto at the edge and core, with MQTT topic bridging;
-- data products: append-only JSONL as the audit record and reproducible Parquet derived from JSONL.
+- UE: one srsUE representing the IoT edge gateway;
+- slice: one slice, SST 1, DNN `internet`;
+- IoT: exactly ten deterministic Contiki-NG/Cooja sensors;
+- edge networking: Cooja Serial Socket plus pinned `tunslip6/tun0`;
+- messaging: digest-pinned Mosquitto at the UE edge and core;
+- data: append-only JSONL as the audit record and deterministic Parquet derived from JSONL.
 
-The following are deferred until the golden path is reproducible and path-proven:
+The following remain deferred through the integrated golden-path milestone unless an explicit accepted decision promotes them:
 
-- multiple UEs and slices;
+- multiple UEs or slices;
 - physical radios;
 - impairment campaigns;
 - formal O-RAN A1 or E2 control;
@@ -73,204 +67,282 @@ The following are deferred until the golden path is reproducible and path-proven
 - synthetic-telemetry generation;
 - automated RAN-policy synthesis.
 
-Do not introduce a deferred technology into the critical path without an explicit accepted decision recorded in `decision.md` and promoted here.
+Path-proven network acceptance does not automatically promote any deferred feature.
 
-## Dependency Reuse and Pinning
+## Immutable Dependency Boundary
 
-SynthRAN composes existing projects through adapters and overlays.
+SynthRAN composes existing projects through pinned checkouts, adapters, and overlays.
 
-- Use `sopnode/5g_ansible` as an external, complete, pinned checkout. Do not copy or vendor it.
-- Use Contiki-NG as an external, complete, pinned checkout and keep the SynthRAN application out of tree. Do not copy or vendor Contiki-NG.
-- Treat Open5GS Kubernetes and srsRAN Helm repositories used by `5g_ansible` as transitive dependencies and resolve every mutable branch reference to an immutable commit.
-- Pin container images by digest, not only by tag.
-- Linux is the only supported SynthRAN host platform for development, hooks, CI, and live operation.
-- Use the named Conda environment `synthran` everywhere. `environment.yml` is the single complete Linux definition and includes deployment tooling. `pyproject.toml` is package/build metadata only.
-- Use only `conda-forge` followed by `nodefaults`. Pin every direct Conda package to one exact version in `environment.yml` and the project lock.
-- Interactive instructions must explicitly activate `synthran` before invoking `python` or environment tools directly. Repository hooks and CI may use `conda run` because they do not inherit an interactive shell. Never fall back to a global Python or `venv`.
-- Treat the current Conda dependency record as direct-version locking, not a complete platform artifact lock. Generate and validate platform-specific `conda-lock` files before claiming artifact-level environment reproducibility.
-- Keep downloaded dependencies in ignored local storage such as `.deps/`.
-- Never rely on a mutable branch at experiment runtime.
-- Prefer configuration, overlays, patches, and stable upstream interfaces. Fork only when a maintained upstream modification is unavoidable.
-- Vendor source only after confirming its license permits redistribution and recording why pinned external reuse is no longer practical.
-- Preserve copyright, license, provenance, and modification notices for copied material.
-- Do not publish derivative `5g_ansible` source until its licensing has been clarified; its reviewed pinned tree had no top-level license.
+- Reuse `sopnode/5g_ansible` as a complete external pinned checkout. Do not vendor it.
+- Reuse Contiki-NG as a complete external pinned checkout. Keep SynthRAN sensor source out of tree under `deploy/iot/`.
+- Treat Open5GS Kubernetes and srsRAN Helm repositories as transitive dependencies and resolve mutable upstream refs to immutable commits.
+- Pin selected runtime container images by digest, not only by tag.
+- Keep dependency trees below ignored `.deps/` storage.
+- Never merge an upstream dependency branch into SynthRAN merely to consume it.
+- Prefer configuration, exact overlays, reviewed patches, and stable upstream interfaces. Fork only when a maintained upstream change is unavoidable.
+- Preserve third-party license and provenance records.
+- Do not publish derivative `5g_ansible` source until its licensing is clarified.
 
-Update dependencies one at a time. A dependency update is accepted only after its version, license, compatibility impact, and golden-path validation are recorded.
+The accepted network runtime/configuration contract must not regress:
 
-`dependencies.lock.yml` intentionally uses the JSON-compatible subset of YAML so the bootstrap command can validate it without a YAML parser. `synthran deps sync` creates detached checkouts under `.deps/`; it never merges an upstream branch into SynthRAN. Direct dependencies are synchronized by default and `--all` is required to include transitive repositories for local inspection.
+- the Open5GS runtime must remain compatible with the locked v2.7-style configuration schema; do not restore the incompatible v2.6.4-aio runtime;
+- remote srsRAN Ansible tasks inherit `/opt/synthran-venv/bin/python`; never leak `ansible_playbook_python` from the controller into a remote task;
+- Helm image-pin rewrites preserve the source indentation rather than hardcoding indentation;
+- ownership helpers render valid Helm/YAML and must not double-quote a value already passed through Helm `quote`;
+- generated srsUE charts must pass `helm lint` and `helm template` before `helm upgrade --install`.
 
-The golden-path adapter uses direct `ansible-galaxy` and `ansible-playbook` calls against isolated locked worktrees. Do not wrap interactive `5g_ansible/deploy.sh`; it contains reservation prompts and bypass behavior outside SynthRAN's control boundary. The first native preparation path is deliberately version-pinned rather than artifact-reproducible: it pins `5g_ansible`, `kubernetes.core`, `community.general`, `ansible.posix`, direct remote Python packages, Helm, and yq, while accepting upstream apt, chart, manifest, and installer transitives. Do not install the legacy `community.kubernetes` collection unless a locked graph contains an actual call to it. The operator accepted the remaining experimental risk in `decision.md`, and `resource_bootstrap.status=ready` enables only the guarded Linux preparation path. Syntax checks must pass before POS mutation. The separate deployment wrapper remains gated by fresh matching live-doctor evidence and pins the selected runtime inputs more narrowly.
+Update dependencies one at a time and record version, license, compatibility impact, and golden-path validation.
 
-The Linux SLICES Webshell, or an SSH session to its documented management host, is the only supported live controller. Every live prepare, doctor, deploy, and verify operation requires an active `synthran` Conda environment, exact locked Python and Ansible versions, POS 2.5.35, a valid SLICES login, an explicitly selected project, and an existing experiment. Standalone read-only controller probes use a 60-second per-command timeout. SynthRAN must never run `slices auth login`, change the active project, or create the experiment; those are operator actions. Public evidence stores only project and experiment fingerprints plus controller versions and the exact dependency-lock digest.
+## Environment and Controller Contract
 
-The preparation boundary patch must apply cleanly to the locked upstream commit before Ansible runs. It removes upstream per-node allocation changes and prevents preparation from entering Open5GS or srsRAN roles. Remote dependency checkouts must be unique and run-scoped. Live preflight, not deployment, owns tool readiness; deployment must fail rather than install a missing tool. The runtime graph remains exactly one slice and one srsUE.
+Linux is the only supported SynthRAN host platform for repository hooks, CI, live network control, and live experiment execution.
+
+Use the named Conda environment `synthran`. `environment.yml` is the complete Linux environment definition; `pyproject.toml` is package/build metadata. Interactive instructions activate the environment once and invoke its tools directly. Hooks and CI may use `conda run` because they do not inherit an interactive shell. Never fall back to an arbitrary host Python or `venv`.
+
+Use only `conda-forge` followed by `nodefaults`. Direct package versions must match `dependencies.lock.yml`. The current lock is direct-version locking, not a complete platform artifact lock; do not claim artifact-level environment reproducibility until platform-specific artifact locks exist.
+
+The Linux SLICES Webshell, or a documented SSH session to its management host, is the only supported live controller. Live network operations require:
+
+- active `synthran` environment;
+- exact locked Python and Ansible versions;
+- POS 2.5.35;
+- valid SLICES authentication;
+- explicitly selected project;
+- existing experiment.
+
+SynthRAN must never perform `slices auth login`, change the active project, or create the SLICES experiment. Those are operator actions.
+
+A SLICES controller-probe timeout is not evidence that the 5G path failed. Keep controller/context failure distinct from radio/core path proof. The accepted live network verification required additional controller timeout headroom; operator guidance may use `--timeout 120` for acceptance verification until controller and path-proof timeouts are independently modeled.
+
+## Network Lifecycle and Safety
+
+Network resource preparation, deployment, verification, experiment execution, and network teardown are separate operations.
+
+- Resource preparation is explicit and may reserve, jointly allocate, image, reset, and configure only the reviewed node pair. It stops before 5G deployment.
+- Network deployment is explicit and requires fresh matching live-preflight evidence.
+- Deployment uses an isolated detached worktree at the locked `5g_ansible` commit and passes immutable Open5GS/srsRAN commits to the wrapper.
+- Live preflight owns readiness. Deployment must fail instead of installing an unproven missing runtime dependency.
+- The supported runtime graph is exactly one slice and one srsUE.
+- Network verification is read-only with respect to provider authority and does not redeploy the network.
+- A failed or orphaned preparation/deployment run ID is immutable evidence and is never reused.
+- A verification attempt that aborts before writing network evidence does not invalidate an already successful `deployed-unverified` run.
+
+Provider ownership is fail-closed. Unknown owner, foreign owner, expired authority, partial allocation, split allocation, missing reservation, or provider schema drift prevents mutation.
+
+## Integrated IoT Experiment Boundary
+
+The integrated experiment consumes an existing `path-proven` network. It must never reserve nodes, allocate nodes, image nodes, or deploy the base network. Its run manifest records:
+
+```text
+reservation_action = none
+network_deployment_action = none
+```
+
+The deterministic initial scenario is:
+
+- exactly ten sensor motes, IDs 1 through 10;
+- one non-sensor RPL border-router mote;
+- fixed Cooja seed and topology;
+- Cooja Serial Socket on the run contract port;
+- `tunslip6` creates `tun0` with `fd00::1/64`;
+- sensors publish run-scoped MQTT telemetry to the `fd00::1` edge address;
+- a counted controller TCP adapter forwards the raw MQTT stream to the run-owned UE-side broker;
+- the real edge Mosquitto bridge runs as a temporary sidecar in the run-owned srsUE pod so it shares the network namespace containing `tun_srsue1`;
+- the bridge binds to the accepted UE PDU address;
+- a run-specific central-broker route is explicitly selected through `tun_srsue1`;
+- a digest-pinned run-owned central Mosquitto broker runs on the selected core node;
+- the collector subscribes only to the current run topic.
+
+Do not move the cellular bridge to the controller: `tun_srsue1` and its PDU address exist in the srsUE pod network namespace, so a controller-local Mosquitto process cannot truthfully prove UE-interface binding.
+
+The experiment is accepted only when all required evidence passes, including:
+
+- deterministic Cooja/Serial Socket startup;
+- `tunslip6/tun0` readiness;
+- all ten sensor identities crossing the counted edge ingress;
+- bridge configuration bound to the accepted UE PDU address;
+- `tun_srsue1` traffic-counter growth during telemetry delivery;
+- accepted slice-one UPF path still valid;
+- all ten streams received centrally;
+- required contiguous sequence windows with no duplicate or missing sequence numbers;
+- valid JSONL;
+- deterministic Parquet;
+- exact-run cleanup;
+- successful accepted-network reproof after cleanup.
+
+Running pods or brokers alone are not experiment acceptance.
+
+## Cleanup and Ownership
+
+Every runtime resource must carry the experiment run ID wherever the target supports labels or equivalent metadata.
+
+Cleanup must:
+
+- target only resources proven to belong to the requested run;
+- use exact resource labels or exact known resource names, never broad guessed deletion;
+- terminate run-owned local process groups;
+- remove the temporary UE-side broker sidecar and config volume without replacing the base UE container;
+- remove run-labeled central broker/config objects;
+- wait for the srsUE Deployment to recover;
+- re-run accepted-network verification;
+- fail closed if the original base deployment cannot be reproven.
+
+Experiment cleanup does not tear down the base 5G deployment. Network teardown remains a separate explicit operator action.
+
+A failed experiment must retain a run-scoped manifest and available local logs. Never reuse the failed experiment run ID.
+
+## Data Contract
+
+`JSONL` is the append-only audit record. Parquet is derived and must be reproducible from accepted JSONL.
+
+The initial telemetry schema accepts only `sensor-01` through `sensor-10`. Each event contains:
+
+- schema identifier;
+- experiment run ID;
+- sensor ID;
+- positive sequence number;
+- sensor time;
+- deterministic integer measurement.
+
+Malformed messages never enter valid JSONL/Parquet. Rejected-event artifacts may record validation reason and topic but must not copy raw untrusted payloads by default.
+
+Sequence acceptance must detect missing sensors, gaps, and duplicates rather than relying only on aggregate counts.
 
 ## Repository Boundaries
 
-Use these top-level ownership boundaries when implementation begins:
+Use these top-level ownership boundaries:
 
-- `contracts/`: versioned scenario, event, metric, and manifest schemas;
-- `synthran/`: CLI, orchestration, adapters, collection, validation, and reporting;
-- `deploy/`: SynthRAN-owned Ansible roles, Kubernetes overlays, container definitions, and run-scoped configuration;
-- `docs/`: architecture and operator documentation;
-- `tests/`: offline tests and test fixtures that contain no real credentials or captured private traffic.
+- `contracts/`: versioned scenario, telemetry, readiness, deployment, and evidence schemas;
+- `synthran/`: CLI, orchestration, adapters, collection, validation, evidence, and reporting;
+- `deploy/`: SynthRAN-owned Ansible overlays plus out-of-tree IoT source/configuration;
+- `docs/`: architecture, operator, dependency, development, and security documentation;
+- `tests/`: offline tests and sanitized fixtures containing no real credentials or private captures.
 
-Do not commit dependency checkouts, generated inventories, run artifacts, firmware build products, packet captures, kubeconfigs, or copied upstream repositories.
+Do not commit dependency checkouts, generated inventories, run artifacts, generated firmware products, packet captures, kubeconfigs, private authority files, or copied upstream repositories.
 
-Keep root `README.md` as the public project landing page: purpose, research problem, architecture, ownership, current status, concise quick start, outputs, repository map, and roadmap. Put detailed setup, security, dependency, and operator procedures in focused files under `docs/`.
+Keep root `README.md` as the public landing page. Detailed procedures live under `docs/`.
 
-Generated run data belongs under a run-scoped ignored location. Every created runtime resource must carry the run ID wherever the target system supports labels or equivalent metadata.
-
-## User and Codex Responsibilities
-
-The user is the experiment operator. The user performs:
-
-- repository creation and external account administration;
-- explicit testbed resource preparation, including reservations and allocations;
-- Conda installation and the first environment solve on the operator machine;
-- compilation when it requires the real toolchain or testbed;
-- network deployment;
-- experiment execution;
-- destructive or infrastructure-wide teardown.
-
-Codex may, when requested:
-
-- author and edit repository code, schemas, configuration, tests, and documentation;
-- perform read-only repository and dependency inspection;
-- run safe offline validation that does not reserve nodes, deploy infrastructure, or conduct the experiment;
-- explain each command the user should run and interpret the output the user provides.
-
-Codex must not run live resource preparation or the SynthRAN experiment on the user's behalf. It must not reserve SLICES nodes, ignore reservation conflicts, silently deploy the 5G network, or make external infrastructure changes unless the user explicitly changes this rule.
-
-## Lifecycle and Safety Rules
-
-- Network deployment is always a separate, explicit operation.
-- Resource preparation is an explicit operator command that may reserve, jointly allocate, image, reset, and configure only the selected reviewed node pair. It must stop before 5G deployment.
-- An experiment run never reserves nodes and never silently deploys the network.
-- Preflight must fail when the required reservation, allocation, SSH access, Kubernetes state, dependency, or image is unavailable.
-- Reservation failure is terminal for preflight and can never be ignored automatically.
-- Every modifying command must support a dry-run mode where technically meaningful.
-- Cleanup targets only resources proven to belong to the requested run ID.
-- Experiment cleanup does not tear down the base 5G deployment unless the operator requests network teardown separately.
-- Cleanup must be idempotent and verify that the original base deployment shape remains operational.
-- A failed run must still produce a partial manifest, available logs, and a failure report.
-- Never use broad deletion targets, unresolved globs, or guessed resource names for cleanup.
-
-## Data, Credentials, and Artifacts
+## Credentials, Privacy, and Public Artifacts
 
 Never commit:
 
-- generated inventories;
 - IMSIs, authentication keys, OPC values, or subscriber credentials;
-- SLICES credentials or reservation tokens;
+- SLICES tokens or credentials;
 - kubeconfigs;
 - private keys;
-- `.env` files containing secrets;
+- secret-bearing `.env` files;
 - unsanitized packet captures;
-- raw testbed logs containing credentials or private addresses that have not been approved for publication;
-- dependency worktrees or generated run directories.
+- private authority files;
+- unsanitized testbed logs;
+- dependency worktrees;
+- generated run directories.
 
-Manifests and reports must redact secrets while retaining reproducibility facts such as dependency hashes, image digests, scenario hashes, node roles, non-secret route evidence, timestamps, and validation status.
+Public manifests retain reproducibility facts without credentials: dependency hashes, image digests, scenario hashes, node roles, non-secret route facts, timestamps, and validation status.
 
-JSONL is the append-only audit record. Parquet is derived output and must be reproducible from JSONL. Malformed events go to a rejected-events artifact and never enter the valid Parquet dataset.
+Privacy protection is layered:
 
-## Privacy Guardrails
+1. ignore rules exclude generated and credential-bearing paths from normal Git status;
+2. the local pre-push hook scans outgoing commits before transport;
+3. GitHub push protection remains an independent server-side control;
+4. CI runs the SynthRAN source scanner and Gitleaks over full history;
+5. public derivatives are sanitized separately rather than rewriting source in place.
 
-Privacy protection is layered because GitHub Actions runs after content reaches GitHub:
+Never bypass a true secret finding merely to pass CI. Rotate exposed credentials and remove them from every affected commit.
 
-1. tracked ignore rules keep known local, generated, credential-bearing, and capture paths out of normal Git status;
-2. the tracked `.githooks/pre-push` hook scans every outgoing commit before transport after the operator activates it;
-3. GitHub push protection remains enabled as an independent server-side control;
-4. the privacy workflow scans source context and runs Gitleaks with full history;
-5. generated public text is produced as a separate sanitized derivative using deterministic placeholders.
+The default integrated acceptance does not require a packet capture. Route proof, interface counters, broker receipt, message integrity, and the accepted UPF path are preferred because they avoid unnecessary raw-capture privacy risk.
 
-Source scanning fails instead of rewriting files. It reports only the rule and location and must not print the detected value into a terminal or CI log. Fix a true finding in every affected commit and rotate an exposed credential; do not add a blanket allowlist or bypass merely to make CI pass.
+## User and Agent Responsibilities
 
-The text redactor may sanitize local user homes, usernames, network-share prefixes, and private IP addresses. It must never rewrite its input in place. Do not attempt to text-redact packet captures, kubeconfigs, private keys, databases, or other binary/structured credential stores; keep them local and create purpose-built sanitized derivatives.
+The user is the live experiment operator. The user performs:
 
-The pre-push hook must execute the privacy scanner with `conda run --no-capture-output -n synthran`. On Linux it may locate Conda through `SYNTHRAN_CONDA_EXE`, `CONDA_EXE`, or `PATH`, and may accept `SYNTHRAN_CONDA_ENV` as an explicit environment override. Never store a username or machine-specific absolute installation path in the hook. It must never fall back to an arbitrary host Python and must fail closed when Conda or the selected environment is unavailable.
+- external account administration;
+- explicit testbed reservations and allocations;
+- live resource preparation;
+- network deployment;
+- live experiment execution;
+- destructive or infrastructure-wide teardown.
 
-All third-party GitHub Actions must be pinned to full commit SHAs and run with the minimum token permissions. Privacy workflows use read-only repository contents and do not upload finding reports that could reproduce sensitive values.
+An agent may, when requested:
+
+- author/edit repository code, contracts, configuration, tests, and documentation;
+- inspect repository/dependency state read-only;
+- run safe offline validation;
+- prepare non-mutating plans;
+- explain operator commands and analyze returned evidence.
+
+An agent must not reserve SLICES resources, silently deploy the network, run the live experiment, ignore reservation conflicts, or make external infrastructure changes unless the user explicitly changes this rule.
 
 ## Decision Journal Procedure
 
 `decision.md` is a local, intentionally untracked engineering journal. It is excluded through `.git/info/exclude`, not the tracked `.gitignore`.
 
-At the start of every task:
+At the start of substantial work:
 
-1. Read this file.
-2. Read the relevant entries in `decision.md`.
-3. Inspect Git status and the current project milestone.
-4. Record any material new decision before implementing it.
+1. read `AGENTS.md`;
+2. read relevant local `decision.md` entries;
+3. inspect Git status and the active milestone;
+4. record material architecture/dependency/interface/security/workflow decisions locally.
 
-Record every nontrivial choice affecting architecture, dependencies, interfaces, repository structure, testing, security, workflow, scope, deployment, or data handling. Each entry must state context, options, the chosen decision, concise rationale, evidence or assumptions, consequences, affected components, and follow-up.
+At the end:
 
-Do not place credentials, subscriber data, kubeconfigs, packet contents, or other secrets in the journal. The journal documents explicit engineering rationale; it is not a transcript of hidden internal reasoning.
+1. complete affected decision entries;
+2. promote durable rules into `AGENTS.md`;
+3. confirm `decision.md` remains untracked;
+4. report durable contract changes.
 
-At the end of every task:
-
-1. Complete or update the affected decision entries.
-2. Promote durable conclusions and operational constraints into this file.
-3. Confirm `decision.md` remains untracked.
-4. Report which durable rules changed.
-
-Temporary observations remain in `decision.md`. Update `AGENTS.md` only when a durable rule, command, interface, milestone, ownership boundary, safety constraint, or repository invariant changes.
+The journal contains engineering rationale, not hidden reasoning, credentials, subscriber data, packet contents, or kubeconfigs.
 
 ## Repository Commands
 
-Run commands from the repository root. Create or reconcile the environment, activate it once, confirm its name, and then invoke its tools directly.
+Run commands from the repository root after activating `synthran`.
 
-- `conda env create --file environment.yml`: create the complete Linux `synthran` environment for a new clone.
-- `conda env update --file environment.yml --prune`: reconcile the Linux environment after a definition change.
-- `conda activate synthran`: activate the required environment in the current shell.
-- `python -c "import os; assert os.environ.get('CONDA_DEFAULT_ENV') == 'synthran'"`: fail if the wrong environment is active.
-- `python -m synthran deps sync --dry-run`: validate and preview direct dependency synchronization.
-- `python -m synthran deps sync`: create or update clean detached direct-dependency checkouts under `.deps/`.
-- `python -m synthran deps sync --all`: also synchronize locked transitive repositories for inspection.
-- `python -m synthran privacy scan --worktree`: scan tracked and unignored source without printing detected values.
-- `python -m synthran privacy scan --history`: apply SynthRAN privacy rules to all commits.
-- `python -m synthran privacy redact INPUT OUTPUT --dry-run`: preview creation of a sanitized text derivative.
-- `python -m synthran hooks install --dry-run`: preview activation of `.githooks` for the current clone.
-- `python -m synthran doctor --offline --inventory PATH`: validate the static golden-path inventory, dependency lock, and pinned checkout without contacting SLICES.
-- `python -m synthran slices doctor --slices-project PROJECT --slices-experiment EXPERIMENT`: verify the supported SLICES shell, login, project, experiment, and exact controller versions without changing provider state.
-- `python -m synthran network prepare --dry-run --owner OWNER --run-id RUN_ID`: preview reservation, shared allocation, imaging, Kubernetes setup, and version-pinned tool installation without contacting POS; report the current bootstrap gate.
-- `python -m synthran network prepare --owner OWNER --slices-project PROJECT --slices-experiment EXPERIMENT --run-id RUN_ID`: operator-only guarded live preparation; it may reserve, jointly allocate, image, reset, and configure only the reviewed node pair and must stop before 5G deployment.
-- `python -m synthran doctor --inventory PATH --slices-project PROJECT --slices-experiment EXPERIMENT --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --evidence-out PATH`: run read-only live readiness checks and write sanitized evidence.
-- `python -m synthran network deploy --dry-run --inventory PATH`: emit the redacted immutable deployment plan without reserving, booting, or deploying.
-- `python -m synthran network deploy --inventory PATH --owner OWNER --reservation-id RESERVATION --allocation-id ALLOCATION --preflight-evidence PATH --run-id RUN_ID`: explicitly deploy the network from fresh matching evidence; operator use only.
-- `python -m synthran network verify --inventory PATH --run-id RUN_ID`: read-only verification of run-owned gNB, srsUE, `tun_srsue1`, PDU address, and UPF route evidence.
-- `python -m unittest discover -s tests -v`: run the offline unit test suite.
+- `conda env create --file environment.yml`: create the complete Linux environment.
+- `conda env update --file environment.yml --prune`: reconcile an existing environment.
+- `conda activate synthran`: activate the supported interactive environment.
+- `python -m synthran deps sync --dry-run`: preview direct dependency synchronization.
+- `python -m synthran deps sync`: synchronize clean detached direct dependencies.
+- `python -m synthran deps sync --all`: also synchronize locked transitive dependencies for inspection.
+- `python -m synthran privacy scan --worktree`: scan tracked/unignored source.
+- `python -m synthran privacy scan --history`: scan complete Git history with SynthRAN rules.
+- `python -m synthran hooks install --dry-run`: preview pre-push hook activation.
+- `python -m synthran doctor --offline --inventory PATH`: validate static network inputs.
+- `python -m synthran slices doctor --slices-project PROJECT --slices-experiment EXPERIMENT`: read-only controller/context verification.
+- `python -m synthran network prepare --dry-run --owner OWNER --run-id RUN_ID`: preview resource preparation.
+- `python -m synthran network prepare ...`: operator-only guarded live preparation.
+- `python -m synthran doctor --inventory PATH ... --evidence-out PATH`: live read-only preflight.
+- `python -m synthran network deploy --dry-run --inventory PATH`: non-executing network deployment plan.
+- `python -m synthran network deploy ... --run-id RUN_ID`: operator-only explicit network deployment.
+- `python -m synthran network verify --inventory PATH --run-id RUN_ID --timeout 120`: read-only accepted-network proof.
+- `synthran-phase3 plan --network-run-id NETWORK_RUN_ID --run-id EXPERIMENT_RUN_ID`: non-mutating integrated scenario plan.
+- `synthran-phase3 run --inventory PATH --network-run-id NETWORK_RUN_ID --run-id EXPERIMENT_RUN_ID`: operator-only integrated experiment.
+- `synthran-phase3 verify --run-id EXPERIMENT_RUN_ID`: read-only persisted experiment-evidence rendering.
+- `python -m unittest discover -s tests -v`: offline unit suite.
 
-Dependency synchronization, resource preparation, hook installation, and redaction are modifying commands and must retain functional `--dry-run` behavior.
-
-Live `network prepare` is enabled only while the reviewed bootstrap lock is `ready`. It must validate the pinned checkout and Ansible syntax before POS mutation, reject foreign/partial/split allocations, persist private recovery authority immediately as provider IDs become known, create or verify one current reservation, allocate both selected nodes together, use run-scoped trust-on-first-use for newly imaged SSH hosts and reject later key changes, preserve partial sanitized artifacts on failure, and never invoke a 5G deployment role. Native run evidence must record observed versions because upstream bootstrap transitives are not artifact-locked. Live `doctor` must remain read-only and require SLICES project, experiment, owner, reservation, allocation, and evidence output. Evidence must match the exact dependency-lock digest, complete successful check set, inventory, authority, controller versions, and SLICES context. Live `network deploy` and `network verify` must revalidate the supported controller and matching context before stateful or proof work. Deployment supports only separate core/RAN nodes, `profile=default`, one srsUE, monitoring disabled, and an empty ready cluster. `network verify` may mark a matching `deployed-unverified` manifest `path-proven` only after every proof passes.
-
-The verified POS 2.5.35 reservation interface is `pos calendar list --filter owner=OWNER --json`. It returns an array with numeric `id`, `owner`, `nodes`, `start_date`, and `end_date`; SynthRAN must select exactly one requested ID and verify ownership, node coverage, and the current UTC window. Reservation creation uses `pos calendar create -d MINUTES -s now CORE RAN` and requires one numeric ID. Preparation inspects `pos allocations list --json`, allocates both nodes in one command, and verifies each with `pos allocations show NODE` using the returned string `id` and `owner`. Provider command or schema drift is terminal and must be adapted against operator-supplied value-free structural evidence.
+Modifying operations retain dry-run behavior where technically meaningful. The integrated experiment has a separate `plan` command rather than pretending its live `run` is a dry-run.
 
 ## Git Workflow
 
-- Do not create a branch for each milestone, task, or document section.
-- Small, safe, coherent changes may be committed directly to `main` when the user chooses to publish them.
-- Use one feature branch only for genuinely substantial or risky work that benefits from isolated review.
-- Keep commits coherent and explain their intent.
-- Never commit or push automatically merely because files were edited.
-- Preserve unrelated user changes and never reset or discard them without explicit approval.
-- Before publishing, inspect the complete diff, verify the intended file set, and confirm no secret or generated artifact is included.
+- Do not create a branch for every small task.
+- Use a feature branch for substantial/risky integrated work that benefits from review.
+- Keep commits coherent and explain intent.
+- Never discard unrelated user changes.
+- Do not merge substantial live-orchestration changes merely because offline CI is green; require the appropriate operator acceptance evidence.
+- Before publishing, inspect the complete diff and confirm no generated or secret-bearing artifacts are included.
 
 ## Validation Required Before Completion
 
-Use validation proportional to the change. Before declaring repository work complete:
+Before declaring repository work complete:
 
-- inspect Git status and the full relevant diff;
-- run applicable schema, unit, lint, formatting, build, or offline integration checks;
-- confirm pinned dependencies use immutable identifiers;
-- confirm `environment.yml` matches the Linux platform, direct package versions, channels, and environment name in `dependencies.lock.yml`;
-- run validation inside `synthran` when Conda is available and report explicitly when the environment could not be solved or exercised;
-- confirm generated and secret-bearing paths are ignored;
-- confirm failure paths are tested where behavior is safety-critical;
-- confirm documentation matches implemented interfaces and commands;
-- confirm `decision.md` is ignored locally and not tracked;
-- report tests not run and the reason;
-- do not claim deployment or experiment success without operator-provided evidence from the real environment.
+- inspect the intended diff/file set;
+- run applicable schemas, unit, syntax, build, lint, and offline integration checks;
+- run privacy scanning;
+- confirm immutable dependency identifiers;
+- confirm generated and credential-bearing paths remain ignored;
+- test safety-critical failure paths;
+- ensure documentation matches implemented interfaces;
+- confirm `decision.md` remains local/untracked;
+- explicitly report checks not run and why.
 
-For the final SLICES acceptance run, the user executes the commands and supplies results. Codex may guide the run and analyze evidence but does not operate it.
+Before declaring the accepted network complete, require operator-provided `path-proven` evidence.
+
+Before declaring the integrated IoT-to-5G experiment complete, require operator-provided live evidence ending in `IOT-TO-5G PATH PROVEN`. Offline CI, Cooja compilation alone, or Running Kubernetes resources are insufficient.
