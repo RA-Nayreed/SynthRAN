@@ -130,7 +130,7 @@ class ResearchRuntimeHelperTests(unittest.TestCase):
             patch("synthran.research_runtime._exec_container", return_value=ok) as edge,
         ):
             _probe_research_tools(object(), "ue-pod", require_load_tools=True)
-        self.assertIn("ping", ue.call_args.args)
+        self.assertIn("command -v ping", ue.call_args.args[-1])
         self.assertIn("mosquitto_pub", edge.call_args.args[-1])
 
     def test_scenario_parameters_apply_seed_and_period_then_restore_builder(self) -> None:
