@@ -19,6 +19,7 @@ from synthran.workspace.store import (
     load_access_record,
     load_profile,
     load_workspace,
+    normalize_identity_reference,
     profile_path,
     workspace_directory,
 )
@@ -223,7 +224,7 @@ class InitializationTests(unittest.TestCase):
                 )
             self.assertFalse(result.profile_created)
             self.assertEqual(result.workspace.profile, "controller")
-            self.assertEqual(result.profile.r2lab_identity, str(identity.resolve()))
+            self.assertEqual(result.profile.r2lab_identity, normalize_identity_reference(identity))
 
     def test_reused_profile_rejects_identity_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

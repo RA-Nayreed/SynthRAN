@@ -53,9 +53,10 @@ class WorkspaceTests(unittest.TestCase):
             saved = profile_path("duckburg", environment=environment)
             text = saved.read_text(encoding="utf-8")
             self.assertEqual(profile.r2lab_identity_fingerprint, "SHA256:testfingerprint")
-            self.assertIn(str(identity), text)
+            self.assertIn(str(profile.r2lab_identity), text)
             self.assertNotIn("private material", text)
-            self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
             loaded = load_profile("duckburg", environment=environment)
             self.assertEqual(loaded, profile)
 

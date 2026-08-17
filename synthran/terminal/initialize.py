@@ -28,10 +28,13 @@ def initialization_root(start: Path | None = None) -> Path:
     """Prefer the nearest existing SynthRAN/git project root for first-use state."""
 
     current = (start or Path.cwd()).expanduser().resolve()
+    home = Path.home().resolve()
     for candidate in (current, *current.parents):
         if workspace_file(candidate).is_file():
             return candidate
-        if workspace_directory(candidate).exists() or (candidate / ".git").exists():
+        if candidate != home and workspace_directory(candidate).exists():
+            return candidate
+        if (candidate / ".git").exists():
             return candidate
     return current
 
