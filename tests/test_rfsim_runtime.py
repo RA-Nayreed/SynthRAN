@@ -11,9 +11,11 @@ from synthran.live_preflight import CommandResult
 from synthran.rfsim_runtime import (
     RFSIM_RECOVERY_ATTEMPTS,
     UE_TUNNEL_COMMAND_TIMEOUT_SECONDS,
+    RfsimRuntimeState,
     _current_pdu_address,
     _deployment_owner_for_pod,
     _one_active_name,
+    _rf_sample_stalled,
     _wait_for_ue_tunnel,
     reconcile_rfsim_runtime,
 )
@@ -174,6 +176,21 @@ class RfsimRuntimeTests(unittest.TestCase):
             ):
                 _wait_for_ue_tunnel(inventory, "ue-pod")
 
+    def test_rf_sample_stall_requires_repeated_zero_progress(self) -> None:
+        inventory = self._inventory()
+        text = "\n".join(
+            [
+                "Waiting for data.",
+                "Waiting for reading samples. Completed 0 of 23040 samples.",
+            ]
+            * 4
+        )
+        with patch(
+            "synthran.rfsim_runtime._remote_result",
+            return_value=CommandResult(0, text, ""),
+        ):
+            self.assertTrue(_rf_sample_stalled(inventory, "gnb-pod"))
+
     def test_reconcile_orders_stop_restart_broker_ue_route_and_returns_live_pdu(self) -> None:
         inventory = self._inventory()
         calls: list[str] = []
@@ -271,9 +288,42 @@ class RfsimRuntimeTests(unittest.TestCase):
         self.assertEqual(labels.count("GNU Radio broker start"), 2)
         self.assertEqual(labels.count("srsUE start"), 2)
 
+    def test_reconcile_can_succeed_on_third_complete_attempt(self) -> None:
+        inventory = self._inventory()
+        state = RfsimRuntimeState(
+            ue_pod="ue-new",
+            gnb_pod="gnb-third",
+            gnb_deployment="srsran-gnb",
+            pdu_address="12.1.0.7",
+        )
+        with (
+            patch(
+                "synthran.rfsim_runtime._discover_pod",
+                side_effect=("ue-new", "gnb-old"),
+            ),
+            patch(
+                "synthran.rfsim_runtime._deployment_owner_for_pod",
+                return_value="srsran-gnb",
+            ),
+            patch(
+                "synthran.rfsim_runtime._reconcile_attempt",
+                side_effect=(
+                    ExperimentError("first stall"),
+                    ExperimentError("second stall"),
+                    state,
+                ),
+            ) as attempt,
+        ):
+            actual = reconcile_rfsim_runtime(
+                inventory,
+                network_run_id="network-run-01",
+            )
+        self.assertEqual(actual, state)
+        self.assertEqual(attempt.call_count, 3)
+
     def test_reconcile_reports_all_failed_attempts(self) -> None:
         inventory = self._inventory()
-        discovery = iter(("ue-new", "gnb-old", "gnb-1", "gnb-2"))
+        discovery = iter(("ue-new", "gnb-old", "gnb-1", "gnb-2", "gnb-3"))
 
         with (
             patch("synthran.rfsim_runtime._discover_pod", side_effect=lambda *a, **k: next(discovery)),

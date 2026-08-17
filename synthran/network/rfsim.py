@@ -24,11 +24,12 @@ from synthran.live_preflight import CommandResult, LivePreflightError, ssh_comma
 
 KUBERNETES_NAMESPACE = "open5gs"
 NETWORK_RUN_LABEL = "synthran.run/id"
-RFSIM_RECOVERY_ATTEMPTS = 2
+RFSIM_RECOVERY_ATTEMPTS = 3
 UE_TUNNEL_WAIT_ATTEMPTS = 60
 UE_TUNNEL_WAIT_INTERVAL_SECONDS = 2
 UE_PROCESS_START_GRACE_ATTEMPTS = 15
 UE_TUNNEL_COMMAND_TIMEOUT_SECONDS = 240
+_RF_ZERO_SAMPLE_MINIMUM = 3
 
 
 @dataclass(frozen=True)
@@ -258,6 +259,25 @@ def _wait_for_ue_tunnel(inventory: NetworkInventory, pod: str) -> None:
     raise ExperimentError("srsUE tunnel readiness probe failed")
 
 
+def _rf_sample_stalled(inventory: NetworkInventory, gnb_pod: str) -> bool:
+    """Classify the observed alive-but-zero-sample RFSIM stall after tunnel timeout."""
+
+    result = _remote_result(
+        inventory,
+        "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec "
+        f"-n {KUBERNETES_NAMESPACE} {shlex.quote(gnb_pod)} -c gnb-logs -- "
+        "/bin/sh -lc "
+        + shlex.quote("tail -n 600 /var/log/gnb.log 2>/dev/null"),
+        timeout_seconds=15,
+    )
+    if result.returncode != 0:
+        return False
+    text = result.stdout
+    zero_samples = text.count("Completed 0 of 23040 samples")
+    waiting = text.count("Waiting for data.") + text.count("Waiting for reading samples.")
+    return zero_samples >= _RF_ZERO_SAMPLE_MINIMUM and waiting >= _RF_ZERO_SAMPLE_MINIMUM
+
+
 def _current_pdu_address(inventory: NetworkInventory, pod: str) -> str:
     output = _remote(
         inventory,
@@ -382,7 +402,14 @@ def _reconcile_attempt(
         + shlex.quote('tmux new-window -t ran -n ue1 "/srsran/config/start_ue.sh 1"'),
         label="srsUE start",
     )
-    _wait_for_ue_tunnel(inventory, ue_pod)
+    try:
+        _wait_for_ue_tunnel(inventory, ue_pod)
+    except ExperimentError as exc:
+        if "remained alive" in str(exc) and _rf_sample_stalled(inventory, gnb_pod):
+            raise ExperimentError(
+                "RFSIM RF sample stream made no progress while tun_srsue1 remained absent"
+            ) from exc
+        raise
 
     _remote(
         inventory,
@@ -408,10 +435,8 @@ def reconcile_rfsim_runtime(
     """Restore the process-level RFSIM runtime after an srsUE pod rollout.
 
     A stalled srsUE attach can leave every ZMQ TCP leg established while no
-    useful RF samples progress to RACH. Live acceptance showed that a complete
-    second reset of UE, broker, and the run-owned gNB can recover that state.
-    Therefore each retry repeats the full recovery contract instead of merely
-    extending one tunnel wait.
+    useful RF samples progress to RACH. Complete bounded recovery attempts reset
+    UE, broker, and the run-owned gNB rather than extending one tunnel wait.
     """
 
     ue_pod = _discover_pod(

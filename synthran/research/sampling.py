@@ -173,6 +173,15 @@ def _ingress_snapshot(
         ) from exc
 
 
+def _future_deadline(deadline: float, interval: float, now: float) -> float:
+    """Return the first scheduled deadline strictly after ``now``."""
+
+    if deadline > now:
+        return deadline
+    missed = int((now - deadline) // interval) + 1
+    return deadline + missed * interval
+
+
 class ResearchNetworkSampler:
     def __init__(
         self,
@@ -201,8 +210,12 @@ class ResearchNetworkSampler:
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None
         self._started = 0.0
+        self._next_deadline = 0.0
 
-    def _sample(self) -> None:
+    def _sample(self, *, scheduled_at: float | None = None) -> None:
+        sample_started = time.monotonic()
+        if scheduled_at is None:
+            scheduled_at = sample_started
         ingress = _ingress_snapshot(self.inventory, self.experiment_run_id)
         ue = _interface_counters(
             self.inventory,
@@ -215,12 +228,15 @@ class ResearchNetworkSampler:
             pod=self.upf_pod,
             interface="ogstun",
         )
+        sample_ended = time.monotonic()
         record: dict[str, Any] = {
             "schema": NETWORK_SAMPLE_SCHEMA,
             "observed_at_utc": datetime.now(timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
-            "elapsed_seconds": time.monotonic() - self._started,
+            "elapsed_seconds": sample_started - self._started,
+            "sample_duration_seconds": sample_ended - sample_started,
+            "schedule_lag_seconds": max(0.0, sample_started - scheduled_at),
             "ue_interface": "tun_srsue1",
             "upf_interface": "ogstun",
             "ingress_accepted_connections": ingress.accepted_connections,
@@ -234,8 +250,22 @@ class ResearchNetworkSampler:
 
     def _run(self) -> None:
         try:
-            while not self._stop.wait(self.interval_seconds):
-                self._sample()
+            deadline = self._next_deadline
+            while not self._stop.is_set():
+                now = time.monotonic()
+                wait_seconds = max(0.0, deadline - now)
+                if wait_seconds and self._stop.wait(wait_seconds):
+                    break
+                if self._stop.is_set():
+                    break
+                self._sample(scheduled_at=deadline)
+                deadline += self.interval_seconds
+                deadline = _future_deadline(
+                    deadline,
+                    self.interval_seconds,
+                    time.monotonic(),
+                )
+                self._next_deadline = deadline
         except BaseException as exc:
             self._error = exc
             self._stop.set()
@@ -244,9 +274,22 @@ class ResearchNetworkSampler:
         if self._thread is not None:
             raise ResearchError("research network sampler is already running")
         self._started = time.monotonic()
-        self._sample()
+        self._sample(scheduled_at=self._started)
+        self._next_deadline = _future_deadline(
+            self._started + self.interval_seconds,
+            self.interval_seconds,
+            time.monotonic(),
+        )
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def check(self) -> None:
+        if self._error is not None:
+            raise ResearchError(
+                "research network sampler failed during measurement"
+            ) from self._error
+        if self._thread is not None and not self._thread.is_alive() and not self._stop.is_set():
+            raise ResearchError("research network sampler stopped unexpectedly")
 
     def stop(self) -> None:
         self._stop.set()
