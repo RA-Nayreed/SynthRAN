@@ -7,11 +7,12 @@ SynthRAN is a reproducible experiment orchestrator joining emulated IoT workload
 The supported golden path is:
 
 ```text
-10 deterministic Contiki-NG/Cooja MQTT sensors
+10 deterministic Contiki-NG/Cooja MQTT sensors on Duckburg
 -> RPL/6LoWPAN border router
--> Cooja Serial Socket
--> tunslip6/tun0
--> counted controller ingress
+-> Cooja Serial Socket (127.0.0.1:60001)
+-> loopback-only reverse SSH tunnel (-R 127.0.0.1:60001:127.0.0.1:60001)
+-> root tunslip6/tun0 on remote core node (fd00::1/64)
+-> counted TCP ingress on remote core node
 -> Mosquitto bridge in the srsUE network namespace
 -> tun_srsue1
 -> srsRAN gNB
@@ -141,18 +142,18 @@ The deterministic scenario is:
 - fixed Cooja seed and topology;
 - Java 21 verified before any live Kubernetes/5G mutation;
 - `deploy/iot/sensor/project-conf.h` enables Contiki-NG TCP socket support (`#define UIP_CONF_TCP 1`);
-- sensor compilation commands embed the validated absolute Contiki checkout path (`CONTIKI=<path>`);
-- Cooja Serial Socket;
-- `tunslip6` creates `tun0` with `fd00::1/64`;
+- Cooja Serial Socket listening on Duckburg (127.0.0.1:60001);
+- strict loopback-only reverse SSH tunnel forwarding Duckburg port 60001 to core node port 60001;
+- root `tunslip6` built and executed on the selected core node (`inventory.core_node`) creating `tun0` at `fd00::1/64` without local controller `sudo`;
 - sensors publish run-scoped MQTT telemetry to the `fd00::1` edge address;
-- a counted controller TCP ingress forwards the raw MQTT stream to the UE-side broker;
+- a counted TCP ingress running on the core node forwards the raw MQTT stream to the UE-side broker;
 - the real edge Mosquitto bridge runs as a temporary sidecar in the run-owned srsUE pod, sharing the network namespace containing `tun_srsue1`;
-- the bridge binds to the accepted UE PDU address;
+- the bridge binds to the dynamically discovered live UE PDU address;
 - a central-broker route is explicitly selected through `tun_srsue1`;
 - a digest-pinned run-owned central broker runs on the core node;
 - the collector subscribes only to the current run topic.
 
-Do not move the cellular bridge to the controller: `tun_srsue1` and its PDU address exist in the srsUE pod network namespace.
+Controller `sudo` is never invoked: privileged TUN network creation is strictly isolated to the root core node. Do not move the cellular bridge to the controller: `tun_srsue1` and its PDU address exist in the srsUE pod network namespace.
 
 For the supported RFSIM path, Kubernetes `Ready` is not sufficient evidence that the UE runtime exists. The pinned srsUE pod is kept alive independently of the GNU Radio broker and `srsue` process, so every experiment-caused srsUE Deployment rollout must reconcile the process-level runtime before network reproof. Reconciliation is limited to resources already owned by the accepted network run and follows this order: stop stale srsUE/broker processes, restart the run-owned gNB while the broker is absent, wait for fresh gNB cell activation, start GNU Radio, start srsUE, wait for `tun_srsue1`, restore routes, then verify the accepted network path. The UE host address inside the accepted PDU network may change during this recovery; discover the live address from `tun_srsue1` and use it for bridge binding and experiment evidence rather than assuming a historical host address. This recovery does not authorize reservation, allocation, imaging, or base-network deployment.
 

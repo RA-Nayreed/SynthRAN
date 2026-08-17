@@ -1,15 +1,17 @@
 """Operator-triggered integrated IoT-to-5G experiment runtime.
 
 The runner consumes an already path-proven network deployment. It creates only
-run-scoped experiment resources, temporarily adds an MQTT sidecar to the
-run-owned srsUE Deployment, collects deterministic telemetry, restores the
-srsUE Deployment, and reproves the accepted network after cleanup.
+run-scoped experiment resources on the controller and selected root experiment host,
+temporarily adds an MQTT sidecar to the run-owned srsUE Deployment, collects
+deterministic telemetry, restores the srsUE Deployment, and reproves the accepted
+network after cleanup.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import io
 import ipaddress
 import json
 import os
@@ -21,6 +23,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 from typing import Any, Mapping, Sequence, TextIO
 
@@ -48,7 +51,7 @@ from synthran.experiment_resources import (
     render_experiment_objects,
 )
 from synthran.fiveg_ansible import NetworkInventory
-from synthran.ingress import CountedTcpIngress
+from synthran.ingress import CountedTcpIngress, IngressSnapshot
 from synthran.iot import write_run_inputs
 from synthran.live_preflight import CommandResult, LivePreflightError, ssh_command
 from synthran.mqtt_collector import collect_mqtt
@@ -63,7 +66,7 @@ from synthran.rfsim_runtime import reconcile_rfsim_runtime
 DEFAULT_RUN_ROOT = Path(".synthran/experiments")
 DEFAULT_COLLECTION_SECONDS = 180
 DEFAULT_MINIMUM_PER_SENSOR = 3
-LOCAL_EDGE_FORWARD_PORT = 18883
+REMOTE_EDGE_FORWARD_PORT = 18883
 LOCAL_CENTRAL_FORWARD_PORT = 18885
 KUBERNETES_NAMESPACE = "open5gs"
 
@@ -147,6 +150,34 @@ def _run(
     except subprocess.TimeoutExpired as exc:
         raise ExperimentError("experiment command timed out") from exc
     return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+
+
+def _run_bytes(
+    command: Sequence[str],
+    *,
+    input_bytes: bytes,
+    timeout_seconds: int = 60,
+    cwd: Path | None = None,
+) -> CommandResult:
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=cwd,
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise ExperimentError(f"required command was not found: {command[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ExperimentError("experiment command timed out") from exc
+    return CommandResult(
+        completed.returncode,
+        completed.stdout.decode("utf-8", errors="replace"),
+        completed.stderr.decode("utf-8", errors="replace"),
+    )
 
 
 def _checked(
@@ -245,6 +276,143 @@ def _core_address(inventory: NetworkInventory) -> str:
             "prepared inventory has an invalid core node IP address; expected a literal IPv4 or IPv6 address"
         ) from exc
     return str(value)
+
+
+def _probe_experiment_host(
+    inventory: NetworkInventory,
+    *,
+    required_ports: Sequence[int] = (60001, REMOTE_EDGE_FORWARD_PORT),
+    timeout_seconds: int = 30,
+) -> None:
+    """Perform early capability check on the privileged experiment host before any live mutation."""
+    host = inventory.core_node
+    host_name = host.name
+
+    probe_code = (
+        "import os, shutil, socket, stat, sys, json\n"
+        "rep = {'uid': os.geteuid(), 'tun_exists': False, 'tun_dev': False, 'missing_tools': [], 'busy_ports': []}\n"
+        "if os.path.exists('/dev/net/tun'):\n"
+        "    try:\n"
+        "        st = os.stat('/dev/net/tun')\n"
+        "        rep['tun_dev'] = stat.S_ISCHR(st.st_mode)\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "for tool in ['python3', 'ip', 'gcc', 'make', 'tar']:\n"
+        "    if shutil.which(tool) is None:\n"
+        "        rep['missing_tools'].append(tool)\n"
+        "if os.path.exists('/sys/class/net/tun0'):\n"
+        "    rep['tun_exists'] = True\n"
+        f"for p in {list(required_ports)}:\n"
+        "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "    try:\n"
+        "        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        "        s.bind(('127.0.0.1', p))\n"
+        "    except OSError:\n"
+        "        rep['busy_ports'].append(p)\n"
+        "    finally:\n"
+        "        s.close()\n"
+        "print(json.dumps(rep))\n"
+    )
+
+    try:
+        cmd = ssh_command(host, "python3", "-c", probe_code)
+    except LivePreflightError as exc:
+        raise ExperimentError(f"[FAIL] experiment-host: SSH connection error: {exc}") from exc
+
+    result = _run(cmd, timeout_seconds=timeout_seconds)
+    if result.returncode != 0:
+        if "python3" in (result.stderr or "").lower() or "not found" in (result.stderr or "").lower():
+            raise ExperimentError(f"[FAIL] experiment-host: python3 is missing on {host_name}")
+        raise ExperimentError(
+            f"[FAIL] experiment-host: capability probe failed on {host_name}: {result.stderr or result.stdout}"
+        )
+
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: capability probe did not return valid JSON on {host_name}"
+        ) from exc
+
+    if data.get("uid") != 0:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: remote host user is not root (uid={data.get('uid')}) on {host_name}"
+        )
+
+    if not data.get("tun_dev"):
+        raise ExperimentError(
+            f"[FAIL] experiment-host: /dev/net/tun is unavailable on {host_name}"
+        )
+
+    missing = data.get("missing_tools")
+    if missing:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: required tools {missing} are missing on {host_name}"
+        )
+
+    if data.get("tun_exists"):
+        raise ExperimentError(
+            f"[FAIL] experiment-host: tun0 already exists on {host_name}; refusing to adopt or delete it"
+        )
+
+    busy = data.get("busy_ports")
+    if busy:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: required ports {busy} are already in use on {host_name}"
+        )
+
+
+def _transfer_directory(
+    inventory: NetworkInventory,
+    source_dir: Path,
+    remote_dir: str,
+    *,
+    label: str,
+) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for file_path in sorted(source_dir.rglob("*")):
+            if file_path.is_file():
+                rel_path = file_path.relative_to(source_dir).as_posix()
+                tar.add(file_path, arcname=rel_path)
+    tar_bytes = buffer.getvalue()
+
+    try:
+        cmd = ssh_command(
+            inventory.core_node,
+            "sh",
+            "-c",
+            f"mkdir -p {shlex.quote(remote_dir)} && tar -xzf - -C {shlex.quote(remote_dir)}",
+        )
+    except LivePreflightError as exc:
+        raise ExperimentError(str(exc)) from exc
+
+    result = _run_bytes(cmd, input_bytes=tar_bytes, timeout_seconds=60)
+    if result.returncode != 0:
+        raise ExperimentError(f"{label} failed: {result.stderr or result.stdout}")
+
+
+def _transfer_file(
+    inventory: NetworkInventory,
+    source_file: Path,
+    remote_path: str,
+    *,
+    label: str,
+) -> None:
+    content = source_file.read_text(encoding="utf-8")
+    try:
+        cmd = ssh_command(
+            inventory.core_node,
+            "sh",
+            "-c",
+            f"cat > {shlex.quote(remote_path)}",
+        )
+    except LivePreflightError as exc:
+        raise ExperimentError(str(exc)) from exc
+
+    result = _run(cmd, input_text=content, timeout_seconds=30)
+    if result.returncode != 0:
+        raise ExperimentError(f"{label} failed: {result.stderr or result.stdout}")
 
 
 def _validate_contiki_checkout(lock: DependencyLock, dependency_root: Path) -> Path:
@@ -443,6 +611,32 @@ def _ssh_tunnel_command(
             f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
             target,
             remote_command,
+        )
+    )
+    return tuple(base)
+
+
+def _ssh_reverse_tunnel_command(
+    inventory: NetworkInventory,
+    *,
+    remote_port: int,
+    local_port: int,
+) -> tuple[str, ...]:
+    try:
+        base = list(ssh_command(inventory.core_node))
+    except LivePreflightError as exc:
+        raise ExperimentError(str(exc)) from exc
+    if not base:
+        raise ExperimentError("unable to construct strict SSH tunnel")
+    target = base.pop()
+    base.extend(
+        (
+            "-N",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-R",
+            f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}",
+            target,
         )
     )
     return tuple(base)
@@ -866,8 +1060,10 @@ def execute_experiment(
     contiki = _validate_contiki_checkout(lock, dependency_root)
     java_home = _validate_java_runtime()
     core_address = _core_address(inventory)
+    core_host = inventory.core_node
 
-    report("network-prerequisite: verifying path-proven baseline...")
+    report(f"experiment: {scenario.run_id}")
+    report("network prerequisite: verifying path-proven baseline...")
     base = verify_network_path(
         inventory=inventory,
         lock=lock,
@@ -876,7 +1072,14 @@ def execute_experiment(
     )
     if not base.ready:
         raise ExperimentError("accepted network no longer satisfies path proof")
-    report("network-prerequisite: OK")
+    report("network prerequisite: OK")
+
+    report(f"experiment host: checking {core_host.name}...")
+    _probe_experiment_host(
+        inventory,
+        required_ports=(scenario.serial_socket_port, REMOTE_EDGE_FORWARD_PORT),
+    )
+    report("experiment host: OK")
 
     run_root = run_root.resolve()
     run_root.mkdir(parents=True, exist_ok=True)
@@ -905,23 +1108,54 @@ def execute_experiment(
     )
 
     processes: list[ManagedProcess] = []
-    ingress: CountedTcpIngress | None = None
     ue_deployment: str | None = None
     extra_checks: list[ExperimentCheck] = []
     failure: str | None = None
+    remote_workspace = f"/tmp/synthran/{scenario.run_id}"
+    remote_workspace_created = False
+    tun0_created = False
 
     try:
-        report("cooja-dependency: preparing pinned checkout...")
+        report("Cooja dependency: preparing pinned checkout...")
         _prepare_cooja_checkout(contiki)
-        report("cooja-dependency: OK")
+        report("Cooja dependency: OK")
 
-        report("tunslip6-build: running...")
-        _checked(
-            ("make", "-C", str(contiki / "tools" / "serial-io"), "tunslip6"),
-            label="tunslip6 build",
+        _remote(
+            inventory,
+            "mkdir",
+            "-p",
+            f"{remote_workspace}/serial-io",
+            label="remote workspace creation",
+        )
+        remote_workspace_created = True
+
+        _transfer_directory(
+            inventory,
+            contiki / "tools" / "serial-io",
+            f"{remote_workspace}/serial-io",
+            label="serial-io transfer",
+        )
+        _transfer_file(
+            inventory,
+            repository_root.resolve() / "synthran" / "ingress.py",
+            f"{remote_workspace}/ingress.py",
+            label="ingress helper transfer",
+        )
+
+        report("remote tunslip6 build: running...")
+        _remote(
+            inventory,
+            "make",
+            "-C",
+            f"{remote_workspace}/serial-io",
+            "tunslip6",
+            label="remote tunslip6 build",
             timeout_seconds=180,
         )
-        report("tunslip6-build: OK")
+        report("remote tunslip6 build: OK")
+
+        report(f"accepted PDU: {scenario.pdu_address}")
+        report("preparing UE MQTT sidecar...")
 
         ue_deployment = _discover_ue_deployment(inventory, scenario.network_run_id)
         resource_names = names(scenario)
@@ -976,7 +1210,7 @@ def execute_experiment(
                 "edge MQTT sidecar did not become Ready; diagnostic log saved"
             ) from exc
 
-        report("rfsim-runtime: reconciling after srsUE rollout...")
+        report("reconciling RFSIM...")
         try:
             runtime_state = reconcile_rfsim_runtime(
                 inventory,
@@ -1001,10 +1235,10 @@ def execute_experiment(
 
         ue_pod = runtime_state.ue_pod
         if runtime_state.pdu_address != scenario.pdu_address:
-            report(
-                "rfsim-runtime: live PDU address changed from "
-                f"{scenario.pdu_address} to {runtime_state.pdu_address}"
-            )
+            report(f"runtime PDU: {runtime_state.pdu_address}")
+        else:
+            report(f"runtime PDU: {runtime_state.pdu_address} (unchanged)")
+
         scenario = replace(scenario, pdu_address=runtime_state.pdu_address)
         _, csc, scenario_path = write_run_inputs(
             scenario,
@@ -1019,7 +1253,6 @@ def execute_experiment(
         _replace_edge_runtime_config(inventory, ue_pod, edge_config)
         _restart_edge_sidecar(inventory, ue_pod)
         time.sleep(3)
-        report("rfsim-runtime: OK")
 
         after_patch = verify_network_path(
             inventory=inventory,
@@ -1056,28 +1289,22 @@ def execute_experiment(
         tx_before = _interface_counter(inventory, ue_pod, "tun_srsue1", "tx_bytes")
         rx_before = _interface_counter(inventory, ue_pod, "tun_srsue1", "rx_bytes")
 
+        # Start remote edge port-forward on core node
+        edge_forward_cmd = ssh_command(
+            inventory.core_node,
+            "sh",
+            "-c",
+            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl port-forward "
+            f"-n {KUBERNETES_NAMESPACE} pod/{shlex.quote(ue_pod)} "
+            f"{REMOTE_EDGE_FORWARD_PORT}:1883 --address 127.0.0.1",
+        )
         edge_forward = _start_process(
             "edge MQTT port-forward",
-            _ssh_tunnel_command(
-                inventory,
-                local_port=LOCAL_EDGE_FORWARD_PORT,
-                remote_port=LOCAL_EDGE_FORWARD_PORT,
-                remote_command=(
-                    "KUBECONFIG=/etc/kubernetes/admin.conf kubectl port-forward "
-                    f"-n {KUBERNETES_NAMESPACE} pod/{ue_pod} "
-                    f"{LOCAL_EDGE_FORWARD_PORT}:1883 --address 127.0.0.1"
-                ),
-            ),
+            edge_forward_cmd,
             cwd=repository_root,
             log_path=logs / "edge-port-forward.log",
         )
         processes.append(edge_forward)
-        _wait_tcp(
-            "127.0.0.1",
-            LOCAL_EDGE_FORWARD_PORT,
-            timeout_seconds=30,
-            process=edge_forward,
-        )
 
         central_forward = _start_process(
             "central MQTT port-forward",
@@ -1104,7 +1331,7 @@ def execute_experiment(
             process=central_forward,
         )
 
-        report("cooja: starting deterministic 10-sensor simulation...")
+        report("Cooja: starting 10-sensor simulation...")
         cooja_env = os.environ.copy()
         cooja_env["JAVA_HOME"] = str(java_home)
         cooja = _start_process(
@@ -1135,53 +1362,106 @@ def execute_experiment(
             )
         )
 
-        report("tunslip6: creating tun0...")
+        # Reverse SSH tunnel to expose controller's SerialSocket on remote experiment host
+        reverse_tunnel = _start_process(
+            "SerialSocket reverse SSH tunnel",
+            _ssh_reverse_tunnel_command(
+                inventory,
+                remote_port=scenario.serial_socket_port,
+                local_port=scenario.serial_socket_port,
+            ),
+            cwd=repository_root,
+            log_path=logs / "serial-reverse-tunnel.log",
+        )
+        processes.append(reverse_tunnel)
+        time.sleep(1)
+        if reverse_tunnel.process.poll() is not None:
+            raise ExperimentError("SerialSocket reverse SSH tunnel failed to start")
+
+        # Launch remote tunslip6 as root through SSH
+        tunslip_cmd = ssh_command(
+            inventory.core_node,
+            "sh",
+            "-c",
+            f"exec {shlex.quote(remote_workspace)}/serial-io/tunslip6 "
+            "-a 127.0.0.1 "
+            f"-p {scenario.serial_socket_port} "
+            "-t tun0 "
+            "fd00::1/64",
+        )
         tunslip = _start_process(
             "tunslip6",
-            (
-                "sudo",
-                "-n",
-                str(contiki / "tools" / "serial-io" / "tunslip6"),
-                "-a",
-                "127.0.0.1",
-                "-p",
-                str(scenario.serial_socket_port),
-                "-t",
-                "tun0",
-                "fd00::1/64",
-            ),
+            tunslip_cmd,
             cwd=repository_root,
             log_path=logs / "tunslip6.log",
         )
         processes.append(tunslip)
+
         deadline = time.monotonic() + 30
+        tun0_ready = False
         while time.monotonic() < deadline:
+            if tunslip.process.poll() is not None:
+                report(
+                    f"[FAIL] serial bridge: remote tunslip6 exited\n"
+                    f"       host: {core_host.name}\n"
+                    f"       log: {logs / 'tunslip6.log'}"
+                )
+                raise ExperimentError(
+                    f"tunslip6 exited before tun0 became ready; see {logs / 'tunslip6.log'}"
+                )
             result = _run(
-                ("ip", "-j", "address", "show", "dev", "tun0"),
+                ssh_command(inventory.core_node, "ip", "-j", "address", "show", "dev", "tun0"),
                 timeout_seconds=5,
             )
             if result.returncode == 0 and "fd00::1" in result.stdout:
+                tun0_ready = True
                 break
             time.sleep(1)
-        else:
-            raise ExperimentError("tun0 did not become UP with fd00::1")
+        if not tun0_ready:
+            if tunslip.process.poll() is not None:
+                report(
+                    f"[FAIL] serial bridge: remote tunslip6 exited\n"
+                    f"       host: {core_host.name}\n"
+                    f"       log: {logs / 'tunslip6.log'}"
+                )
+                raise ExperimentError(
+                    f"tunslip6 exited before tun0 became ready; see {logs / 'tunslip6.log'}"
+                )
+            raise ExperimentError("tun0 did not become UP with fd00::1 on remote experiment host")
+        tun0_created = True
+
+        report(f"serial bridge: ready on {core_host.name}")
+        report("RPL border router: tun0 ready")
         extra_checks.append(
             ExperimentCheck(
                 "rpl-border-router",
                 True,
-                "Cooja serial socket is bridged through tunslip6/tun0",
+                "Cooja serial socket is bridged through remote tunslip6/tun0",
             )
         )
 
-        ingress = CountedTcpIngress(
-            listen_host="fd00::1",
-            listen_port=1883,
-            target_host="127.0.0.1",
-            target_port=LOCAL_EDGE_FORWARD_PORT,
+        # Launch remote CountedTcpIngress through SSH
+        snapshot_remote_path = f"{remote_workspace}/ingress-snapshot.json"
+        ingress_remote_cmd = (
+            f"exec python3 {shlex.quote(remote_workspace)}/ingress.py "
+            "--listen-host fd00::1 "
+            "--listen-port 1883 "
+            "--target-host 127.0.0.1 "
+            f"--target-port {REMOTE_EDGE_FORWARD_PORT} "
+            f"--snapshot-path {shlex.quote(snapshot_remote_path)}"
         )
-        ingress.start()
+        ingress_proc = _start_process(
+            "CountedTcpIngress",
+            ssh_command(inventory.core_node, "sh", "-c", ingress_remote_cmd),
+            cwd=repository_root,
+            log_path=logs / "ingress.log",
+        )
+        processes.append(ingress_proc)
+        time.sleep(1)
+        if ingress_proc.process.poll() is not None:
+            raise ExperimentError("remote CountedTcpIngress failed to start")
 
-        report("collector: waiting for all 10 sensor streams...")
+        report("collector: waiting for 10 sensor streams...")
         collection = collect_mqtt(
             scenario,
             host="127.0.0.1",
@@ -1198,7 +1478,12 @@ def execute_experiment(
             )
         report(f"collector: OK ({collection.records} events from 10 sensors)")
 
-        ingress_snapshot = ingress.snapshot()
+        snapshot_data = _remote_json(
+            inventory,
+            f"cat {shlex.quote(snapshot_remote_path)}",
+            label="remote ingress snapshot probe",
+        )
+        ingress_snapshot = IngressSnapshot.from_dict(snapshot_data)
         if (
             ingress_snapshot.accepted_connections < scenario.sensor_count
             or ingress_snapshot.upstream_bytes <= 0
@@ -1208,7 +1493,7 @@ def execute_experiment(
             ExperimentCheck(
                 "edge-mqtt",
                 True,
-                f"{ingress_snapshot.accepted_connections} sensor MQTT connections crossed the tun0 ingress",
+                f"{ingress_snapshot.accepted_connections} sensor MQTT connections crossed the remote tun0 ingress",
             )
         )
         extra_checks.append(
@@ -1272,24 +1557,48 @@ def execute_experiment(
         failure = str(exc)
         report(f"error: {failure}")
     finally:
-        if ingress is not None:
-            try:
-                ingress.stop()
-            except Exception as exc:
-                if failure is None:
-                    failure = f"ingress cleanup failed: {exc}"
         for managed in reversed(processes):
             try:
                 managed.stop()
             except Exception as exc:
                 if failure is None:
                     failure = f"unable to stop {managed.name}: {exc}"
+        if tun0_created:
+            try:
+                _remote(
+                    inventory,
+                    "ip",
+                    "link",
+                    "delete",
+                    "dev",
+                    "tun0",
+                    label="remote tun0 cleanup",
+                    timeout_seconds=10,
+                )
+            except Exception:
+                pass
+        if remote_workspace_created:
+            try:
+                _remote(
+                    inventory,
+                    "rm",
+                    "-rf",
+                    remote_workspace,
+                    label="remote workspace cleanup",
+                    timeout_seconds=10,
+                )
+            except Exception:
+                pass
         cleanup_check = _cleanup_live_resources(
             inventory=inventory,
             lock=lock,
             scenario=scenario,
             ue_deployment=ue_deployment,
         )
+        if cleanup_check.passed:
+            report(f"[PASS] cleanup-base-network: {cleanup_check.detail}")
+        else:
+            report(f"[FAIL] cleanup-base-network: {cleanup_check.detail}")
 
     final = None
     if jsonl_path.is_file() and parquet_path.is_file():

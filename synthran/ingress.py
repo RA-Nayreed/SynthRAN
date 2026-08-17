@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+import json
+from pathlib import Path
 import selectors
+import signal
 import socket
+import sys
+import tempfile
 import threading
+import time
+from typing import Any, Mapping, Sequence
 
 
 class IngressError(RuntimeError):
@@ -17,6 +25,27 @@ class IngressSnapshot:
     accepted_connections: int
     upstream_bytes: int
     downstream_bytes: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "accepted_connections": self.accepted_connections,
+            "upstream_bytes": self.upstream_bytes,
+            "downstream_bytes": self.downstream_bytes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> IngressSnapshot:
+        if not isinstance(data, dict):
+            raise IngressError("ingress snapshot is malformed")
+        for key in ("accepted_connections", "upstream_bytes", "downstream_bytes"):
+            val = data.get(key)
+            if not isinstance(val, int) or val < 0:
+                raise IngressError(f"ingress snapshot has invalid {key}")
+        return cls(
+            accepted_connections=int(data["accepted_connections"]),
+            upstream_bytes=int(data["upstream_bytes"]),
+            downstream_bytes=int(data["downstream_bytes"]),
+        )
 
 
 class CountedTcpIngress:
@@ -53,7 +82,13 @@ class CountedTcpIngress:
         if self._thread is not None:
             raise IngressError("ingress is already running")
         try:
-            listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            # Determine address family (support IPv6 and IPv4 for test flexibility)
+            family = (
+                socket.AF_INET
+                if ":" not in self.listen_host and not self.listen_host.startswith("[")
+                else socket.AF_INET6
+            )
+            listener = socket.socket(family, socket.SOCK_STREAM)
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self.listen_host, self.listen_port))
             listener.listen(128)
@@ -88,6 +123,23 @@ class CountedTcpIngress:
                 downstream_bytes=self._downstream_bytes,
             )
 
+    def write_snapshot_file(self, destination: Path) -> None:
+        """Atomically persist the current snapshot to disk without raw payloads."""
+        destination = destination.resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        current = self.snapshot()
+        content = json.dumps(current.to_dict(), indent=2, sort_keys=True) + "\n"
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary_path = Path(temporary.name)
+        temporary_path.replace(destination)
+
     def _run(self) -> None:
         assert self._listener is not None
         try:
@@ -110,7 +162,12 @@ class CountedTcpIngress:
             self._stop.set()
 
     def _forward_connection(self, client: socket.socket) -> None:
-        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        target_family = (
+            socket.AF_INET
+            if ":" not in self.target_host and not self.target_host.startswith("[")
+            else socket.AF_INET6
+        )
+        upstream = socket.socket(target_family, socket.SOCK_STREAM)
         try:
             upstream.settimeout(self.connect_timeout)
             upstream.connect((self.target_host, self.target_port))
@@ -152,3 +209,96 @@ class CountedTcpIngress:
     def _count_downstream(self, count: int) -> None:
         with self._lock:
             self._downstream_bytes += count
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Counted TCP ingress helper for SynthRAN IoT experiments."
+    )
+    parser.add_argument(
+        "--listen-host",
+        default="fd00::1",
+        help="IPv6 or IPv4 address to listen on (default: fd00::1)",
+    )
+    parser.add_argument(
+        "--listen-port",
+        type=int,
+        default=1883,
+        help="Port to listen on (default: 1883)",
+    )
+    parser.add_argument(
+        "--target-host",
+        default="127.0.0.1",
+        help="Target IPv4 or IPv6 address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--target-port",
+        type=int,
+        default=18883,
+        help="Target port (default: 18883)",
+    )
+    parser.add_argument(
+        "--snapshot-path",
+        type=Path,
+        required=True,
+        help="File path to write the JSON snapshot of byte/connection counters",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=10.0,
+        help="Upstream connect timeout in seconds (default: 10.0)",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=0.5,
+        help="Snapshot update interval in seconds (default: 0.5)",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        ingress = CountedTcpIngress(
+            listen_host=args.listen_host,
+            listen_port=args.listen_port,
+            target_host=args.target_host,
+            target_port=args.target_port,
+            connect_timeout=args.connect_timeout,
+        )
+        ingress.start()
+    except IngressError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    stop_event = threading.Event()
+
+    def _handle_signal(_signum: int, _frame: Any) -> None:
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    # Write initial zero snapshot
+    ingress.write_snapshot_file(args.snapshot_path)
+
+    try:
+        while not stop_event.is_set():
+            time.sleep(args.poll_interval)
+            ingress.write_snapshot_file(args.snapshot_path)
+    finally:
+        try:
+            ingress.stop()
+        except IngressError:
+            pass
+        ingress.write_snapshot_file(args.snapshot_path)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

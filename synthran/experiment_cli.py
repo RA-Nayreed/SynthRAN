@@ -98,6 +98,10 @@ def _plan(args: argparse.Namespace) -> int:
         network_evidence=evidence,
     )
     print(json.dumps(scenario.to_dict(), indent=2, sort_keys=True))
+    print(
+        "\nPDU note: the displayed address is accepted network evidence;\n"
+        "experiment execution rediscovers the live address after the srsUE rollout."
+    )
     print("\nExecution action: none")
     print("Reservation action: none")
     print("Network deployment action: none")

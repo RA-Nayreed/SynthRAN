@@ -32,19 +32,20 @@ This is composition, not a Git merge. `.deps/` is local and ignored. No upstream
 
 ## Golden-path data flow
 
-1. Ten deterministic Cooja sensors join one RPL/6LoWPAN network.
-2. A Cooja border router exposes its serial link through a deterministic Serial Socket.
-3. Pinned Contiki-NG `tunslip6` creates `tun0` with `fd00::1/64` on the Linux controller.
-4. Sensors publish run-scoped MQTT telemetry toward `fd00::1:1883`.
-5. A counted controller-side TCP ingress forwards the MQTT byte stream through a strict SSH/kubectl port-forward to a temporary Mosquitto sidecar in the run-owned srsUE pod.
-6. That Mosquitto sidecar shares the srsUE network namespace containing `tun_srsue1`. Its bridge binds to the accepted UE PDU address and targets a literal core-node address.
-7. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the bridge connection is accepted.
-8. The srsRAN/Open5GS user plane transports the bridge traffic to a run-owned host-network Mosquitto broker on the core node.
-9. A central collector subscribes only to the current run topic, validates events, and appends canonical JSONL.
-10. PyArrow derives deterministic Parquet from the accepted JSONL record.
-11. Route proof, `tun_srsue1` counters, broker receipt, message integrity, the accepted UPF route, and post-cleanup network reproof form the default path evidence.
+1. Ten deterministic Cooja sensors join one RPL/6LoWPAN network on Duckburg.
+2. A Cooja border router exposes its serial link through a deterministic Serial Socket on Duckburg (`127.0.0.1:60001`).
+3. A strict loopback-only reverse SSH tunnel forwards Duckburg port 60001 to the root core node's `127.0.0.1:60001`.
+4. Pinned Contiki-NG `tunslip6`, built remotely on the root core node (`inventory.core_node`), creates `tun0` with `fd00::1/64` as root without requiring controller `sudo`.
+5. Sensors publish run-scoped MQTT telemetry toward `fd00::1:1883`.
+6. A counted TCP ingress running on the core node forwards the MQTT byte stream through a kubectl port-forward to a temporary Mosquitto sidecar in the run-owned srsUE pod.
+7. That Mosquitto sidecar shares the srsUE network namespace containing `tun_srsue1`. Its bridge binds to the dynamically discovered live UE PDU address and targets a literal core-node address.
+8. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the bridge connection is accepted.
+9. The srsRAN/Open5GS user plane transports the bridge traffic to a run-owned host-network Mosquitto broker on the core node.
+10. A central collector subscribes only to the current run topic, validates events, and appends canonical JSONL.
+11. PyArrow derives deterministic Parquet from the accepted JSONL record.
+12. Route proof, `tun_srsue1` counters, broker receipt, message integrity, the accepted UPF route, and post-cleanup network reproof form the default path evidence.
 
-The controller-side TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the accepted PDU address exist.
+The TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the live PDU address exist. Controller `sudo` is never required: privileged TUN creation is strictly isolated to the root core node.
 
 ## Control boundaries
 

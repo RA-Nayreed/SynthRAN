@@ -5,13 +5,14 @@ The experiment consumes an already `path-proven` Open5GS + srsRAN + RFSIM networ
 ## Golden path
 
 ```text
-10 deterministic Contiki-NG/Cooja sensors
+10 deterministic Contiki-NG/Cooja sensors on Duckburg
 -> RPL/6LoWPAN
--> Cooja border router + Serial Socket
--> tunslip6 / tun0 (fd00::1/64)
--> counted controller ingress
+-> Cooja border router + Serial Socket (127.0.0.1:60001)
+-> loopback-only reverse SSH tunnel (-R 127.0.0.1:60001:127.0.0.1:60001)
+-> root tunslip6 / tun0 (fd00::1/64) on core node
+-> counted TCP ingress on core node
 -> run-owned Mosquitto sidecar in the srsUE pod network namespace
--> bridge bound to the accepted UE PDU address on tun_srsue1
+-> bridge bound to live UE PDU address on tun_srsue1
 -> srsRAN gNB
 -> Open5GS UPF
 -> run-owned host-network Mosquitto broker on the core node
@@ -21,7 +22,9 @@ The experiment consumes an already `path-proven` Open5GS + srsRAN + RFSIM networ
 -> experiment evidence
 ```
 
-The controller-side ingress is a TCP adapter, not the cellular bridge. The edge Mosquitto bridge is injected temporarily into the existing run-owned srsUE Deployment so it shares the network namespace containing `tun_srsue1`. SynthRAN installs a route for the central broker through `tun_srsue1`, restarts only the MQTT sidecar after that route exists, and requires the tunnel byte counter to increase while the central collector receives all ten sensor streams.
+The TCP ingress is an adapter, not the cellular bridge. The edge Mosquitto bridge is injected temporarily into the existing run-owned srsUE Deployment so it shares the network namespace containing `tun_srsue1`. SynthRAN discovers the live UE PDU address after srsUE rollout, installs a route for the central broker through `tun_srsue1`, restarts only the MQTT sidecar after that route exists, and requires the tunnel byte counter to increase while the central collector receives all ten sensor streams.
+
+Privileged TUN operations (`tunslip6` and `tun0` at `fd00::1/64`) and TCP ingress run exclusively on the root core node (`inventory.core_node`), eliminating any requirement for `sudo` on the Duckburg controller. Duckburg connects Cooja to `tunslip6` via a strict loopback-only reverse SSH tunnel.
 
 ## Deterministic scenario
 

@@ -142,7 +142,7 @@ python -m synthran network verify \
   --timeout 120
 ```
 
-Verification requires exactly one run-owned Ready gNB, srsUE, and selected UPF. It checks locked image IDs, gNB cell activation, `tun_srsue1`, its PDU address and route, and the UPF `ogstun` route. Full success writes ignored network evidence and marks the deployment manifest `path-proven`.
+Verification requires exactly one run-owned Ready gNB, srsUE, and selected UPF. It checks locked image IDs, gNB cell activation, `tun_srsue1`, its PDU address and route, and the UPF `ogstun` route. Full success writes ignored network evidence and marks the deployment manifest `path-proven`. Re-running `verify` on an already `path-proven` network performs read-only reproof idempotently.
 
 ## 7. Run the integrated IoT-to-5G experiment
 
@@ -158,6 +158,8 @@ synthran experiment run \
   --network-run-id network-001 \
   --run-id exp-001
 ```
+
+Controller privileges: Duckburg does **not** require `sudo`. SynthRAN automatically executes privileged TUN interface setup (`tunslip6` and `tun0` at `fd00::1/64`) and TCP ingress on the root core node (`inventory.core_node`) via a strict loopback-only reverse SSH tunnel.
 
 Render persisted acceptance evidence without touching live state:
 

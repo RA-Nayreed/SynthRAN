@@ -918,8 +918,11 @@ def load_deployment_manifest(
         raise NetworkRuntimeError("deployment manifest schema is unsupported")
     if payload.get("run_id") != validate_run_id(run_id):
         raise NetworkRuntimeError("deployment manifest run ID does not match")
-    if payload.get("status") != "deployed-unverified":
-        raise NetworkRuntimeError("deployment manifest is not awaiting verification")
+    status = payload.get("status")
+    if status not in ("deployed-unverified", "path-proven"):
+        raise NetworkRuntimeError(
+            f"deployment manifest is not awaiting verification (status={status})"
+        )
     inventory_data = payload.get("inventory")
     if not isinstance(inventory_data, dict) or inventory_data.get("sha256") != inventory.sha256:
         raise NetworkRuntimeError("deployment manifest inventory does not match")
@@ -953,7 +956,8 @@ def save_network_evidence(
     atomic_json(destination, report.to_dict())
     if manifest_path is not None and report.ready:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        payload["status"] = "path-proven"
+        if payload.get("status") == "deployed-unverified":
+            payload["status"] = "path-proven"
         payload["updated_at_utc"] = (
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         )

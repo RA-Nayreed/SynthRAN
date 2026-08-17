@@ -15,8 +15,12 @@ from synthran.network_runtime import (
     DEPLOYMENT_SCHEMA,
     NETWORK_EVIDENCE_SCHEMA,
     NetworkRuntimeError,
+    NetworkVerificationReport,
+    VerificationCheck,
     execute_network_deployment,
     golden_path_image_variables,
+    load_deployment_manifest,
+    save_network_evidence,
     sanitize_deployment_text,
     validate_run_id,
     verify_network_path,
@@ -620,6 +624,104 @@ class DeploymentBoundaryTests(unittest.TestCase):
             self.assertIn("ansible-deployment: running...", text)
             self.assertIn("ansible-deployment: OK", text)
             self.assertIn("network deployment: DEPLOYED, verification still required", text)
+
+
+class ManifestAndEvidenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.lock = load_lock(REPOSITORY_ROOT / "dependencies.lock.yml")
+        self.inventory = load_inventory(FIXTURE)
+        self.project = "project-test"
+        self.experiment = "experiment-test"
+        from synthran.network_runtime import context_fingerprint, dependency_lock_sha256
+
+        lock_digest = dependency_lock_sha256(self.lock)
+        self.base_manifest = {
+            "schema": DEPLOYMENT_SCHEMA,
+            "run_id": "net-run-1",
+            "inventory": {"sha256": self.inventory.sha256},
+            "dependencies": {
+                item.name: item.commit
+                for item in self.lock.git
+                if item.name in {"fiveg_ansible", "open5gs_k8s", "srsran_helm"}
+            },
+            "dependency_lock_sha256": lock_digest,
+            "slices_controller": {
+                "dependency_lock_sha256": lock_digest,
+                "project_fingerprint": context_fingerprint(self.project),
+                "experiment_fingerprint": context_fingerprint(self.experiment),
+            },
+        }
+
+    def test_load_deployment_manifest_accepts_deployed_unverified_and_path_proven(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+
+            # deployed-unverified
+            payload = dict(self.base_manifest, status="deployed-unverified")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            manifest = load_deployment_manifest(
+                path=manifest_path,
+                run_id="net-run-1",
+                inventory=self.inventory,
+                lock=self.lock,
+                slices_project=self.project,
+                slices_experiment=self.experiment,
+            )
+            self.assertEqual(manifest["status"], "deployed-unverified")
+
+            # path-proven (idempotent reproof)
+            payload = dict(self.base_manifest, status="path-proven")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            manifest = load_deployment_manifest(
+                path=manifest_path,
+                run_id="net-run-1",
+                inventory=self.inventory,
+                lock=self.lock,
+                slices_project=self.project,
+                slices_experiment=self.experiment,
+            )
+            self.assertEqual(manifest["status"], "path-proven")
+
+    def test_load_deployment_manifest_rejects_other_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            payload = dict(self.base_manifest, status="failed")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                NetworkRuntimeError,
+                r"deployment manifest is not awaiting verification \(status=failed\)",
+            ):
+                load_deployment_manifest(
+                    path=manifest_path,
+                    run_id="net-run-1",
+                    inventory=self.inventory,
+                    lock=self.lock,
+                    slices_project=self.project,
+                    slices_experiment=self.experiment,
+                )
+
+    def test_save_network_evidence_updates_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            payload = dict(self.base_manifest, status="deployed-unverified")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            evidence_dest = root / "network-evidence.json"
+            report = NetworkVerificationReport(
+                run_id="net-run-1",
+                generated_at_utc=NOW,
+                inventory_sha256=self.inventory.sha256,
+                dependencies={},
+                checks=(VerificationCheck("check1", True, "ok"),),
+                pdu_address="12.1.0.1",
+            )
+            save_network_evidence(report, evidence_dest, manifest_path=manifest_path)
+            self.assertTrue(evidence_dest.is_file())
+            updated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated_manifest["status"], "path-proven")
+            self.assertEqual(updated_manifest["network_evidence"], "network-evidence.json")
 
 
 class ContractSchemaTests(unittest.TestCase):
