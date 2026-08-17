@@ -10,7 +10,11 @@ import subprocess
 from typing import Callable, Sequence
 
 from synthran.workspace.model import AccessRecord, WorkspaceError, format_utc, utc_now
-from synthran.workspace.store import resolve_identity_reference, save_access_record
+from synthran.workspace.store import (
+    load_access_record,
+    resolve_identity_reference,
+    save_access_record,
+)
 
 
 DEFAULT_ACCESS_REFRESH = timedelta(hours=12)
@@ -64,6 +68,22 @@ def _refresh_boundary(now: datetime, access_until: datetime | None) -> datetime:
     return refresh
 
 
+def _matching_fresh_record(
+    *,
+    workspace_root: Path,
+    provider: str,
+    subject: str,
+    scope: str,
+    now: datetime,
+) -> AccessRecord | None:
+    record = load_access_record(workspace_root, provider)
+    if record is None:
+        return None
+    if record.subject != subject or record.scope != scope:
+        return None
+    return record if record.is_fresh(now) else None
+
+
 def verify_slices_project_access(
     *,
     workspace_root: Path,
@@ -102,6 +122,42 @@ def verify_slices_project_access(
     )
     save_access_record(workspace_root, record)
     return record
+
+
+def ensure_slices_project_access(
+    *,
+    workspace_root: Path,
+    username: str,
+    project: str,
+    force: bool = False,
+    runner: Runner = subprocess_runner,
+    timeout_seconds: int = 30,
+    now: datetime | None = None,
+) -> tuple[AccessRecord, bool]:
+    """Return matching fresh access evidence, or refresh it read-only when needed."""
+
+    current = (now or utc_now()).astimezone(timezone.utc)
+    if not force:
+        cached = _matching_fresh_record(
+            workspace_root=workspace_root,
+            provider="slices",
+            subject=username,
+            scope=project,
+            now=current,
+        )
+        if cached is not None:
+            return cached, False
+    return (
+        verify_slices_project_access(
+            workspace_root=workspace_root,
+            username=username,
+            project=project,
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+            now=current,
+        ),
+        True,
+    )
 
 
 def verify_r2lab_gateway_access(
@@ -146,3 +202,39 @@ def verify_r2lab_gateway_access(
     )
     save_access_record(workspace_root, record)
     return record
+
+
+def ensure_r2lab_gateway_access(
+    *,
+    workspace_root: Path,
+    slice_name: str,
+    identity_reference: str,
+    force: bool = False,
+    runner: Runner = subprocess_runner,
+    timeout_seconds: int = 30,
+    now: datetime | None = None,
+) -> tuple[AccessRecord, bool]:
+    """Return matching fresh gateway evidence, or refresh it read-only when needed."""
+
+    current = (now or utc_now()).astimezone(timezone.utc)
+    if not force:
+        cached = _matching_fresh_record(
+            workspace_root=workspace_root,
+            provider="r2lab",
+            subject=slice_name,
+            scope="faraday.inria.fr",
+            now=current,
+        )
+        if cached is not None:
+            return cached, False
+    return (
+        verify_r2lab_gateway_access(
+            workspace_root=workspace_root,
+            slice_name=slice_name,
+            identity_reference=identity_reference,
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+            now=current,
+        ),
+        True,
+    )

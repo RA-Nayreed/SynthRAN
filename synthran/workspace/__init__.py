@@ -1,6 +1,8 @@
 """Persistent SynthRAN identity, workspace, access, and experiment services."""
 
 from synthran.workspace.access import (
+    ensure_r2lab_gateway_access,
+    ensure_slices_project_access,
     verify_r2lab_gateway_access,
     verify_slices_project_access,
 )
@@ -13,6 +15,14 @@ from synthran.workspace.model import (
     WorkspaceError,
 )
 from synthran.workspace.registry import ExperimentEntry, WorkspaceRegistry
+from synthran.workspace.session import (
+    AccessState,
+    ProviderExperimentObservation,
+    WorkspaceSession,
+    open_workspace_session,
+    verify_slices_experiment_binding,
+)
+from synthran.workspace.status import load_experiment_status, save_experiment_status
 from synthran.workspace.store import (
     DEFAULT_PROFILE_NAME,
     create_or_update_profile,
@@ -31,26 +41,35 @@ from synthran.workspace.store import (
 
 __all__ = [
     "AccessRecord",
+    "AccessState",
     "DEFAULT_PROFILE_NAME",
     "ExperimentEntry",
     "ExperimentRecord",
     "ExperimentStatus",
     "Profile",
+    "ProviderExperimentObservation",
     "WorkspaceConfig",
     "WorkspaceError",
     "WorkspaceRegistry",
+    "WorkspaceSession",
     "create_or_update_profile",
+    "ensure_r2lab_gateway_access",
+    "ensure_slices_project_access",
     "find_workspace_root",
     "initialize_workspace",
     "load_access_record",
     "load_active_experiment_id",
     "load_experiment_record",
+    "load_experiment_status",
     "load_profile",
     "load_workspace",
+    "open_workspace_session",
     "profile_path",
     "resolve_identity_reference",
+    "save_experiment_status",
     "set_active_experiment",
     "verify_profile_identity",
     "verify_r2lab_gateway_access",
+    "verify_slices_experiment_binding",
     "verify_slices_project_access",
 ]
