@@ -21,6 +21,7 @@ SynthRAN separates durable controller identity, workspace configuration, experim
 │       ├── experiment.toml             # durable experiment identity/binding record
 │       ├── desired.json                # detailed requested experiment state
 │       ├── observed.json               # reconciled observation cache, when collected
+│       ├── status.json                 # legacy WorkspaceSession/provider-summary cache when used
 │       └── runs/
 │           └── run-NNN[-label]/
 │               └── run.json            # durable run identity record
@@ -49,6 +50,7 @@ Legacy accepted `.synthran/preparations/`, `.synthran/runs/`, and historical exp
 | Experiment identity and provider binding | `experiment.toml` | durable experiment record |
 | Detailed requested experiment state | `desired.json` | desired-state authority |
 | Current reconciled observation snapshot | `observed.json` | observation cache; source/freshness remain authoritative |
+| Legacy provider-session summary | `status.json` | compatibility/summary cache only |
 | Current reservation/allocation/lease/runtime facts | provider/direct observations | live truth when fresh |
 | Operation identity/plan/status/approval/events | `.synthran/operations/<operation-id>/` | operation-control records |
 | Run identity | experiment `runs/<run-id>/run.json` | durable run record |
@@ -132,15 +134,23 @@ Runtime-assigned values such as PDU addresses, pod names, reservations, allocati
 
 Provider experiment creation remains an operator action. A stored provider binding names an already-existing provider experiment and does not create one.
 
-## Observed state
+## Observed and status caches
 
-The reconciled observation cache is:
+The current application reconciliation cache is:
 
 ```text
 observed.json
 ```
 
 It stores the best selected observation for each collected dimension, including source, state, timestamp/freshness, ownership, resource ID when available, and bounded facts/detail.
+
+A separate older `WorkspaceSession` helper can persist a compact provider-experiment summary in:
+
+```text
+status.json
+```
+
+`status.json` is not the `ApplicationController` observed-state model and must not be confused with `observed.json`. Both are local cache/evidence surfaces; neither overrides current provider truth.
 
 Persisting `observed.json` does not promote it above its underlying source authority. The current truth order remains:
 
@@ -213,15 +223,17 @@ The no-argument interactive terminal discovers the nearest existing SynthRAN/Git
 
 An existing `.synthran` directory containing legacy accepted run evidence is adoptable. Initialization does not move, rename, rewrite, or recursively delete those artifacts.
 
-Initialization fails closed when `.synthran` contains ambiguous partial **new-format** state without `workspace.toml`, such as registry/active/access records, `sran-*` experiment folders, or `op-*` operation folders.
+Initialization fails closed when `.synthran` contains ambiguous partial new-format state without `workspace.toml`, such as registry/active/access records, `sran-*` experiment folders, or `op-*` operation folders.
 
 There is currently no top-level scripted `synthran init` command. The persistent initialization UX is the no-argument terminal startup flow.
 
 ## Startup and reconciliation
 
-After initialization, the application resolves workspace/profile authority and the active local experiment. Status may use persisted observed state for rendering, while provider-facing operations require the fresh facts dictated by policy.
+The production interactive shell constructs `ApplicationController`, which resolves durable workspace/profile/active-experiment authority. Status may use persisted `observed.json` for rendering; provider-facing operation policy requires the fresh facts dictated by the relevant policy.
 
-The application does not treat cached access/observed records as permission to mutate remote resources indefinitely. Freshness and ownership are rechecked at the appropriate boundary, and concrete executors must still perform final live provider checks.
+The repository also contains `open_workspace_session()` as a lower-level helper that can refresh cached SLICES/R2Lab access and recheck a bound provider experiment, persisting its compact `status.json` summary. The production terminal shell does not currently use that helper as its primary application startup path.
+
+Neither path treats cached access/observed/status records as permission to mutate remote resources indefinitely. Freshness and ownership are rechecked at the appropriate boundary, and concrete executors must still perform final live provider checks.
 
 ## Credential boundary
 
