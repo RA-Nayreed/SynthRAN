@@ -25,6 +25,8 @@ An existing profile is reused without asking the operator to re-enter its identi
 
 Initialization never reserves, allocates, powers, deploys, or changes provider resources. It verifies access first and persists local workspace/profile/access state only after the read-only checks succeed.
 
+When the initialized workspace has no active experiment, the terminal offers to create one through `ApplicationController.create_experiment()`. The default request is `iot-to-5g` with virtual RFSIM radio. A provider experiment can be bound from the prompt or left unset; live control remains fail-closed when no provider binding exists.
+
 ### Existing live-run artifacts
 
 A checkout may already contain legacy experiment evidence such as:
@@ -66,7 +68,7 @@ History is in-memory by default. Terminal commands therefore are not copied to a
 
 `TerminalSession` handles local UI/read-only commands and returns workflow commands as structured `CommandRequest` objects. `TerminalCommandRouter` is the only interactive dispatch boundary.
 
-The current router maps application-modeled lifecycle requests as follows:
+Every registered workflow command now reaches the shared application layer and either returns a policy error or creates an immutable operation plan:
 
 | Terminal command | Application action |
 |---|---|
@@ -74,12 +76,34 @@ The current router maps application-modeled lifecycle requests as follows:
 | `/up` | plan exactly one current progression step: `reserve`, `allocate`, `prepare`, or `up` |
 | `/verify` | plan the current read-only `verify-path` step |
 | `/recover` | plan one explicit `recover-*` step when reconciliation exposes exactly one |
+| `/run baseline` | plan R2 `run-baseline` only from current `PATH_PROVEN` state |
+| `/run congestion` | plan R2 `run-congestion` only from current `PATH_PROVEN` state |
+| `/stop` | plan R2 `stop` only while an experiment is currently running |
+| `/collect` | plan R1 evidence collection from a current proven path |
+| `/logs network` | plan R1 sanitized network-log access when network runtime state exists |
+| `/logs open5gs` | plan R1 sanitized Open5GS-log access when a current core runtime exists |
+| `/logs ue` | plan R1 sanitized UE-log access when a current UE runtime exists |
+| `/down` | plan R3 teardown only after the experiment is stopped and current ownership facts permit teardown |
 | `/config resources` | render durable workspace resource policy |
 | `/config experiment` | render the active experiment projection |
 
-Resource-bound planning requires a fresh `ResourceInventory` supplied through an inventory adapter. If no fresh adapter is configured, the router fails closed before creating an operation.
+Resource-bound network planning requires a fresh `ResourceInventory` supplied through an inventory adapter. If no fresh adapter is configured, the router fails closed before creating an operation.
 
 `/up` never silently turns path verification into a mutation. When the network is ready and `verify-path` is next, it instructs the operator to use `/verify`.
+
+The experiment/evidence/log/teardown commands are evaluated by a pure application workflow policy and then passed into the same `OperationController` used for reconciliation. Their operation plans are therefore bound to the exact desired state, observed-state digest, policy digest, risk class, approval mode, operation journal, and concurrency model rather than being terminal-only actions.
+
+## Workflow policy
+
+Application workflow planning is intentionally state-sensitive:
+
+- experiment start requires current `PATH_PROVEN` evidence and refuses to start over an already running experiment;
+- stop requires a current `EXPERIMENT_RUNNING` observation;
+- collection is R1 and requires a current proven path;
+- component log operations are R1 and require the relevant runtime to exist;
+- teardown is R3, refuses to run while the experiment is active, and refuses stale, foreign, or unknown ownership facts before a destructive plan can be created.
+
+A change to desired state, observed state, workflow policy, or bound inputs after plan review invalidates later authorization through the shared operation-engine drift checks.
 
 ## Provider execution boundary
 
@@ -87,17 +111,9 @@ Planning is not execution. A planned operation prints its operation ID, risk, ap
 
 The terminal does **not** tunnel a workflow into the legacy CLI to make it appear implemented. That would bypass the shared application, immutable operation plan, approval, ownership, freshness, and provider-adapter boundaries.
 
-The following registered commands still require dedicated application/domain executors before the interactive terminal may run them:
+The interactive router now has a first-class application plan for every registered workflow command, but provider/domain execution remains a separate boundary. A future executor must consume an authorized `ExecutionPermit`, perform its live provider checks immediately before any mutation, emit only structured progress events to the terminal, and preserve recovery-required semantics on partial failure.
 
-```text
-/down
-/run baseline|congestion
-/stop
-/collect
-/logs network|open5gs|ue
-```
-
-Until those executors exist, the router returns an explicit error and confirms that no provider action was taken. The existing explicit scripted CLI remains available for operator-run live workflows.
+Until the corresponding provider/domain adapters are connected, creating a plan does not reserve, deploy, start, stop, collect, read remote logs, or tear down provider resources. The existing explicit scripted CLI remains available for operator-run live workflows and is not invoked secretly by the interactive terminal.
 
 ## Transcript and progress
 
