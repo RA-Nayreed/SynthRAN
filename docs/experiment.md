@@ -60,9 +60,19 @@ Live experiment changes are limited to:
 - run-labeled MQTT ConfigMaps and a central MQTT Deployment;
 - one temporary MQTT sidecar and config volume on the run-owned srsUE Deployment;
 - one temporary host route inside that pod network namespace;
-- local Cooja, `tunslip6`, SSH/kubectl port-forward, and ingress processes.
+- on the Duckburg controller: local Cooja simulation, reverse/forward SSH tunnel processes, and central collector client;
+- on the root core node: remote `tunslip6`, `tun0`, `CountedTcpIngress`, remote kubectl edge port-forward, and an isolated run-scoped workspace (`/tmp/synthran/<run-id>/`).
 
-Cleanup removes exact run-labeled resources, removes the sidecar by strategic patch, waits for the srsUE Deployment to recover, and reproves the accepted network path. A cleanup failure prevents an `IOT-TO-5G PATH PROVEN` result.
+Cleanup targets only resources proven to belong to the requested run:
+- terminates run-owned local and remote process groups;
+- deletes the run-created/partially-created `tun0` interface on the core node and verifies its absence postcondition;
+- removes the isolated run-scoped workspace `/tmp/synthran/<run-id>/` on the core node and verifies its absence postcondition;
+- removes the temporary UE sidecar and config volume by strategic patch;
+- removes run-labeled central broker and ConfigMap objects;
+- waits for the srsUE Deployment to recover and reconciles RFSIM runtime if needed;
+- reproves the accepted base network.
+
+A cleanup or network-reproof failure prevents an `IOT-TO-5G PATH PROVEN` result.
 
 ## Operator commands
 
@@ -105,7 +115,7 @@ A successful run records checks for:
 - deterministic Cooja startup and Serial Socket availability;
 - RPL border-router attachment through `tunslip6/tun0`;
 - sensor MQTT connections crossing the counted `tun0` ingress;
-- edge bridge configuration bound to the accepted UE PDU address;
+- edge bridge configuration bound to the live dynamically discovered UE PDU address on `tun_srsue1`;
 - `tun_srsue1` transmit-counter growth during telemetry delivery;
 - the accepted slice-one UPF route remaining path-proven;
 - receipt of all ten deterministic streams by the central broker and collector;
@@ -113,7 +123,7 @@ A successful run records checks for:
 - no duplicate or missing sequence numbers in the accepted collection window;
 - valid append-only JSONL;
 - deterministic derived Parquet;
-- exact-run cleanup and successful reproof of the base network.
+- exact-run remote and Kubernetes cleanup with verified absence postconditions and successful reproof of the base network.
 
 Only when every check passes does the experiment manifest use `status=iot-to-5g-path-proven` and the evidence report end with:
 

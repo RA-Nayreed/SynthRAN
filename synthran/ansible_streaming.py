@@ -66,6 +66,13 @@ FRIENDLY_MAPPINGS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+# Tasks that are always visible even without a friendly mapping.
+VISIBLE_TASK_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"^Wait for .+ to become Ready$", re.I),
+    re.compile(r"^Pin(ning)? locked .+ images?$", re.I),
+    re.compile(r"^Recording run ownership$", re.I),
+]
+
 
 def format_duration(seconds: float) -> str:
     """Format elapsed seconds as human-readable string (e.g. 30s, 1m, 2m 30s)."""
@@ -104,11 +111,29 @@ def is_ugly_template_task(name: str) -> bool:
     return "<<" in name and ">>" in name and ("error" in lower or "undefined" in lower)
 
 
+def _is_visible_task(name: str) -> bool:
+    """Return True if a task name should be visible to the operator.
+
+    A task is visible if it has a friendly mapping or matches a visible pattern.
+    Unmapped internal tasks (gather facts, command, file, assert, etc.) are suppressed.
+    """
+    cleaned = _clean_ansible_title(name)
+    for pattern, _replacement in FRIENDLY_MAPPINGS:
+        if pattern.search(cleaned):
+            return True
+    for pattern in VISIBLE_TASK_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
+
+
 def parse_ansible_line(line: str, current_task: str | None = None) -> str | None:
     """Parse one raw Ansible line into a sanitized high-level event or None.
 
     Routine host lines (OK, CHANGED, SKIPPED) and ugly skipped template errors are suppressed.
-    Failures (FAILED, FATAL, UNREACHABLE) remain surfaced with task and host context.
+    Unmapped internal TASK names are suppressed during normal execution.
+    Failures (FAILED, FATAL, UNREACHABLE) remain surfaced with task and host context,
+    including the cleaned task name even if the TASK header itself was suppressed.
     """
     stripped = line.strip()
     if not stripped:
@@ -126,7 +151,10 @@ def parse_ansible_line(line: str, current_task: str | None = None) -> str | None
         if is_ugly_template_task(raw_name):
             return None
         name = friendly_task_name(raw_name)
-        return f"  TASK: {name}"
+        if _is_visible_task(raw_name):
+            return f"  TASK: {name}"
+        # Suppress unmapped internal TASK lines during normal execution
+        return None
 
     match = HANDLER_RE.match(stripped)
     if match:

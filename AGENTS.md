@@ -162,14 +162,14 @@ Experiment acceptance requires all of:
 - deterministic Cooja/Serial Socket startup;
 - `tunslip6/tun0` readiness;
 - all ten sensor identities crossing the counted ingress;
-- bridge binding to the accepted UE PDU address;
+- bridge binding to the live dynamically discovered UE PDU address;
 - `tun_srsue1` traffic-counter growth during telemetry delivery;
 - accepted UPF path remaining valid;
 - all ten streams received centrally;
 - contiguous sequence windows with no duplicates or gaps;
 - valid JSONL;
 - deterministic Parquet;
-- exact-run cleanup;
+- exact-run remote and Kubernetes cleanup with verified absence postconditions;
 - successful network reproof after cleanup.
 
 Running pods or brokers alone are not acceptance.
@@ -182,12 +182,14 @@ Cleanup must:
 
 - target only resources proven to belong to the requested run;
 - use exact labels or exact known resource names, never broad guessed deletion;
-- terminate run-owned local process groups;
+- terminate run-owned local and remote process groups;
+- remove run-created/partially-created `tun0` on the core node and verify its absence postcondition;
+- remove the run-scoped workspace `/tmp/synthran/<run-id>/` on the core node and verify its absence postcondition;
 - remove the temporary UE-side sidecar/config without replacing the base UE container;
 - remove run-labeled central broker/config objects;
-- wait for the srsUE Deployment to recover;
+- wait for the srsUE Deployment to recover and reconcile RFSIM runtime if needed;
 - re-run accepted-network verification;
-- fail closed if the base deployment cannot be reproven.
+- fail closed if any cleanup step, postcondition, or base deployment reproof cannot be verified.
 
 Experiment cleanup never tears down the base 5G deployment. A failed experiment retains its run-scoped manifest and available logs, and its run ID is not reused.
 

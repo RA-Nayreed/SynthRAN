@@ -58,7 +58,8 @@ Run manifests retain dependency and overlay hashes, image digests, inventory has
 The controller host runs unprivileged without requiring `sudo`. Privileged TUN network setup (`tunslip6` and `tun0` at `fd00::1/64`) and TCP ingress run exclusively on the root core node (`inventory.core_node`).
 
 To ensure strict network isolation:
-1. The reverse SSH tunnel connecting Cooja's serial socket on the controller to the core node explicitly binds to loopback (`-R 127.0.0.1:60001:127.0.0.1:60001`). Remote ports are never exposed to public or non-loopback interfaces.
+1. The reverse SSH tunnel connecting Cooja's serial socket on the controller to the core node explicitly binds to loopback (`-R 127.0.0.1:60001:127.0.0.1:60001`). Remote ports are never exposed to public or wildcard interfaces (`0.0.0.0` or `[::]`), and `GatewayPorts=yes` is never required or enabled.
 2. All SSH commands employ strict host-key checking against the run's verified known hosts file (`StrictHostKeyChecking=yes`).
-3. Remote core node prerequisites fail closed if `tun0` exists prior to the run, preventing unauthorized adoption or mutation of existing host interfaces.
-4. Experiment cleanup removes only the run-created `tun0` interface and the isolated run workspace `/tmp/synthran/<run-id>/`.
+3. An early read-only SSH forwarding capability probe inspects effective sshd configuration (`sshd -T`) and requires `allowtcpforwarding` to permit both local and remote forwarding (`yes` or `all`), failing closed otherwise.
+4. Remote core node prerequisites fail closed if `tun0` exists prior to the run, preventing unauthorized adoption, mutation, or deletion of existing host interfaces.
+5. Experiment cleanup removes only the run-created/partially-created `tun0` interface and the isolated run workspace `/tmp/synthran/<run-id>/`, verifying postconditions that both are absent afterward. Cleanup failures fail closed and prevent experiment acceptance.

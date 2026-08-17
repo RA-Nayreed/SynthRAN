@@ -297,7 +297,7 @@ def _probe_experiment_host(
         "        rep['tun_dev'] = stat.S_ISCHR(st.st_mode)\n"
         "    except Exception:\n"
         "        pass\n"
-        "for tool in ['python3', 'ip', 'gcc', 'make', 'tar']:\n"
+        "for tool in ['python3', 'ip', 'gcc', 'make', 'tar', 'ifconfig']:\n"
         "    if shutil.which(tool) is None:\n"
         "        rep['missing_tools'].append(tool)\n"
         "if os.path.exists('/sys/class/net/tun0'):\n"
@@ -360,6 +360,83 @@ def _probe_experiment_host(
         raise ExperimentError(
             f"[FAIL] experiment-host: required ports {busy} are already in use on {host_name}"
         )
+
+
+def _probe_ssh_forwarding(
+    inventory: NetworkInventory,
+    *,
+    timeout_seconds: int = 15,
+) -> None:
+    """Verify that the experiment host allows both local and remote SSH forwarding."""
+    host = inventory.core_node
+    host_name = host.name
+    try:
+        cmd = ssh_command(host, "sshd", "-T")
+    except LivePreflightError as exc:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: SSH forwarding probe failed on {host_name}: {exc}"
+        ) from exc
+    result = _run(cmd, timeout_seconds=timeout_seconds)
+    if result.returncode != 0:
+        raise ExperimentError(
+            f"[FAIL] experiment-host: SSH forwarding required by the experiment "
+            f"is disabled on {host_name}"
+        )
+    forwarding_value: str | None = None
+    for line in result.stdout.splitlines():
+        parts = line.strip().lower().split(None, 1)
+        if len(parts) == 2 and parts[0] == "allowtcpforwarding":
+            forwarding_value = parts[1]
+            break
+    if forwarding_value not in ("yes", "all"):
+        raise ExperimentError(
+            f"[FAIL] experiment-host: SSH forwarding required by the experiment "
+            f"is disabled on {host_name}"
+        )
+
+
+def _wait_remote_tcp(
+    inventory: NetworkInventory,
+    *,
+    host: str,
+    port: int,
+    timeout_seconds: int = 30,
+    process: ManagedProcess | None = None,
+) -> None:
+    """Wait until a remote TCP port is connectable via an SSH-based Python probe."""
+    probe_code = (
+        "import socket, sys; "
+        "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); "
+        "s.settimeout(2); "
+        f"s.connect(('{host}', {port})); "
+        "s.close(); "
+        "print('ok')"
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process is not None and process.process.poll() is not None:
+            exit_code = process.process.poll()
+            raise ExperimentError(
+                f"{process.name} exited with code {exit_code} before "
+                f"remote TCP endpoint {host}:{port} became ready"
+            )
+        try:
+            cmd = ssh_command(inventory.core_node, "python3", "-c", probe_code)
+        except LivePreflightError as exc:
+            raise ExperimentError(str(exc)) from exc
+        result = _run(cmd, timeout_seconds=5)
+        if result.returncode == 0 and "ok" in result.stdout:
+            return
+        time.sleep(0.5)
+    if process is not None and process.process.poll() is not None:
+        exit_code = process.process.poll()
+        raise ExperimentError(
+            f"{process.name} exited with code {exit_code} before "
+            f"remote TCP endpoint {host}:{port} became ready"
+        )
+    raise ExperimentError(
+        f"remote TCP endpoint {host}:{port} did not become ready"
+    )
 
 
 def _transfer_directory(
@@ -970,8 +1047,9 @@ def _cleanup_live_resources(
     lock: DependencyLock,
     scenario: ExperimentScenario,
     ue_deployment: str | None,
+    remote_cleanup_errors: Sequence[str] = (),
 ) -> ExperimentCheck:
-    errors: list[str] = []
+    errors: list[str] = list(remote_cleanup_errors)
     cleanup_rollout_completed = False
     if ue_deployment is not None:
         try:
@@ -1079,6 +1157,7 @@ def execute_experiment(
         inventory,
         required_ports=(scenario.serial_socket_port, REMOTE_EDGE_FORWARD_PORT),
     )
+    _probe_ssh_forwarding(inventory)
     report("experiment host: OK")
 
     run_root = run_root.resolve()
@@ -1113,7 +1192,7 @@ def execute_experiment(
     failure: str | None = None
     remote_workspace = f"/tmp/synthran/{scenario.run_id}"
     remote_workspace_created = False
-    tun0_created = False
+    tun_state = "absent"  # proven by prerequisite: no pre-existing tun0
 
     try:
         report("Cooja dependency: preparing pinned checkout...")
@@ -1305,6 +1384,13 @@ def execute_experiment(
             log_path=logs / "edge-port-forward.log",
         )
         processes.append(edge_forward)
+        _wait_remote_tcp(
+            inventory,
+            host="127.0.0.1",
+            port=REMOTE_EDGE_FORWARD_PORT,
+            timeout_seconds=30,
+            process=edge_forward,
+        )
 
         central_forward = _start_process(
             "central MQTT port-forward",
@@ -1389,6 +1475,7 @@ def execute_experiment(
             "-t tun0 "
             "fd00::1/64",
         )
+        tun_state = "creation-attempted"
         tunslip = _start_process(
             "tunslip6",
             tunslip_cmd,
@@ -1428,7 +1515,7 @@ def execute_experiment(
                     f"tunslip6 exited before tun0 became ready; see {logs / 'tunslip6.log'}"
                 )
             raise ExperimentError("tun0 did not become UP with fd00::1 on remote experiment host")
-        tun0_created = True
+        tun_state = "ready"
 
         report(f"serial bridge: ready on {core_host.name}")
         report("RPL border router: tun0 ready")
@@ -1563,7 +1650,8 @@ def execute_experiment(
             except Exception as exc:
                 if failure is None:
                     failure = f"unable to stop {managed.name}: {exc}"
-        if tun0_created:
+        remote_cleanup_errors: list[str] = []
+        if tun_state in ("creation-attempted", "ready"):
             try:
                 _remote(
                     inventory,
@@ -1575,8 +1663,25 @@ def execute_experiment(
                     label="remote tun0 cleanup",
                     timeout_seconds=10,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                remote_cleanup_errors.append(f"remote tun0 cleanup: {exc}")
+            # Postcondition: verify tun0 is absent
+            try:
+                tun0_check = _run(
+                    ssh_command(
+                        inventory.core_node,
+                        "test", "-e", "/sys/class/net/tun0",
+                    ),
+                    timeout_seconds=5,
+                )
+                if tun0_check.returncode == 0:
+                    remote_cleanup_errors.append(
+                        "remote tun0 cleanup postcondition: tun0 still exists"
+                    )
+            except Exception as exc:
+                remote_cleanup_errors.append(
+                    f"remote tun0 cleanup postcondition: {exc}"
+                )
         if remote_workspace_created:
             try:
                 _remote(
@@ -1587,13 +1692,34 @@ def execute_experiment(
                     label="remote workspace cleanup",
                     timeout_seconds=10,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                remote_cleanup_errors.append(
+                    f"remote workspace cleanup: {exc}"
+                )
+            # Postcondition: verify run-scoped workspace is absent
+            try:
+                ws_check = _run(
+                    ssh_command(
+                        inventory.core_node,
+                        "test", "-d", remote_workspace,
+                    ),
+                    timeout_seconds=5,
+                )
+                if ws_check.returncode == 0:
+                    remote_cleanup_errors.append(
+                        f"remote workspace cleanup postcondition: "
+                        f"{remote_workspace} still exists"
+                    )
+            except Exception as exc:
+                remote_cleanup_errors.append(
+                    f"remote workspace cleanup postcondition: {exc}"
+                )
         cleanup_check = _cleanup_live_resources(
             inventory=inventory,
             lock=lock,
             scenario=scenario,
             ue_deployment=ue_deployment,
+            remote_cleanup_errors=remote_cleanup_errors,
         )
         if cleanup_check.passed:
             report(f"[PASS] cleanup-base-network: {cleanup_check.detail}")

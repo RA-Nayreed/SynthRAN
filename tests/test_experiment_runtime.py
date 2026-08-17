@@ -35,10 +35,12 @@ from synthran.experiment_runtime import (
     _one_name,
     _prepare_cooja_checkout,
     _probe_experiment_host,
+    _probe_ssh_forwarding,
     _render_manifest,
     _ssh_reverse_tunnel_command,
     _ssh_tunnel_command,
     _validate_java_runtime,
+    _wait_remote_tcp,
     _wait_tcp,
     execute_experiment,
 )
@@ -693,11 +695,18 @@ class FullRemoteExperimentRuntimeTests(unittest.TestCase):
                 )
                 stack.enter_context(patch("synthran.experiment_runtime._wait_tcp"))
 
-                # Remote tun0 address check: returns 0 with fd00::1
+                # Remote command runner mock
                 def fake_run(cmd, *args, **kwargs):
                     cmd_str = " ".join(cmd)
+                    if "sshd" in cmd_str:
+                        return CommandResult(0, "allowtcpforwarding yes\n", "")
+                    if "s.connect" in cmd_str:
+                        return CommandResult(0, "ok\n", "")
                     if "ip -j address show dev tun0" in cmd_str or "show dev tun0" in cmd_str:
                         return CommandResult(0, '[{"addr_info":[{"local":"fd00::1"}]}]', "")
+                    if "test -e" in cmd_str or "test -d" in cmd_str:
+                        # Postconditions: tun0 and workspace absent (test returns 1)
+                        return CommandResult(1, "", "")
                     return CommandResult(0, "", "")
 
                 stack.enter_context(patch("synthran.experiment_runtime._run", side_effect=fake_run))
@@ -811,7 +820,18 @@ class FullRemoteExperimentRuntimeTests(unittest.TestCase):
 
                 stack.enter_context(patch("synthran.experiment_runtime._start_process", side_effect=mock_start))
                 stack.enter_context(patch("synthran.experiment_runtime._wait_tcp"))
-                stack.enter_context(patch("synthran.experiment_runtime._run", return_value=CommandResult(1, "", "no dev")))
+                def fake_run(cmd, *args, **kwargs):
+                    cmd_str = " ".join(cmd)
+                    if "sshd" in cmd_str:
+                        return CommandResult(0, "allowtcpforwarding yes\n", "")
+                    if "s.connect" in cmd_str:
+                        return CommandResult(0, "ok\n", "")
+                    if "test -e" in cmd_str or "test -d" in cmd_str:
+                        # Postcondition checks: tun0 and workspace absent (test returns 1)
+                        return CommandResult(1, "", "")
+                    return CommandResult(1, "", "no dev")
+
+                stack.enter_context(patch("synthran.experiment_runtime._run", side_effect=fake_run))
                 stack.enter_context(
                     patch(
                         "synthran.experiment_runtime._cleanup_live_resources",
@@ -909,6 +929,489 @@ class ExperimentPrerequisitesTests(unittest.TestCase):
             mock_killpg.assert_called_with(99999, signal.SIGTERM)
             mock_proc.wait.assert_called()
             mock_stream.close.assert_called()
+
+
+class IfconfigPrerequisiteTests(unittest.TestCase):
+    def _sample_inventory(self, host_name: str = "sopnode-f2") -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                host_name,
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost(
+                "sopnode-f3",
+                {"ansible_host": "192.0.2.11", "ansible_user": "root", "ip": "192.0.2.11"},
+            ),
+            all_vars={},
+        )
+
+    def test_probe_passes_with_ifconfig_present(self) -> None:
+        inventory = self._sample_inventory()
+        valid_response = json.dumps(
+            {
+                "uid": 0,
+                "tun_dev": True,
+                "tun_exists": False,
+                "missing_tools": [],
+                "busy_ports": [],
+            }
+        )
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, valid_response, ""),
+            ),
+        ):
+            _probe_experiment_host(inventory)
+
+    def test_probe_fails_closed_when_ifconfig_missing(self) -> None:
+        inventory = self._sample_inventory()
+        missing_ifconfig_response = json.dumps(
+            {
+                "uid": 0,
+                "tun_dev": True,
+                "tun_exists": False,
+                "missing_tools": ["ifconfig"],
+                "busy_ports": [],
+            }
+        )
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, missing_ifconfig_response, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: required tools \['ifconfig'\] are missing on sopnode-f2",
+            ):
+                _probe_experiment_host(inventory)
+
+
+class SSHForwardingProbeTests(unittest.TestCase):
+    def _sample_inventory(self, host_name: str = "sopnode-f2") -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                host_name,
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost(
+                "sopnode-f3",
+                {"ansible_host": "192.0.2.11", "ansible_user": "root", "ip": "192.0.2.11"},
+            ),
+            all_vars={},
+        )
+
+    def test_forwarding_yes_passes(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\nallowTcpForwarding yes\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_all_passes(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\nallowtcpforwarding all\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_no_fails(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\nallowtcpforwarding no\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: SSH forwarding required by the experiment is disabled",
+            ):
+                _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_local_only_fails(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\nallowtcpforwarding local\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: SSH forwarding required by the experiment is disabled",
+            ):
+                _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_remote_only_fails(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\nallowtcpforwarding remote\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: SSH forwarding required by the experiment is disabled",
+            ):
+                _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_malformed_sshd_fails(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(1, "", "sshd: command not found"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: SSH forwarding required by the experiment is disabled",
+            ):
+                _probe_ssh_forwarding(inventory)
+
+    def test_forwarding_missing_key_fails(self) -> None:
+        inventory = self._sample_inventory()
+        sshd_output = "port 22\npermitRootLogin yes\n"
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, sshd_output, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"\[FAIL\] experiment-host: SSH forwarding required by the experiment is disabled",
+            ):
+                _probe_ssh_forwarding(inventory)
+
+
+class TunOwnershipAndCleanupTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "sopnode-f2",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost(
+                "sopnode-f3",
+                {"ansible_host": "192.0.2.11", "ansible_user": "root", "ip": "192.0.2.11"},
+            ),
+            all_vars={},
+        )
+
+    def test_preexisting_tun0_is_rejected(self) -> None:
+        inventory = self._sample_inventory()
+        tun0_exists_response = json.dumps(
+            {
+                "uid": 0,
+                "tun_dev": True,
+                "tun_exists": True,
+                "missing_tools": [],
+                "busy_ports": [],
+            }
+        )
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, tun0_exists_response, ""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"tun0 already exists.*refusing to adopt or delete it",
+            ):
+                _probe_experiment_host(inventory)
+
+    def test_cleanup_failure_prevents_acceptance(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        check = _cleanup_live_resources(
+            inventory=inventory,
+            lock=lock,
+            scenario=scenario,
+            ue_deployment=None,
+            remote_cleanup_errors=["remote tun0 cleanup: connection refused"],
+        )
+        self.assertFalse(check.passed)
+        self.assertIn("remote tun0 cleanup", check.detail)
+
+    def test_workspace_cleanup_failure_prevents_acceptance(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        check = _cleanup_live_resources(
+            inventory=inventory,
+            lock=lock,
+            scenario=scenario,
+            ue_deployment=None,
+            remote_cleanup_errors=["remote workspace cleanup: permission denied"],
+        )
+        self.assertFalse(check.passed)
+        self.assertIn("remote workspace cleanup", check.detail)
+
+    def test_tun0_postcondition_failure_prevents_acceptance(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        check = _cleanup_live_resources(
+            inventory=inventory,
+            lock=lock,
+            scenario=scenario,
+            ue_deployment=None,
+            remote_cleanup_errors=["remote tun0 cleanup postcondition: tun0 still exists"],
+        )
+        self.assertFalse(check.passed)
+        self.assertIn("tun0 still exists", check.detail)
+
+    def test_workspace_postcondition_failure_prevents_acceptance(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        check = _cleanup_live_resources(
+            inventory=inventory,
+            lock=lock,
+            scenario=scenario,
+            ue_deployment=None,
+            remote_cleanup_errors=[
+                "remote workspace cleanup postcondition: /tmp/synthran/exp-01 still exists"
+            ],
+        )
+        self.assertFalse(check.passed)
+        self.assertIn("still exists", check.detail)
+
+    def test_successful_cleanup_with_no_errors_allows_acceptance(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        with (
+            patch(
+                "synthran.experiment_runtime._delete_experiment_objects",
+                return_value=None,
+            ),
+            patch(
+                "synthran.experiment_runtime.verify_network_path",
+                return_value=MagicMock(ready=True),
+            ),
+        ):
+            check = _cleanup_live_resources(
+                inventory=inventory,
+                lock=lock,
+                scenario=scenario,
+                ue_deployment=None,
+                remote_cleanup_errors=[],
+            )
+        self.assertTrue(check.passed)
+        self.assertIn("reproven", check.detail)
+
+    def test_network_reproof_alone_cannot_override_cleanup_failure(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        with (
+            patch(
+                "synthran.experiment_runtime._delete_experiment_objects",
+                return_value=None,
+            ),
+            patch(
+                "synthran.experiment_runtime.verify_network_path",
+                return_value=MagicMock(ready=True),
+            ),
+        ):
+            check = _cleanup_live_resources(
+                inventory=inventory,
+                lock=lock,
+                scenario=scenario,
+                ue_deployment=None,
+                remote_cleanup_errors=["remote tun0 cleanup: failed"],
+            )
+        self.assertFalse(check.passed)
+        self.assertIn("remote tun0 cleanup", check.detail)
+
+
+class RemoteEdgePortForwardReadinessTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "sopnode-f2",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost(
+                "sopnode-f3",
+                {"ansible_host": "192.0.2.11", "ansible_user": "root", "ip": "192.0.2.11"},
+            ),
+            all_vars={},
+        )
+
+    def test_ready_port_succeeds(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, "ok\n", ""),
+            ),
+            patch("synthran.experiment_runtime.time.sleep"),
+        ):
+            _wait_remote_tcp(
+                inventory,
+                host="127.0.0.1",
+                port=18883,
+                timeout_seconds=5,
+            )
+
+    def test_timeout_fails_clearly(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(1, "", "Connection refused"),
+            ),
+            patch("synthran.experiment_runtime.time.sleep"),
+            patch("synthran.experiment_runtime.time.monotonic", side_effect=[0.0, 0.0, 100.0, 100.0]),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"remote TCP endpoint 127\.0\.0\.1:18883 did not become ready",
+            ):
+                _wait_remote_tcp(
+                    inventory,
+                    host="127.0.0.1",
+                    port=18883,
+                    timeout_seconds=5,
+                )
+
+    def test_child_process_early_exit_fails_immediately(self) -> None:
+        inventory = self._sample_inventory()
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 1
+        managed = ManagedProcess(
+            name="edge MQTT port-forward",
+            process=mock_proc,
+            log_path=Path("logs/edge.log"),
+            log_stream=MagicMock(),
+        )
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"edge MQTT port-forward exited with code 1 before remote TCP endpoint",
+            ):
+                _wait_remote_tcp(
+                    inventory,
+                    host="127.0.0.1",
+                    port=18883,
+                    timeout_seconds=5,
+                    process=managed,
+                )
+
+
+class DynamicPDURediscoveryTests(unittest.TestCase):
+    def test_accepted_address_replaced_by_runtime_address(self) -> None:
+        from dataclasses import replace
+
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        self.assertEqual(scenario.pdu_address, "12.1.0.1")
+        updated = replace(scenario, pdu_address="12.1.0.2")
+        self.assertEqual(updated.pdu_address, "12.1.0.2")
+        self.assertEqual(scenario.pdu_address, "12.1.0.1")
+
+    def test_live_address_propagated_to_scenario(self) -> None:
+        from dataclasses import replace
+
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        runtime_address = "12.1.0.7"
+        updated = replace(scenario, pdu_address=runtime_address)
+        self.assertEqual(updated.pdu_address, "12.1.0.7")
+        self.assertNotEqual(updated.pdu_address, scenario.pdu_address)
+
+
+class ReverseTunnelStrictnessTests(unittest.TestCase):
+    def test_reverse_tunnel_has_no_wildcard_binding(self) -> None:
+        inventory = NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "sopnode-f2",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost("sopnode-f3", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/tmp/known_hosts"}),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            cmd = _ssh_reverse_tunnel_command(inventory, remote_port=60001, local_port=60001)
+
+        self.assertIn("-N", cmd)
+        self.assertIn("ExitOnForwardFailure=yes", cmd)
+        self.assertIn("-R", cmd)
+        self.assertIn("127.0.0.1:60001:127.0.0.1:60001", cmd)
+        # Negative assertions: no wildcard bindings
+        for part in cmd:
+            self.assertNotIn("0.0.0.0", part, "reverse tunnel must not bind to 0.0.0.0")
+            if part != "root@192.0.2.10":
+                self.assertNotIn("::", part, "reverse tunnel must not bind to [::]")
 
 
 if __name__ == "__main__":

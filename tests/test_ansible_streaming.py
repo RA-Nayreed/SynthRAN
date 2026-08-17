@@ -73,13 +73,17 @@ class AnsibleStreamingParserTests(unittest.TestCase):
             parse_ansible_line("PLAY [all] *********************************************************************"),
             "  PLAY: all",
         )
-        self.assertEqual(
+        # Unmapped routine tasks like 'gather facts' are suppressed during normal execution
+        self.assertIsNone(
             parse_ansible_line("TASK [gather facts] ************************************************************"),
-            "  TASK: gather facts",
         )
         self.assertEqual(
             parse_ansible_line("TASK [5g/open5gs/config : install packages] ************************************"),
             "  TASK: Open5GS config: install packages",
+        )
+        self.assertEqual(
+            parse_ansible_line("TASK [Wait for AMF pod to become Ready] *****************************************"),
+            "  TASK: Wait for AMF pod to become Ready",
         )
         self.assertEqual(
             parse_ansible_line("RUNNING HANDLER [restart mosquitto] *********************************************"),
@@ -93,31 +97,48 @@ class AnsibleStreamingParserTests(unittest.TestCase):
             )
         )
 
-    def test_task_lines_strip_argument_decorations(self) -> None:
+    def test_task_lines_strip_argument_decorations_and_suppress_routine(self) -> None:
+        # Verify friendly_task_name strips argument decorations
         self.assertEqual(
+            friendly_task_name("command argv=['helm', 'status']"),
+            "command",
+        )
+        self.assertEqual(
+            friendly_task_name("file path=/etc/systemd/system/mosquitto.service"),
+            "file",
+        )
+        self.assertEqual(
+            friendly_task_name("k8s definition={'apiVersion': 'v1'}"),
+            "k8s",
+        )
+        self.assertEqual(
+            friendly_task_name("assert that=['result.rc == 0']"),
+            "assert",
+        )
+        self.assertEqual(
+            friendly_task_name("shell _raw_params=systemctl restart mosquitto"),
+            "shell",
+        )
+        self.assertEqual(
+            friendly_task_name("include_tasks apply={'tags': ['deploy']}"),
+            "include_tasks",
+        )
+
+        # Unmapped routine task lines are suppressed by parse_ansible_line
+        self.assertIsNone(
             parse_ansible_line("TASK [command argv=['helm', 'status']] ****************************************"),
-            "  TASK: command",
         )
-        self.assertEqual(
+        self.assertIsNone(
             parse_ansible_line("TASK [file path=/etc/systemd/system/mosquitto.service] *************************"),
-            "  TASK: file",
         )
-        self.assertEqual(
+        self.assertIsNone(
             parse_ansible_line("TASK [k8s definition={'apiVersion': 'v1'}] *************************************"),
-            "  TASK: k8s",
         )
-        self.assertEqual(
+        self.assertIsNone(
             parse_ansible_line("TASK [assert that=['result.rc == 0']] ******************************************"),
-            "  TASK: assert",
         )
-        self.assertEqual(
-            parse_ansible_line("TASK [shell _raw_params=systemctl restart mosquitto] ***************************"),
-            "  TASK: shell",
-        )
-        self.assertEqual(
-            parse_ansible_line("TASK [include_tasks apply={'tags': ['deploy']}] ********************************"),
-            "  TASK: include_tasks",
-        )
+
+        # Friendly-mapped tasks with argument decorations remain visible
         self.assertEqual(
             parse_ansible_line("TASK [Attach the run ID to the deployed network resources] **********************"),
             "  TASK: Recording run ownership",
@@ -247,6 +268,33 @@ class AnsibleStreamingRunnerTests(unittest.TestCase):
         self.assertIn("host: sopnode-f2", reported[1])
         self.assertIn("state: FATAL", reported[1])
         self.assertIn('fatal: [sopnode-f2]: FAILED!', result.stdout)
+
+    def test_hidden_unmapped_task_failure_still_reported_with_context(self) -> None:
+        script = (
+            "import sys\n"
+            "print('TASK [command argv=[\"ip\", \"link\"]] ********************************************')\n"
+            "print('fatal: [sopnode-f2]: FAILED! => {\"msg\": \"interface not found\"}')\n"
+            "sys.stdout.flush()\n"
+            "sys.exit(2)\n"
+        )
+        reported: list[str] = []
+        with tempfile.TemporaryDirectory() as temporary:
+            cwd = Path(temporary)
+            result = run_streaming_ansible_command(
+                [sys.executable, "-c", script],
+                cwd=cwd,
+                environment=None,
+                timeout_seconds=10,
+                report=reported.append,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        # The TASK header for 'command' is suppressed, but the fatal line reports the failure with task context
+        self.assertEqual(len(reported), 1)
+        self.assertIn("[FAIL] command", reported[0])
+        self.assertIn("host: sopnode-f2", reported[0])
+        self.assertIn("state: FATAL", reported[0])
+        self.assertIn("TASK [command argv=", result.stdout)
 
     def test_contextual_heartbeat_emission_with_task_name_and_duration(self) -> None:
         script = (

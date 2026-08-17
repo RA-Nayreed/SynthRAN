@@ -34,7 +34,6 @@ The operator establishes the SLICES session and context. These are intentionally
 slices auth login
 slices auth show
 slices project use PROJECT
-slices project show
 slices experiment show EXPERIMENT
 ```
 
