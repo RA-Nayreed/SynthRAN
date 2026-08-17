@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 import shutil
 from typing import Mapping
@@ -31,6 +30,7 @@ from synthran.workspace.store import (
     load_profile,
     normalize_identity_reference,
     profile_path,
+    resolve_identity_reference,
     save_access_record,
     save_profile,
     ssh_identity_fingerprint,
@@ -45,8 +45,8 @@ class InitializationRequest:
 
     root: Path
     project: str
-    slices_username: str
     profile_name: str = DEFAULT_PROFILE_NAME
+    slices_username: str | None = None
     r2lab_slice: str | None = None
     r2lab_identity: Path | None = None
     reservation_minutes: int = 120
@@ -56,6 +56,21 @@ class InitializationRequest:
     def __post_init__(self) -> None:
         validate_profile_name(self.profile_name)
         validate_safe_name(self.project, "SLICES project")
+        if self.reuse_profile:
+            if any(
+                value is not None
+                for value in (
+                    self.slices_username,
+                    self.r2lab_slice,
+                    self.r2lab_identity,
+                )
+            ):
+                raise WorkspaceError(
+                    "profile identity fields cannot be overridden when reusing a profile"
+                )
+            return
+        if self.slices_username is None:
+            raise WorkspaceError("SLICES username is required when creating a profile")
         validate_safe_name(self.slices_username, "SLICES username")
         if self.r2lab_slice is not None:
             validate_safe_name(self.r2lab_slice, "R2Lab slice")
@@ -94,26 +109,10 @@ def _profile_from_request(
     path = profile_path(request.profile_name, environment=environment)
     if request.reuse_profile:
         profile = load_profile(request.profile_name, environment=environment)
-        if profile.slices_username != request.slices_username:
-            raise WorkspaceError(
-                "existing profile SLICES username does not match initialization request"
+        if profile.r2lab_identity is not None:
+            observed = ssh_identity_fingerprint(
+                resolve_identity_reference(profile.r2lab_identity)
             )
-        if profile.r2lab_slice != request.r2lab_slice:
-            raise WorkspaceError(
-                "existing profile R2Lab slice does not match initialization request"
-            )
-        if request.r2lab_identity is None:
-            if profile.r2lab_identity is not None:
-                raise WorkspaceError(
-                    "existing profile has an R2Lab identity but initialization request does not"
-                )
-        else:
-            identity_reference = normalize_identity_reference(request.r2lab_identity)
-            if profile.r2lab_identity != identity_reference:
-                raise WorkspaceError(
-                    "existing profile R2Lab identity does not match initialization request"
-                )
-            observed = ssh_identity_fingerprint(request.r2lab_identity)
             if observed != profile.r2lab_identity_fingerprint:
                 raise WorkspaceError(
                     "existing profile R2Lab identity fingerprint no longer matches"
@@ -124,6 +123,8 @@ def _profile_from_request(
         raise WorkspaceError(
             f"SynthRAN profile '{request.profile_name}' already exists; reuse it explicitly"
         )
+    if request.slices_username is None:
+        raise WorkspaceError("SLICES username is required when creating a profile")
 
     identity_reference: str | None = None
     fingerprint: str | None = None
@@ -163,9 +164,11 @@ def plan_initialization(
     profile, profile_created = _profile_from_request(
         request, environment=environment, now=current
     )
+    if profile.slices_username is None:
+        raise WorkspaceError("selected profile has no SLICES username")
 
     slices_access = probe_slices_project_access(
-        username=request.slices_username,
+        username=profile.slices_username,
         project=request.project,
         runner=slices_runner,
         timeout_seconds=timeout_seconds,
@@ -173,10 +176,12 @@ def plan_initialization(
     )
 
     r2lab_access: AccessRecord | None = None
-    if request.r2lab_slice is not None and request.r2lab_identity is not None:
+    if profile.r2lab_slice is not None or profile.r2lab_identity is not None:
+        if profile.r2lab_slice is None or profile.r2lab_identity is None:
+            raise WorkspaceError("selected profile has incomplete R2Lab identity data")
         r2lab_access = probe_r2lab_gateway_access(
-            slice_name=request.r2lab_slice,
-            identity_reference=str(request.r2lab_identity),
+            slice_name=profile.r2lab_slice,
+            identity_reference=profile.r2lab_identity,
             runner=r2lab_runner,
             timeout_seconds=timeout_seconds,
             now=current,
@@ -213,7 +218,6 @@ def persist_initialization(
         raise WorkspaceError("SynthRAN profile appeared after initialization planning")
 
     profile_written = False
-    workspace_written = False
     try:
         if plan.profile_created:
             save_profile(plan.profile, environment=environment)
@@ -235,12 +239,11 @@ def persist_initialization(
             placement=request.placement,
             now=now,
         )
-        workspace_written = True
         save_access_record(root, plan.slices_access)
         if plan.r2lab_access is not None:
             save_access_record(root, plan.r2lab_access)
     except Exception:
-        if workspace_written and workspace_path.exists():
+        if workspace_path.exists():
             shutil.rmtree(workspace_path)
         if profile_written and profile_file.exists():
             profile_file.unlink()
