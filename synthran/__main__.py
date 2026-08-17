@@ -1,4 +1,4 @@
-from synthran.cli import main
+from synthran.entrypoint import main
 
 
 if __name__ == "__main__":
