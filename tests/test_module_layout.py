@@ -17,6 +17,7 @@ class ModuleLayoutTests(unittest.TestCase):
         self.assertTrue((SOURCE / "network" / "runtime.py").is_file())
         self.assertTrue((SOURCE / "network" / "resources.py").is_file())
         self.assertTrue((SOURCE / "network" / "rfsim.py").is_file())
+        self.assertTrue((SOURCE / "network" / "r2lab.py").is_file())
         self.assertTrue((SOURCE / "research" / "__init__.py").is_file())
         self.assertTrue((SOURCE / "research" / "collector.py").is_file())
         self.assertTrue((SOURCE / "research" / "instrumentation.py").is_file())
