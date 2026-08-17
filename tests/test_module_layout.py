@@ -24,6 +24,11 @@ class ModuleLayoutTests(unittest.TestCase):
         self.assertTrue((SOURCE / "research" / "iperf.py").is_file())
         self.assertTrue((SOURCE / "research" / "runtime.py").is_file())
         self.assertTrue((SOURCE / "research" / "sampling.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "__init__.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "model.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "store.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "registry.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "access.py").is_file())
 
     def test_flat_duplicate_modules_do_not_return(self) -> None:
         removed = {
@@ -41,6 +46,7 @@ class ModuleLayoutTests(unittest.TestCase):
             "research_iperf.py",
             "research_runtime.py",
             "research_sampling.py",
+            "workspace.py",
         }
         present = {path.name for path in SOURCE.iterdir() if path.is_file()}
         self.assertTrue(removed.isdisjoint(present), sorted(removed & present))
