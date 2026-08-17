@@ -11,13 +11,24 @@ import sqlite3
 from synthran.workspace.model import (
     ExperimentRecord,
     ExperimentStatus,
+    OperationRecord,
+    RunRecord,
     WorkspaceError,
     format_utc,
+    parse_operation_id,
+    parse_run_id,
     utc_now,
     validate_experiment_id,
-    validate_operation_id,
-    validate_run_id,
 )
+from synthran.workspace.records import (
+    load_operation_record,
+    load_run_record,
+    operation_directory,
+    run_directory,
+    save_operation_record,
+    save_run_record,
+)
+from synthran.workspace.status import load_experiment_status, save_experiment_status
 from synthran.workspace.store import (
     experiment_directory,
     load_experiment_record,
@@ -40,7 +51,7 @@ class ExperimentEntry:
 
 
 class WorkspaceRegistry:
-    """SQLite index whose research records remain recoverable from experiment folders."""
+    """SQLite index whose research records remain recoverable from durable folders."""
 
     def __init__(self, workspace_root: Path):
         self.workspace_root = workspace_root.resolve()
@@ -116,6 +127,18 @@ class WorkspaceRegistry:
         )
         return value
 
+    @staticmethod
+    def _set_counter_max(connection: sqlite3.Connection, key: str, value: int) -> None:
+        row = connection.execute(
+            "SELECT value FROM counters WHERE key = ?", (key,)
+        ).fetchone()
+        if row is None or int(row[0]) < value:
+            connection.execute(
+                "INSERT INTO counters(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
     def issue_experiment_id(self, now: datetime | None = None) -> str:
         current = (now or utc_now()).astimezone(timezone.utc)
         date_stamp = current.strftime("%Y%m%d")
@@ -176,12 +199,13 @@ class WorkspaceRegistry:
             for name in ("providers", "operations", "runs", "evidence", "datasets"):
                 (directory / name).mkdir(exist_ok=False)
             save_experiment_record(self.workspace_root, record)
-            self._write_status(
+            save_experiment_status(
+                self.workspace_root,
                 ExperimentStatus(
                     experiment_id=experiment_id,
                     state="configured",
                     updated_at_utc=format_utc(current),
-                )
+                ),
             )
             self.mark_experiment_status(experiment_id, "configured")
             if activate:
@@ -189,14 +213,16 @@ class WorkspaceRegistry:
         except Exception as exc:
             self.mark_experiment_status(experiment_id, "failed")
             try:
-                self._write_status(
-                    ExperimentStatus(
-                        experiment_id=experiment_id,
-                        state="failed",
-                        updated_at_utc=format_utc(utc_now()),
-                        notes=("experiment initialization did not complete",),
+                if (directory / "experiment.toml").is_file():
+                    save_experiment_status(
+                        self.workspace_root,
+                        ExperimentStatus(
+                            experiment_id=experiment_id,
+                            state="failed",
+                            updated_at_utc=format_utc(utc_now()),
+                            notes=("experiment initialization did not complete",),
+                        ),
                     )
-                )
             except Exception:
                 pass
             if isinstance(exc, WorkspaceError):
@@ -205,28 +231,6 @@ class WorkspaceRegistry:
                 f"experiment {experiment_id} could not be initialized; its ID remains consumed"
             ) from exc
         return record
-
-    def _write_status(self, status: ExperimentStatus) -> Path:
-        import json
-        import os
-        import tempfile
-
-        directory = experiment_directory(self.workspace_root, status.experiment_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / "status.json"
-        content = json.dumps(status.to_dict(), indent=2, sort_keys=True) + "\n"
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            dir=directory,
-            delete=False,
-        ) as temporary:
-            temporary.write(content)
-            temporary_path = Path(temporary.name)
-        os.chmod(temporary_path, 0o600)
-        temporary_path.replace(path)
-        return path
 
     def mark_experiment_status(self, experiment_id: str, status: str) -> None:
         validate_experiment_id(experiment_id)
@@ -260,7 +264,8 @@ class WorkspaceRegistry:
             raise WorkspaceError(
                 "run label must start with a lowercase letter or number and contain only lowercase letters, numbers, or '-'"
             )
-        created = format_utc(now or utc_now())
+        current = (now or utc_now()).astimezone(timezone.utc)
+        created = format_utc(current)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             exists = connection.execute(
@@ -271,20 +276,31 @@ class WorkspaceRegistry:
                 raise WorkspaceError(f"experiment {experiment_id} is not indexed")
             ordinal = self._next_counter(connection, f"run:{experiment_id}")
             run_id = f"run-{ordinal:03d}" + (f"-{label}" if label else "")
-            validate_run_id(run_id)
             connection.execute(
                 "INSERT INTO runs(experiment_id, run_id, ordinal, label, created_at_utc) "
                 "VALUES(?, ?, ?, ?, ?)",
                 (experiment_id, run_id, ordinal, label, created),
             )
             connection.execute("COMMIT")
-        run_directory = experiment_directory(self.workspace_root, experiment_id) / "runs" / run_id
+        directory = run_directory(self.workspace_root, experiment_id, run_id)
         try:
-            run_directory.mkdir(parents=True, exist_ok=False)
+            directory.mkdir(parents=True, exist_ok=False)
+            save_run_record(
+                self.workspace_root,
+                RunRecord(
+                    experiment_id=experiment_id,
+                    run_id=run_id,
+                    ordinal=ordinal,
+                    label=label,
+                    created_at_utc=created,
+                ),
+            )
         except OSError as exc:
             raise WorkspaceError(
-                f"unable to create run directory for {run_id}; ID remains consumed"
+                f"unable to create durable run record for {run_id}; ID remains consumed"
             ) from exc
+        except WorkspaceError:
+            raise
         return run_id
 
     def issue_operation_id(
@@ -294,13 +310,17 @@ class WorkspaceRegistry:
         experiment_id: str | None = None,
         now: datetime | None = None,
     ) -> str:
-        if not kind or len(kind) > 64 or any(
-            not (character.isalnum() or character in "._-") for character in kind
-        ):
-            raise WorkspaceError("operation kind contains unsafe characters")
+        current = (now or utc_now()).astimezone(timezone.utc)
+        created = format_utc(current)
+        record_template = OperationRecord(
+            operation_id="op-000001",
+            ordinal=1,
+            kind=kind,
+            experiment_id=experiment_id,
+            created_at_utc=created,
+        )
         if experiment_id is not None:
             validate_experiment_id(experiment_id)
-        created = format_utc(now or utc_now())
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             if experiment_id is not None:
@@ -312,62 +332,111 @@ class WorkspaceRegistry:
                     raise WorkspaceError(f"experiment {experiment_id} is not indexed")
             ordinal = self._next_counter(connection, "operation")
             operation_id = f"op-{ordinal:06d}"
-            validate_operation_id(operation_id)
             connection.execute(
                 "INSERT INTO operations(operation_id, ordinal, experiment_id, kind, created_at_utc) "
                 "VALUES(?, ?, ?, ?, ?)",
-                (operation_id, ordinal, experiment_id, kind, created),
+                (operation_id, ordinal, experiment_id, record_template.kind, created),
             )
             connection.execute("COMMIT")
-        directory = workspace_directory(self.workspace_root) / "operations" / operation_id
+        directory = operation_directory(self.workspace_root, operation_id)
         try:
             directory.mkdir(parents=True, exist_ok=False)
+            save_operation_record(
+                self.workspace_root,
+                OperationRecord(
+                    operation_id=operation_id,
+                    ordinal=ordinal,
+                    kind=record_template.kind,
+                    experiment_id=experiment_id,
+                    created_at_utc=created,
+                ),
+            )
         except OSError as exc:
             raise WorkspaceError(
-                f"unable to create operation directory for {operation_id}; ID remains consumed"
+                f"unable to create durable operation record for {operation_id}; ID remains consumed"
             ) from exc
+        except WorkspaceError:
+            raise
         return operation_id
 
     def rebuild_from_experiment_folders(self) -> int:
-        """Rebuild the experiment index and daily counters from durable folders."""
+        """Rebuild indexes and all non-reuse counters from durable workspace folders."""
 
-        experiment_root = workspace_directory(self.workspace_root) / "experiments"
+        workspace = workspace_directory(self.workspace_root)
+        experiment_root = workspace / "experiments"
+        operation_root = workspace / "operations"
         experiment_root.mkdir(parents=True, exist_ok=True)
-        records: list[ExperimentRecord] = []
-        consumed: list[tuple[str, str]] = []
+        operation_root.mkdir(parents=True, exist_ok=True)
+
+        experiments: list[tuple[str, ExperimentRecord | None, str]] = []
+        run_records: list[RunRecord] = []
+        run_maxima: dict[str, int] = {}
         for directory in sorted(path for path in experiment_root.iterdir() if path.is_dir()):
             try:
                 validate_experiment_id(directory.name)
             except WorkspaceError:
                 continue
             record_path = directory / "experiment.toml"
-            if record_path.is_file():
-                records.append(load_experiment_record(self.workspace_root, directory.name))
-                consumed.append((directory.name, "configured"))
-            else:
-                consumed.append((directory.name, "failed"))
+            record = (
+                load_experiment_record(self.workspace_root, directory.name)
+                if record_path.is_file()
+                else None
+            )
+            status = "failed"
+            if record is not None:
+                status = "configured"
+                try:
+                    status = load_experiment_status(
+                        self.workspace_root, directory.name
+                    ).state
+                except WorkspaceError:
+                    pass
+            experiments.append((directory.name, record, status))
 
+            runs_root = directory / "runs"
+            if not runs_root.is_dir():
+                continue
+            maximum = 0
+            for child in sorted(path for path in runs_root.iterdir() if path.is_dir()):
+                try:
+                    ordinal, _ = parse_run_id(child.name)
+                except WorkspaceError:
+                    continue
+                maximum = max(maximum, ordinal)
+                if (child / "run.json").is_file():
+                    run_records.append(
+                        load_run_record(self.workspace_root, directory.name, child.name)
+                    )
+            if maximum:
+                run_maxima[directory.name] = maximum
+
+        operation_records: list[OperationRecord] = []
+        operation_maximum = 0
+        for directory in sorted(path for path in operation_root.iterdir() if path.is_dir()):
+            try:
+                ordinal = parse_operation_id(directory.name)
+            except WorkspaceError:
+                continue
+            operation_maximum = max(operation_maximum, ordinal)
+            if (directory / "operation.json").is_file():
+                operation_records.append(
+                    load_operation_record(self.workspace_root, directory.name)
+                )
+
+        experiment_ids = {experiment_id for experiment_id, _, _ in experiments}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute("DELETE FROM runs")
             connection.execute("DELETE FROM operations")
             connection.execute("DELETE FROM experiments")
             connection.execute("DELETE FROM counters")
-            record_map = {record.experiment_id: record for record in records}
-            for experiment_id, status in consumed:
+
+            for experiment_id, record, status in experiments:
                 date_stamp, ordinal_text = experiment_id.split("-")[1:]
                 ordinal = int(ordinal_text)
-                counter_key = f"experiment:{date_stamp}"
-                current = connection.execute(
-                    "SELECT value FROM counters WHERE key = ?", (counter_key,)
-                ).fetchone()
-                if current is None or int(current[0]) < ordinal:
-                    connection.execute(
-                        "INSERT INTO counters(key, value) VALUES(?, ?) "
-                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        (counter_key, ordinal),
-                    )
-                record = record_map.get(experiment_id)
+                self._set_counter_max(
+                    connection, f"experiment:{date_stamp}", ordinal
+                )
                 created_at = (
                     record.created_at_utc
                     if record is not None
@@ -383,5 +452,48 @@ class WorkspaceRegistry:
                         f"experiments/{experiment_id}",
                     ),
                 )
+
+            for experiment_id, maximum in run_maxima.items():
+                self._set_counter_max(connection, f"run:{experiment_id}", maximum)
+            for record in run_records:
+                if record.experiment_id not in experiment_ids:
+                    connection.execute("ROLLBACK")
+                    raise WorkspaceError(
+                        f"run {record.run_id} references an unknown experiment"
+                    )
+                connection.execute(
+                    "INSERT INTO runs(experiment_id, run_id, ordinal, label, created_at_utc) "
+                    "VALUES(?, ?, ?, ?, ?)",
+                    (
+                        record.experiment_id,
+                        record.run_id,
+                        record.ordinal,
+                        record.label,
+                        record.created_at_utc,
+                    ),
+                )
+
+            if operation_maximum:
+                self._set_counter_max(connection, "operation", operation_maximum)
+            for record in operation_records:
+                if (
+                    record.experiment_id is not None
+                    and record.experiment_id not in experiment_ids
+                ):
+                    connection.execute("ROLLBACK")
+                    raise WorkspaceError(
+                        f"operation {record.operation_id} references an unknown experiment"
+                    )
+                connection.execute(
+                    "INSERT INTO operations(operation_id, ordinal, experiment_id, kind, created_at_utc) "
+                    "VALUES(?, ?, ?, ?, ?)",
+                    (
+                        record.operation_id,
+                        record.ordinal,
+                        record.experiment_id,
+                        record.kind,
+                        record.created_at_utc,
+                    ),
+                )
             connection.execute("COMMIT")
-        return len(consumed)
+        return len(experiments)
