@@ -319,6 +319,35 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(report.steps[0].risk, "R2")
         self.assertTrue(report.steps[0].mutates)
 
+    def test_unknown_allocation_stops_before_later_dependencies(self) -> None:
+        desired = ExperimentDesiredState.recommended(intent="virtual-5g")
+        report = plan_reconciliation(
+            desired,
+            snapshot(
+                *authority_ready(),
+                live("reservation", ownership="operator"),
+                live("allocation", state="unknown", ownership="unknown"),
+            ),
+            now=NOW,
+        )
+        self.assertEqual([step.name for step in report.steps], ["inspect-allocation"])
+        self.assertFalse(report.steps[0].mutates)
+
+    def test_absent_allocation_stops_at_allocate(self) -> None:
+        desired = ExperimentDesiredState.recommended(intent="virtual-5g")
+        report = plan_reconciliation(
+            desired,
+            snapshot(
+                *authority_ready(),
+                live("reservation", ownership="operator"),
+                live("allocation", state="absent", ownership="unowned"),
+            ),
+            now=NOW,
+        )
+        self.assertEqual([step.name for step in report.steps], ["allocate"])
+        self.assertEqual(report.steps[0].risk, "R2")
+        self.assertTrue(report.steps[0].mutates)
+
     def test_unknown_or_foreign_allocation_ownership_blocks_mutation(self) -> None:
         desired = ExperimentDesiredState.recommended(intent="virtual-5g")
         report = plan_reconciliation(
@@ -344,7 +373,7 @@ class ReconciliationTests(unittest.TestCase):
             ),
             now=NOW,
         )
-        self.assertIn("recover-allocation", [step.name for step in owned.steps])
+        self.assertEqual([step.name for step in owned.steps], ["recover-allocation"])
         external = plan_reconciliation(
             desired,
             snapshot(
@@ -369,10 +398,21 @@ class ReconciliationTests(unittest.TestCase):
             ),
             now=NOW,
         )
-        self.assertIn("obtain-r2lab-lease", [step.name for step in report.steps])
-        self.assertFalse(
-            next(step for step in report.steps if step.name == "obtain-r2lab-lease").mutates
+        self.assertEqual([step.name for step in report.steps], ["obtain-r2lab-lease"])
+        self.assertFalse(report.steps[0].mutates)
+
+    def test_unknown_preparation_stops_before_network_inspection(self) -> None:
+        desired = ExperimentDesiredState.recommended(intent="virtual-5g")
+        report = plan_reconciliation(
+            desired,
+            snapshot(
+                *authority_ready(),
+                live("reservation", ownership="operator"),
+                live("allocation", ownership="operator"),
+            ),
+            now=NOW,
         )
+        self.assertEqual([step.name for step in report.steps], ["inspect-preparation"])
 
     def test_ready_resources_and_absent_network_produce_one_up_step(self) -> None:
         desired = ExperimentDesiredState.recommended(intent="virtual-5g")
