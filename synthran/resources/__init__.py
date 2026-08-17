@@ -26,6 +26,7 @@ from synthran.resources.transaction import (
     ResourceTransactionError,
     ResourceTransactionResult,
     execute_resource_transaction,
+    validate_resource_adapters,
 )
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     "requirements_from_desired",
     "reviewed_resource_descriptors",
     "select_resources",
+    "validate_resource_adapters",
 ]
