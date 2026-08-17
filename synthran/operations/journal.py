@@ -182,17 +182,41 @@ def _load_event_objects(path: Path) -> list[Mapping[str, object]]:
     return result
 
 
-def next_event_sequence(root: Path, operation_id: str) -> int:
+def load_operation_events(root: Path, operation_id: str) -> tuple[OperationEvent, ...]:
+    """Load and integrity-check one operation-local event stream."""
+
+    validate_operation_id(operation_id)
+    plan = load_plan(root, operation_id)
     entries = _load_event_objects(operation_events_path(root, operation_id))
+    events: list[OperationEvent] = []
     expected = 1
     for value in entries:
-        if value.get("operation_id") != operation_id or value.get("sequence") != expected:
+        event = OperationEvent.from_dict(value)
+        if event.operation_id != operation_id:
+            raise WorkspaceError("operation event belongs to another operation")
+        if event.sequence != expected:
             raise WorkspaceError("operation event sequence is not contiguous")
+        if event.plan_sha256 != plan.plan_sha256:
+            raise WorkspaceError("operation event plan digest does not match the immutable plan")
+        if event.risk != plan.risk or event.mutates != plan.mutates:
+            raise WorkspaceError("operation event policy does not match the immutable plan")
+        events.append(event)
         expected += 1
-    return expected
+    return tuple(events)
+
+
+def next_event_sequence(root: Path, operation_id: str) -> int:
+    return len(load_operation_events(root, operation_id)) + 1
 
 
 def append_event(root: Path, event: OperationEvent) -> None:
+    plan = load_plan(root, event.operation_id)
+    if (
+        event.plan_sha256 != plan.plan_sha256
+        or event.risk != plan.risk
+        or event.mutates != plan.mutates
+    ):
+        raise WorkspaceError("operation event does not match the immutable plan")
     expected = next_event_sequence(root, event.operation_id)
     if event.sequence != expected:
         raise WorkspaceError("operation event sequence does not match the journal")
