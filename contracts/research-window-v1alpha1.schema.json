@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-window-v1alpha1.schema.json",
+  "title": "SynthRAN Research Measurement Window",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "start_utc", "end_utc", "start_monotonic_seconds", "end_monotonic_seconds"],
+  "properties": {
+    "schema": {"const": "synthran/research-window/v1alpha1"},
+    "start_utc": {"type": "string", "format": "date-time"},
+    "end_utc": {"type": "string", "format": "date-time"},
+    "start_monotonic_seconds": {"type": "number", "minimum": 0},
+    "end_monotonic_seconds": {"type": "number", "minimum": 0}
+  }
+}

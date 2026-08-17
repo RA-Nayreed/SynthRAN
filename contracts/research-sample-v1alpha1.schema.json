@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-sample-v1alpha1.schema.json",
+  "title": "SynthRAN Research Sample",
+  "type": "object",
+  "required": ["schema", "monotonic_seconds"],
+  "properties": {
+    "schema": {"const": "synthran/research-sample/v1alpha1"},
+    "monotonic_seconds": {"type": "number", "minimum": 0},
+    "success": {"type": "boolean"},
+    "rtt_ms": {"type": ["number", "null"], "minimum": 0},
+    "ue_tx_bytes": {"type": "integer", "minimum": 0},
+    "ue_rx_bytes": {"type": "integer", "minimum": 0},
+    "measured_kbps": {"type": "number", "minimum": 0}
+  },
+  "additionalProperties": false
+}

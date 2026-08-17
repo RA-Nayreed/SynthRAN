@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-experiment-v1alpha1.schema.json",
+  "title": "SynthRAN Research Experiment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "run_id", "network_run_id", "condition", "cooja_seed", "sensor_count", "sensor_period_seconds", "warmup_seconds", "measurement_seconds", "sample_interval_seconds", "minimum_per_sensor", "expected_events", "load"],
+  "properties": {
+    "schema": {"const": "synthran/research-experiment/v1alpha1"},
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "network_run_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "condition": {"enum": ["baseline", "congestion", "calibration"]},
+    "cooja_seed": {"type": "integer", "minimum": 0},
+    "sensor_count": {"const": 10},
+    "sensor_period_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "warmup_seconds": {"type": "integer", "minimum": 0, "maximum": 600},
+    "measurement_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+    "sample_interval_seconds": {"type": "number", "minimum": 0.2, "maximum": 60},
+    "minimum_per_sensor": {"type": "integer", "minimum": 3, "maximum": 100},
+    "expected_events": {"type": "integer", "minimum": 10},
+    "load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "target_fraction", "reference_kbps", "target_kbps", "payload_bytes"],
+      "properties": {
+        "mode": {"enum": ["baseline", "congestion", "calibration"]},
+        "target_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "reference_kbps": {"type": ["number", "null"], "minimum": 1},
+        "target_kbps": {"type": "number", "minimum": 0},
+        "payload_bytes": {"type": "integer", "minimum": 64, "maximum": 65536}
+      }
+    }
+  }
+}

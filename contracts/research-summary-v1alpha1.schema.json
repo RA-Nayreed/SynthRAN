@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-summary-v1alpha1.schema.json",
+  "title": "SynthRAN Research Campaign Summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "conditions", "paired_effects", "run_count", "sha256"],
+  "properties": {
+    "schema": {"const": "synthran/research-summary/v1alpha1"},
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "conditions": {"type": "object"},
+    "paired_effects": {"type": "object"},
+    "run_count": {"type": "integer", "minimum": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

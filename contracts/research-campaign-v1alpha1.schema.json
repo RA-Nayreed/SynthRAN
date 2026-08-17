@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-campaign-v1alpha1.schema.json",
+  "title": "SynthRAN Research Campaign",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "network_run_id", "randomization_seed", "reference_kbps", "runs"],
+  "properties": {
+    "schema": {"const": "synthran/research-campaign/v1alpha1"},
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "network_run_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "randomization_seed": {"type": "integer"},
+    "reference_kbps": {"type": "number", "minimum": 1},
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ordinal", "seed", "condition", "target_fraction", "run_id"],
+        "properties": {
+          "ordinal": {"type": "integer", "minimum": 1},
+          "seed": {"type": "integer", "minimum": 0},
+          "condition": {"enum": ["baseline", "congestion"]},
+          "target_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+          "run_id": {"type": "string", "minLength": 1, "maxLength": 63}
+        }
+      }
+    }
+  }
+}

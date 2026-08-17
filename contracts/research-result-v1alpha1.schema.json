@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synthran.local/contracts/research-result-v1alpha1.schema.json",
+  "title": "SynthRAN Research Run Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "run_id", "network_run_id", "condition", "cooja_seed", "target_fraction", "telemetry", "probe", "network", "load"],
+  "properties": {
+    "schema": {"const": "synthran/research-result/v1alpha1"},
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "network_run_id": {"type": "string", "minLength": 1, "maxLength": 63},
+    "condition": {"enum": ["baseline", "congestion", "calibration"]},
+    "cooja_seed": {"type": "integer", "minimum": 0},
+    "target_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+    "telemetry": {"type": "object"},
+    "probe": {"type": "object"},
+    "network": {"type": "object"},
+    "load": {"type": "object"}
+  }
+}
