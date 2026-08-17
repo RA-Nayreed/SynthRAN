@@ -27,6 +27,26 @@ class CollectionResult:
     completed: bool
 
 
+def _mqtt_reason_succeeded(reason_code: Any) -> bool:
+    """Return whether a Paho v1/v2 connect reason represents success.
+
+    Callback API v2 passes a ReasonCode object.  It is intentionally not
+    coerced with int(): some Paho versions do not implement integer coercion,
+    which previously turned the literal Success reason into a refusal.
+    """
+    marker = getattr(reason_code, "is_failure", None)
+    if marker is not None:
+        try:
+            marker = marker() if callable(marker) else marker
+            return not bool(marker)
+        except Exception:
+            return False
+    try:
+        return int(reason_code) == 0
+    except (TypeError, ValueError):
+        return reason_code == 0
+
+
 def collect_mqtt(
     scenario: ExperimentScenario,
     *,
@@ -54,12 +74,8 @@ def collect_mqtt(
 
     def on_connect(client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
         nonlocal connected
-        try:
-            code = int(reason_code)
-        except (TypeError, ValueError):
-            code = 1
         with condition:
-            connected = code == 0
+            connected = _mqtt_reason_succeeded(reason_code)
             if connected:
                 client.subscribe(scenario.sensor_topic, qos=0)
             else:

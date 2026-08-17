@@ -15,6 +15,7 @@ from synthran.experiment import (
     load_jsonl,
     write_parquet,
 )
+from synthran.mqtt_collector import _mqtt_reason_succeeded
 
 
 class MqttCollectorDataTests(unittest.TestCase):
@@ -91,6 +92,29 @@ class MqttCollectorDataTests(unittest.TestCase):
                 [(row["sensor_id"], row["sequence"]) for row in rows],
                 [("sensor-01", 1), ("sensor-01", 2), ("sensor-02", 2)],
             )
+
+
+class MqttReasonCodeTests(unittest.TestCase):
+    def test_callback_api_v2_success_does_not_require_int_conversion(self) -> None:
+        class SuccessReason:
+            is_failure = False
+
+            def __int__(self) -> int:
+                raise TypeError("not integer-convertible")
+
+            def __str__(self) -> str:
+                return "Success"
+
+        self.assertTrue(_mqtt_reason_succeeded(SuccessReason()))
+
+    def test_callback_api_v2_failure_is_rejected(self) -> None:
+        class FailureReason:
+            is_failure = True
+
+        self.assertFalse(_mqtt_reason_succeeded(FailureReason()))
+
+    def test_legacy_numeric_success_is_supported(self) -> None:
+        self.assertTrue(_mqtt_reason_succeeded(0))
 
 
 if __name__ == "__main__":

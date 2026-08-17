@@ -142,6 +142,9 @@ The deterministic scenario is:
 - fixed Cooja seed and topology;
 - Java 21 verified before any live Kubernetes/5G mutation;
 - `deploy/iot/sensor/project-conf.h` enables Contiki-NG TCP socket support (`#define UIP_CONF_TCP 1`);
+- preparation installs host runtime packages (`net-tools` for `ifconfig`);
+- pre-run stale runtime recovery automatically reclaims only provably orphaned (PPID 1) processes matching exact SynthRAN signatures (edge port-forward `18883:1883`, central port-forward `18885:18884`, `ingress.py`, `tunslip6`), while active, foreign, or ambiguous ownership remains strictly fail-closed;
+- host preflight verifies reserved remote ports `60001`, `18883`, and `18885` are available;
 - Cooja Serial Socket listening on Duckburg (127.0.0.1:60001);
 - strict loopback-only reverse SSH tunnel forwarding Duckburg port 60001 to core node port 60001;
 - root `tunslip6` built and executed on the selected core node (`inventory.core_node`) creating `tun0` at `fd00::1/64` without local controller `sudo`;
@@ -169,7 +172,7 @@ Experiment acceptance requires all of:
 - contiguous sequence windows with no duplicates or gaps;
 - valid JSONL;
 - deterministic Parquet;
-- exact-run remote and Kubernetes cleanup with verified absence postconditions;
+- exact-run remote process cleanup and verified host absence postconditions;
 - successful network reproof after cleanup.
 
 Running pods or brokers alone are not acceptance.
@@ -183,13 +186,15 @@ Cleanup must:
 - target only resources proven to belong to the requested run;
 - use exact labels or exact known resource names, never broad guessed deletion;
 - terminate run-owned local and remote process groups;
+- explicitly terminate exact run-scoped remote processes (matching run workspace, UE pod, and central deployment);
 - remove run-created/partially-created `tun0` on the core node and verify its absence postcondition;
 - remove the run-scoped workspace `/tmp/synthran/<run-id>/` on the core node and verify its absence postcondition;
+- verify host runtime postconditions (reserved ports `60001`, `18883`, and `18885` free, `tun0` absent, workspace absent);
 - remove the temporary UE-side sidecar/config without replacing the base UE container;
 - remove run-labeled central broker/config objects;
 - wait for the srsUE Deployment to recover and reconcile RFSIM runtime if needed;
 - re-run accepted-network verification;
-- fail closed if any cleanup step, postcondition, or base deployment reproof cannot be verified.
+- fail closed if any cleanup step, host postcondition, or base deployment reproof cannot be verified.
 
 Experiment cleanup never tears down the base 5G deployment. A failed experiment retains its run-scoped manifest and available logs, and its run ID is not reused.
 

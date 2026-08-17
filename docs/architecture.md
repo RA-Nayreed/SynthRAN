@@ -79,9 +79,11 @@ The experiment makes only narrow, reversible changes on top of the accepted netw
 - add one temporary route inside the srsUE pod network namespace;
 - run local Cooja and strict SSH reverse/forward tunnel processes on Duckburg, and execute `tunslip6`, `tun0`, `CountedTcpIngress`, and remote edge port-forward in an isolated run workspace on the root core node.
 
+Before live mutation, SynthRAN automatically scans `/proc` on the core node to reclaim provably orphaned SynthRAN background processes (`18883:1883`, `18885:18884`, `ingress.py`, `tunslip6`) and verifies reserved ports `60001`, `18883`, and `18885` are free, while foreign or active processes fail closed.
+
 The sidecar patch does not replace the UE container, its image, credentials, or radio configuration. After the route is installed the edge sidecar is restarted so its bridge reconnects against the proven route.
 
-Cleanup is fail-closed and run-scoped. Local and remote process groups are terminated, run-created/partially-created `tun0` and the isolated run workspace are removed on the core node with verified absence postconditions, the sidecar and volume are removed by exact strategic patch, run-labeled Kubernetes objects are deleted by the exact experiment run label, the srsUE rollout is allowed to recover, RFSIM runtime is reconciled, and the accepted network verifier is run again. A cleanup or network-reproof failure prevents `iot-to-5g-path-proven` status.
+Cleanup is fail-closed and run-scoped. Local and remote process groups are terminated, exact run-scoped remote processes are reaped, run-created/partially-created `tun0` and the isolated run workspace are removed on the core node with verified absence postconditions, host postconditions (ports free, tun0 absent, workspace absent) are verified, the sidecar and volume are removed by exact strategic patch, run-labeled Kubernetes objects are deleted by the exact experiment run label, the srsUE rollout is allowed to recover, RFSIM runtime is reconciled, and the accepted network verifier is run again. A cleanup, host postcondition, or network-reproof failure prevents `iot-to-5g-path-proven` status.
 
 ## Data boundary
 

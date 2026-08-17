@@ -91,7 +91,7 @@ The command performs these guarded steps:
 - allocate both nodes together and verify their shared allocation owner;
 - record newly imaged SSH host keys in a run-scoped ignored file and reject later changes;
 - reuse upstream imaging, Linux, Kubernetes, CNI, storage, and GRE roles;
-- install exact direct Python packages, checksum-verified yq, and exact Helm;
+- install required host runtime packages (`net-tools` for `ifconfig`), exact direct Python packages, checksum-verified yq, and exact Helm;
 - stop before every Open5GS and srsRAN deployment role.
 
 It never calls `deploy.sh`, never frees an allocation, never ignores reservation failure, and never rolls back a partially modified testbed automatically.
@@ -158,7 +158,12 @@ synthran experiment run \
   --run-id exp-001
 ```
 
-Controller privileges: Duckburg does **not** require `sudo`. SynthRAN automatically executes privileged TUN interface setup (`tunslip6` and `tun0` at `fd00::1/64`) and TCP ingress on the root core node (`inventory.core_node`) via a strict loopback-only reverse SSH tunnel.
+Runtime lifecycle and safety:
+- **Preflight host recovery:** Before mutation, SynthRAN automatically scans `/proc` on the core node and reclaims only provably stale/orphaned processes (PPID 1) matching exact SynthRAN signatures (`18883:1883`, `18885:18884`, `ingress.py`, `tunslip6`). Unknown, foreign, or active processes remain fail-closed.
+- **Port reservation:** Remote ports `60001`, `18883`, and `18885` are verified free before cluster mutation.
+- **Privilege isolation:** Duckburg does **not** require `sudo`. SynthRAN executes `tunslip6` and `tun0` (`fd00::1/64`) and TCP ingress on the root core node (`inventory.core_node`) via a strict loopback-only reverse SSH tunnel (`-R 127.0.0.1:60001:127.0.0.1:60001`).
+- **Dynamic PDU rediscovery:** The live UE PDU address on `tun_srsue1` is rediscovered after srsUE rollout and used for bridge binding; it is never assumed from historical manifests.
+- **Exact cleanup & postconditions:** Cleanup reaps exact run-scoped remote processes, removes `tun0` and workspace, verifies host postconditions (ports free, tun0 absent, workspace absent), and reproves the base network.
 
 Render persisted acceptance evidence without touching live state:
 
@@ -171,6 +176,8 @@ See the [integrated experiment guide](experiment.md) for full scenario details, 
 ## Failure and recovery
 
 Do not reuse a preparation or deployment run ID. A failure keeps a sanitized partial manifest and log. If preparation failed after imaging or reset began, inspect the named stage and preserve the artifacts; do not guess resource names, broadly delete, or automatically free the allocation.
+
+Base network `network-acceptance-20260817-04` is live-accepted. Consumed experiment run IDs `iot-acceptance-20260817-02` through `-05` recorded incremental hardening findings: missing `net-tools`/`ifconfig` (-02), stale edge port-forward (-03), dynamic PDU proof followed by stale central port-forward (-04), and Paho v2 ReasonCode evaluation / remote process persistence (-05). All subsequent live runs must use fresh, never-before-used run IDs.
 
 If preflight finds an existing `open5gs` namespace, stop. Verify ownership and use a separate operator-approved teardown procedure.
 

@@ -232,6 +232,210 @@ def _remote_path_exists(
     )
 
 
+def _remote_process_reap(
+    inventory: NetworkInventory,
+    *,
+    patterns: Sequence[str],
+    orphan_only: bool,
+    remove_proven_workspaces: bool = False,
+    remove_tun_if_tunslip: bool = False,
+    label: str,
+) -> Mapping[str, Any]:
+    """Reap only processes matching explicit SynthRAN runtime signatures.
+
+    For stale recovery, matching processes must already be orphaned (PPID 1),
+    or be a child of a matching wrapper whose PPID is 1.  Exact-run cleanup
+    can set ``orphan_only`` false because every pattern is run-scoped.
+    """
+    payload = json.dumps(
+        {
+            "patterns": list(patterns),
+            "orphan_only": orphan_only,
+            "remove_proven_workspaces": remove_proven_workspaces,
+            "remove_tun_if_tunslip": remove_tun_if_tunslip,
+        },
+        sort_keys=True,
+    )
+    reaper = r'''
+import json, os, re, shutil, signal, subprocess, sys, time
+
+cfg = json.loads(sys.argv[1])
+patterns = [re.compile(value) for value in cfg["patterns"]]
+self_pid = os.getpid()
+
+def read_process(pid):
+    if pid == self_pid:
+        return None
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read()
+        if not raw:
+            return None
+        cmd = raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        ppid = None
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("PPid:"):
+                    ppid = int(line.split()[1])
+                    break
+        if ppid is None:
+            return None
+        return {"pid": pid, "ppid": ppid, "cmd": cmd}
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError, ValueError):
+        return None
+
+records = {}
+for entry in os.listdir("/proc"):
+    if not entry.isdigit():
+        continue
+    record = read_process(int(entry))
+    if record is not None and any(pattern.search(record["cmd"]) for pattern in patterns):
+        records[record["pid"]] = record
+
+def orphaned(record):
+    if record["ppid"] == 1:
+        return True
+    parent = records.get(record["ppid"])
+    return parent is not None and parent["ppid"] == 1
+
+blocked = sorted(
+    record["pid"]
+    for record in records.values()
+    if cfg["orphan_only"] and not orphaned(record)
+)
+if blocked:
+    print(json.dumps({"killed": [], "blocked": blocked, "remaining": [], "workspaces": []}))
+    raise SystemExit(0)
+
+targets = sorted(records)
+target_commands = [records[pid]["cmd"] for pid in targets]
+for pid in targets:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+def alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            fields = handle.read().split()
+        return len(fields) > 2 and fields[2] != "Z"
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return False
+
+deadline = time.monotonic() + 5.0
+while time.monotonic() < deadline and any(alive(pid) for pid in targets):
+    time.sleep(0.1)
+for pid in targets:
+    if alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+deadline = time.monotonic() + 2.0
+while time.monotonic() < deadline and any(alive(pid) for pid in targets):
+    time.sleep(0.1)
+
+remaining = sorted(pid for pid in targets if alive(pid))
+workspaces = sorted(
+    set(
+        match.group(0)
+        for cmd in target_commands
+        for match in re.finditer(r"/tmp/synthran/[A-Za-z0-9._:-]+", cmd)
+    )
+)
+
+if not remaining and cfg["remove_tun_if_tunslip"] and any("/serial-io/tunslip6 " in cmd for cmd in target_commands):
+    if os.path.exists("/sys/class/net/tun0"):
+        subprocess.run(["ip", "link", "delete", "dev", "tun0"], check=False)
+
+if not remaining and cfg["remove_proven_workspaces"]:
+    for workspace in workspaces:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+print(json.dumps({"killed": targets, "blocked": [], "remaining": remaining, "workspaces": workspaces}))
+'''
+    output = _remote(
+        inventory,
+        "python3",
+        "-c",
+        reaper,
+        payload,
+        label=label,
+        timeout_seconds=20,
+    )
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ExperimentError(f"{label} did not return JSON") from exc
+    if not isinstance(result, dict):
+        raise ExperimentError(f"{label} returned malformed state")
+    blocked = result.get("blocked")
+    remaining = result.get("remaining")
+    if blocked:
+        raise ExperimentError(
+            "[FAIL] experiment-host: an active SynthRAN runtime already owns reserved resources; "
+            "refusing to terminate a non-orphaned process"
+        )
+    if remaining:
+        raise ExperimentError(f"{label} left matching remote processes alive: {remaining}")
+    return result
+
+
+def _reclaim_stale_experiment_runtime(inventory: NetworkInventory) -> int:
+    """Automatically reclaim only orphaned processes with SynthRAN signatures."""
+    patterns = (
+        r"kubectl port-forward -n open5gs pod/srsran-ue-[A-Za-z0-9.-]+ 18883:1883 --address 127\.0\.0\.1(?: |$)",
+        r"kubectl port-forward -n open5gs deployment/synthran-exp-central-[A-Za-z0-9.-]+ 18885:18884 --address 127\.0\.0\.1(?: |$)",
+        r"python3 /tmp/synthran/[A-Za-z0-9._:-]+/ingress\.py --listen-host fd00::1 --listen-port 1883 --target-host 127\.0\.0\.1 --target-port 18883(?: |$)",
+        r"/tmp/synthran/[A-Za-z0-9._:-]+/serial-io/tunslip6 -a 127\.0\.0\.1 -p 60001 -t tun0 fd00::1/64(?: |$)",
+    )
+    result = _remote_process_reap(
+        inventory,
+        patterns=patterns,
+        orphan_only=True,
+        remove_proven_workspaces=True,
+        remove_tun_if_tunslip=True,
+        label="stale SynthRAN runtime recovery",
+    )
+    killed = result.get("killed", [])
+    return len(killed) if isinstance(killed, list) else 0
+
+
+def _cleanup_remote_run_processes(
+    inventory: NetworkInventory,
+    *,
+    remote_workspace: str,
+    ue_pod: str | None,
+    central_deployment: str | None,
+) -> None:
+    """Terminate every remote process created by the exact experiment run."""
+    patterns = [
+        re.escape(f"python3 {remote_workspace}/ingress.py "),
+        re.escape(f"{remote_workspace}/serial-io/tunslip6 "),
+    ]
+    if ue_pod is not None:
+        patterns.append(
+            re.escape(
+                "kubectl port-forward -n open5gs "
+                f"pod/{ue_pod} {REMOTE_EDGE_FORWARD_PORT}:1883 --address 127.0.0.1"
+            )
+        )
+    if central_deployment is not None:
+        patterns.append(
+            re.escape(
+                "kubectl port-forward -n open5gs "
+                f"deployment/{central_deployment} "
+                f"{LOCAL_CENTRAL_FORWARD_PORT}:{CENTRAL_PORT} --address 127.0.0.1"
+            )
+        )
+    _remote_process_reap(
+        inventory,
+        patterns=tuple(patterns),
+        orphan_only=False,
+        label="exact-run remote process cleanup",
+    )
+
+
 def _remote_json(
     inventory: NetworkInventory,
     command: str,
@@ -301,7 +505,7 @@ def _core_address(inventory: NetworkInventory) -> str:
 def _probe_experiment_host(
     inventory: NetworkInventory,
     *,
-    required_ports: Sequence[int] = (60001, REMOTE_EDGE_FORWARD_PORT),
+    required_ports: Sequence[int] = (60001, REMOTE_EDGE_FORWARD_PORT, LOCAL_CENTRAL_FORWARD_PORT),
     timeout_seconds: int = 30,
 ) -> None:
     """Perform early capability check on the privileged experiment host before any live mutation."""
@@ -1174,9 +1378,16 @@ def execute_experiment(
     report("network prerequisite: OK")
 
     report(f"experiment host: checking {core_host.name}...")
+    reclaimed = _reclaim_stale_experiment_runtime(inventory)
+    if reclaimed:
+        report(f"experiment host: reclaimed {reclaimed} stale SynthRAN process(es)")
     _probe_experiment_host(
         inventory,
-        required_ports=(scenario.serial_socket_port, REMOTE_EDGE_FORWARD_PORT),
+        required_ports=(
+            scenario.serial_socket_port,
+            REMOTE_EDGE_FORWARD_PORT,
+            LOCAL_CENTRAL_FORWARD_PORT,
+        ),
     )
     _probe_ssh_forwarding(inventory)
     report("experiment host: OK")
@@ -1209,6 +1420,8 @@ def execute_experiment(
 
     processes: list[ManagedProcess] = []
     ue_deployment: str | None = None
+    ue_pod: str | None = None
+    central_deployment: str | None = None
     extra_checks: list[ExperimentCheck] = []
     failure: str | None = None
     remote_workspace = f"/tmp/synthran/{scenario.run_id}"
@@ -1259,6 +1472,7 @@ def execute_experiment(
 
         ue_deployment = _discover_ue_deployment(inventory, scenario.network_run_id)
         resource_names = names(scenario)
+        central_deployment = resource_names["central_deployment"]
         for index, value in enumerate(
             render_experiment_objects(
                 scenario,
@@ -1672,6 +1886,19 @@ def execute_experiment(
             except Exception as exc:
                 cleanup_errors.append(f"process stop ({managed.name}): {exc}")
 
+        # Local SSH/session teardown is not sufficient: remote kubectl and
+        # helper processes can survive and be reparented to PID 1.  Reap the
+        # exact run signatures before removing tun0 or the remote workspace.
+        try:
+            _cleanup_remote_run_processes(
+                inventory,
+                remote_workspace=remote_workspace,
+                ue_pod=ue_pod,
+                central_deployment=central_deployment,
+            )
+        except Exception as exc:
+            cleanup_errors.append(f"remote process cleanup: {exc}")
+
         if tun_state in ("creation-attempted", "ready"):
             tun0_exists = False
             try:
@@ -1742,6 +1969,21 @@ def execute_experiment(
                 cleanup_errors.append(
                     f"remote workspace cleanup postcondition: {exc}"
                 )
+
+        # Cleanup is not successful merely because Kubernetes reproves.  The
+        # host must also be back to the pre-experiment runtime state.
+        try:
+            _probe_experiment_host(
+                inventory,
+                required_ports=(
+                    scenario.serial_socket_port,
+                    REMOTE_EDGE_FORWARD_PORT,
+                    LOCAL_CENTRAL_FORWARD_PORT,
+                ),
+                timeout_seconds=30,
+            )
+        except Exception as exc:
+            cleanup_errors.append(f"remote runtime cleanup postcondition: {exc}")
 
         cleanup_check = _cleanup_live_resources(
             inventory=inventory,

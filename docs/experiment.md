@@ -53,7 +53,12 @@ Local Cooja runtime prerequisites are strictly validated before any live cluster
 - sensor compilation commands in generated Cooja scenarios explicitly embed the validated absolute Contiki checkout path (`CONTIKI=<path>`) rather than relying on unexpanded `[CONTIKI_DIR]` placeholders or ambient parent environment variables;
 - child processes (`cooja`, SSH port-forwards) are actively monitored during readiness checks so early process exits fail immediately with the exit code and log file path instead of waiting for TCP socket timeouts.
 
-Network verification explicitly addresses the `ue` container (`kubectl exec ... -c ue -- ...`) when probing `tun_srsue1` and UE routing tables.
+Before live mutation, SynthRAN inspects the root core node and performs guarded preflight checks:
+- automatically reclaims only provably stale/orphaned processes (PPID 1 or child of matching PPID 1 wrapper) matching exact SynthRAN runtime signatures (edge port-forward `18883:1883`, central port-forward `18885:18884`, `ingress.py`, and `tunslip6`), while active, foreign, or ambiguous ownership remains strictly fail-closed;
+- verifies required tools (`ifconfig` from package `net-tools`, `gcc`, `make`, `python3`, `ip`, `tar`), root privileges, `/dev/net/tun`, absence of pre-existing `tun0`, and availability of reserved remote ports `60001`, `18883`, and `18885`;
+- validates SSH daemon configuration (`sshd -T`) to require `AllowTcpForwarding` (`yes` or `all`).
+
+Network verification explicitly addresses the `ue` container (`kubectl exec ... -c ue -- ...`) when probing `tun_srsue1` and UE routing tables. The live UE PDU address is discovered dynamically from `tun_srsue1` after srsUE rollout and is never assumed from historical evidence.
 
 Live experiment changes are limited to:
 
@@ -65,14 +70,20 @@ Live experiment changes are limited to:
 
 Cleanup targets only resources proven to belong to the requested run:
 - terminates run-owned local and remote process groups;
+- explicitly terminates exact run-scoped remote processes (matching run workspace, UE pod, and central deployment) before filesystem or network deletions;
 - deletes the run-created/partially-created `tun0` interface on the core node and verifies its absence postcondition;
 - removes the isolated run-scoped workspace `/tmp/synthran/<run-id>/` on the core node and verifies its absence postcondition;
+- verifies host runtime postconditions (reserved ports `60001`, `18883`, and `18885` free, `tun0` absent, workspace absent);
 - removes the temporary UE sidecar and config volume by strategic patch;
 - removes run-labeled central broker and ConfigMap objects;
 - waits for the srsUE Deployment to recover and reconciles RFSIM runtime if needed;
 - reproves the accepted base network.
 
-A cleanup or network-reproof failure prevents an `IOT-TO-5G PATH PROVEN` result.
+A cleanup, host postcondition, or network-reproof failure prevents an `IOT-TO-5G PATH PROVEN` result.
+
+## Current status and live evidence
+
+The base network `network-acceptance-20260817-04` is live-accepted and `path-proven`. Integrated IoT-to-5G experiment execution has been exercised through live attempts `iot-acceptance-20260817-02` through `-05`, which exposed prerequisite gaps (`net-tools`/`ifconfig`), port collisions from orphaned `kubectl` processes, Paho v2 MQTT `ReasonCode` success handling, and the requirement for explicit remote process reaping during cleanup. The implementation is complete and hardened, but `IOT-TO-5G PATH PROVEN` status remains pending until a clean operator run is recorded.
 
 ## Operator commands
 

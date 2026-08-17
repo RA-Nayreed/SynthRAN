@@ -27,6 +27,8 @@ from synthran.experiment_runtime import (
     CommandResult,
     ManagedProcess,
     _cleanup_live_resources,
+    _cleanup_remote_run_processes,
+    _reclaim_stale_experiment_runtime,
     _collect_rollout_diagnostics,
     _copy_sensor_source,
     _core_address,
@@ -302,6 +304,69 @@ class ExperimentHostCapabilityProbeTests(unittest.TestCase):
                 r"\[FAIL\] experiment-host: required ports \[60001\] are already in use on sopnode-f2",
             ):
                 _probe_experiment_host(inventory)
+
+    def test_probe_default_includes_remote_central_forward_port(self) -> None:
+        inventory = self._sample_inventory()
+        valid_response = json.dumps(
+            {
+                "uid": 0,
+                "tun_dev": True,
+                "tun_exists": False,
+                "missing_tools": [],
+                "busy_ports": [],
+            }
+        )
+        captured: dict[str, str] = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = " ".join(str(part) for part in command)
+            return CommandResult(0, valid_response, "")
+
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch("synthran.experiment_runtime._run", side_effect=fake_run),
+        ):
+            _probe_experiment_host(inventory)
+
+        self.assertIn("18883", captured["command"])
+        self.assertIn("18885", captured["command"])
+        self.assertIn("60001", captured["command"])
+
+
+class RemoteRuntimeRecoveryTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost("sopnode-f2", {"ip": "192.0.2.10"}),
+            ran_node=InventoryHost("sopnode-f3", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+
+    def test_stale_recovery_reports_reclaimed_process_count(self) -> None:
+        inventory = self._sample_inventory()
+        with patch(
+            "synthran.experiment_runtime._remote_process_reap",
+            return_value={"killed": [10, 11], "blocked": [], "remaining": [], "workspaces": []},
+        ):
+            self.assertEqual(_reclaim_stale_experiment_runtime(inventory), 2)
+
+    def test_exact_run_cleanup_uses_run_scoped_signatures(self) -> None:
+        inventory = self._sample_inventory()
+        with patch("synthran.experiment_runtime._remote_process_reap") as reap:
+            _cleanup_remote_run_processes(
+                inventory,
+                remote_workspace="/tmp/synthran/iot-acceptance-test",
+                ue_pod="srsran-ue-srsran-ue-abc123",
+                central_deployment="synthran-exp-central-deadbeef",
+            )
+        kwargs = reap.call_args.kwargs
+        self.assertFalse(kwargs["orphan_only"])
+        joined = "\n".join(kwargs["patterns"])
+        self.assertIn("iot\\-acceptance\\-test", joined)
+        self.assertIn("18883:1883", joined)
+        self.assertIn("18885:18884", joined)
 
 
 class ReverseTunnelTests(unittest.TestCase):
@@ -648,11 +713,13 @@ class FullRemoteExperimentRuntimeTests(unittest.TestCase):
                 stack.enter_context(patch("synthran.experiment_runtime._validate_contiki_checkout", return_value=contiki_path))
                 stack.enter_context(patch("synthran.experiment_runtime._validate_java_runtime", return_value=java_home_path))
                 stack.enter_context(patch("synthran.experiment_runtime._prepare_cooja_checkout"))
-                stack.enter_context(patch("synthran.experiment_runtime._probe_experiment_host"))
+                mock_probe = stack.enter_context(patch("synthran.experiment_runtime._probe_experiment_host"))
 
                 # Track remote calls
                 def fake_remote(inv, *cmd, **kwargs):
                     commands_executed.append(cmd)
+                    if cmd and cmd[0] == "python3" and "-c" in cmd:
+                        return json.dumps({"killed": [], "blocked": [], "remaining": [], "workspaces": []})
                     return ""
 
                 def fake_remote_json(inv, cmd, **kwargs):
@@ -762,6 +829,17 @@ class FullRemoteExperimentRuntimeTests(unittest.TestCase):
                 cmd_flat = " ".join(cmd_args) if isinstance(cmd_args, (list, tuple)) else str(cmd_args)
                 self.assertNotIn("sudo", cmd_flat)
 
+            # Confirm _probe_experiment_host was called with all three reserved ports
+            self.assertEqual(mock_probe.call_count, 2)
+            self.assertEqual(
+                mock_probe.call_args_list[0].kwargs.get("required_ports"),
+                (60001, 18883, 18885),
+            )
+            self.assertEqual(
+                mock_probe.call_args_list[1].kwargs.get("required_ports"),
+                (60001, 18883, 18885),
+            )
+
     def test_early_tunslip_exit_fails_immediately_and_prints_cleanup(self) -> None:
         inventory = self._sample_inventory("sopnode-f2")
         progress_buffer = io.StringIO()
@@ -789,7 +867,12 @@ class FullRemoteExperimentRuntimeTests(unittest.TestCase):
                 stack.enter_context(patch("synthran.experiment_runtime._validate_java_runtime", return_value=java_home_path))
                 stack.enter_context(patch("synthran.experiment_runtime._prepare_cooja_checkout"))
                 stack.enter_context(patch("synthran.experiment_runtime._probe_experiment_host"))
-                stack.enter_context(patch("synthran.experiment_runtime._remote", return_value=""))
+                def fake_remote_exec(inv, *cmd, **kwargs):
+                    if cmd and cmd[0] == "python3" and "-c" in cmd:
+                        return json.dumps({"killed": [], "blocked": [], "remaining": [], "workspaces": []})
+                    return ""
+
+                stack.enter_context(patch("synthran.experiment_runtime._remote", side_effect=fake_remote_exec))
                 stack.enter_context(patch("synthran.experiment_runtime._remote_json", return_value={"items": [{"metadata": {"name": "ue-res"}}]}))
                 stack.enter_context(patch("synthran.experiment_runtime._transfer_directory"))
                 stack.enter_context(patch("synthran.experiment_runtime._transfer_file"))
@@ -1467,6 +1550,8 @@ class IdempotentTunCleanupAndProcessStopExecutionTests(unittest.TestCase):
                     if "delete" in cmd and "tun0" in cmd:
                         if tun0_delete_error is not None:
                             raise tun0_delete_error
+                    if cmd and cmd[0] == "python3" and "-c" in cmd:
+                        return json.dumps({"killed": [], "blocked": [], "remaining": [], "workspaces": []})
                     return ""
 
                 def fake_remote_json(inv, cmd, **kwargs):

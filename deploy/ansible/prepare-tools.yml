@@ -7,6 +7,13 @@
     ansible_python_interpreter: /usr/bin/python3
     synthran_python: /opt/synthran-venv/bin/python
   tasks:
+    - name: Install SynthRAN experiment runtime OS tools
+      ansible.builtin.apt:
+        name:
+          - net-tools
+        state: present
+        update_cache: false
+
     - name: Create the dedicated SynthRAN Python environment
       ansible.builtin.command:
         argv:
