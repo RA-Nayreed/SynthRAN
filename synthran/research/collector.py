@@ -9,7 +9,13 @@ import threading
 import time
 from typing import Any, Callable
 
-from synthran.experiment import ExperimentError, ExperimentScenario, TelemetryEvent, append_jsonl, append_rejected
+from synthran.experiment import (
+    ExperimentError,
+    ExperimentScenario,
+    TelemetryEvent,
+    append_jsonl,
+    append_rejected,
+)
 from synthran.mqtt_collector import _mqtt_reason_succeeded
 
 
@@ -32,6 +38,7 @@ def collect_mqtt_window(
     duration_seconds: int,
     warmup_seconds: int = 0,
     on_window_start: Callable[[], None] | None = None,
+    health_check: Callable[[], None] | None = None,
 ) -> WindowCollectionResult:
     if duration_seconds < 1:
         raise ExperimentError("measurement duration must be positive")
@@ -49,7 +56,13 @@ def collect_mqtt_window(
     records = 0
     sensors: set[str] = set()
 
-    def on_connect(client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+    def on_connect(
+        client: Any,
+        userdata: Any,
+        flags: Any,
+        reason_code: Any,
+        properties: Any = None,
+    ) -> None:
         del userdata, flags, properties
         nonlocal connected
         with condition:
@@ -109,18 +122,25 @@ def collect_mqtt_window(
             time.sleep(warmup_seconds)
         if on_window_start is not None:
             on_window_start()
+
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_path.touch(exist_ok=True)
         started_at = datetime.now(timezone.utc)
         with condition:
             active = True
         deadline = time.monotonic() + duration_seconds
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
+        try:
+            while True:
+                if health_check is not None:
+                    health_check()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                with condition:
+                    condition.wait(timeout=min(1.0, remaining))
+        finally:
             with condition:
-                condition.wait(timeout=min(1.0, remaining))
-        with condition:
-            active = False
+                active = False
         ended_at = datetime.now(timezone.utc)
         return WindowCollectionResult(
             records=records,
