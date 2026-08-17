@@ -10,3 +10,4 @@ dependencies:
   - pyarrow=21.0.0
   - ansible-core=2.20.5
   - openjdk=21.0.9
+  - prompt-toolkit=3.0.52

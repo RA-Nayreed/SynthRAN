@@ -3,8 +3,10 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from synthran.cli import _parser
+from synthran.launcher import main as launch
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -17,8 +19,18 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(
             project["project"]["scripts"],
-            {"synthran": "synthran.cli:main"},
+            {"synthran": "synthran.launcher:main"},
         )
+
+    def test_empty_argv_opens_interactive_terminal(self) -> None:
+        with patch("synthran.terminal.shell.run_terminal", return_value=0) as terminal:
+            self.assertEqual(launch([]), 0)
+        terminal.assert_called_once_with()
+
+    def test_explicit_argv_preserves_scripted_cli(self) -> None:
+        with patch("synthran.cli.main", return_value=7) as cli_main:
+            self.assertEqual(launch(["privacy", "scan", "--worktree"]), 7)
+        cli_main.assert_called_once_with(["privacy", "scan", "--worktree"])
 
     def test_parser_contains_experiment_commands(self) -> None:
         parser = _parser()
