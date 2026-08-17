@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from synthran.app.model import ApplicationSnapshot, DimensionView
+from synthran.app.workflows import plan_workflow
 from synthran.operations import (
     ApprovalGrant,
     ExecutionPermit,
@@ -246,6 +247,30 @@ class ApplicationController:
             step_name=step.name,
             targets=targets,
             bound_inputs=bound_inputs,
+            now=current,
+        )
+
+    def begin_workflow_operation(
+        self,
+        workflow: str,
+        *,
+        now: datetime | None = None,
+    ) -> OperationPlan:
+        """Plan one non-reconciliation application workflow through the same operation engine."""
+
+        current = (now or utc_now()).astimezone(timezone.utc)
+        record, desired = self._active_desired()
+        if record.slices_experiment is None:
+            raise WorkspaceError(
+                "active experiment has no provider experiment binding; bind one before live control"
+            )
+        observed = self._active_observed(now=current, allow_empty=False)
+        policy = plan_workflow(desired, observed, workflow, now=current)
+        return self.operations.begin(
+            desired=desired,
+            observed=observed,
+            step_name=workflow,
+            policy_report=policy,
             now=current,
         )
 
