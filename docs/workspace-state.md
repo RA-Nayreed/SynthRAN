@@ -82,7 +82,7 @@ Slow-changing authorization is cached with both a verification timestamp and an 
 
 The default refresh interval is 12 hours. The refresh boundary is clipped to provider expiry. Access may still be revoked before a published expiry, so the expiry is never treated as permission to skip periodic verification indefinitely.
 
-R2Lab gateway authentication follows the same 12-hour cache policy. An active R2Lab lease is not cached as mutation authority; it is checked live before every R2Lab resource mutation.
+R2Lab gateway authentication follows the same 12-hour cache policy. Its cached access record is bound to the SSH public-key fingerprint that was actually verified. A changed identity forces another gateway authentication check even when the old cache has not reached its time refresh boundary. An active R2Lab lease is not cached as mutation authority; it is checked live before every R2Lab resource mutation.
 
 Provider experiments are temporary and are checked when an experiment is resumed or before any operation that depends on them.
 
@@ -138,7 +138,7 @@ run-002-load025
 run-003-load050
 ```
 
-Run IDs are also never reused.
+Each issued run directory contains a small `run.json` identity record. The directory name itself is sufficient to preserve the consumed ordinal if a failure occurs before `run.json` can be written. Run IDs are therefore never reused after registry recovery.
 
 ## Operation identity
 
@@ -155,19 +155,27 @@ op-000041
 op-000042
 ```
 
-An operation may be associated with an experiment, but infrastructure inspection and other workspace actions may exist without one.
+Each issued operation directory contains `operation.json`. As with runs, an incomplete but valid operation directory still consumes its ordinal. An operation may be associated with an experiment, but infrastructure inspection and other workspace actions may exist without one.
 
 ## Registry behavior
 
-`.synthran/registry.sqlite3` provides atomic ID allocation, concurrency control, and fast lookup. It is not the only copy of experiment configuration.
+`.synthran/registry.sqlite3` provides atomic ID allocation, concurrency control, and fast lookup. It is not the only copy of research identity or experiment configuration.
 
-Experiment directories are durable records. The experiment index and daily experiment counters can be rebuilt by scanning valid experiment directories. A partially initialized experiment directory still consumes its ID.
+The filesystem preserves every issued identifier. Registry recovery scans:
+
+- experiment directory names and `experiment.toml` / `status.json`;
+- run directory names and `run.json`;
+- operation directory names and `operation.json`.
+
+A valid directory without its record is treated as an interrupted issuance and still consumes the identifier. This prevents experiment, run, or operation ID reuse after SQLite loss.
 
 The registry maintains independent counters for:
 
 - experiment IDs per UTC date;
 - run IDs per experiment;
 - operation IDs per workspace.
+
+The index rows can be rebuilt where durable records exist, while the highest observed valid directory ordinal restores each non-reuse counter even for interrupted records.
 
 ## Startup behavior
 
@@ -177,7 +185,7 @@ A normal terminal startup should perform local checks first:
 2. load the selected profile;
 3. validate local profile structure and SSH identity fingerprint;
 4. read cached access records;
-5. refresh only access records whose refresh boundary has passed;
+5. refresh only access records whose refresh boundary has passed or whose identity binding changed;
 6. load the active experiment pointer;
 7. check the provider experiment because provider experiments are short-lived;
 8. reconcile live reservation, allocation, lease, Kubernetes, core, RAN, UE, PDU, and experiment state only when required by the selected operation or status view.
