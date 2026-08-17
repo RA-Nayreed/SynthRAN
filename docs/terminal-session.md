@@ -44,7 +44,11 @@ Commands that require an application workflow are returned as a structured `Comm
 /config resources|experiment
 ```
 
-The session does not pretend that routing is execution. A higher command router must map these requests to `ApplicationController`, operation policy, resource selection, and provider adapters.
+`TerminalCommandRouter` is the single interactive dispatch boundary. It maps commands only through application-layer workflows; it does not call the scripted CLI as a hidden mutation shortcut.
+
+Current application-modeled routing covers `/reserve`, `/up`, `/verify`, `/recover`, and both `/config` views. Resource-bound planning requires a fresh provider inventory adapter and fails closed when one is unavailable.
+
+`/down`, `/run`, `/stop`, `/collect`, and `/logs` remain registered but cannot execute interactively until dedicated application/domain executors are connected. The router reports that boundary explicitly and performs no provider action.
 
 In OBSERVE mode, mutating requests are rejected before they can become dispatch requests.
 
@@ -60,6 +64,8 @@ error
 ```
 
 Valid command entries are normalized from the strict parser, so arbitrary provider/resource overrides do not enter the transcript through the command line.
+
+Router results are copied into the transcript through `record_dispatch_result()` only after passing the same terminal line-safety contract.
 
 `/clear` clears only these visible lines. Durable `.synthran/operations/*` and `.synthran/sessions/events.jsonl` records are unaffected.
 
@@ -97,8 +103,8 @@ Operation op-000041: completed
 
 The session never parses raw provider stdout/stderr to create these lines. It renders only the structured event vocabulary validated by the operation layer.
 
-## Shell boundary
+## Interactive shell
 
-This session controller is independent of the concrete input library. A prompt-toolkit shell can provide history, completion, key bindings, prompt styling, and asynchronous screen refresh while continuing to call `TerminalSession.submit()` and `operation_updates()`.
+The production shell is implemented with `prompt_toolkit` and calls `TerminalSession.submit()` plus `TerminalCommandRouter.dispatch()`. It provides registry-backed completion, in-memory history, OBSERVE/OPERATE prompts, and a bottom toolbar derived from `ApplicationSnapshot`.
 
-That keeps terminal ergonomics separate from lifecycle authority and provider execution.
+Running `synthran` with no arguments opens this shell. Supplying any explicit arguments delegates unchanged to the existing scripted CLI. See `docs/terminal-shell.md` for the launcher and provider-execution boundary.
