@@ -46,14 +46,47 @@ def state(*items: Observation) -> ObservedState:
     )
 
 
+def controlled(*items: Observation) -> ObservedState:
+    return state(
+        observation("controller", ownership="operator"),
+        observation("project_access", ownership="operator"),
+        observation("provider_experiment", ownership="operator"),
+        *items,
+    )
+
+
 class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.desired = ExperimentDesiredState.recommended(intent="iot-to-5g")
 
+    def test_live_workflow_requires_current_controller_authority(self) -> None:
+        report = plan_workflow(
+            self.desired,
+            state(observation("path")),
+            "run-baseline",
+            now=NOW,
+        )
+        self.assertTrue(report.blocks)
+        self.assertIn("controller", report.blocks[0])
+
+        stale = plan_workflow(
+            self.desired,
+            state(
+                observation("controller", fresh=False),
+                observation("project_access"),
+                observation("provider_experiment"),
+                observation("path"),
+            ),
+            "run-baseline",
+            now=NOW,
+        )
+        self.assertTrue(stale.blocks)
+        self.assertIn("controller", stale.blocks[0])
+
     def test_run_baseline_requires_current_path_proof(self) -> None:
         ready = plan_workflow(
             self.desired,
-            state(observation("path")),
+            controlled(observation("path")),
             "run-baseline",
             now=NOW,
         )
@@ -65,7 +98,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         blocked = plan_workflow(
             self.desired,
-            state(observation("path", state="absent")),
+            controlled(observation("path", state="absent")),
             "run-baseline",
             now=NOW,
         )
@@ -75,7 +108,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_run_is_blocked_while_an_experiment_is_running(self) -> None:
         report = plan_workflow(
             self.desired,
-            state(
+            controlled(
                 observation("path"),
                 observation("experiment", running=True),
             ),
@@ -88,7 +121,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_stop_requires_running_experiment(self) -> None:
         running = plan_workflow(
             self.desired,
-            state(
+            controlled(
                 observation("path"),
                 observation("experiment", running=True),
             ),
@@ -100,7 +133,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         idle = plan_workflow(
             self.desired,
-            state(observation("path"), observation("experiment", running=False)),
+            controlled(observation("path"), observation("experiment", running=False)),
             "stop",
             now=NOW,
         )
@@ -109,7 +142,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_collect_is_read_only_and_requires_current_path(self) -> None:
         report = plan_workflow(
             self.desired,
-            state(observation("path")),
+            controlled(observation("path")),
             "collect",
             now=NOW,
         )
@@ -119,7 +152,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         stale = plan_workflow(
             self.desired,
-            state(observation("path", fresh=False)),
+            controlled(observation("path", fresh=False)),
             "collect",
             now=NOW,
         )
@@ -128,7 +161,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_component_logs_require_the_relevant_runtime(self) -> None:
         missing = plan_workflow(
             self.desired,
-            state(observation("path")),
+            controlled(observation("path")),
             "logs-open5gs",
             now=NOW,
         )
@@ -136,7 +169,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         ready = plan_workflow(
             self.desired,
-            state(observation("path"), observation("core")),
+            controlled(observation("path"), observation("core")),
             "logs-open5gs",
             now=NOW,
         )
@@ -144,7 +177,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
         self.assertEqual(ready.steps[0].risk, "R1")
 
     def test_down_is_r3_and_binds_exact_sorted_targets(self) -> None:
-        current = state(
+        current = controlled(
             observation("path"),
             observation("reservation", ownership="operator"),
             observation("allocation"),
@@ -162,7 +195,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_down_fails_closed_on_foreign_stale_or_unidentified_resources(self) -> None:
         foreign = plan_workflow(
             self.desired,
-            state(observation("path"), observation("allocation", ownership="other")),
+            controlled(observation("path"), observation("allocation", ownership="other")),
             "down",
             now=NOW,
         )
@@ -171,7 +204,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         stale = plan_workflow(
             self.desired,
-            state(observation("path"), observation("allocation", fresh=False)),
+            controlled(observation("path"), observation("allocation", fresh=False)),
             "down",
             now=NOW,
         )
@@ -180,7 +213,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
 
         unidentified = plan_workflow(
             self.desired,
-            state(observation("path"), observation("allocation", exact=False)),
+            controlled(observation("path"), observation("allocation", exact=False)),
             "down",
             now=NOW,
         )
@@ -196,7 +229,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
     def test_down_requires_stop_before_teardown(self) -> None:
         report = plan_workflow(
             self.desired,
-            state(
+            controlled(
                 observation("path"),
                 observation("experiment", running=True),
             ),
