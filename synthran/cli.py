@@ -29,6 +29,18 @@ from synthran.live_preflight import (
     run_live_preflight,
     save_live_evidence,
 )
+from synthran.network.r2lab import (
+    DEFAULT_TIMEOUT_SECONDS as DEFAULT_R2LAB_TIMEOUT_SECONDS,
+    R2LabResourceError,
+    R2LabSelection,
+    SUPPORTED_QFITS,
+    SUPPORTED_QHATS,
+    SUPPORTED_RADIOS,
+    build_plan as build_r2lab_plan,
+    execute_prepare as execute_r2lab_prepare,
+    execute_release as execute_r2lab_release,
+    run_doctor as run_r2lab_doctor,
+)
 from synthran.network.resources import (
     DEFAULT_DURATION_MINUTES,
     ResourcePreparationError,
@@ -279,6 +291,22 @@ def _add_slices_context(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_r2lab_selection_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--slice",
+        dest="r2lab_slice",
+        default=os.environ.get("SYNTHRAN_R2LAB_SLICE"),
+        help="R2Lab slice name (or SYNTHRAN_R2LAB_SLICE)",
+    )
+    parser.add_argument("--radio", required=True, choices=sorted(SUPPORTED_RADIOS))
+    parser.add_argument(
+        "--ue", required=True, choices=sorted(SUPPORTED_QHATS | SUPPORTED_QFITS)
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=DEFAULT_R2LAB_TIMEOUT_SECONDS
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="synthran")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -296,6 +324,56 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout", type=int, default=DEFAULT_CONTROLLER_TIMEOUT_SECONDS
     )
     _add_slices_context(slices_doctor)
+
+    r2lab = subcommands.add_parser(
+        "r2lab", help="verify and control exact R2Lab radio resources"
+    )
+    r2lab_commands = r2lab.add_subparsers(dest="r2lab_command", required=True)
+
+    r2lab_doctor = r2lab_commands.add_parser(
+        "doctor", help="verify Faraday access and an active R2Lab lease"
+    )
+    _add_r2lab_selection_arguments(r2lab_doctor)
+    r2lab_doctor.add_argument("--json", action="store_true")
+
+    r2lab_plan = r2lab_commands.add_parser(
+        "plan", help="print exact R2Lab resource actions without executing them"
+    )
+    _add_r2lab_selection_arguments(r2lab_plan)
+    r2lab_plan.add_argument("--run-id", required=True)
+    r2lab_plan.add_argument("--json", action="store_true")
+
+    r2lab_prepare = r2lab_commands.add_parser(
+        "prepare", help="claim and power one R2Lab radio and UE under an active lease"
+    )
+    _add_r2lab_selection_arguments(r2lab_prepare)
+    r2lab_prepare.add_argument("--run-id", required=True)
+    r2lab_prepare.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/r2lab"),
+        help=argparse.SUPPRESS,
+    )
+
+    r2lab_release = r2lab_commands.add_parser(
+        "release", help="power off only resources owned by one SynthRAN R2Lab run"
+    )
+    r2lab_release.add_argument(
+        "--slice",
+        dest="r2lab_slice",
+        default=os.environ.get("SYNTHRAN_R2LAB_SLICE"),
+        help="R2Lab slice name (or SYNTHRAN_R2LAB_SLICE)",
+    )
+    r2lab_release.add_argument("--run-id", required=True)
+    r2lab_release.add_argument(
+        "--timeout", type=int, default=DEFAULT_R2LAB_TIMEOUT_SECONDS
+    )
+    r2lab_release.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/r2lab"),
+        help=argparse.SUPPRESS,
+    )
 
     deps = subcommands.add_parser("deps", help="manage immutable external dependencies")
     deps_commands = deps.add_subparsers(dest="deps_command", required=True)
@@ -498,6 +576,70 @@ def _slices_doctor(args: argparse.Namespace) -> int:
     )
     print(report.render())
     return 0
+
+
+def _r2lab_selection(args: argparse.Namespace) -> R2LabSelection:
+    if args.r2lab_slice is None:
+        raise R2LabResourceError(
+            "R2Lab control requires --slice or SYNTHRAN_R2LAB_SLICE"
+        )
+    return R2LabSelection.build(
+        slice_name=args.r2lab_slice,
+        radio=args.radio,
+        ue=args.ue,
+    )
+
+
+def _dispatch_r2lab(args: argparse.Namespace) -> int:
+    if args.r2lab_command == "doctor":
+        report = run_r2lab_doctor(
+            selection=_r2lab_selection(args),
+            timeout_seconds=args.timeout,
+        )
+        print(
+            json.dumps(report.to_dict(), indent=2, sort_keys=True)
+            if args.json
+            else report.render()
+        )
+        return 0 if report.ready else 2
+    if args.r2lab_command == "plan":
+        plan = build_r2lab_plan(
+            run_id=args.run_id,
+            selection=_r2lab_selection(args),
+        )
+        print(plan.render(as_json=args.json))
+        return 0
+    if args.r2lab_command == "prepare":
+        plan = build_r2lab_plan(
+            run_id=args.run_id,
+            selection=_r2lab_selection(args),
+        )
+        result = execute_r2lab_prepare(
+            plan=plan,
+            run_root=args.run_root,
+            timeout_seconds=args.timeout,
+            progress=sys.stdout,
+        )
+        print(f"R2Lab resources prepared for run {result.run_id}.")
+        print(f"Sanitized manifest: {result.manifest_path}")
+        print(f"Sanitized log: {result.log_path}")
+        return 0
+    if args.r2lab_command == "release":
+        if args.r2lab_slice is None:
+            raise R2LabResourceError(
+                "R2Lab release requires --slice or SYNTHRAN_R2LAB_SLICE"
+            )
+        result = execute_r2lab_release(
+            run_id=args.run_id,
+            slice_name=args.r2lab_slice,
+            run_root=args.run_root,
+            timeout_seconds=args.timeout,
+            progress=sys.stdout,
+        )
+        print(f"R2Lab resources released for run {result.run_id}.")
+        print(f"Sanitized manifest: {result.manifest_path}")
+        return 0
+    raise AssertionError("unreachable R2Lab command")
 
 
 def _deps_sync(args: argparse.Namespace) -> int:
@@ -1141,6 +1283,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _dispatch_experiment(args)
         if args.command == "slices" and args.slices_command == "doctor":
             return _slices_doctor(args)
+        if args.command == "r2lab":
+            return _dispatch_r2lab(args)
         if args.command == "deps" and args.deps_command == "sync":
             return _deps_sync(args)
         if args.command == "privacy" and args.privacy_command == "scan":
@@ -1165,6 +1309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         LivePreflightError,
         NetworkRuntimeError,
         PrivacyError,
+        R2LabResourceError,
         ResearchError,
         ResourcePreparationError,
         SlicesControllerError,
