@@ -36,6 +36,7 @@ from synthran.experiment_runtime import (
     _prepare_cooja_checkout,
     _probe_experiment_host,
     _probe_ssh_forwarding,
+    _remote_path_exists,
     _render_manifest,
     _ssh_reverse_tunnel_command,
     _ssh_tunnel_command,
@@ -1254,7 +1255,23 @@ class TunOwnershipAndCleanupTests(unittest.TestCase):
         self.assertTrue(check.passed)
         self.assertIn("reproven", check.detail)
 
-    def test_network_reproof_alone_cannot_override_cleanup_failure(self) -> None:
+    def test_cleanup_accepts_cleanup_errors_keyword(self) -> None:
+        inventory = self._sample_inventory()
+        from synthran.dependencies import load_lock
+
+        lock = load_lock(Path("dependencies.lock.yml"))
+        scenario = ExperimentScenario("exp-01", "net-01", "12.1.0.1")
+        check = _cleanup_live_resources(
+            inventory=inventory,
+            lock=lock,
+            scenario=scenario,
+            ue_deployment=None,
+            cleanup_errors=["process stop (tunslip6): kill failed"],
+        )
+        self.assertFalse(check.passed)
+        self.assertIn("process stop (tunslip6): kill failed", check.detail)
+
+    def test_process_stop_failure_cannot_be_overridden_by_network_reproof(self) -> None:
         inventory = self._sample_inventory()
         from synthran.dependencies import load_lock
 
@@ -1275,10 +1292,368 @@ class TunOwnershipAndCleanupTests(unittest.TestCase):
                 lock=lock,
                 scenario=scenario,
                 ue_deployment=None,
-                remote_cleanup_errors=["remote tun0 cleanup: failed"],
+                cleanup_errors=["process stop (Cooja simulator): exit timeout"],
             )
         self.assertFalse(check.passed)
-        self.assertIn("remote tun0 cleanup", check.detail)
+        self.assertIn("process stop (Cooja simulator)", check.detail)
+
+
+class RemotePathExistsTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "sopnode-f2",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost("sopnode-f3", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+
+    def test_remote_path_exists_returns_true_on_zero(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(0, "", ""),
+            ),
+        ):
+            self.assertTrue(_remote_path_exists(inventory, "/sys/class/net/tun0"))
+
+    def test_remote_path_absent_returns_false_on_one(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(1, "", ""),
+            ),
+        ):
+            self.assertFalse(_remote_path_exists(inventory, "/sys/class/net/tun0"))
+
+    def test_remote_path_unexpected_exit_code_raises(self) -> None:
+        inventory = self._sample_inventory()
+        with (
+            patch.dict("os.environ", {"SYNTHRAN_KNOWN_HOSTS": "/dev/null"}),
+            patch("pathlib.Path.is_file", return_value=True),
+            patch(
+                "synthran.experiment_runtime._run",
+                return_value=CommandResult(255, "", "SSH error"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ExperimentError,
+                r"remote existence probe for /sys/class/net/tun0 failed with exit code 255",
+            ):
+                _remote_path_exists(inventory, "/sys/class/net/tun0")
+
+
+class IdempotentTunCleanupAndProcessStopExecutionTests(unittest.TestCase):
+    def _sample_inventory(self) -> NetworkInventory:
+        return NetworkInventory(
+            path=Path("hosts.ini"),
+            sha256="0" * 64,
+            core_node=InventoryHost(
+                "sopnode-f2",
+                {"ansible_host": "192.0.2.10", "ansible_user": "root", "ip": "192.0.2.10"},
+            ),
+            ran_node=InventoryHost("sopnode-f3", {"ip": "192.0.2.11"}),
+            all_vars={},
+        )
+
+    def _network_artifacts(self, root: Path) -> tuple[Path, Path]:
+        manifest_path = root / "network-manifest.json"
+        evidence_path = root / "network-evidence.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema": "synthran/network-deployment/v1alpha1",
+                    "run_id": "net-01",
+                    "status": "path-proven",
+                    "network_evidence": evidence_path.name,
+                }
+            ),
+            encoding="utf-8",
+        )
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "schema": "synthran/network-evidence/v1alpha1",
+                    "run_id": "net-01",
+                    "ready": True,
+                    "path": {
+                        "pdu_address": "12.1.0.1",
+                        "pdu_network": "12.1.0.0/16",
+                        "ue_interface": "tun_srsue1",
+                        "slice": "slice1",
+                        "sst": 1,
+                        "dnn": "internet",
+                    },
+                    "checks": [{"name": "upf-path", "passed": True}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path, evidence_path
+
+    def _execute_test_experiment(
+        self,
+        *,
+        tun0_initial_exists: bool = False,
+        tun0_delete_error: Exception | None = None,
+        tun0_postcondition_exists: bool = False,
+        workspace_postcondition_exists: bool = False,
+        process_stop_error: Exception | None = None,
+        collector_error: Exception | None = None,
+        early_tunslip_exit: bool = False,
+    ) -> tuple[ExperimentRunResult, str, list[tuple[str, ...]], str | None]:
+        inventory = self._sample_inventory()
+        progress_buffer = io.StringIO()
+        remote_calls: list[tuple[str, ...]] = []
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text("sopnode-f2 ssh-ed25519 AAA...\n", encoding="utf-8")
+            manifest_path, evidence_path = self._network_artifacts(root)
+            lock = load_lock(Path("dependencies.lock.yml"))
+
+            contiki_path = root / "contiki"
+            (contiki_path / "tools" / "serial-io").mkdir(parents=True)
+            (contiki_path / "tools" / "serial-io" / "Makefile").write_text("all:\n", encoding="utf-8")
+            (contiki_path / "tools" / "serial-io" / "tunslip6.c").write_text("int main(){}\n", encoding="utf-8")
+            java_home_path = root / "jvm_home"
+            java_home_path.mkdir(parents=True)
+
+            def mock_collect(scenario, *args, **kwargs):
+                if collector_error is not None:
+                    raise collector_error
+                jsonl_path = kwargs.get("jsonl_path")
+                if jsonl_path:
+                    lines = []
+                    for s_id in range(1, 11):
+                        for seq in range(1, 4):
+                            ev = TelemetryEvent(
+                                run_id=scenario.run_id,
+                                sensor_id=f"sensor-{s_id:02d}",
+                                sequence=seq,
+                                sensor_time_ms=1000 * seq,
+                                value_milli=1000 + seq,
+                            )
+                            lines.append(json.dumps(ev.to_record(received_at_utc=datetime(2026, 8, 17, tzinfo=timezone.utc))))
+                    jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                res = MagicMock()
+                res.completed = True
+                res.records = 30
+                res.sensors = 10
+                return res
+
+            with ExitStack() as stack:
+                stack.enter_context(patch("sys.platform", "linux"))
+                stack.enter_context(patch.object(os, "uname", return_value=FAKE_UNAME, create=True))
+                stack.enter_context(patch.dict("os.environ", {"CONDA_DEFAULT_ENV": "synthran", "SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}))
+                stack.enter_context(patch("synthran.experiment_runtime.verify_network_path", return_value=MagicMock(ready=True)))
+                stack.enter_context(patch("synthran.experiment_runtime._validate_contiki_checkout", return_value=contiki_path))
+                stack.enter_context(patch("synthran.experiment_runtime._validate_java_runtime", return_value=java_home_path))
+                stack.enter_context(patch("synthran.experiment_runtime._prepare_cooja_checkout"))
+                stack.enter_context(patch("synthran.experiment_runtime._probe_experiment_host"))
+
+                def fake_remote(inv, *cmd, **kwargs):
+                    remote_calls.append(cmd)
+                    if "delete" in cmd and "tun0" in cmd:
+                        if tun0_delete_error is not None:
+                            raise tun0_delete_error
+                    return ""
+
+                def fake_remote_json(inv, cmd, **kwargs):
+                    if "ingress-snapshot" in cmd:
+                        return {"accepted_connections": 10, "upstream_bytes": 4500, "downstream_bytes": 1200}
+                    if "kubectl get deployments" in cmd:
+                        return {"items": [{"metadata": {"name": "srsran-ue-deploy"}}]}
+                    if "kubectl get pods" in cmd:
+                        return {"items": [{"metadata": {"name": "srsran-ue-pod"}}]}
+                    return {}
+
+                stack.enter_context(patch("synthran.experiment_runtime._remote", side_effect=fake_remote))
+                stack.enter_context(patch("synthran.experiment_runtime._remote_json", side_effect=fake_remote_json))
+                stack.enter_context(patch("synthran.experiment_runtime._transfer_directory"))
+                stack.enter_context(patch("synthran.experiment_runtime._transfer_file"))
+                stack.enter_context(patch("synthran.experiment_runtime._kubectl_apply_object"))
+                stack.enter_context(patch("synthran.experiment_runtime._kubectl_patch_deployment"))
+                stack.enter_context(patch("synthran.experiment_runtime._wait_rollout"))
+                stack.enter_context(patch("synthran.experiment_runtime._delete_experiment_objects"))
+                stack.enter_context(
+                    patch(
+                        "synthran.experiment_runtime.reconcile_rfsim_runtime",
+                        return_value=RfsimRuntimeState("srsran-ue-pod", "srsran-gnb-pod", "srsran-gnb", "12.1.0.2"),
+                    )
+                )
+                stack.enter_context(patch("synthran.experiment_runtime._replace_edge_runtime_config"))
+                stack.enter_context(patch("synthran.experiment_runtime._restart_edge_sidecar"))
+                stack.enter_context(patch("synthran.experiment_runtime._add_ue_route"))
+
+                counter_vals = [100, 100, 500, 200]
+                stack.enter_context(patch("synthran.experiment_runtime._interface_counter", side_effect=lambda *args: counter_vals.pop(0)))
+                stack.enter_context(patch("synthran.experiment_runtime.time.sleep"))
+
+                mock_stream = MagicMock()
+
+                def mock_start(name, *args, **kwargs):
+                    mock_proc = MagicMock()
+                    if early_tunslip_exit and name == "tunslip6":
+                        mock_proc.poll.return_value = 1
+                    else:
+                        mock_proc.poll.return_value = None
+                    managed = ManagedProcess(name, mock_proc, root / f"{name}.log", mock_stream)
+                    if process_stop_error is not None and name == "tunslip6":
+                        managed.stop = MagicMock(side_effect=process_stop_error)
+                    return managed
+
+                stack.enter_context(patch("synthran.experiment_runtime._start_process", side_effect=mock_start))
+                stack.enter_context(patch("synthran.experiment_runtime._wait_tcp"))
+
+                tun0_probe_count = 0
+
+                def fake_run(cmd, *args, **kwargs):
+                    nonlocal tun0_probe_count
+                    cmd_str = " ".join(cmd)
+                    if "sshd" in cmd_str:
+                        return CommandResult(0, "allowtcpforwarding yes\n", "")
+                    if "s.connect" in cmd_str:
+                        return CommandResult(0, "ok\n", "")
+                    if "ip -j address show dev tun0" in cmd_str or "show dev tun0" in cmd_str:
+                        if early_tunslip_exit:
+                            return CommandResult(1, "", "Device does not exist")
+                        return CommandResult(0, '[{"addr_info":[{"local":"fd00::1"}]}]', "")
+                    if "test -e /sys/class/net/tun0" in cmd_str:
+                        tun0_probe_count += 1
+                        if tun0_probe_count == 1:
+                            return CommandResult(0 if tun0_initial_exists else 1, "", "")
+                        else:
+                            return CommandResult(0 if tun0_postcondition_exists else 1, "", "")
+                    if "test -e" in cmd_str and "/tmp/synthran" in cmd_str:
+                        return CommandResult(0 if workspace_postcondition_exists else 1, "", "")
+                    return CommandResult(0, "", "")
+
+                stack.enter_context(patch("synthran.experiment_runtime._run", side_effect=fake_run))
+                stack.enter_context(patch("synthran.experiment_runtime.collect_mqtt", side_effect=mock_collect))
+
+                result = execute_experiment(
+                    inventory=inventory,
+                    lock=lock,
+                    dependency_root=root / "deps",
+                    network_manifest=manifest_path,
+                    network_evidence=evidence_path,
+                    run_id="exp-idempotency-test",
+                    repository_root=Path(__file__).parent.parent,
+                    run_root=root / "experiments",
+                    progress=progress_buffer,
+                )
+
+                manifest_file = result.run_directory / "manifest.json"
+                manifest_text = manifest_file.read_text(encoding="utf-8") if manifest_file.is_file() else None
+
+        return result, progress_buffer.getvalue(), remote_calls, manifest_text
+
+    def test_1_tun0_automatically_disappeared_after_tunslip_stopped(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            tun0_initial_exists=False,
+            tun0_postcondition_exists=False,
+        )
+        self.assertTrue(result.ready)
+        self.assertIn("[PASS] cleanup-base-network:", output)
+        self.assertIn("IOT-TO-5G PATH PROVEN", output)
+        delete_calls = [c for c in remote_calls if "delete" in c and "tun0" in c]
+        self.assertEqual(delete_calls, [])
+
+    def test_2_tun0_exists_and_explicit_deletion_succeeds(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            tun0_initial_exists=True,
+            tun0_postcondition_exists=False,
+        )
+        self.assertTrue(result.ready)
+        self.assertIn("[PASS] cleanup-base-network:", output)
+        self.assertIn("IOT-TO-5G PATH PROVEN", output)
+        delete_calls = [c for c in remote_calls if "delete" in c and "tun0" in c]
+        self.assertEqual(len(delete_calls), 1)
+        self.assertEqual(delete_calls[0], ("ip", "link", "delete", "dev", "tun0"))
+
+    def test_3_tun0_delete_fails_and_records_cleanup_error(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            tun0_initial_exists=True,
+            tun0_delete_error=ExperimentError("ip link delete failed"),
+            tun0_postcondition_exists=False,
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("[FAIL] cleanup-base-network: cleanup failed closed: remote tun0 cleanup: ip link delete failed", output)
+        self.assertNotIn("[PASS] cleanup-base-network:", output)
+        self.assertIn("experiment path NOT PROVEN", output)
+
+    def test_4_tun0_remains_after_deletion_fails_postcondition(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            tun0_initial_exists=True,
+            tun0_postcondition_exists=True,
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("[FAIL] cleanup-base-network: cleanup failed closed: remote tun0 cleanup postcondition: tun0 still exists", output)
+        self.assertNotIn("[PASS] cleanup-base-network:", output)
+        self.assertIn("experiment path NOT PROVEN", output)
+
+    def test_5_creation_attempted_never_appeared_is_clean_success(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            early_tunslip_exit=True,
+            tun0_initial_exists=False,
+            tun0_postcondition_exists=False,
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("tunslip6 exited before tun0 became ready", output)
+        delete_calls = [c for c in remote_calls if "delete" in c and "tun0" in c]
+        self.assertEqual(delete_calls, [])
+        self.assertIn("[PASS] cleanup-base-network:", output)
+
+    def test_6_managed_process_stop_failure_is_part_of_cleanup_check(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            process_stop_error=RuntimeError("killpg failed"),
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("[FAIL] cleanup-base-network: cleanup failed closed: process stop (tunslip6): killpg failed", output)
+        self.assertNotIn("[PASS] cleanup-base-network:", output)
+        self.assertIn("experiment path NOT PROVEN", output)
+
+    def test_7_stop_failure_cannot_be_overridden_by_network_reproof_success(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            process_stop_error=RuntimeError("killpg failed"),
+            tun0_initial_exists=False,
+            tun0_postcondition_exists=False,
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("[FAIL] cleanup-base-network:", output)
+        self.assertNotIn("[PASS] cleanup-base-network:", output)
+
+    def test_8_fully_successful_cleanup_passes(self) -> None:
+        result, output, remote_calls, _ = self._execute_test_experiment(
+            tun0_initial_exists=False,
+            tun0_postcondition_exists=False,
+        )
+        self.assertTrue(result.ready)
+        self.assertIn("[PASS] cleanup-base-network: experiment resources removed and accepted network path reproven", output)
+        self.assertIn("IOT-TO-5G PATH PROVEN", output)
+
+    def test_9_process_stop_failure_preserves_earlier_experiment_failure(self) -> None:
+        result, output, remote_calls, manifest_text = self._execute_test_experiment(
+            collector_error=ExperimentError("collector timeout"),
+            process_stop_error=RuntimeError("killpg failed"),
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("[FAIL] cleanup-base-network: cleanup failed closed: process stop (tunslip6): killpg failed", output)
+        self.assertIsNotNone(manifest_text)
+        manifest_data = json.loads(manifest_text)
+        self.assertEqual(manifest_data["status"], "failed")
+        self.assertEqual(manifest_data["failure"], "collector timeout")
 
 
 class RemoteEdgePortForwardReadinessTests(unittest.TestCase):

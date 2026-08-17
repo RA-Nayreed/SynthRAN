@@ -212,6 +212,26 @@ def _remote(
     return _checked(command, label=label, timeout_seconds=timeout_seconds)
 
 
+def _remote_path_exists(
+    inventory: NetworkInventory,
+    path: str,
+    *,
+    timeout_seconds: int = 5,
+) -> bool:
+    try:
+        command = ssh_command(inventory.core_node, "test", "-e", path)
+    except LivePreflightError as exc:
+        raise ExperimentError(str(exc)) from exc
+    result = _run(command, timeout_seconds=timeout_seconds)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise ExperimentError(
+        f"remote existence probe for {path} failed with exit code {result.returncode}"
+    )
+
+
 def _remote_json(
     inventory: NetworkInventory,
     command: str,
@@ -1047,9 +1067,10 @@ def _cleanup_live_resources(
     lock: DependencyLock,
     scenario: ExperimentScenario,
     ue_deployment: str | None,
+    cleanup_errors: Sequence[str] = (),
     remote_cleanup_errors: Sequence[str] = (),
 ) -> ExperimentCheck:
-    errors: list[str] = list(remote_cleanup_errors)
+    errors: list[str] = [*cleanup_errors, *remote_cleanup_errors]
     cleanup_rollout_completed = False
     if ue_deployment is not None:
         try:
@@ -1644,44 +1665,54 @@ def execute_experiment(
         failure = str(exc)
         report(f"error: {failure}")
     finally:
+        cleanup_errors: list[str] = []
         for managed in reversed(processes):
             try:
                 managed.stop()
             except Exception as exc:
-                if failure is None:
-                    failure = f"unable to stop {managed.name}: {exc}"
-        remote_cleanup_errors: list[str] = []
+                cleanup_errors.append(f"process stop ({managed.name}): {exc}")
+
         if tun_state in ("creation-attempted", "ready"):
+            tun0_exists = False
             try:
-                _remote(
+                tun0_exists = _remote_path_exists(
                     inventory,
-                    "ip",
-                    "link",
-                    "delete",
-                    "dev",
-                    "tun0",
-                    label="remote tun0 cleanup",
-                    timeout_seconds=10,
-                )
-            except Exception as exc:
-                remote_cleanup_errors.append(f"remote tun0 cleanup: {exc}")
-            # Postcondition: verify tun0 is absent
-            try:
-                tun0_check = _run(
-                    ssh_command(
-                        inventory.core_node,
-                        "test", "-e", "/sys/class/net/tun0",
-                    ),
+                    "/sys/class/net/tun0",
                     timeout_seconds=5,
                 )
-                if tun0_check.returncode == 0:
-                    remote_cleanup_errors.append(
+            except Exception as exc:
+                cleanup_errors.append(f"remote tun0 existence check: {exc}")
+            else:
+                if tun0_exists:
+                    try:
+                        _remote(
+                            inventory,
+                            "ip",
+                            "link",
+                            "delete",
+                            "dev",
+                            "tun0",
+                            label="remote tun0 cleanup",
+                            timeout_seconds=10,
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"remote tun0 cleanup: {exc}")
+
+            # Postcondition: verify tun0 is absent
+            try:
+                if _remote_path_exists(
+                    inventory,
+                    "/sys/class/net/tun0",
+                    timeout_seconds=5,
+                ):
+                    cleanup_errors.append(
                         "remote tun0 cleanup postcondition: tun0 still exists"
                     )
             except Exception as exc:
-                remote_cleanup_errors.append(
+                cleanup_errors.append(
                     f"remote tun0 cleanup postcondition: {exc}"
                 )
+
         if remote_workspace_created:
             try:
                 _remote(
@@ -1693,33 +1724,31 @@ def execute_experiment(
                     timeout_seconds=10,
                 )
             except Exception as exc:
-                remote_cleanup_errors.append(
+                cleanup_errors.append(
                     f"remote workspace cleanup: {exc}"
                 )
             # Postcondition: verify run-scoped workspace is absent
             try:
-                ws_check = _run(
-                    ssh_command(
-                        inventory.core_node,
-                        "test", "-d", remote_workspace,
-                    ),
+                if _remote_path_exists(
+                    inventory,
+                    remote_workspace,
                     timeout_seconds=5,
-                )
-                if ws_check.returncode == 0:
-                    remote_cleanup_errors.append(
+                ):
+                    cleanup_errors.append(
                         f"remote workspace cleanup postcondition: "
                         f"{remote_workspace} still exists"
                     )
             except Exception as exc:
-                remote_cleanup_errors.append(
+                cleanup_errors.append(
                     f"remote workspace cleanup postcondition: {exc}"
                 )
+
         cleanup_check = _cleanup_live_resources(
             inventory=inventory,
             lock=lock,
             scenario=scenario,
             ue_deployment=ue_deployment,
-            remote_cleanup_errors=remote_cleanup_errors,
+            cleanup_errors=cleanup_errors,
         )
         if cleanup_check.passed:
             report(f"[PASS] cleanup-base-network: {cleanup_check.detail}")
