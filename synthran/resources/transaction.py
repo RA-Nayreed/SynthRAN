@@ -8,7 +8,7 @@ from typing import Mapping, Protocol, runtime_checkable
 
 from synthran.operations.model import ExecutionPermit
 from synthran.resources.decision import ResourceDecision
-from synthran.resources.model import ResourceSelectionError
+from synthran.resources.model import ProviderResourceSet, ResourceSelectionError
 
 
 PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -153,6 +153,11 @@ class ResourceTransactionResult:
             raise ResourceTransactionError(
                 "ready resource transaction cannot contain a failed provider"
             )
+        providers = [item.provider for item in self.records]
+        if len(providers) != len(set(providers)):
+            raise ResourceTransactionError(
+                "resource transaction result must contain one final record per provider"
+            )
 
     @property
     def clean_failure(self) -> bool:
@@ -170,7 +175,9 @@ class ResourceTransactionResult:
         }
 
 
-def _ordered_provider_sets(decision: ResourceDecision):
+def _ordered_provider_sets(
+    decision: ResourceDecision,
+) -> tuple[ProviderResourceSet, ...]:
     return tuple(
         sorted(
             decision.selection.provider_sets,
@@ -182,23 +189,11 @@ def _ordered_provider_sets(decision: ResourceDecision):
     )
 
 
-def _validate_transaction_scope(
-    permit: ExecutionPermit,
+def validate_resource_adapters(
     decision: ResourceDecision,
     adapters: Mapping[str, ResourceProviderAdapter],
-) -> tuple:
-    if not permit.mutates:
-        raise ResourceTransactionError(
-            "read-only execution permit cannot start a resource transaction"
-        )
-    if not permit.targets:
-        raise ResourceTransactionError(
-            "resource transaction requires an execution permit with exact targets"
-        )
-    if tuple(sorted(permit.targets)) != decision.targets:
-        raise ResourceTransactionError(
-            "execution permit targets do not match the resource decision"
-        )
+) -> tuple[ProviderResourceSet, ...]:
+    """Validate every real provider adapter before any operation acquires mutation authority."""
 
     groups = _ordered_provider_sets(decision)
     grouped_ids = tuple(
@@ -230,6 +225,26 @@ def _validate_transaction_scope(
                 f"resource adapter provider mismatch for {group.provider}"
             )
     return groups
+
+
+def _validate_transaction_scope(
+    permit: ExecutionPermit,
+    decision: ResourceDecision,
+    adapters: Mapping[str, ResourceProviderAdapter],
+) -> tuple[ProviderResourceSet, ...]:
+    if not permit.mutates:
+        raise ResourceTransactionError(
+            "read-only execution permit cannot start a resource transaction"
+        )
+    if not permit.targets:
+        raise ResourceTransactionError(
+            "resource transaction requires an execution permit with exact targets"
+        )
+    if tuple(sorted(permit.targets)) != decision.targets:
+        raise ResourceTransactionError(
+            "execution permit targets do not match the resource decision"
+        )
+    return validate_resource_adapters(decision, adapters)
 
 
 def _validate_acquisition(
@@ -310,6 +325,14 @@ def _rollback(
     return records, clean
 
 
+def _unaffected_records(
+    ready_records: list[ProviderTransactionRecord],
+    completed: list[tuple[ResourceProviderAdapter, AcquisitionReceipt]],
+) -> list[ProviderTransactionRecord]:
+    rolled_back = {receipt.provider for _, receipt in completed}
+    return [item for item in ready_records if item.provider not in rolled_back]
+
+
 def execute_resource_transaction(
     *,
     permit: ExecutionPermit,
@@ -346,7 +369,7 @@ def execute_resource_transaction(
             return ResourceTransactionResult(
                 status="recovery-required",
                 records=tuple(
-                    ready_records
+                    _unaffected_records(ready_records, completed)
                     + [
                         ProviderTransactionRecord(
                             provider=group.provider,
@@ -364,7 +387,10 @@ def execute_resource_transaction(
             rollback_records, clean = _rollback(completed, permit=permit)
             return ResourceTransactionResult(
                 status="rolled-back" if clean else "recovery-required",
-                records=tuple(ready_records + rollback_records),
+                records=tuple(
+                    _unaffected_records(ready_records, completed)
+                    + rollback_records
+                ),
                 failed_provider=group.provider,
             )
 
