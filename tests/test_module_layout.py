@@ -31,6 +31,7 @@ class ModuleLayoutTests(unittest.TestCase):
         self.assertTrue((SOURCE / "resources" / "catalog.py").is_file())
         self.assertTrue((SOURCE / "resources" / "requirements.py").is_file())
         self.assertTrue((SOURCE / "resources" / "selector.py").is_file())
+        self.assertTrue((SOURCE / "resources" / "decision.py").is_file())
         self.assertTrue((SOURCE / "research" / "__init__.py").is_file())
         self.assertTrue((SOURCE / "research" / "collector.py").is_file())
         self.assertTrue((SOURCE / "research" / "instrumentation.py").is_file())

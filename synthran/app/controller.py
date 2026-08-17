@@ -8,7 +8,20 @@ from pathlib import Path
 from typing import Mapping
 
 from synthran.app.model import ApplicationSnapshot, DimensionView
-from synthran.operations import ApprovalGrant, ExecutionPermit, OperationController, OperationPlan, OperationState
+from synthran.operations import (
+    ApprovalGrant,
+    ExecutionPermit,
+    OperationController,
+    OperationPlan,
+    OperationState,
+    load_plan,
+    select_reconciliation_step,
+)
+from synthran.resources import (
+    ResourceDecision,
+    ResourceInventory,
+    build_resource_decision,
+)
 from synthran.workspace.context import WorkspaceAuthorityContext, resolve_workspace_authority
 from synthran.workspace.desired import ExperimentDesiredState
 from synthran.workspace.desired_store import load_desired_state
@@ -18,7 +31,10 @@ from synthran.workspace.observed import Observation, ObservedState, reconcile_ob
 from synthran.workspace.observed_store import load_observed_state, observed_state_path, save_observed_state
 from synthran.workspace.reconciliation import derive_lifecycle, plan_reconciliation
 from synthran.workspace.registry import WorkspaceRegistry
-from synthran.workspace.store import load_experiment_record
+
+
+RESOURCE_BOUND_MUTATIONS = frozenset({"reserve", "allocate", "prepare", "up"})
+RESOURCE_DECISION_INPUT = "resource_decision"
 
 
 class ApplicationController:
@@ -121,6 +137,18 @@ class ApplicationController:
         save_observed_state(self.root, state)
         return state
 
+    def resource_decision(
+        self,
+        inventory: ResourceInventory,
+        *,
+        now: datetime | None = None,
+    ) -> ResourceDecision:
+        """Select exact resources from fresh provider inventory without mutation."""
+
+        current = (now or utc_now()).astimezone(timezone.utc)
+        _, desired = self._active_desired()
+        return build_resource_decision(desired, inventory, now=current)
+
     def snapshot(self, *, now: datetime | None = None) -> ApplicationSnapshot:
         """Return a local status projection; this method performs no provider mutation."""
 
@@ -180,9 +208,10 @@ class ApplicationController:
         self,
         *,
         step_name: str | None = None,
+        inventory: ResourceInventory | None = None,
         now: datetime | None = None,
     ) -> OperationPlan:
-        """Create the next operation from the active desired and observed state."""
+        """Create the next operation and bind exact resources for placement mutations."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
         record, desired = self._active_desired()
@@ -191,10 +220,26 @@ class ApplicationController:
                 "active experiment has no provider experiment binding; bind one before live control"
             )
         observed = self._active_observed(now=current, allow_empty=False)
+        reconciliation = plan_reconciliation(desired, observed, now=current)
+        step = select_reconciliation_step(reconciliation, step_name)
+
+        targets: tuple[str, ...] = ()
+        bound_inputs: Mapping[str, Mapping[str, object]] | None = None
+        if step.name in RESOURCE_BOUND_MUTATIONS:
+            if inventory is None:
+                raise WorkspaceError(
+                    f"operation {step.name} requires fresh complete resource inventory"
+                )
+            decision = build_resource_decision(desired, inventory, now=current)
+            targets = decision.targets
+            bound_inputs = {RESOURCE_DECISION_INPUT: decision.to_dict()}
+
         return self.operations.begin(
             desired=desired,
             observed=observed,
-            step_name=step_name,
+            step_name=step.name,
+            targets=targets,
+            bound_inputs=bound_inputs,
             now=current,
         )
 
@@ -215,19 +260,36 @@ class ApplicationController:
         self,
         operation_id: str,
         *,
+        inventory: ResourceInventory | None = None,
         now: datetime | None = None,
     ) -> ExecutionPermit:
-        """Authorize against the active persisted desired/observed state at call time."""
+        """Authorize against current persisted state and any operation-bound resource decision."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
         record, desired = self._active_desired()
         observed = self._active_observed(now=current, allow_empty=False)
         if observed.experiment_id != record.experiment_id:
             raise WorkspaceError("active observed state belongs to another experiment")
+
+        plan = load_plan(self.root, operation_id)
+        bound_inputs: Mapping[str, Mapping[str, object]] | None = None
+        if RESOURCE_DECISION_INPUT in plan.input_sha256:
+            if inventory is None:
+                raise WorkspaceError(
+                    "operation authorization requires fresh complete resource inventory"
+                )
+            decision = build_resource_decision(desired, inventory, now=current)
+            if decision.targets != plan.targets:
+                raise WorkspaceError(
+                    "resource placement changed after approval; create a new operation"
+                )
+            bound_inputs = {RESOURCE_DECISION_INPUT: decision.to_dict()}
+
         return self.operations.authorize(
             operation_id,
             desired=desired,
             observed=observed,
+            bound_inputs=bound_inputs,
             now=current,
         )
 

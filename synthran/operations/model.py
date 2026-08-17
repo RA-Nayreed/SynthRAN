@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Mapping
 
 from synthran.workspace.model import (
@@ -69,6 +70,22 @@ def _validate_reason(value: str) -> str:
     return value
 
 
+def _validate_target(value: str) -> str:
+    if not value or len(value) > 128 or any(
+        not (character.isalnum() or character in "._:-") for character in value
+    ):
+        raise WorkspaceError("operation target contains unsafe characters")
+    return value
+
+
+def _validate_input_name(value: str) -> str:
+    if not value or len(value) > 64 or any(
+        not (character.isalnum() or character in "._-") for character in value
+    ):
+        raise WorkspaceError("operation input name contains unsafe characters")
+    return value
+
+
 @dataclass(frozen=True)
 class OperationPlan:
     operation_id: str
@@ -82,6 +99,8 @@ class OperationPlan:
     reconciliation_sha256: str
     plan_sha256: str
     created_at_utc: str
+    targets: tuple[str, ...] = ()
+    input_sha256: Mapping[str, str] = field(default_factory=dict)
     schema: str = OPERATION_PLAN_SCHEMA
 
     def __post_init__(self) -> None:
@@ -102,13 +121,23 @@ class OperationPlan:
         _validate_digest(self.reconciliation_sha256, "reconciliation digest")
         _validate_digest(self.plan_sha256, "operation plan digest")
         parse_utc(self.created_at_utc, "operation plan created_at_utc")
+        if len(set(self.targets)) != len(self.targets):
+            raise WorkspaceError("operation targets must be unique")
+        for target in self.targets:
+            _validate_target(target)
+        digests: dict[str, str] = {}
+        for name, digest in self.input_sha256.items():
+            _validate_input_name(name)
+            _validate_digest(digest, f"operation input {name} digest")
+            digests[name] = digest
+        object.__setattr__(self, "input_sha256", MappingProxyType(digests))
 
     @property
     def approval_required(self) -> bool:
         return self.risk in {"R2", "R3"}
 
     def unsigned_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "operation_id": self.operation_id,
             "experiment_id": self.experiment_id,
@@ -121,12 +150,30 @@ class OperationPlan:
             "reconciliation_sha256": self.reconciliation_sha256,
             "created_at_utc": self.created_at_utc,
         }
+        if self.targets:
+            payload["targets"] = list(self.targets)
+        if self.input_sha256:
+            payload["input_sha256"] = dict(self.input_sha256)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self.unsigned_dict(), "plan_sha256": self.plan_sha256}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "OperationPlan":
+        raw_targets = value.get("targets", [])
+        if not isinstance(raw_targets, list) or not all(
+            isinstance(item, str) for item in raw_targets
+        ):
+            raise WorkspaceError("operation plan targets are malformed")
+        raw_inputs = value.get("input_sha256", {})
+        if not isinstance(raw_inputs, Mapping):
+            raise WorkspaceError("operation plan input digests are malformed")
+        input_sha256: dict[str, str] = {}
+        for name, digest in raw_inputs.items():
+            if not isinstance(name, str) or not isinstance(digest, str):
+                raise WorkspaceError("operation plan input digest entry is malformed")
+            input_sha256[name] = digest
         return cls(
             schema=str(value.get("schema", "")),
             operation_id=str(value.get("operation_id", "")),
@@ -140,6 +187,8 @@ class OperationPlan:
             reconciliation_sha256=str(value.get("reconciliation_sha256", "")),
             plan_sha256=str(value.get("plan_sha256", "")),
             created_at_utc=str(value.get("created_at_utc", "")),
+            targets=tuple(raw_targets),
+            input_sha256=input_sha256,
         )
 
 
@@ -306,6 +355,7 @@ class ExecutionPermit:
     mutates: bool
     plan_sha256: str
     issued_at_utc: str
+    targets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         validate_operation_id(self.operation_id)
@@ -315,3 +365,7 @@ class ExecutionPermit:
             raise WorkspaceError("execution permit risk is unsupported")
         _validate_digest(self.plan_sha256, "execution permit plan digest")
         parse_utc(self.issued_at_utc, "execution permit issued_at_utc")
+        if len(set(self.targets)) != len(self.targets):
+            raise WorkspaceError("execution permit targets must be unique")
+        for target in self.targets:
+            _validate_target(target)
