@@ -2,7 +2,7 @@
 
 ## Environment
 
-SynthRAN supports Linux only. Local development, repository hooks, CI, and the live controller use one named Conda environment, `synthran`. `environment.yml` is the single complete definition and includes Ansible tooling. `pyproject.toml` contains package and build metadata only.
+SynthRAN supports Linux for the reviewed development/CI/live-control path. Repository hooks, CI, and the live controller use the named Conda environment `synthran`. `environment.yml` is the complete supported Linux environment definition and includes Ansible tooling. `pyproject.toml` contains package/build metadata and the console entrypoint.
 
 Create the environment:
 
@@ -10,13 +10,13 @@ Create the environment:
 conda env create --file environment.yml
 ```
 
-Reconcile it after a dependency update:
+Reconcile it after a direct dependency update:
 
 ```sh
 conda env update --file environment.yml --prune
 ```
 
-Activate the environment once per shell, verify its name, and then invoke its tools directly:
+Activate the environment once per shell, verify its name, and invoke tools directly:
 
 ```sh
 conda activate synthran
@@ -24,7 +24,9 @@ python -c "import os; assert os.environ.get('CONDA_DEFAULT_ENV') == 'synthran'"
 python -m unittest discover -s tests -v
 ```
 
-Direct package versions are exact. Conda still selects platform-specific transitive builds during a solve, so the current environment is not an artifact-level lock. Reviewed platform-specific `conda-lock` files are required before making that stronger reproducibility claim.
+Direct package versions are exact. Conda still selects platform-specific transitive builds during solving, so the current environment is not an artifact-level lock. A reviewed platform artifact lock would be required before making that stronger claim.
+
+When adding or changing a direct dependency, keep `environment.yml` and the authoritative direct dependency metadata in `dependencies.lock.yml` synchronized. Do not weaken the dependency-consistency tests to accommodate drift.
 
 ## Git hooks
 
@@ -35,21 +37,55 @@ python -m synthran hooks install --dry-run
 python -m synthran hooks install
 ```
 
-The pre-push hook runs the outgoing-commit privacy scan in `synthran`. It checks explicit Conda variables and `PATH`. Nonstandard Linux installations can set `SYNTHRAN_CONDA_EXE` locally.
+The pre-push hook runs the outgoing-commit privacy scan in `synthran`. It checks explicit Conda variables and `PATH`. Nonstandard Linux installations can set the documented local Conda executable override.
 
-Do not bypass a real finding. Remove it from every affected outgoing commit and rotate an exposed credential.
+Do not bypass a true privacy/secret finding. Remove the sensitive content from every affected outgoing commit and rotate an exposed credential when applicable.
 
-## Research contract and test expectations
+## Architecture-sensitive test expectations
 
-Unit tests are strictly offline and validate safety-critical interfaces across multiple domains:
+Offline tests protect both the accepted experiment path and the newer persistent application/terminal control plane.
 
-- **Research schemas:** `tests/test_research_schema.py` and `tests/test_research.py` verify that all research record schemas (`synthran/research-experiment/v1alpha1`, `research-campaign`, `research-summary`, `research-measurement-window`, `research-probe`, `research-network-sample`, `research-load-result`, `research-capacity`) conform to the unified research domain model.
-- **RFSIM handoff and sidecar readiness:** `tests/test_rfsim_runtime.py` and `tests/test_research_runtime.py` verify that RFSIM reconciliation occurs once in base execution, handing reconciled UE/PDU state cleanly to the research collector, and that the sidecar restart barrier tracks `restartCount` and pod Ready conditions before proceeding.
-- **Temporary route and iperf lifecycle:** `tests/test_research_safety.py` and `tests/test_research_runtime.py` verify that transient target `/32` routes are proven and cleanly removed without residual routing table mutations, and that owned `iperf3` servers maintain run-scoped workspaces and pidfiles with automatic orphan recovery.
-- **Synchronized sampling:** `tests/test_research_sampling.py` verifies multi-point interface delta derivations (Ingress, UE `tun_srsue1`, UPF `ogstun`) and ensures incomplete path samples fail research validity.
-- **Campaign generation and analysis:** `tests/test_research.py` verifies deterministic blocked randomization, schedule immutability, and paired difference bootstrap estimation.
-- **Research validity and failure boundaries:** Tests must verify that runs with failed load injection (`load_target_achieved = false`), missing telemetry, or lost RTT probes are correctly classified as `ready_for_campaign_analysis = false` and `INVALID` while preserving all diagnostic artifacts.
-- **RFSIM stall regression testing:** Future test additions should model RFSIM sample stream stalls (where processes are alive and ZMQ TCP connections are established, but sample progression is zero) to ensure robust recovery and fast-fail health probing.
+Important areas include:
+
+- **Workspace identity and reconstruction:** workspace/profile initialization, legacy `.synthran` adoption, non-reusable IDs, registry reconstruction, authority conflicts, and safe rollback.
+- **Desired/observed separation:** desired-state validation, source truth ordering, freshness, ownership, lifecycle derivation, and fail-closed reconciliation.
+- **Operation control:** immutable plan hashes, approval binding, drift rejection, mutation claims, interruption/recovery semantics, and structured operation events.
+- **Resource selection/transactions:** deterministic capability placement, fresh/complete inventory requirements, exact `ResourceDecision` binding, provider ordering, exact rollback scope, and recovery-required behavior on unknown partial failure.
+- **Terminal:** strict slash-command parsing, OBSERVE/OPERATE gates, registry-backed completion/help, no-argument launcher behavior, first-launch initialization, EMPTY-workspace experiment creation, router/application integration, and structured event rendering.
+- **Research schemas and validity:** research specifications/campaigns/summaries, measurement windows, probes, network samples, load results, artifact digests, and invalid-run classification.
+- **RFSIM resilience:** one-time reconciled UE/PDU handoff, delayed tunnel readiness, dead-process distinction, repeated zero-sample stall detection, complete retry attempts, and route/ownership restoration.
+- **Research load safety:** temporary target-route ownership, owned iperf3 lifecycle, control-connection readiness, load-target achievement, synchronized sampling, path reproof, and cleanup.
+- **Campaign analysis:** deterministic blocked randomization, run immutability, paired differences, and bootstrap confidence intervals.
+
+Do not interpret an offline unit test as live SLICES acceptance. Live-accepted claims require run evidence from the real environment.
+
+## Terminal development rule
+
+The current terminal can inspect application state and create immutable workflow plans, but terminal provider/domain executors are not yet connected.
+
+When extending terminal execution:
+
+1. do not call the existing scripted CLI secretly;
+2. reuse `ApplicationController`, `OperationController`, current policy/reconciliation, exact target/input binding, and structured events;
+3. authorize before execution;
+4. perform final provider/domain live checks inside the executor;
+5. preserve mutation claims on unknown partial failure;
+6. keep provider output out of trusted terminal state unless mapped to the structured event model.
+
+Tests must prove both success and fail-closed boundaries.
+
+## Documentation rule
+
+Documentation is part of the correctness surface. Before completion, compare docs against current code rather than PR intent.
+
+In particular:
+
+- command lists must match `synthran.terminal.commands.COMMANDS`;
+- no top-level CLI command may be documented unless `_parser()` actually registers it;
+- terminal planning must not be described as live provider execution;
+- source truth order must match `SOURCE_PRIORITY`;
+- workflow risks/gates must match the registry and application policy;
+- live-accepted, offline-tested, and deferred capabilities must remain clearly separated.
 
 ## Validation
 
@@ -58,14 +94,10 @@ Before considering a change complete:
 ```sh
 python -m unittest discover -s tests -v
 python -m synthran privacy scan --worktree
-```
-
-Also inspect:
-
-```sh
-git status --short
 git diff --check
-git diff
+git status --short
 ```
 
-Tests are intentionally offline. SLICES credentials must never be placed in GitHub Actions.
+When available, also run the repository/Git-history secret scan used by CI.
+
+Inspect the complete diff manually. Tests are intentionally offline and must not require SLICES credentials in CI.
