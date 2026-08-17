@@ -89,11 +89,20 @@ class InitializationTests(unittest.TestCase):
 
             self.assertTrue(result.profile_created)
             self.assertEqual(result.profile.r2lab_identity_fingerprint, "SHA256:fixture")
-            self.assertEqual(load_profile("controller", environment={"SYNTHRAN_CONFIG_HOME": str(config_home)}), result.profile)
+            self.assertEqual(
+                load_profile(
+                    "controller",
+                    environment={"SYNTHRAN_CONFIG_HOME": str(config_home)},
+                ),
+                result.profile,
+            )
             self.assertEqual(load_workspace(root), result.workspace)
             self.assertEqual(load_access_record(root, "slices"), result.slices_access)
             self.assertEqual(load_access_record(root, "r2lab"), result.r2lab_access)
-            self.assertEqual(result.slices_access.access_until_utc, "2026-10-22T23:59:00Z")
+            self.assertEqual(
+                result.slices_access.access_until_utc,
+                "2026-10-22T23:59:00Z",
+            )
             self.assertEqual(len(r2lab_calls), 1)
             command = r2lab_calls[0]
             self.assertIn("IdentitiesOnly=yes", command)
@@ -151,7 +160,9 @@ class InitializationTests(unittest.TestCase):
                         self._request(root, identity),
                         environment={"SYNTHRAN_CONFIG_HOME": str(config_home)},
                         slices_runner=slices_runner,
-                        r2lab_runner=lambda command, timeout: ProbeResult(255, "", "denied"),
+                        r2lab_runner=lambda command, timeout: ProbeResult(
+                            255, "", "denied"
+                        ),
                         now=NOW,
                     )
             self.assertFalse(workspace_directory(root).exists())
@@ -162,7 +173,7 @@ class InitializationTests(unittest.TestCase):
                 ).exists()
             )
 
-    def test_existing_profile_requires_explicit_reuse_and_exact_identity(self) -> None:
+    def test_existing_profile_requires_explicit_reuse_without_reentering_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             first_root = base / "first"
@@ -200,10 +211,7 @@ class InitializationTests(unittest.TestCase):
                 reused = InitializationRequest(
                     root=second_root,
                     profile_name="controller",
-                    slices_username="operator",
                     project="research-project",
-                    r2lab_slice="slice_user",
-                    r2lab_identity=identity,
                     reuse_profile=True,
                 )
                 result = initialize_controller_workspace(
@@ -215,6 +223,19 @@ class InitializationTests(unittest.TestCase):
                 )
             self.assertFalse(result.profile_created)
             self.assertEqual(result.workspace.profile, "controller")
+            self.assertEqual(result.profile.r2lab_identity, str(identity.resolve()))
+
+    def test_reused_profile_rejects_identity_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaises(WorkspaceError):
+                InitializationRequest(
+                    root=root,
+                    profile_name="controller",
+                    project="research-project",
+                    slices_username="other",
+                    reuse_profile=True,
+                )
 
     def test_persist_detects_local_state_race(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
