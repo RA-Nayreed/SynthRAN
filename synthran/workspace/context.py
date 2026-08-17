@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -78,7 +79,7 @@ def resolve_workspace_authority(
 ) -> WorkspaceAuthorityContext:
     """Resolve profile/workspace/experiment bindings and reject conflicting overrides."""
 
-    env = environment or {}
+    env = environment if environment is not None else os.environ
     root = find_workspace_root(start, environment=env)
     workspace = load_workspace(root)
     profile = load_profile(workspace.profile, environment=env)
