@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import ipaddress
 import json
 import math
 from pathlib import Path
@@ -13,7 +14,7 @@ import shlex
 from typing import Any, Callable, Iterator, Mapping
 
 from synthran.experiment import build_scenario as build_base_scenario
-import synthran.experiment_runtime as base_runtime
+from synthran.experiment import runtime as base_runtime
 from synthran.fiveg_ansible import NetworkInventory
 from synthran.live_preflight import ssh_command
 from synthran.research import (
@@ -88,13 +89,23 @@ def _check_research_tools(
         )
 
 
-def _prove_target_route(
+def _target_prefix(target: str) -> str:
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError as exc:
+        raise ResearchError("research target must be a literal IPv4 address") from exc
+    if not isinstance(address, ipaddress.IPv4Address):
+        raise ResearchError("research target must be a literal IPv4 address")
+    return f"{address}/32"
+
+
+def _target_route_uses_tunnel(
     inventory: NetworkInventory,
     ue_pod: str,
     *,
     pdu_address: str,
     target: str,
-) -> None:
+) -> bool:
     result = base_runtime._run(
         _kubectl_exec_command(
             inventory,
@@ -108,8 +119,114 @@ def _prove_target_route(
         ),
         timeout_seconds=10,
     )
-    if result.returncode != 0 or "dev tun_srsue1" not in result.stdout:
+    if result.returncode != 0:
+        raise ResearchError("research target route could not be inspected")
+    return "dev tun_srsue1" in result.stdout
+
+
+def _prove_target_route(
+    inventory: NetworkInventory,
+    ue_pod: str,
+    *,
+    pdu_address: str,
+    target: str,
+) -> None:
+    if not _target_route_uses_tunnel(
+        inventory,
+        ue_pod,
+        pdu_address=pdu_address,
+        target=target,
+    ):
         raise ResearchError("research target route is not proven through tun_srsue1")
+
+
+def _remove_target_route(
+    inventory: NetworkInventory,
+    ue_pod: str,
+    *,
+    pdu_address: str,
+    target: str,
+) -> None:
+    prefix = _target_prefix(target)
+    result = base_runtime._run(
+        _kubectl_exec_command(
+            inventory,
+            ue_pod,
+            "ip",
+            "route",
+            "del",
+            prefix,
+            "dev",
+            "tun_srsue1",
+        ),
+        timeout_seconds=10,
+    )
+    if result.returncode != 0:
+        raise ResearchError("owned research target route cleanup failed")
+    if _target_route_uses_tunnel(
+        inventory,
+        ue_pod,
+        pdu_address=pdu_address,
+        target=target,
+    ):
+        raise ResearchError("owned research target route remained after cleanup")
+
+
+def _install_target_route(
+    inventory: NetworkInventory,
+    ue_pod: str,
+    *,
+    pdu_address: str,
+    target: str,
+) -> bool:
+    prefix = _target_prefix(target)
+    if _target_route_uses_tunnel(
+        inventory,
+        ue_pod,
+        pdu_address=pdu_address,
+        target=target,
+    ):
+        return False
+
+    result = base_runtime._run(
+        _kubectl_exec_command(
+            inventory,
+            ue_pod,
+            "ip",
+            "route",
+            "add",
+            prefix,
+            "dev",
+            "tun_srsue1",
+        ),
+        timeout_seconds=10,
+    )
+    if result.returncode != 0:
+        raise ResearchError(
+            "unable to install exact research target route without replacing existing state"
+        )
+    try:
+        _prove_target_route(
+            inventory,
+            ue_pod,
+            pdu_address=pdu_address,
+            target=target,
+        )
+    except Exception as exc:
+        try:
+            _remove_target_route(
+                inventory,
+                ue_pod,
+                pdu_address=pdu_address,
+                target=target,
+            )
+        except Exception as cleanup_exc:
+            raise ResearchError(
+                "research target route proof failed and route cleanup failed closed: "
+                f"{exc}; {cleanup_exc}"
+            ) from exc
+        raise
+    return True
 
 
 def _start_probe(
