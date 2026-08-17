@@ -10,6 +10,9 @@ SOURCE = REPOSITORY_ROOT / "synthran"
 
 class ModuleLayoutTests(unittest.TestCase):
     def test_domain_code_is_grouped_in_packages(self) -> None:
+        self.assertTrue((SOURCE / "app" / "__init__.py").is_file())
+        self.assertTrue((SOURCE / "app" / "model.py").is_file())
+        self.assertTrue((SOURCE / "app" / "controller.py").is_file())
         self.assertTrue((SOURCE / "experiment" / "__init__.py").is_file())
         self.assertTrue((SOURCE / "experiment" / "resources.py").is_file())
         self.assertTrue((SOURCE / "experiment" / "runtime.py").is_file())
