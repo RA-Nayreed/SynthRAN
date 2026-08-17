@@ -82,14 +82,6 @@ class ResourceState:
             raise ResourceSelectionError("resource availability state is unsupported")
         if self.ownership not in OWNERSHIP_STATES:
             raise ResourceSelectionError("resource ownership state is unsupported")
-        if self.availability == "available" and self.ownership not in {
-            "unowned",
-            "synthran",
-            "operator",
-        }:
-            raise ResourceSelectionError(
-                "available resource must have known safe ownership state"
-            )
         if self.availability == "allocated" and self.ownership == "unowned":
             raise ResourceSelectionError("allocated resource cannot be unowned")
 
