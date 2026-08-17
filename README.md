@@ -61,9 +61,15 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 ## Current status
 
-The repository foundation and the Open5GS + srsRAN + RFSIM network baseline are implemented. A live SLICES acceptance run has reached `path-proven`, including a healthy run-owned gNB, srsUE and UPF, cell activation, `tun_srsue1`, the expected PDU address and UE/UPF routes.
+The repository foundation, the Open5GS + srsRAN + RFSIM network baseline, and the integrated deterministic IoT-to-5G experiment path are implemented and live-accepted.
 
-The integrated IoT-to-5G experiment implementation includes the deterministic ten-sensor Cooja scenario, RPL border-router/tun0 ingress, run-scoped UE-side and central Mosquitto brokers, explicit UE-path routing, central collection, JSONL/Parquet derivation, evidence generation, exact-run cleanup, and base-network reproof. It is not accepted until an operator executes the complete live command and the persisted report returns `IOT-TO-5G PATH PROVEN`.
+The canonical accepted evidence pair on SLICES is:
+- **Base 5G network:** `network-acceptance-20260817-04` (`Result: PATH PROVEN`)
+- **Integrated IoT-to-5G experiment:** `iot-acceptance-20260817-06` (`Result: IOT-TO-5G PATH PROVEN`)
+
+The accepted integrated path exercises 10 deterministic Contiki-NG/Cooja sensors over RPL/6LoWPAN, remote `tunslip6/tun0` (`fd00::1/64`), `CountedTcpIngress`, edge Mosquitto bridge on `tun_srsue1`, srsRAN gNB, Open5GS UPF, core Mosquitto broker, and central collection (30 events across 10/10 sensors into JSONL and derived Parquet).
+
+Live execution on 2026-08-17 proved automated pre-run reclamation of 4 stale SynthRAN processes, dynamic UE PDU rediscovery (`12.1.0.3` -> `12.1.0.8`), exact remote process cleanup, base-network reproof, and independent post-run host verification (reserved ports 60001, 18883, 18885 free; `tun0` and workspace absent).
 
 | Capability | Status |
 |---|---|
@@ -71,11 +77,11 @@ The integrated IoT-to-5G experiment implementation includes the deterministic te
 | Pinned upstream dependency synchronization | Implemented and tested |
 | Open5GS + srsRAN + RFSIM inventory validation | Implemented and tested |
 | Explicit SLICES preparation and evidence-gated network deployment | Implemented and live accepted |
-| srsUE/UPF path proof | Implemented and live accepted (`path-proven`) |
-| Deterministic ten-sensor Cooja/RPL workload | Implemented; live integrated acceptance pending |
-| `tunslip6/tun0` ingress and UE-side Mosquitto bridge | Implemented; live integrated acceptance pending |
-| Central MQTT collection and JSONL/Parquet derivation | Implemented; live integrated acceptance pending |
-| Integrated IoT-to-5G evidence and cleanup reproof | Implemented; live integrated acceptance pending |
+| srsUE/UPF path proof | Implemented and live accepted (`PATH PROVEN`) |
+| Deterministic ten-sensor Cooja/RPL workload | Implemented and live accepted |
+| `tunslip6/tun0` ingress and UE-side Mosquitto bridge | Implemented and live accepted |
+| Central MQTT collection and JSONL/Parquet derivation | Implemented and live accepted |
+| Integrated IoT-to-5G evidence and cleanup reproof | Implemented and live accepted (`IOT-TO-5G PATH PROVEN`) |
 | A1/E2, RIC and generative intelligence | Deliberately deferred |
 
 The supported live controller is the Linux SLICES Webshell, or an SSH session to that documented management host, with the `synthran` Conda environment active. SynthRAN verifies but never changes the SLICES login, selected project, or existing experiment. Resource preparation, network deployment, and experiment execution remain separate operator actions; no experiment command reserves nodes or silently deploys the network.

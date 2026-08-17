@@ -58,7 +58,7 @@ The supported Open5GS + srsRAN + RFSIM network baseline has completed live SLICE
 
 Deployment success alone remains `deployed-unverified`.
 
-The integrated deterministic IoT-to-5G experiment is implemented repository-side but is not accepted until an operator-run live experiment persists `IOT-TO-5G PATH PROVEN`.
+The integrated deterministic IoT-to-5G experiment has completed live SLICES acceptance (`iot-acceptance-20260817-06`), persisting `Result: IOT-TO-5G PATH PROVEN` against the accepted base network `network-acceptance-20260817-04`.
 
 ## Supported and Deferred Technology
 

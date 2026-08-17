@@ -177,7 +177,7 @@ See the [integrated experiment guide](experiment.md) for full scenario details, 
 
 Do not reuse a preparation or deployment run ID. A failure keeps a sanitized partial manifest and log. If preparation failed after imaging or reset began, inspect the named stage and preserve the artifacts; do not guess resource names, broadly delete, or automatically free the allocation.
 
-Base network `network-acceptance-20260817-04` is live-accepted. Consumed experiment run IDs `iot-acceptance-20260817-02` through `-05` recorded incremental hardening findings: missing `net-tools`/`ifconfig` (-02), stale edge port-forward (-03), dynamic PDU proof followed by stale central port-forward (-04), and Paho v2 ReasonCode evaluation / remote process persistence (-05). All subsequent live runs must use fresh, never-before-used run IDs.
+The canonical accepted pair on SLICES is base network `network-acceptance-20260817-04` (`PATH PROVEN`) and integrated experiment `iot-acceptance-20260817-06` (`IOT-TO-5G PATH PROVEN`). Consumed experiment run IDs `iot-acceptance-20260817-02` through `-05` recorded incremental hardening findings: missing `net-tools`/`ifconfig` (-02), stale edge port-forward (-03), dynamic PDU proof followed by stale central port-forward (-04), and Paho v2 ReasonCode evaluation / remote process persistence (-05). All subsequent live runs must use fresh, never-before-used run IDs.
 
 If preflight finds an existing `open5gs` namespace, stop. Verify ownership and use a separate operator-approved teardown procedure.
 

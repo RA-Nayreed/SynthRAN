@@ -81,9 +81,21 @@ Cleanup targets only resources proven to belong to the requested run:
 
 A cleanup, host postcondition, or network-reproof failure prevents an `IOT-TO-5G PATH PROVEN` result.
 
-## Current status and live evidence
+## Current status and live acceptance
 
-The base network `network-acceptance-20260817-04` is live-accepted and `path-proven`. Integrated IoT-to-5G experiment execution has been exercised through live attempts `iot-acceptance-20260817-02` through `-05`, which exposed prerequisite gaps (`net-tools`/`ifconfig`), port collisions from orphaned `kubectl` processes, Paho v2 MQTT `ReasonCode` success handling, and the requirement for explicit remote process reaping during cleanup. The implementation is complete and hardened, but `IOT-TO-5G PATH PROVEN` status remains pending until a clean operator run is recorded.
+The integrated deterministic IoT-to-5G experiment is live-accepted. The canonical accepted evidence pair on SLICES is:
+
+- **Base network:** `network-acceptance-20260817-04` (`Result: PATH PROVEN`)
+- **Integrated experiment:** `iot-acceptance-20260817-06` (`Result: IOT-TO-5G PATH PROVEN`)
+
+Key facts proven live on 2026-08-17:
+- **Pre-run stale runtime recovery:** 4 stale SynthRAN processes from previous runs were automatically reclaimed on the core node before mutation, requiring zero manual PID cleanup.
+- **Dynamic PDU rediscovery:** The srsUE rollout dynamically discovered live PDU address `12.1.0.8` on `tun_srsue1` (distinct from the accepted baseline address `12.1.0.3`) and bound the edge bridge to the live address.
+- **Deterministic collection:** All 10/10 sensors published successfully, yielding 30 canonical JSONL records (minimum 3 per sensor) and derived Parquet.
+- **Cleanup and network reproof:** Exact run processes were reaped, `tun0` and the remote workspace were removed, and the base network was reproven (`[PASS] cleanup-base-network`).
+- **Independent post-run audit:** Out-of-band inspection of `sopnode-f2` confirmed all postconditions: reserved ports `60001`, `18883`, and `18885` had no listeners; `tun0` was absent; `/tmp/synthran/iot-acceptance-20260817-06` was absent.
+
+Historical context: earlier attempts `iot-acceptance-20260817-02` through `-05` served as engineering provenance for missing host `net-tools`/`ifconfig` (-02), stale edge port-forward (-03), dynamic PDU proof followed by stale central port-forward (-04), and Paho v2 ReasonCode evaluation / remote process persistence (-05), which were resolved in commit `0f0d2d2`.
 
 ## Operator commands
 
