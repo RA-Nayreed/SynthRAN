@@ -3,25 +3,30 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from synthran.live_preflight import CommandResult
 from synthran.research import (
     LoadSpec,
     MeasurementSpec,
+    ResearchError,
     ResearchExperimentSpec,
     load_jsonl,
 )
-from synthran.research_runtime import (
+from synthran.research.instrumentation import (
     _base_cleanup_reproved,
     _extract_iperf_bps,
+    _install_target_route,
     _parse_load_log,
     _parse_probe_log,
     _prove_target_route,
+    _remove_target_route,
     _runtime_overrides,
 )
+from synthran.research.runtime import calibrate_capacity
 
 
 class IperfParsingTests(unittest.TestCase):
@@ -149,7 +154,7 @@ class RuntimeSafetyTests(unittest.TestCase):
         )
 
     def test_runtime_overrides_restore_accepted_experiment_module_globals(self) -> None:
-        import synthran.experiment_runtime as base_runtime
+        from synthran.experiment import runtime as base_runtime
 
         original_builder = base_runtime.build_scenario
         original_collector = base_runtime.collect_mqtt
@@ -164,11 +169,11 @@ class RuntimeSafetyTests(unittest.TestCase):
         inventory = object()
         with (
             patch(
-                "synthran.research_instrumentation._kubectl_exec_command",
+                "synthran.research.instrumentation._kubectl_exec_command",
                 return_value=("ssh",),
             ),
             patch(
-                "synthran.research_instrumentation.base_runtime._run",
+                "synthran.research.instrumentation.base_runtime._run",
                 return_value=CommandResult(
                     0,
                     "192.0.2.1 dev eth0 src 10.0.0.2\n",
@@ -188,11 +193,11 @@ class RuntimeSafetyTests(unittest.TestCase):
         inventory = object()
         with (
             patch(
-                "synthran.research_instrumentation._kubectl_exec_command",
+                "synthran.research.instrumentation._kubectl_exec_command",
                 return_value=("ssh",),
             ),
             patch(
-                "synthran.research_instrumentation.base_runtime._run",
+                "synthran.research.instrumentation.base_runtime._run",
                 return_value=CommandResult(
                     0,
                     "192.0.2.1 from 12.1.0.8 dev tun_srsue1 src 12.1.0.8\n",
@@ -206,6 +211,194 @@ class RuntimeSafetyTests(unittest.TestCase):
                 pdu_address="12.1.0.8",
                 target="192.0.2.1",
             )
+
+    def test_route_install_reuses_already_proven_tunnel_without_claiming_it(self) -> None:
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                side_effect=lambda _inventory, _pod, *command: tuple(command),
+            ),
+            patch(
+                "synthran.research.instrumentation.base_runtime._run",
+                return_value=CommandResult(
+                    0,
+                    "192.0.2.1 from 12.1.0.8 dev tun_srsue1 src 12.1.0.8\n",
+                    "",
+                ),
+            ) as run,
+        ):
+            installed = _install_target_route(
+                object(),
+                "ue-pod",
+                pdu_address="12.1.0.8",
+                target="192.0.2.1",
+            )
+        self.assertFalse(installed)
+        self.assertEqual(run.call_count, 1)
+
+    def test_route_install_adds_exact_prefix_and_proves_tunnel(self) -> None:
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                side_effect=lambda _inventory, _pod, *command: tuple(command),
+            ),
+            patch(
+                "synthran.research.instrumentation.base_runtime._run",
+                side_effect=(
+                    CommandResult(
+                        0,
+                        "192.0.2.1 from 12.1.0.8 via 10.0.0.1 dev eth0\n",
+                        "",
+                    ),
+                    CommandResult(0, "", ""),
+                    CommandResult(
+                        0,
+                        "192.0.2.1 from 12.1.0.8 dev tun_srsue1 src 12.1.0.8\n",
+                        "",
+                    ),
+                ),
+            ) as run,
+        ):
+            installed = _install_target_route(
+                object(),
+                "ue-pod",
+                pdu_address="12.1.0.8",
+                target="192.0.2.1",
+            )
+        self.assertTrue(installed)
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ("ip", "route", "add", "192.0.2.1/32", "dev", "tun_srsue1"),
+        )
+        self.assertNotIn("replace", run.call_args_list[1].args[0])
+
+    def test_route_install_never_replaces_conflicting_exact_state(self) -> None:
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                side_effect=lambda _inventory, _pod, *command: tuple(command),
+            ),
+            patch(
+                "synthran.research.instrumentation.base_runtime._run",
+                side_effect=(
+                    CommandResult(
+                        0,
+                        "192.0.2.1 from 12.1.0.8 via 10.0.0.1 dev eth0\n",
+                        "",
+                    ),
+                    CommandResult(2, "", "RTNETLINK answers: File exists"),
+                ),
+            ) as run,
+        ):
+            with self.assertRaisesRegex(ResearchError, "without replacing"):
+                _install_target_route(
+                    object(),
+                    "ue-pod",
+                    pdu_address="12.1.0.8",
+                    target="192.0.2.1",
+                )
+        self.assertNotIn("replace", run.call_args_list[1].args[0])
+
+    def test_failed_route_proof_removes_the_route_it_created(self) -> None:
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                side_effect=lambda _inventory, _pod, *command: tuple(command),
+            ),
+            patch(
+                "synthran.research.instrumentation.base_runtime._run",
+                side_effect=(
+                    CommandResult(0, "192.0.2.1 dev eth0\n", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "192.0.2.1 dev eth0\n", ""),
+                    CommandResult(0, "", ""),
+                    CommandResult(0, "192.0.2.1 dev eth0\n", ""),
+                ),
+            ) as run,
+        ):
+            with self.assertRaisesRegex(ResearchError, "tun_srsue1"):
+                _install_target_route(
+                    object(),
+                    "ue-pod",
+                    pdu_address="12.1.0.8",
+                    target="192.0.2.1",
+                )
+        self.assertEqual(
+            run.call_args_list[3].args[0],
+            ("ip", "route", "del", "192.0.2.1/32", "dev", "tun_srsue1"),
+        )
+
+    def test_owned_route_cleanup_restores_non_tunnel_path(self) -> None:
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                side_effect=lambda _inventory, _pod, *command: tuple(command),
+            ),
+            patch(
+                "synthran.research.instrumentation.base_runtime._run",
+                side_effect=(
+                    CommandResult(0, "", ""),
+                    CommandResult(
+                        0,
+                        "192.0.2.1 from 12.1.0.8 via 10.0.0.1 dev eth0\n",
+                        "",
+                    ),
+                ),
+            ) as run,
+        ):
+            _remove_target_route(
+                object(),
+                "ue-pod",
+                pdu_address="12.1.0.8",
+                target="192.0.2.1",
+            )
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ("ip", "route", "del", "192.0.2.1/32", "dev", "tun_srsue1"),
+        )
+
+    def test_capacity_calibration_releases_route_when_server_start_fails(self) -> None:
+        inventory = object()
+        lock = object()
+        state = SimpleNamespace(ue_pod="ue-pod", pdu_address="12.1.0.8")
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                patch(
+                    "synthran.research.runtime.verify_network_path",
+                    return_value=SimpleNamespace(ready=True),
+                ),
+                patch(
+                    "synthran.research.runtime.reconcile_rfsim_runtime",
+                    return_value=state,
+                ),
+                patch("synthran.research.runtime._check_research_tools"),
+                patch(
+                    "synthran.research.runtime._install_target_route",
+                    return_value=True,
+                ),
+                patch(
+                    "synthran.research.runtime.start_owned_iperf_server",
+                    side_effect=ResearchError("server start failed"),
+                ),
+                patch(
+                    "synthran.research.runtime._remove_target_route"
+                ) as remove_route,
+                self.assertRaisesRegex(ResearchError, "server start failed"),
+            ):
+                calibrate_capacity(
+                    inventory=inventory,
+                    lock=lock,
+                    network_run_id="network-accepted",
+                    target="192.0.2.1",
+                    repository_root=Path(temporary),
+                    output_path=Path(temporary) / "capacity.json",
+                )
+        remove_route.assert_called_once_with(
+            inventory,
+            "ue-pod",
+            pdu_address="12.1.0.8",
+            target="192.0.2.1",
+        )
 
     def test_cleanup_reproof_requires_persisted_cleanup_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

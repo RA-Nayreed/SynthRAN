@@ -10,10 +10,12 @@ import threading
 from typing import Any, Mapping, TextIO
 
 from synthran.dependencies import DependencyLock
-import synthran.experiment_runtime as base_runtime
+from synthran.experiment import runtime as base_runtime
 from synthran.fiveg_ansible import NetworkInventory
-from synthran.network_runtime import verify_network_path
+from synthran.network.rfsim import reconcile_rfsim_runtime
+from synthran.network.runtime import verify_network_path
 from synthran.research import (
+    CAPACITY_SCHEMA,
     LOAD_RESULT_SCHEMA,
     MEASUREMENT_WINDOW_SCHEMA,
     NETWORK_SAMPLE_SCHEMA,
@@ -27,28 +29,28 @@ from synthran.research import (
     save_run_summary,
     write_records_parquet,
 )
-from synthran.research_collector import collect_mqtt_window
-from synthran.research_instrumentation import (
+from synthran.research.collector import collect_mqtt_window
+from synthran.research.instrumentation import (
     DEFAULT_RESEARCH_RUN_ROOT,
     ResearchRunResult,
     _base_cleanup_reproved,
     _check_research_tools,
     _extract_iperf_bps,
+    _install_target_route,
     _kubectl_exec_command,
     _parse_load_log,
     _parse_probe_log,
-    _prove_target_route,
+    _remove_target_route,
     _runtime_overrides,
     _start_load_client,
     _start_probe,
 )
-from synthran.research_iperf import (
+from synthran.research.iperf import (
     OwnedIperfServer,
     start_owned_iperf_server,
     stop_owned_iperf_server,
 )
-from synthran.research_sampling import ResearchNetworkSampler
-from synthran.rfsim_runtime import reconcile_rfsim_runtime
+from synthran.research.sampling import ResearchNetworkSampler
 
 _RUNTIME_OVERRIDE_LOCK = threading.Lock()
 
@@ -100,25 +102,19 @@ def execute_research_experiment(
         _check_research_tools(
             inventory, ue_pod, load_enabled=spec.load.enabled
         )
-        _prove_target_route(
+        route_installed = _install_target_route(
             inventory,
             ue_pod,
             pdu_address=scenario.pdu_address,
             target=spec.probe_target or "",
         )
-        sampler = ResearchNetworkSampler(
-            inventory=inventory,
-            network_run_id=scenario.network_run_id,
-            experiment_run_id=scenario.run_id,
-            ue_pod=ue_pod,
-            interval_seconds=spec.measurement.sample_interval_seconds,
-            destination=network_path,
-        )
+        sampler: ResearchNetworkSampler | None = None
         processes: list[base_runtime.ManagedProcess] = []
         load_server: OwnedIperfServer | None = None
 
         def start_instrumentation() -> None:
             nonlocal load_server
+            assert sampler is not None
             sampler.start()
             probe = _start_probe(
                 inventory=inventory,
@@ -160,6 +156,14 @@ def execute_research_experiment(
 
         result = None
         try:
+            sampler = ResearchNetworkSampler(
+                inventory=inventory,
+                network_run_id=scenario.network_run_id,
+                experiment_run_id=scenario.run_id,
+                ue_pod=ue_pod,
+                interval_seconds=spec.measurement.sample_interval_seconds,
+                destination=network_path,
+            )
             if spec.measurement.warmup_seconds:
                 report(f"warmup: {spec.measurement.warmup_seconds}s")
             report(
@@ -194,10 +198,11 @@ def execute_research_experiment(
             )
             return result
         finally:
-            try:
-                sampler.stop()
-            except Exception as exc:
-                instrumentation_errors.append(str(exc))
+            if sampler is not None:
+                try:
+                    sampler.stop()
+                except Exception as exc:
+                    instrumentation_errors.append(str(exc))
             for process in reversed(processes):
                 try:
                     if process.process.poll() is None:
@@ -211,6 +216,16 @@ def execute_research_experiment(
             if load_server is not None:
                 try:
                     stop_owned_iperf_server(inventory, load_server)
+                except Exception as exc:
+                    instrumentation_errors.append(str(exc))
+            if route_installed:
+                try:
+                    _remove_target_route(
+                        inventory,
+                        ue_pod,
+                        pdu_address=scenario.pdu_address,
+                        target=spec.probe_target or "",
+                    )
                 except Exception as exc:
                     instrumentation_errors.append(str(exc))
             try:
@@ -330,27 +345,29 @@ def calibrate_capacity(
     )
     ue_pod = state.ue_pod
     _check_research_tools(inventory, ue_pod, load_enabled=True)
-    _prove_target_route(
+    route_installed = _install_target_route(
         inventory,
         ue_pod,
         pdu_address=state.pdu_address,
         target=target,
     )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     owner_id = "cal-" + hashlib.sha256(
         f"{network_run_id}:{target}:{server_port}".encode("utf-8")
     ).hexdigest()[:16]
-    server_log = output_path.with_suffix(".server.log")
-    server = start_owned_iperf_server(
-        inventory=inventory,
-        owner_id=owner_id,
-        port=server_port,
-        repository_root=repository_root,
-        log_path=server_log,
-    )
+    server: OwnedIperfServer | None = None
     failure: Exception | None = None
     payload: Mapping[str, Any] | None = None
     try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        server_log = output_path.with_suffix(".server.log")
+        server = start_owned_iperf_server(
+            inventory=inventory,
+            owner_id=owner_id,
+            port=server_port,
+            repository_root=repository_root,
+            log_path=server_log,
+        )
         command = _kubectl_exec_command(
             inventory,
             ue_pod,
@@ -402,19 +419,35 @@ def calibrate_capacity(
         )
     except Exception as exc:
         failure = exc
-    cleanup_error: Exception | None = None
-    try:
-        stop_owned_iperf_server(inventory, server)
-    except Exception as exc:
-        cleanup_error = exc
-    if failure is not None and cleanup_error is not None:
+
+    cleanup_errors: list[str] = []
+    if server is not None:
+        try:
+            stop_owned_iperf_server(inventory, server)
+        except Exception as exc:
+            cleanup_errors.append(f"iperf3 server: {exc}")
+    if route_installed:
+        try:
+            _remove_target_route(
+                inventory,
+                ue_pod,
+                pdu_address=state.pdu_address,
+                target=target,
+            )
+        except Exception as exc:
+            cleanup_errors.append(f"target route: {exc}")
+
+    if failure is not None and cleanup_errors:
         raise ResearchError(
             "capacity calibration failed and cleanup failed closed: "
-            f"{failure}; {cleanup_error}"
+            f"{failure}; {'; '.join(cleanup_errors)}"
         ) from failure
     if failure is not None:
         raise failure
-    if cleanup_error is not None:
-        raise cleanup_error
+    if cleanup_errors:
+        raise ResearchError(
+            "capacity calibration cleanup failed closed: "
+            + "; ".join(cleanup_errors)
+        )
     assert payload is not None
     return payload
