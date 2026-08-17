@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from synthran.app.model import ApplicationSnapshot, DimensionView
-from synthran.app.workflows import plan_workflow
+from synthran.app.workflows import WORKFLOW_SPECS, plan_workflow, workflow_targets
 from synthran.operations import (
     ApprovalGrant,
     ExecutionPermit,
@@ -266,10 +266,12 @@ class ApplicationController:
             )
         observed = self._active_observed(now=current, allow_empty=False)
         policy = plan_workflow(desired, observed, workflow, now=current)
+        targets = workflow_targets(observed, workflow, now=current)
         return self.operations.begin(
             desired=desired,
             observed=observed,
             step_name=workflow,
+            targets=targets,
             policy_report=policy,
             now=current,
         )
@@ -294,7 +296,7 @@ class ApplicationController:
         inventory: ResourceInventory | None = None,
         now: datetime | None = None,
     ) -> ExecutionPermit:
-        """Authorize against current persisted state and any operation-bound resource decision."""
+        """Authorize against current state, policy, and exact bound targets."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
         record, desired = self._active_desired()
@@ -303,6 +305,21 @@ class ApplicationController:
             raise WorkspaceError("active observed state belongs to another experiment")
 
         plan = load_plan(self.root, operation_id)
+        if plan.kind in WORKFLOW_SPECS:
+            policy = plan_workflow(desired, observed, plan.kind, now=current)
+            targets = workflow_targets(observed, plan.kind, now=current)
+            if targets != plan.targets:
+                raise WorkspaceError(
+                    "application workflow targets changed after approval; create a new operation"
+                )
+            return self.operations.authorize(
+                operation_id,
+                desired=desired,
+                observed=observed,
+                policy_report=policy,
+                now=current,
+            )
+
         bound_inputs: Mapping[str, Mapping[str, object]] | None = None
         if RESOURCE_DECISION_INPUT in plan.input_sha256:
             if inventory is None:
