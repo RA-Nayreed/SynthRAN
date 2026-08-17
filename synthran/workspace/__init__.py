@@ -8,6 +8,10 @@ from synthran.workspace.access import (
     verify_r2lab_gateway_access,
     verify_slices_project_access,
 )
+from synthran.workspace.context import (
+    WorkspaceAuthorityContext,
+    resolve_workspace_authority,
+)
 from synthran.workspace.initialization import (
     InitializationPlan,
     InitializationRequest,
@@ -71,6 +75,7 @@ __all__ = [
     "Profile",
     "ProviderExperimentObservation",
     "RunRecord",
+    "WorkspaceAuthorityContext",
     "WorkspaceConfig",
     "WorkspaceError",
     "WorkspaceRegistry",
@@ -96,6 +101,7 @@ __all__ = [
     "probe_slices_project_access",
     "profile_path",
     "resolve_identity_reference",
+    "resolve_workspace_authority",
     "save_experiment_status",
     "save_operation_record",
     "save_run_record",
