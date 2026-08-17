@@ -28,7 +28,7 @@ def reconciliation_to_dict(report: ReconciliationReport) -> dict[str, object]:
     }
 
 
-def _select_step(
+def select_reconciliation_step(
     report: ReconciliationReport,
     step_name: str | None,
 ) -> ReconciliationStep:
@@ -57,7 +57,7 @@ def build_operation_plan(
 ) -> OperationPlan:
     """Bind one reconciliation step to exact desired, observed, and policy inputs."""
 
-    step = _select_step(reconciliation, step_name)
+    step = select_reconciliation_step(reconciliation, step_name)
     current = (now or utc_now()).astimezone(timezone.utc)
     desired_sha256 = digest_json(desired.to_dict())
     observed_sha256 = digest_json(observed.to_dict())
