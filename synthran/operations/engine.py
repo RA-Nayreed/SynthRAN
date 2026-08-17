@@ -234,15 +234,20 @@ class OperationController:
         operation_id: str,
         *,
         success: bool,
+        recovered: bool = False,
         now: datetime | None = None,
     ) -> OperationState:
-        """Close a running operation; failed mutations retain their exclusive claim."""
+        """Close a running operation; release failed mutation claims only after proven rollback."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
         plan = load_plan(self.root, operation_id)
         state = load_state(self.root, operation_id)
         if state.status != "running":
             raise WorkspaceError("only a running operation can be finished")
+        if success and recovered:
+            raise WorkspaceError("successful operation cannot also be marked recovered")
+        if recovered and not plan.mutates:
+            raise WorkspaceError("read-only operation cannot use mutation rollback recovery")
         if plan.mutates:
             require_mutation_claim(self.root, plan)
 
@@ -260,6 +265,26 @@ class OperationController:
             )
             save_state(self.root, result)
             self._event(plan, "operation.completed", now=current)
+            return result
+
+        if recovered:
+            release_mutation_claim(self.root, plan)
+            result = OperationState(
+                operation_id=operation_id,
+                status="failed",
+                risk=plan.risk,
+                mutates=plan.mutates,
+                plan_sha256=plan.plan_sha256,
+                updated_at_utc=format_utc(current),
+                claim_held=False,
+            )
+            save_state(self.root, result)
+            self._event(
+                plan,
+                "operation.failed",
+                now=current,
+                attributes={"rollback": "complete"},
+            )
             return result
 
         status = "recovery-required" if plan.mutates else "failed"
