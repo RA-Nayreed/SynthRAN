@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 from time import monotonic
 from typing import Any, Mapping, Sequence, TextIO
@@ -24,10 +25,6 @@ from synthran.live_preflight import (
     LivePreflightError,
     verify_reservation,
 )
-from synthran.slices_controller import (
-    SlicesControllerError,
-    verify_slices_controller,
-)
 from synthran.network_runtime import (
     RunCommand,
     atomic_json,
@@ -36,6 +33,8 @@ from synthran.network_runtime import (
     tree_sha256,
     validate_run_id,
 )
+from synthran.slices_controller import SlicesControllerError, verify_slices_controller
+from synthran.upstream_overlay import UpstreamOverlayError, apply_preparation_overlay
 
 
 PREPARATION_SCHEMA = "synthran/resource-preparation/v1alpha1"
@@ -56,7 +55,6 @@ class NodeSpec:
     storage: str
 
 
-# Inventory mappings from the locked fiveg_ansible commit.
 SUPPORTED_NODES: Mapping[str, NodeSpec] = {
     "sopnode-f1": NodeSpec("sopnode-f1", "ens2f1", "172.28.2.76", "sda1"),
     "sopnode-f2": NodeSpec("sopnode-f2", "ens2f1", "172.28.2.77", "sda1"),
@@ -173,7 +171,8 @@ def _record_nodes(value: object, label: str) -> set[str]:
     for item in value:
         if isinstance(item, str) and item.strip():
             nodes.add(item.strip())
-        elif isinstance(item, dict):
+            continue
+        if isinstance(item, dict):
             candidate = next(
                 (
                     item.get(key)
@@ -182,11 +181,10 @@ def _record_nodes(value: object, label: str) -> set[str]:
                 ),
                 None,
             )
-            if candidate is None:
-                raise ResourcePreparationError(f"{label} contains an invalid node")
-            nodes.add(candidate.strip())
-        else:
-            raise ResourcePreparationError(f"{label} contains an invalid node")
+            if candidate is not None:
+                nodes.add(candidate.strip())
+                continue
+        raise ResourcePreparationError(f"{label} contains an invalid node")
     return nodes
 
 
@@ -234,10 +232,7 @@ class ResourcePreparationPlan:
             "schema": PREPARATION_SCHEMA,
             "execution_enabled": False,
             "run_id": self.run_id,
-            "nodes": {
-                "core": self.core_node.name,
-                "ran": self.ran_node.name,
-            },
+            "nodes": {"core": self.core_node.name, "ran": self.ran_node.name},
             "duration_minutes": self.duration_minutes,
             "reservation_action": self.reservation_action,
             "dependencies": {"fiveg_ansible": self.fiveg_ansible_commit},
@@ -248,8 +243,8 @@ class ResourcePreparationPlan:
             "commands": [
                 "git -C '<locked-fiveg-checkout>' worktree add --detach "
                 f"'<isolated-worktree>' {self.fiveg_ansible_commit}",
-                "git apply --check '<resource-preparation-boundary.patch>'",
-                "ansible-playbook --syntax-check '<patched-upstream-deploy.yml>'",
+                "apply SynthRAN upstream preparation overlay",
+                "ansible-playbook --syntax-check '<upstream-deploy.yml>'",
                 (
                     "pos calendar create -d "
                     f"{self.duration_minutes} -s now {self.core_node.name} {self.ran_node.name}"
@@ -257,8 +252,7 @@ class ResourcePreparationPlan:
                     else "pos calendar list --filter owner='<operator>' --json"
                 ),
                 f"pos allocations allocate {self.core_node.name} {self.ran_node.name}",
-                "ansible-playbook '<patched-upstream-deploy.yml>' "
-                "-e synthran_prepare_only=true",
+                "ansible-playbook '<upstream-deploy.yml>' -e synthran_prepare_only=true",
                 "ansible-playbook '<prepare-tools.yml>'",
             ],
         }
@@ -360,10 +354,7 @@ def locked_preparation_variables(lock: DependencyLock) -> dict[str, Any]:
 
 
 def _allocation_before_mutation(
-    text: str,
-    *,
-    owner: str,
-    nodes: set[str],
+    text: str, *, owner: str, nodes: set[str]
 ) -> str | None:
     touched: list[tuple[Mapping[str, Any], set[str]]] = []
     for record in _json_records(text, "POS allocation list"):
@@ -389,9 +380,7 @@ def _allocation_before_mutation(
 
 
 def _allocation_after_mutation(
-    outputs: Mapping[str, str],
-    *,
-    owner: str,
+    outputs: Mapping[str, str], *, owner: str
 ) -> str:
     identifiers: set[str] = set()
     for node, text in outputs.items():
@@ -478,10 +467,8 @@ def _write_authority(
         f"export SYNTHRAN_OWNER={owner}",
         f"export SYNTHRAN_SLICES_PROJECT={slices_project}",
         f"export SYNTHRAN_SLICES_EXPERIMENT={slices_experiment}",
-        (
-            "export SYNTHRAN_KNOWN_HOSTS="
-            f"{shlex.quote(str(path.parent / 'known_hosts'))}"
-        ),
+        "export SYNTHRAN_KNOWN_HOSTS="
+        f"{shlex.quote(str(path.parent / 'known_hosts'))}",
     ]
     if reservation_id is not None:
         lines.append(f"export SYNTHRAN_RESERVATION_ID={reservation_id}")
@@ -533,7 +520,6 @@ def execute_resource_preparation(
         f"preparation started: run={plan.run_id} "
         f"core={plan.core_node.name} ran={plan.ran_node.name}"
     )
-
     owner = _validate_authority(owner, "owner")
     if plan.reservation_action == "reuse":
         if reservation_id is None or not RESERVATION_ID_RE.fullmatch(reservation_id):
@@ -551,6 +537,7 @@ def execute_resource_preparation(
             "live resource preparation is blocked by the dependency lock: "
             + plan.bootstrap_reason
         )
+
     report("controller-preflight: running...")
     try:
         controller_report = verify_slices_controller(
@@ -578,14 +565,7 @@ def execute_resource_preparation(
     overlay_source = repository_root.resolve() / "deploy" / "ansible"
     preparation_playbook = overlay_source / "prepare-tools.yml"
     preparation_requirements = overlay_source / "preparation-requirements.yml"
-    boundary_patch_source = (
-        overlay_source / "patches" / "resource-preparation-boundary.patch"
-    )
-    if (
-        not preparation_playbook.is_file()
-        or not preparation_requirements.is_file()
-        or not boundary_patch_source.is_file()
-    ):
+    if not preparation_playbook.is_file() or not preparation_requirements.is_file():
         raise ResourcePreparationError(
             "SynthRAN resource preparation overlay is incomplete"
         )
@@ -621,7 +601,7 @@ def execute_resource_preparation(
     allocation_action = "pending"
     log_parts: list[str] = []
 
-    def write_manifest(status: str, stage: str | None = None) -> None:
+    def write_manifest(status: str, stage_name: str | None = None) -> None:
         atomic_json(
             manifest_path,
             _preparation_manifest(
@@ -634,7 +614,7 @@ def execute_resource_preparation(
                 allocation_id=current_allocation,
                 slices_controller=controller_report.to_dict(),
                 allocation_action=allocation_action,
-                failure_stage=stage,
+                failure_stage=stage_name,
             ),
         )
 
@@ -699,10 +679,8 @@ def execute_resource_preparation(
         streaming: bool = False,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
-
         report(f"{name}: running...")
         started = monotonic()
-
         try:
             if streaming:
                 if runner is run_command:
@@ -732,27 +710,22 @@ def execute_resource_preparation(
         except (OSError, RuntimeError) as exc:
             elapsed = monotonic() - started
             report(f"{name}: FAILED ({elapsed:.1f}s)")
-
             fail(name, f"{name} could not be completed")
             raise ResourcePreparationError(
                 f"preparation stage {name} could not be completed"
             ) from exc
 
         elapsed = monotonic() - started
-
         if retain_output:
             log_parts.extend((result.stdout, result.stderr))
         else:
             log_parts.append("provider output was intentionally not retained")
-
         if result.returncode != 0:
             report(f"{name}: FAILED ({elapsed:.1f}s)")
             fail(name, f"{name} returned nonzero")
             raise ResourcePreparationError(
-                f"preparation stage {name} failed; "
-                "see the sanitized preparation log"
+                f"preparation stage {name} failed; see the sanitized preparation log"
             )
-
         report(f"{name}: OK ({elapsed:.1f}s)")
         return result
 
@@ -791,19 +764,18 @@ def execute_resource_preparation(
         raise ResourcePreparationError(
             "unable to prepare the isolated resource overlay"
         ) from exc
-    boundary_patch = (
-        overlay_directory / "patches" / "resource-preparation-boundary.patch"
+
+    report("upstream-overlay: running...")
+    try:
+        apply_preparation_overlay(worktree)
+    except UpstreamOverlayError as exc:
+        fail("upstream-overlay", str(exc))
+        report("upstream-overlay: FAILED")
+        raise ResourcePreparationError(str(exc)) from exc
+    log_parts.append(
+        "=== upstream-overlay ===\nexact pinned-source transformations applied"
     )
-    stage(
-        "upstream-boundary-check",
-        ("git", "apply", "--check", str(boundary_patch)),
-        worktree,
-    )
-    stage(
-        "upstream-boundary-apply",
-        ("git", "apply", str(boundary_patch)),
-        worktree,
-    )
+    report("upstream-overlay: OK")
 
     collections = run_directory / "collections"
     environment = dict(os.environ)
@@ -922,11 +894,11 @@ def execute_resource_preparation(
             repository_root,
             retain_output=False,
         ).stdout.strip()
-        if (
-            not RESERVATION_ID_RE.fullmatch(created_output)
-            or created_output in before_ids
-        ):
-            fail("reservation-create", "POS did not return one new numeric reservation ID")
+        if not RESERVATION_ID_RE.fullmatch(created_output) or created_output in before_ids:
+            fail(
+                "reservation-create",
+                "POS did not return one new numeric reservation ID",
+            )
             raise ResourcePreparationError(
                 "created reservation did not return one new numeric identifier"
             )
@@ -943,10 +915,7 @@ def execute_resource_preparation(
             "reservation-discovery",
         )
         new_ids = after_ids - before_ids
-        if (
-            RESERVATION_ID_RE.fullmatch(created_output)
-            and created_output not in before_ids
-        ):
+        if created_output not in before_ids:
             new_ids.add(created_output)
         if len(new_ids) != 1:
             fail(
@@ -959,7 +928,9 @@ def execute_resource_preparation(
         current_reservation = next(iter(new_ids))
         write_manifest("running")
 
-    def provider_runner(command: Sequence[str], probe_timeout: int) -> CommandResult:
+    def provider_runner(
+        command: Sequence[str], probe_timeout: int
+    ) -> CommandResult:
         return runner(command, repository_root, None, probe_timeout)
 
     try:
@@ -996,12 +967,9 @@ def execute_resource_preparation(
             repository_root,
             retain_output=False,
         )
-
-        # POS does not guarantee that allocation creation returns the
-        # allocation identifier on stdout. Discover and verify the
-        # allocation from authoritative per-node provider state below.
         persist_authority()
         write_manifest("running")
+
     allocation_outputs = {
         node: stage(
             f"allocation-verification-{role}",
@@ -1016,16 +984,12 @@ def execute_resource_preparation(
     }
     try:
         observed_allocation = _allocation_after_mutation(
-            allocation_outputs,
-            owner=owner,
+            allocation_outputs, owner=owner
         )
     except ResourcePreparationError:
         fail("allocation-verification", "shared allocation verification failed")
         raise
-    if (
-        current_allocation is not None
-        and observed_allocation != current_allocation
-    ):
+    if current_allocation is not None and observed_allocation != current_allocation:
         fail("allocation-verification", "allocation identity changed unexpectedly")
         raise ResourcePreparationError(
             "selected node allocation identity changed unexpectedly"

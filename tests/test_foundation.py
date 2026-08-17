@@ -127,30 +127,36 @@ class FoundationTests(unittest.TestCase):
             self.assertTrue((REPOSITORY_ROOT / "docs" / name).is_file(), name)
             self.assertIn(f"docs/{name}", readme)
 
-    def test_numbered_phase_terms_exist_only_in_the_decision_journal(self) -> None:
+    def test_tracked_product_text_avoids_internal_milestone_language(self) -> None:
         excluded_parts = {".git", ".deps", ".synthran", "__pycache__"}
-        pattern = re.compile(r"phase[\s_-]*[0-9]", flags=re.IGNORECASE)
+        forbidden = "pha" + "se"
+        text_suffixes = {
+            ".ini",
+            ".json",
+            ".md",
+            ".py",
+            ".sh",
+            ".toml",
+            ".txt",
+            ".yaml",
+            ".yml",
+        }
         for root, dirs, files in os.walk(REPOSITORY_ROOT):
-            dirs[:] = [d for d in dirs if d not in excluded_parts]
+            dirs[:] = [directory for directory in dirs if directory not in excluded_parts]
             for filename in files:
                 if filename == "decision.md":
                     continue
                 path = Path(root) / filename
                 relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-                self.assertIsNone(pattern.search(relative), relative)
-                if path.suffix.lower() in {
-                    ".ini",
-                    ".json",
-                    ".md",
-                    ".py",
-                    ".sh",
-                    ".toml",
-                    ".txt",
-                    ".yaml",
-                    ".yml",
-                } or path.name in {"AGENTS.md", "LICENSE", "README.md", "THIRD_PARTY.md"}:
+                self.assertNotIn(forbidden, relative.lower(), relative)
+                if path.suffix.lower() in text_suffixes or path.name in {
+                    "AGENTS.md",
+                    "LICENSE",
+                    "README.md",
+                    "THIRD_PARTY.md",
+                }:
                     content = path.read_text(encoding="utf-8")
-                    self.assertIsNone(pattern.search(content), relative)
+                    self.assertNotIn(forbidden, content.lower(), relative)
 
     def test_interactive_guides_use_direct_commands_after_activation(self) -> None:
         paths = (
@@ -172,13 +178,10 @@ class FoundationTests(unittest.TestCase):
         lock = json.loads(
             (REPOSITORY_ROOT / "dependencies.lock.yml").read_text()
         )
-
         open5gs = lock["containers"]["open5gs"]
         smf = lock["containers"]["open5gs_smf"]
-
         self.assertEqual("ghcr.io/niloysh/open5gs", open5gs["image"])
         self.assertEqual("v2.7.0", open5gs["tag"])
-
         self.assertEqual(open5gs["image"], smf["image"])
         self.assertEqual(open5gs["tag"], smf["tag"])
         self.assertEqual(open5gs["digest"], smf["digest"])
@@ -191,7 +194,6 @@ class FoundationTests(unittest.TestCase):
             / "tasks"
             / "pin-open5gs-images.yml"
         ).read_text(encoding="utf-8")
-
         self.assertIn(
             'old: "ghcr.io/niloysh/open5gs:v2.6.4-aio"',
             pinning,

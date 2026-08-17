@@ -79,9 +79,6 @@ class PreparationRunner:
             self.reservation_created = True
             return CommandResult(0, "7000000001\n")
         if argv[:3] == ("pos", "allocations", "allocate"):
-            # Real POS 2.5.35 does not reliably return the allocation ID
-            # on stdout. The authoritative ID is discovered with
-            # `pos allocations show` after creation.
             return CommandResult(0, "")
         if argv == (
             "pos",
@@ -126,6 +123,20 @@ class ResourcePreparationTests(unittest.TestCase):
             slices_cli_version="1.4.0",
         )
 
+    def _runtime_patches(self, checkout: Path):
+        return (
+            patch(
+                "synthran.resource_runtime.validate_fiveg_checkout",
+                return_value=checkout,
+            ),
+            patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
+            patch(
+                "synthran.resource_runtime.verify_slices_controller",
+                return_value=self.controller,
+            ),
+            patch("synthran.resource_runtime.apply_preparation_overlay"),
+        )
+
     def test_inventory_uses_locked_upstream_node_mappings(self) -> None:
         text, inventory = build_preparation_inventory(
             core_node="sopnode-f2",
@@ -167,6 +178,8 @@ class ResourcePreparationTests(unittest.TestCase):
             rendered,
         )
         self.assertIn("pos calendar create -d 120 -s now", rendered)
+        self.assertIn("apply SynthRAN upstream preparation overlay", rendered)
+        self.assertNotIn("git apply", rendered)
         self.assertNotIn("allocations free", rendered)
         self.assertNotIn("deploy.sh", rendered)
         self.assertIn("stops before Open5GS or srsRAN deployment", rendered)
@@ -178,7 +191,9 @@ class ResourcePreparationTests(unittest.TestCase):
             bootstrap_reason="test-only blocked bootstrap",
         )
         runner = PreparationRunner()
-        with self.assertRaisesRegex(ResourcePreparationError, "blocked by the dependency lock"):
+        with self.assertRaisesRegex(
+            ResourcePreparationError, "blocked by the dependency lock"
+        ):
             execute_resource_preparation(
                 plan=blocked_plan,
                 lock=self.lock,
@@ -196,17 +211,8 @@ class ResourcePreparationTests(unittest.TestCase):
             root = Path(directory)
             checkout = root / "checkout"
             checkout.mkdir()
-            with (
-                patch(
-                    "synthran.resource_runtime.validate_fiveg_checkout",
-                    return_value=checkout,
-                ),
-                patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
-                patch(
-                    "synthran.resource_runtime.verify_slices_controller",
-                    return_value=self.controller,
-                ),
-            ):
+            first, second, third, fourth = self._runtime_patches(checkout)
+            with first, second, third, fourth as overlay:
                 result = execute_resource_preparation(
                     plan=self.ready_plan,
                     lock=self.lock,
@@ -219,6 +225,7 @@ class ResourcePreparationTests(unittest.TestCase):
                     runner=runner,
                     now=NOW,
                 )
+            overlay.assert_called_once()
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             rendered_manifest = json.dumps(manifest)
@@ -247,10 +254,20 @@ class ResourcePreparationTests(unittest.TestCase):
                 self.assertEqual(0o600, result.authority_path.stat().st_mode & 0o777)
 
             allocate_calls = [
-                call for call in runner.calls if call[:3] == ("pos", "allocations", "allocate")
+                call
+                for call in runner.calls
+                if call[:3] == ("pos", "allocations", "allocate")
             ]
             self.assertEqual(
-                [("pos", "allocations", "allocate", "sopnode-f2", "sopnode-f3")],
+                [
+                    (
+                        "pos",
+                        "allocations",
+                        "allocate",
+                        "sopnode-f2",
+                        "sopnode-f3",
+                    )
+                ],
                 allocate_calls,
             )
             self.assertFalse(any("free" in call for call in runner.calls))
@@ -269,7 +286,9 @@ class ResourcePreparationTests(unittest.TestCase):
             live_playbooks = [
                 call
                 for call in runner.calls
-                if call and call[0] == "ansible-playbook" and "--syntax-check" not in call
+                if call
+                and call[0] == "ansible-playbook"
+                and "--syntax-check" not in call
             ]
             self.assertTrue(
                 any("synthran_prepare_only=true" in call for call in live_playbooks)
@@ -299,16 +318,12 @@ class ResourcePreparationTests(unittest.TestCase):
             root = Path(directory)
             checkout = root / "checkout"
             checkout.mkdir()
+            first, second, third, fourth = self._runtime_patches(checkout)
             with (
-                patch(
-                    "synthran.resource_runtime.validate_fiveg_checkout",
-                    return_value=checkout,
-                ),
-                patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
-                patch(
-                    "synthran.resource_runtime.verify_slices_controller",
-                    return_value=self.controller,
-                ),
+                first,
+                second,
+                third,
+                fourth,
                 self.assertRaisesRegex(ResourcePreparationError, "another operator"),
             ):
                 execute_resource_preparation(
@@ -337,16 +352,12 @@ class ResourcePreparationTests(unittest.TestCase):
             root = Path(directory)
             checkout = root / "checkout"
             checkout.mkdir()
+            first, second, third, fourth = self._runtime_patches(checkout)
             with (
-                patch(
-                    "synthran.resource_runtime.validate_fiveg_checkout",
-                    return_value=checkout,
-                ),
-                patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
-                patch(
-                    "synthran.resource_runtime.verify_slices_controller",
-                    return_value=self.controller,
-                ),
+                first,
+                second,
+                third,
+                fourth,
                 self.assertRaisesRegex(
                     ResourcePreparationError,
                     "supplied reservation could not be verified",
@@ -390,17 +401,8 @@ class ResourcePreparationTests(unittest.TestCase):
             root = Path(directory)
             checkout = root / "checkout"
             checkout.mkdir()
-            with (
-                patch(
-                    "synthran.resource_runtime.validate_fiveg_checkout",
-                    return_value=checkout,
-                ),
-                patch("synthran.resource_runtime.shutil.which", return_value="/tool"),
-                patch(
-                    "synthran.resource_runtime.verify_slices_controller",
-                    return_value=self.controller,
-                ),
-            ):
+            first, second, third, fourth = self._runtime_patches(checkout)
+            with first, second, third, fourth:
                 execute_resource_preparation(
                     plan=self.ready_plan,
                     lock=self.lock,
@@ -422,6 +424,8 @@ class ResourcePreparationTests(unittest.TestCase):
             self.assertIn("controller-preflight: OK", text)
             self.assertIn("isolated-worktree: running...", text)
             self.assertIn("isolated-worktree: OK", text)
+            self.assertIn("upstream-overlay: running...", text)
+            self.assertIn("upstream-overlay: OK", text)
             self.assertIn("resource preparation: COMPLETE", text)
 
 

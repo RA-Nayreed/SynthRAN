@@ -4,23 +4,23 @@ import tomllib
 from pathlib import Path
 import unittest
 
-from synthran.entrypoint import _parser
+from synthran.cli import _parser
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
-class ExperimentCliTests(unittest.TestCase):
+class CliTests(unittest.TestCase):
     def test_package_exposes_one_synthran_executable(self) -> None:
         project = tomllib.loads(
             (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
         self.assertEqual(
             project["project"]["scripts"],
-            {"synthran": "synthran.entrypoint:main"},
+            {"synthran": "synthran.cli:main"},
         )
 
-    def test_unified_parser_contains_experiment_commands(self) -> None:
+    def test_parser_contains_experiment_commands(self) -> None:
         parser = _parser()
         args = parser.parse_args(
             [
@@ -35,7 +35,7 @@ class ExperimentCliTests(unittest.TestCase):
         self.assertEqual(args.command, "experiment")
         self.assertEqual(args.experiment_command, "plan")
 
-    def test_unified_parser_keeps_existing_network_commands(self) -> None:
+    def test_parser_keeps_network_commands(self) -> None:
         parser = _parser()
         args = parser.parse_args(
             [

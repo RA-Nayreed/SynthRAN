@@ -11,6 +11,7 @@
       ansible.builtin.apt:
         name:
           - net-tools
+          - iperf3
         state: present
         update_cache: false
 
