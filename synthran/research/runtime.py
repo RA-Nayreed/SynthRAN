@@ -57,6 +57,7 @@ from synthran.research.sampling import ResearchNetworkSampler
 
 _RUNTIME_OVERRIDE_LOCK = threading.Lock()
 _MEASUREMENT_PATH_SCHEMA = "synthran/research-measurement-path/v1alpha1"
+_LOAD_RUNTIME_HEADROOM_SECONDS = 15
 
 
 class _ResearchProgressStream:
@@ -109,7 +110,7 @@ def _measurement_runtime_handoff(
 
 def _report_checks(report: Any) -> list[dict[str, Any]]:
     checks = []
-    for check in getattr(report, "checks", ()): 
+    for check in getattr(report, "checks", ()):
         checks.append(
             {
                 "name": str(check.name),
@@ -346,32 +347,6 @@ def execute_research_experiment(
             save_path_state()
             report("measurement path: ready")
 
-            sampler = ResearchNetworkSampler(
-                inventory=inventory,
-                network_run_id=scenario.network_run_id,
-                experiment_run_id=scenario.run_id,
-                ue_pod=ue_pod,
-                interval_seconds=spec.measurement.sample_interval_seconds,
-                destination=network_path,
-            )
-            sampler.start()
-            report(
-                f"network sampler: ready ({spec.measurement.sample_interval_seconds:g}s target interval)"
-            )
-
-            probe_process = _start_probe(
-                inventory=inventory,
-                ue_pod=ue_pod,
-                target=spec.probe_target or "",
-                duration_seconds=spec.measurement.duration_seconds + 2,
-                interval_seconds=spec.measurement.probe_interval_seconds,
-                repository_root=repository_root,
-                log_path=probe_log,
-            )
-            report(
-                f"RTT probe: ready ({spec.measurement.probe_interval_seconds:g}s interval)"
-            )
-
             if spec.load.enabled:
                 target_bps = spec.load.resolved_target_bps
                 assert target_bps is not None
@@ -393,7 +368,10 @@ def execute_research_experiment(
                     target_bps=per_stream_bps,
                     protocol=spec.load.protocol,
                     parallel_flows=spec.load.parallel_flows,
-                    duration_seconds=spec.measurement.duration_seconds + 15,
+                    duration_seconds=(
+                        spec.measurement.duration_seconds
+                        + _LOAD_RUNTIME_HEADROOM_SECONDS
+                    ),
                     repository_root=repository_root,
                     log_path=load_client_log,
                 )
@@ -405,12 +383,41 @@ def execute_research_experiment(
                     port=spec.load.server_port,
                     process=load_process,
                 )
+                report("load client: connected")
                 report(
                     "UDP load: target "
                     f"{target_bps / 1_000_000:.2f} Mbps, "
                     f"{spec.load.parallel_flows} flow(s)"
                 )
-                report("load client: connected")
+
+            sampler = ResearchNetworkSampler(
+                inventory=inventory,
+                network_run_id=scenario.network_run_id,
+                experiment_run_id=scenario.run_id,
+                ue_pod=ue_pod,
+                interval_seconds=spec.measurement.sample_interval_seconds,
+                destination=network_path,
+            )
+            sampler.start()
+            report(
+                f"network sampler: ready ({spec.measurement.sample_interval_seconds:g}s target interval)"
+            )
+
+            probe_process = _start_probe(
+                inventory=inventory,
+                ue_pod=ue_pod,
+                target=spec.probe_target or "",
+                duration_seconds=(
+                    spec.measurement.duration_seconds
+                    + _LOAD_RUNTIME_HEADROOM_SECONDS
+                ),
+                interval_seconds=spec.measurement.probe_interval_seconds,
+                repository_root=repository_root,
+                log_path=probe_log,
+            )
+            report(
+                f"RTT probe: ready ({spec.measurement.probe_interval_seconds:g}s interval)"
+            )
             report(f"measurement window: {spec.measurement.duration_seconds}s")
 
         def health_check() -> None:
@@ -497,17 +504,17 @@ def execute_research_experiment(
                     sampler.stop()
                 except Exception as exc:
                     instrumentation_errors.append(str(exc))
-            for process in (probe_process,):
-                if process is None:
-                    continue
+            if probe_process is not None:
                 try:
-                    process.stop()
+                    probe_process.stop()
                 except Exception as exc:
-                    instrumentation_errors.append(f"{process.name}: {exc}")
+                    instrumentation_errors.append(f"{probe_process.name}: {exc}")
             if load_process is not None:
                 try:
                     if load_process.process.poll() is None:
-                        load_process.process.wait(timeout=20)
+                        load_process.process.wait(
+                            timeout=_LOAD_RUNTIME_HEADROOM_SECONDS + 5
+                        )
                 except Exception:
                     pass
                 try:
@@ -634,7 +641,9 @@ def execute_research_experiment(
         (network_records, run_directory / "network-samples.parquet"),
         (load_records, run_directory / "load.parquet"),
     ):
-        if source or destination.name == "telemetry.parquet" and telemetry_file.is_file():
+        if source or (
+            destination.name == "telemetry.parquet" and telemetry_file.is_file()
+        ):
             write_records_parquet(source, destination)
 
     report(
