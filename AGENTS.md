@@ -22,7 +22,9 @@ The supported golden path is:
 -> deterministic Parquet
 ```
 
-SynthRAN owns orchestration, contracts, integration adapters, validation, artifact collection, cleanup, and reproducibility reporting. It does not reimplement Open5GS, srsRAN, Contiki-NG, Cooja, or Mosquitto.
+In controlled research workflows, this path is instrumented across fixed measurement windows with continuous RTT probing, synchronized multi-point network counter sampling (Ingress, UE `tun_srsue1`, UPF `ogstun`), and controlled background UDP load to assess the impact of 5G load on deterministic IoT telemetry.
+
+SynthRAN owns orchestration, contracts, integration adapters, validation, artifact collection, cleanup, and reproducibility reporting. It does not reimplement Open5GS, srsRAN, Contiki-NG, Cooja, Mosquitto, or iperf3.
 
 ## Product Vocabulary and CLI
 
@@ -35,11 +37,12 @@ Stable command groups are named for domains and operations, for example:
 ```text
 synthran network prepare|deploy|verify
 synthran experiment plan|run|verify
+synthran experiment research plan|run|calibrate|campaign-plan|campaign-run|analyze
 synthran deps sync
 synthran privacy scan|redact
 ```
 
-Do not create milestone-specific executables or compatibility aliases for unreleased temporary interfaces. Internal Python modules should describe their responsibility, such as `experiment`, `experiment_runtime`, `experiment_resources`, `iot`, `mqtt_collector`, or `ingress`.
+Do not create milestone-specific executables or compatibility aliases for unreleased temporary interfaces. Internal Python modules should describe their responsibility, such as `experiment`, `experiment_runtime`, `experiment_resources`, `research`, `research_collector`, `research_instrumentation`, `research_iperf`, `research_sampling`, `iot`, `mqtt_collector`, or `ingress`.
 
 ## Current Acceptance State
 
@@ -60,6 +63,10 @@ Deployment success alone remains `deployed-unverified`.
 
 The integrated deterministic IoT-to-5G experiment has completed live SLICES acceptance (`iot-acceptance-20260817-06`), persisting `Result: IOT-TO-5G PATH PROVEN` against the accepted base network `network-acceptance-20260817-04`.
 
+Controlled research capabilities have completed live SLICES acceptance against the accepted base network `network-acceptance-20260817-04`:
+- Reference capacity calibration: `calibration-20260817-02.json` persisting `67,253,028 bps` (~67.25 Mbps over `tun_srsue1`).
+- Controlled baseline measurement: `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, `IOT-TO-5G PATH PROVEN`), proving 360/360 events across 10 sensors (100% delivery, 0 gaps, 0 duplicates), 180 RTT probe samples (0 timeouts), complete transport path sampling, clean instrumentation, and verified base-network cleanup reproof.
+
 ## Supported and Deferred Technology
 
 The supported configuration is deliberately narrow:
@@ -72,12 +79,15 @@ The supported configuration is deliberately narrow:
 - IoT: exactly ten deterministic Contiki-NG/Cooja sensors;
 - edge networking: Cooja Serial Socket plus pinned `tunslip6/tun0`;
 - messaging: digest-pinned Mosquitto at the UE edge and core;
-- data: append-only JSONL and deterministic Parquet derived from JSONL.
+- load generation: run-owned UDP iperf3 client (in UE) and server (on core node);
+- probing: continuous ICMP RTT probing bound to `tun_srsue1`;
+- data: append-only JSONL, deterministic Parquet, and structured research summaries.
 
 The following remain deferred unless an explicit accepted decision promotes them:
 
 - multiple UEs or slices;
 - physical radios;
+- TCP controlled load mode (research load protocol is UDP only);
 - impairment campaigns;
 - formal O-RAN A1 or E2 control;
 - RIC integration;
@@ -177,6 +187,21 @@ Experiment acceptance requires all of:
 
 Running pods or brokers alone are not acceptance.
 
+## Controlled Research Boundary and Rules
+
+Controlled research builds upon the accepted base network and deterministic experiment lifecycle:
+
+1. **Protocol and Load Validity:** Controlled background load uses UDP only. A loaded run is valid only when `0.90 <= measured_bps / target_bps <= 1.10`. Baseline runs have background load disabled (`load_target_achieved = true`).
+2. **Single RFSIM Reconciliation and State Handoff:** The base experiment runtime performs RFSIM reconciliation once, discovers the live PDU address, updates scenario inputs, and proves the network path. That exact reconciled UE/PDU state is handed to the research collector. The research collector must NOT perform a second RFSIM reconciliation.
+3. **Controlled Sidecar Readiness Barrier:** When refreshing the edge MQTT bridge configuration, the sidecar restart wrapper reads the current `synthran-edge-mqtt` container `restartCount`, triggers termination, and waits for `restartCount` to increment alongside container Running, container Ready, and pod Ready states within a bounded timeout. Fixed-delay sleep assumptions are prohibited.
+4. **Temporary Target Route Lifecycle:** When a probe/load target requires routing through `tun_srsue1`, the runtime inspects the current routing table. If already routed via `tun_srsue1`, it is reused without ownership. Otherwise, an exact target `/32` route is added (`ip route add`) and proven. Upon teardown, only the SynthRAN-created route is removed, and prior routing state is verified restored. Unknown or conflicting routes fail closed. Operators must never be instructed to manually install routing hacks.
+5. **Owned iperf3 Server Lifecycle:** The research server runs under an exact run-scoped workspace `/tmp/synthran-research/<run-id>/` with a pidfile (`iperf3-<port>.pid`). Startup automatically reaps only provably orphaned (PPID 1) matching processes. Stop explicitly terminates the process group, reaps the remote process, deletes the pidfile, and removes the workspace with verified absence.
+6. **Network Sampling Cadence:** The synchronized network sampler performs sequential remote queries (Ingress snapshot, UE `tun_srsue1` counters, UPF `ogstun` counters) before sleeping `sample_interval_seconds`. Because remote round-trips add to the interval, `sample_interval=1` yields ~51 samples over 180s rather than 180 samples. Throughput is computed from `(last - first) / actual_elapsed_time` and remains accurate. Do not assume 1 Hz sample cadence.
+7. **Metrics and Latency Terminology:** Document RTT latency only (mean, median, p95, p99, jitter). Do not invent one-way latency claims without synchronized cross-host clocks.
+8. **Campaign Methodology:** The run is the statistical unit. Multi-run campaigns use deterministic blocked randomization across seeds. Offline analysis (`synthran experiment research analyze`) derives bootstrap paired differences from persisted run summaries without live access. Do not claim a campaign is complete without persisted run summaries for all scheduled runs.
+9. **Separate Acceptance Concepts:** Base 5G path proof (`path_acceptance_ready`) and research validity (`ready_for_campaign_analysis`) are distinct and must not be conflated.
+10. **Preserve Failed Runs and Recover Without Redeployment:** Failed research runs (such as `pilot-20260817-03-load50`) are immutable diagnostic evidence; their run IDs are never reused. An invalid loaded run where the underlying 5G/RFSIM transport failed before load injection must not be cited as congestion evidence. If radio attachment stalls or `tun_srsue1` drops, recover the base network via process-level RFSIM reconciliation rather than tearing down and redeploying the base network.
+
 ## Cleanup and Ownership
 
 Every runtime resource carries the experiment run ID where supported.
@@ -186,10 +211,10 @@ Cleanup must:
 - target only resources proven to belong to the requested run;
 - use exact labels or exact known resource names, never broad guessed deletion;
 - terminate run-owned local and remote process groups;
-- explicitly terminate exact run-scoped remote processes (matching run workspace, UE pod, and central deployment);
+- explicitly terminate exact run-scoped remote processes (matching run workspace, UE pod, central deployment, and research iperf3);
 - remove run-created/partially-created `tun0` on the core node and verify its absence postcondition;
-- remove the run-scoped workspace `/tmp/synthran/<run-id>/` on the core node and verify its absence postcondition;
-- verify host runtime postconditions (reserved ports `60001`, `18883`, and `18885` free, `tun0` absent, workspace absent);
+- remove the run-scoped workspace `/tmp/synthran/<run-id>/` and `/tmp/synthran-research/<run-id>/` on the core node and verify absence postconditions;
+- verify host runtime postconditions (reserved ports `60001`, `18883`, `18885`, and load ports free, `tun0` absent, workspace absent);
 - remove the temporary UE-side sidecar/config without replacing the base UE container;
 - remove run-labeled central broker/config objects;
 - wait for the srsUE Deployment to recover and reconcile RFSIM runtime if needed;
@@ -210,8 +235,8 @@ Sequence acceptance detects missing sensors, gaps, and duplicates rather than re
 
 ## Repository Boundaries
 
-- `contracts/`: versioned scenario, telemetry, readiness, deployment, and evidence schemas;
-- `synthran/`: CLI, orchestration, adapters, collection, validation, evidence, and reporting;
+- `contracts/`: versioned scenario, telemetry, readiness, deployment, research, and evidence schemas;
+- `synthran/`: CLI, orchestration, adapters, collection, research, validation, evidence, and reporting;
 - `deploy/`: SynthRAN-owned Ansible overlays plus out-of-tree IoT source/configuration;
 - `docs/`: architecture, operator, experiment, dependency, development, and security documentation;
 - `tests/`: offline tests and sanitized fixtures containing no real credentials or private captures.
@@ -230,9 +255,11 @@ The default experiment acceptance does not require packet capture; route proof, 
 
 The user is the live operator and performs external account administration, reservations/allocations, live resource preparation, network deployment, live experiment execution, and destructive/infrastructure-wide teardown.
 
+Duckburg/Linux is the supported live experiment controller. Live experiments must not be run from the Windows development clone.
+
 An agent may author repository code/config/tests/docs, inspect repository/dependency state read-only, run safe offline validation, prepare non-mutating plans, and analyze operator-provided evidence.
 
-An agent must not reserve SLICES resources, silently deploy the network, run the live experiment, ignore reservation conflicts, or make external infrastructure changes unless the user explicitly changes this rule.
+An agent must not reserve SLICES resources, silently deploy the network, run the live experiment, ignore reservation conflicts, commit or push without explicit authorization, or make external infrastructure changes unless the user explicitly changes this rule.
 
 ## Decision Journal
 
@@ -258,6 +285,12 @@ Run from the repository root after activating `synthran`.
 - `synthran experiment plan --network-run-id NETWORK_RUN_ID --run-id EXPERIMENT_RUN_ID`
 - `synthran experiment run --inventory PATH --network-run-id NETWORK_RUN_ID --run-id EXPERIMENT_RUN_ID`
 - `synthran experiment verify --run-id EXPERIMENT_RUN_ID`
+- `python -m synthran experiment research calibrate --inventory PATH --network-run-id NETWORK_RUN_ID --target CORE_IP --duration-seconds 10 --out PATH`
+- `python -m synthran experiment research plan --campaign-id ID --network-run-id NETWORK_RUN_ID --run-id RUN_ID --condition baseline`
+- `python -m synthran experiment research run --inventory PATH --campaign-id ID --network-run-id NETWORK_RUN_ID --run-id RUN_ID --condition baseline --probe-target CORE_IP`
+- `python -m synthran experiment research campaign-plan --campaign-id ID --network-run-id NETWORK_RUN_ID --seeds 424242,424243 --conditions baseline,load50:0.5 --campaign-seed 12345 --out PATH`
+- `python -m synthran experiment research campaign-run --campaign PATH --inventory PATH --target CORE_IP --reference-capacity-bps CAPACITY`
+- `python -m synthran experiment research analyze --campaign PATH --out PATH`
 - `python -m unittest discover -s tests -v`
 
 The experiment has a separate non-mutating `plan` command rather than pretending live `run` is a dry-run.

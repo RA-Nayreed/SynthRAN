@@ -54,6 +54,14 @@ Deployment is separately evidence-gated, verifies its locked inputs, and replace
 
 The tracked `deploy/ansible/patches/golden-path-boundary.patch` applies only to the locked `5g_ansible` commit and is checked before application. It prevents the selected roles from restarting the cluster, installing or upgrading host packages, downloading mutable tools, deploying the optional WebUI, overriding remote task interpreters with the controller's local Python path, or expanding the runtime beyond slice one and one srsUE. A patch-context mismatch is terminal.
 
+## Research measurement dependencies
+
+Controlled research experiments and capacity calibration rely on tooling across controller, host, and container environments:
+
+- `iperf3`: Installed in the srsUE container image (`-c ue`) and on the root core node (`inventory.core_node`), executed as a run-owned server on the core node and as a client inside srsUE for saturating capacity calibration and controlled UDP background load generation.
+- `ping` and `ip`: Installed inside the srsUE container environment and preflighted at runtime for continuous RTT probing (`-I tun_srsue1`) and temporary target route management (`ip route add`).
+- `pyarrow` (`19.0.1` in Conda lock): Used by the research collector on the controller to derive deterministic, compressed Parquet tables (`probe.parquet`, `network-samples.parquet`, `load.parquet`, `telemetry.parquet`) directly from accepted JSONL audit records.
+
 ## Update procedure
 
 Update one dependency at a time:

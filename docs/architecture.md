@@ -15,6 +15,8 @@ SynthRAN CLI and contracts
   |-- counted ingress ----------------------> UE-side Mosquitto bridge
   |-- central MQTT -------------------------> run-owned core broker
   |-- collector and validator -------------> JSONL + Parquet + report
+  |-- research instrumentation ------------> iperf3 load + RTT probe + network sampler
+  |-- campaign scheduler and analyzer ------> blocked schedules + paired difference analysis
   `-- run-scoped cleanup and evidence
 ```
 
@@ -84,6 +86,94 @@ Before live mutation, SynthRAN automatically scans `/proc` on the core node to r
 The sidecar patch does not replace the UE container, its image, credentials, or radio configuration. After the route is installed the edge sidecar is restarted so its bridge reconnects against the proven route.
 
 Cleanup is fail-closed and run-scoped. Local and remote process groups are terminated, exact run-scoped remote processes are reaped, run-created/partially-created `tun0` and the isolated run workspace are removed on the core node with verified absence postconditions, host postconditions (ports free, tun0 absent, workspace absent) are verified, the sidecar and volume are removed by exact strategic patch, run-labeled Kubernetes objects are deleted by the exact experiment run label, the srsUE rollout is allowed to recover, RFSIM runtime is reconciled, and the accepted network verifier is run again. A cleanup, host postcondition, or network-reproof failure prevents `iot-to-5g-path-proven` status.
+
+## Controlled research architecture
+
+Controlled research builds upon the deterministic experiment lifecycle by wrapping execution in a fixed measurement window with active load generation and multi-layer instrumentation:
+
+```text
++--------------------------------------------------------------------------------+
+| srsUE Pod (open5gs namespace)                                                  |
+|  - tun_srsue1 [Live PDU] ---------------------------------------------------+  |
+|  - synthran-edge-mqtt (sidecar)                                             |  |
+|  - RTT probe: ping -D -I tun_srsue1 <core-target>                           |  |
+|  - Background load client: iperf3 -u -b <rate> -B <PDU> <core-target>       |  |
++-----------------------------------------------------------------------------|--+
+                                                                              |
+                                                              5G RFSIM / UPF Path
+                                                                              |
++-----------------------------------------------------------------------------|--+
+| Root Core Node                                                              v  |
+|  - Ingress: /tmp/synthran/<run-id>/ingress-snapshot.json                       |
+|  - Background load server: iperf3 -s -1 -p <port> -I <pidfile> <------------+  |
+|  - Central Mosquitto broker                                                    |
+|  - Synchronized Sampler: Ingress snapshot + UE tun_srsue1 + UPF ogstun counters|
++--------------------------------------------------------------------------------+
+```
+
+### 1. Reconciled PDU state handoff
+
+The base experiment runtime performs RFSIM reconciliation once, discovers the live PDU address, updates scenario inputs, and proves the network path. That exact reconciled state (`ue_pod`, `gnb_pod`, `pdu_address`) is handed directly to the research collector. The research collector reuses the handed-off state and does not execute a second RFSIM reconciliation, preventing redundant gNB/srsUE restarts and subsequent PDU drift.
+
+### 2. Controlled sidecar readiness barrier
+
+When the edge MQTT bridge configuration is rewritten with the discovered live PDU address, the sidecar container must restart cleanly. To eliminate race conditions where pod verification executes during container recreation:
+- the wrapper records the container's pre-restart `restartCount`;
+- sends `kill -TERM 1` to the sidecar;
+- polls until `restartCount` increments;
+- verifies the sidecar container reaches `Running=True` and `Ready=True`;
+- verifies the overall srsUE pod reaches `Ready=True` within a bounded timeout.
+
+### 3. Temporary target route lifecycle
+
+When background load or RTT probes target a core IP address outside the default subnet, the destination must resolve through `tun_srsue1`:
+- the runtime queries `ip route get <target> from <pdu_address>`;
+- if already resolving via `dev tun_srsue1`, the route is reused without claiming ownership;
+- otherwise, an exact target `/32` route is added (`ip route add <target>/32 dev tun_srsue1`) and ownership is claimed;
+- after measurement completes, only the owned route is removed, and prior routing table state is verified restored;
+- conflicting or unexpected routes fail closed.
+
+### 4. Owned iperf3 server lifecycle
+
+The core-node `iperf3` server lifecycle is strictly managed:
+- allocated an isolated workspace `/tmp/synthran-research/<run-id>/` and pidfile `iperf3-<port>.pid`;
+- pre-run recovery reclaims only provably orphaned (PPID 1) matching processes;
+- started in single-client mode (`-1`);
+- stop explicitly terminates the local SSH wrapper, reaps the remote PID, removes the pidfile, and verifies absence of the workspace directory.
+
+### 5. Synchronized network sampling
+
+The network sampler runs in a dedicated background thread during the measurement window. Each sample captures:
+- `IngressSnapshot` (accepted connections, upstream bytes, downstream bytes);
+- UE interface statistics (`rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_dropped`, `tx_dropped` on `tun_srsue1`);
+- UPF interface statistics (corresponding counters on `ogstun`).
+
+Because each sampling iteration performs sequential remote SSH queries before sleeping `sample_interval_seconds`, the effective cadence reflects remote query latency plus the sleep interval. Throughput rates are computed from boundary counter deltas divided by actual elapsed time `(last_counter - first_counter) / elapsed_seconds`.
+
+### 6. Research artifact provenance and verification
+
+Controlled research runs persist structured evidence with SHA-256 artifact hashing:
+- `experiment-spec.json`: immutable run specification;
+- `measurement-window.json`: exact UTC start and end bounds of the active measurement window;
+- `probe.jsonl` / `probe.parquet`: sequence-aligned RTT samples, timestamps, and timeout flags;
+- `network-samples.jsonl` / `network-samples.parquet`: synchronized interface and ingress counter samples;
+- `load.jsonl` / `load.parquet`: background load throughput records;
+- `research-summary.json`: consolidated research metrics, validity flags, and SHA-256 digests of all source artifacts (`synthran/research-summary/v1alpha1`).
+
+Base 5G path acceptance (`path_acceptance_ready`) and research analysis readiness (`ready_for_campaign_analysis`) remain distinct validation concepts.
+
+### 7. Base network resilience and process-level RFSIM recovery
+
+The accepted 5G network baseline is decoupled from experiment and research execution lifecycles. If an experiment or research measurement encounters radio-layer stalls or interface drops (such as RFSIM sample stream stalls where processes and TCP connections remain alive but sample progress stops), SynthRAN restores the network via process-level RFSIM reconciliation:
+- terminates stale `srsue` and GNU Radio broker processes;
+- restarts the run-owned gNB pod while the broker is absent;
+- waits for fresh gNB cell activation;
+- restarts the GNU Radio broker and `srsue`;
+- awaits `tun_srsue1` tunnel creation;
+- rediscovers the live PDU address and restores required pod routes;
+- verifies the accepted network path (`[PASS] ue-tunnel`, `Result: PATH PROVEN`).
+
+This recovery restores the operational baseline without requiring destructive teardown or full redeployment of Open5GS or Kubernetes.
 
 ## Data boundary
 

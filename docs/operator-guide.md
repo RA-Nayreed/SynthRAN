@@ -10,6 +10,8 @@ resource preparation
 -> explicit 5G deployment
 -> read-only gNB/srsUE/tunnel/UPF proof
 -> integrated IoT-to-5G experiment
+-> capacity calibration
+-> controlled research measurement & campaign execution
 ```
 
 Every live step is operator-executed from a verified SLICES shell. The lean preparation implementation can create a reservation, jointly allocate two nodes, image and reset them, build Kubernetes, and install version-pinned remote tools. The operator accepted that upstream bootstrap transitives are not artifact-locked, so the guarded live preparation path is enabled.
@@ -173,11 +175,132 @@ synthran experiment verify --run-id exp-001
 
 See the [integrated experiment guide](experiment.md) for full scenario details, topology, artifacts, and acceptance criteria.
 
+## 8. Calibrate reference UE-path capacity
+
+Before conducting controlled fractional-load research runs, calibrate the saturating UDP goodput over `tun_srsue1`:
+
+```sh
+python -m synthran experiment research calibrate \
+  --inventory "$INVENTORY" \
+  --network-run-id network-001 \
+  --target CORE_IP \
+  --duration-seconds 10 \
+  --out .synthran/research/capacity-network-001.json
+```
+
+The command verifies the base network is `path-proven`, discovers the live UE PDU, manages the transient target `/32` route, starts a run-owned `iperf3` server on the core node, measures saturating UDP goodput, and safely cleans up server and routing artifacts.
+
+The resulting JSON records reference capacity (e.g. `67,253,028 bps` from accepted calibration `calibration-20260817-02.json`).
+
+## 9. Plan and execute controlled research measurements
+
+### Plan a single research measurement
+
+Render the immutable research experiment specification:
+
+```sh
+python -m synthran experiment research plan \
+  --campaign-id pilot-01 \
+  --network-run-id network-001 \
+  --run-id pilot-01-baseline \
+  --condition baseline \
+  --sensor-period 5 \
+  --warmup-seconds 30 \
+  --duration-seconds 180
+```
+
+For loaded runs, specify `--target-fraction` and `--reference-capacity-bps` (or `--target-bps`):
+
+```sh
+python -m synthran experiment research plan \
+  --campaign-id pilot-01 \
+  --network-run-id network-001 \
+  --run-id pilot-01-load50 \
+  --condition load50 \
+  --target-fraction 0.5 \
+  --reference-capacity-bps 67253028 \
+  --sensor-period 5 \
+  --warmup-seconds 30 \
+  --duration-seconds 180
+```
+
+### Execute a single research measurement
+
+```sh
+python -m synthran experiment research run \
+  --inventory "$INVENTORY" \
+  --campaign-id pilot-01 \
+  --network-run-id network-001 \
+  --run-id pilot-01-baseline \
+  --condition baseline \
+  --probe-target CORE_IP \
+  --sensor-period 5 \
+  --warmup-seconds 30 \
+  --duration-seconds 180
+```
+
+The research collector consumes the single RFSIM reconciliation handoff, enforces the sidecar restart readiness barrier, manages the transient target route, runs the synchronized network sampler and continuous RTT probe, executes the background load client/server (when enabled), verifies base-network cleanup reproof, and saves `research-summary.json`.
+
+## 10. Multi-run campaigns and offline analysis
+
+### Plan a randomized blocked campaign
+
+```sh
+python -m synthran experiment research campaign-plan \
+  --campaign-id campaign-01 \
+  --network-run-id network-001 \
+  --seeds 424242,424243,424244 \
+  --conditions baseline,load50:0.5,load80:0.8,load95:0.95 \
+  --campaign-seed 12345 \
+  --out .synthran/campaigns/campaign-01.json
+```
+
+This generates a deterministic schedule of runs blocked by seed with condition order randomized within each block.
+
+### Execute the campaign
+
+```sh
+python -m synthran experiment research campaign-run \
+  --campaign .synthran/campaigns/campaign-01.json \
+  --inventory "$INVENTORY" \
+  --target CORE_IP \
+  --reference-capacity-bps 67253028 \
+  --sensor-period 5 \
+  --warmup-seconds 30 \
+  --duration-seconds 180
+```
+
+Runs execute sequentially, creating run-scoped directories below `.synthran/experiments/<run-id>/`.
+
+### Analyze the campaign offline
+
+```sh
+python -m synthran experiment research analyze \
+  --campaign .synthran/campaigns/campaign-01.json \
+  --out .synthran/reports/campaign-01-analysis.json
+```
+
+The analyzer computes paired differences against baseline across all seed blocks and estimates 95% bootstrap confidence intervals for delivery ratios, inter-arrival latencies, and RTT distributions without requiring live network access.
+
 ## Failure and recovery
 
-Do not reuse a preparation or deployment run ID. A failure keeps a sanitized partial manifest and log. If preparation failed after imaging or reset began, inspect the named stage and preserve the artifacts; do not guess resource names, broadly delete, or automatically free the allocation.
+Do not reuse a preparation, deployment, or experiment run ID. A failure keeps a sanitized partial manifest and log. If preparation failed after imaging or reset began, inspect the named stage and preserve the artifacts; do not guess resource names, broadly delete, or automatically free the allocation.
 
-The canonical accepted pair on SLICES is base network `network-acceptance-20260817-04` (`PATH PROVEN`) and integrated experiment `iot-acceptance-20260817-06` (`IOT-TO-5G PATH PROVEN`). Consumed experiment run IDs `iot-acceptance-20260817-02` through `-05` recorded incremental hardening findings: missing `net-tools`/`ifconfig` (-02), stale edge port-forward (-03), dynamic PDU proof followed by stale central port-forward (-04), and Paho v2 ReasonCode evaluation / remote process persistence (-05). All subsequent live runs must use fresh, never-before-used run IDs.
+The canonical accepted evidence on SLICES includes:
+- Base network `network-acceptance-20260817-04` (`PATH PROVEN`)
+- Integrated experiment `iot-acceptance-20260817-06` (`IOT-TO-5G PATH PROVEN`)
+- Capacity calibration `calibration-20260817-02.json` (`67,253,028 bps`)
+- Controlled baseline measurement `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, `IOT-TO-5G PATH PROVEN`)
+
+### Decoupled network and experiment lifecycles
+
+The base 5G network deployment and experiment/research execution lifecycles are completely decoupled:
+- **Do not redeploy the network after experiment failures:** An experiment failure (e.g. `pilot-20260817-03-load50`) does not invalidate the underlying Kubernetes or Open5GS deployment.
+- **Process-level RFSIM reconciliation:** If radio attachment stalls or `tun_srsue1` drops during an experiment or teardown, recover the data path via process-level RFSIM reconciliation and re-verify the network (`synthran network verify --inventory "$INVENTORY" --run-id <network-run-id>`) rather than tearing down and redeploying the base network.
+- **Preserve invalid run evidence:** Never delete or overwrite failed run directories. Preserved logs and summaries (e.g. from `pilot-20260817-03-load50`) provide essential diagnostic records explaining why a condition did not achieve validity.
+- **Fail-closed ownership:** Do not use broad process termination (`pkill`, `killall`) or manual route hacks. SynthRAN strictly manages route lifecycles and reaps only provably orphaned SynthRAN processes.
+
+All subsequent live runs must use fresh, never-before-used run IDs.
 
 If preflight finds an existing `open5gs` namespace, stop. Verify ownership and use a separate operator-approved teardown procedure.
 
@@ -187,5 +310,5 @@ If preflight finds an existing `open5gs` namespace, stop. Verify ownership and u
 - Resource preparation is explicit and stops before 5G deployment.
 - Network deployment is a separate explicit operation and never changes reservations or base node setup.
 - Experiment execution never reserves nodes or silently deploys the network.
-- Codex may implement and test offline code and interpret operator output, but does not execute live SLICES mutations.
+- Automated agents may author offline code, tests, and documentation, prepare non-mutating plans, and interpret operator-provided evidence, but do not execute live SLICES mutations.
 - No SLICES or golden-path success is claimed without operator-provided evidence.

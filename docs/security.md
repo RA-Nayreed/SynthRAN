@@ -63,3 +63,11 @@ To ensure strict network isolation:
 3. An early read-only SSH forwarding capability probe inspects effective sshd configuration (`sshd -T`) and requires `allowtcpforwarding` to permit both local and remote forwarding (`yes` or `all`), failing closed otherwise.
 4. Remote core node prerequisites fail closed if `tun0` exists prior to the run, preventing unauthorized adoption, mutation, or deletion of existing host interfaces.
 5. Experiment cleanup removes only the run-created/partially-created `tun0` interface and the isolated run workspace `/tmp/synthran/<run-id>/`, verifying postconditions that both are absent afterward. Cleanup failures fail closed and prevent experiment acceptance.
+
+## Controlled Research Isolation and Safety
+
+Controlled research experiments enforce additional runtime isolation boundaries:
+
+1. **Owned iperf3 Server Isolation:** Background load servers run with an isolated workspace `/tmp/synthran-research/<run-id>/` and exact pidfile (`iperf3-<port>.pid`) in single-connection mode (`-1`). Startup automatically reclaims only provably orphaned (PPID 1) matching processes. Stop explicitly terminates the local wrapper, reaps the remote process, removes the pidfile, and verifies absence of the workspace directory.
+2. **Temporary Research Route Safety:** When background load or RTT probing targets a core IP outside the default subnet, the runtime inspects the routing table. If already resolving via `tun_srsue1`, it is reused without claiming ownership. Otherwise, an exact `/32` route is added (`ip route add`). Upon cleanup, only the SynthRAN-created route is removed, and restoration of the prior routing table state is verified. Conflicting routing state fails closed.
+3. **Artifact Integrity and Auditability:** Research artifacts (`telemetry.jsonl`, `probe.jsonl`, `network-samples.jsonl`, `load.jsonl`, `measurement-window.json`, `experiment-spec.json`) are hashed via SHA-256 and recorded in `research-summary.json` (`synthran/research-summary/v1alpha1`). Rejection logs and probe records exclude private packet payloads and retain only sequence, latency, and throughput facts.
