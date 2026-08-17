@@ -20,7 +20,11 @@ from synthran.operations import (
 from synthran.resources import (
     ResourceDecision,
     ResourceInventory,
+    ResourceProviderAdapter,
+    ResourceTransactionResult,
     build_resource_decision,
+    execute_resource_transaction,
+    validate_resource_adapters,
 )
 from synthran.workspace.context import WorkspaceAuthorityContext, resolve_workspace_authority
 from synthran.workspace.desired import ExperimentDesiredState
@@ -293,14 +297,69 @@ class ApplicationController:
             now=current,
         )
 
+    def execute_resource_operation(
+        self,
+        operation_id: str,
+        *,
+        inventory: ResourceInventory,
+        adapters: Mapping[str, ResourceProviderAdapter],
+        now: datetime | None = None,
+    ) -> ResourceTransactionResult:
+        """Authorize and execute one resource-bound operation through exact provider adapters."""
+
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = load_plan(self.root, operation_id)
+        if RESOURCE_DECISION_INPUT not in plan.input_sha256:
+            raise WorkspaceError("operation is not bound to a resource decision")
+        decision = self.resource_decision(inventory, now=current)
+        if decision.targets != plan.targets:
+            raise WorkspaceError(
+                "resource placement changed after approval; create a new operation"
+            )
+        validate_resource_adapters(decision, adapters)
+        permit = self.authorize_operation(
+            operation_id,
+            inventory=inventory,
+            now=current,
+        )
+
+        try:
+            result = execute_resource_transaction(
+                permit=permit,
+                decision=decision,
+                adapters=adapters,
+            )
+        except Exception:
+            self.interrupt_operation(operation_id, now=current)
+            raise
+
+        if result.status == "ready":
+            self.finish_operation(operation_id, success=True, now=current)
+        elif result.status == "rolled-back":
+            self.finish_operation(
+                operation_id,
+                success=False,
+                recovered=True,
+                now=current,
+            )
+        else:
+            self.finish_operation(operation_id, success=False, now=current)
+        return result
+
     def finish_operation(
         self,
         operation_id: str,
         *,
         success: bool,
+        recovered: bool = False,
         now: datetime | None = None,
     ) -> OperationState:
-        return self.operations.finish(operation_id, success=success, now=now)
+        return self.operations.finish(
+            operation_id,
+            success=success,
+            recovered=recovered,
+            now=now,
+        )
 
     def interrupt_operation(
         self,
