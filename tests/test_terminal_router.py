@@ -24,6 +24,7 @@ class FakeApplication:
         self.next_steps = next_steps
         self.blocks: tuple[str, ...] = ()
         self.begin_calls: list[tuple[str | None, object | None]] = []
+        self.workflow_calls: list[str] = []
         self.authority = SimpleNamespace(
             workspace=SimpleNamespace(
                 project="research-project",
@@ -51,6 +52,11 @@ class FakeApplication:
         self.begin_calls.append((step_name, inventory))
         risk = "R1" if step_name == "verify-path" else "R2"
         return FakePlan("op-000001", step_name or "next", risk)
+
+    def begin_workflow_operation(self, workflow: str):
+        self.workflow_calls.append(workflow)
+        risk = "R3" if workflow == "down" else "R1" if workflow.startswith("logs-") or workflow == "collect" else "R2"
+        return FakePlan("op-000002", workflow, risk)
 
 
 class TerminalRouterTests(unittest.TestCase):
@@ -114,21 +120,40 @@ class TerminalRouterTests(unittest.TestCase):
 
     def test_recover_requires_one_explicit_recovery_step(self) -> None:
         app = FakeApplication(next_steps=("recover-allocation",))
-        inventory = object()
-        result = TerminalCommandRouter(
-            app,
-            inventory_source=lambda: inventory,  # type: ignore[arg-type]
-        ).dispatch(parse_command("/recover"))
+        result = TerminalCommandRouter(app).dispatch(parse_command("/recover"))
         self.assertFalse(result.error)
         self.assertEqual(app.begin_calls, [("recover-allocation", None)])
 
-    def test_unconnected_domain_executor_fails_closed(self) -> None:
+    def test_run_conditions_are_first_class_application_workflows(self) -> None:
         app = FakeApplication()
-        result = TerminalCommandRouter(app).dispatch(parse_command("/run baseline"))
-        self.assertTrue(result.error)
-        self.assertIn("not connected yet", result.lines[0])
-        self.assertIn("no provider action was taken", result.lines[0])
-        self.assertEqual(app.begin_calls, [])
+        baseline = TerminalCommandRouter(app).dispatch(parse_command("/run baseline"))
+        congestion = TerminalCommandRouter(app).dispatch(parse_command("/run congestion"))
+        self.assertFalse(baseline.error)
+        self.assertFalse(congestion.error)
+        self.assertEqual(app.workflow_calls, ["run-baseline", "run-congestion"])
+        self.assertIn("Approval required: standard", baseline.lines)
+        self.assertIn("Execution: not started", baseline.lines)
+
+    def test_stop_collect_and_logs_are_routed_through_application_policy(self) -> None:
+        app = FakeApplication()
+        router = TerminalCommandRouter(app)
+        stop = router.dispatch(parse_command("/stop"))
+        collect = router.dispatch(parse_command("/collect"))
+        logs = router.dispatch(parse_command("/logs ue"))
+        self.assertFalse(stop.error)
+        self.assertFalse(collect.error)
+        self.assertFalse(logs.error)
+        self.assertEqual(app.workflow_calls, ["stop", "collect", "logs-ue"])
+        self.assertIn("Approval required: standard", stop.lines)
+        self.assertIn("Approval required: none", collect.lines)
+        self.assertIn("Approval required: none", logs.lines)
+
+    def test_down_is_planned_as_destructive_application_workflow(self) -> None:
+        app = FakeApplication()
+        result = TerminalCommandRouter(app).dispatch(parse_command("/down"))
+        self.assertFalse(result.error)
+        self.assertEqual(app.workflow_calls, ["down"])
+        self.assertIn("Approval required: destructive", result.lines)
 
 
 if __name__ == "__main__":
