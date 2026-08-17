@@ -88,9 +88,8 @@ def _matching_fresh_record(
     return record if record.is_fresh(now) else None
 
 
-def verify_slices_project_access(
+def probe_slices_project_access(
     *,
-    workspace_root: Path,
     username: str,
     project: str,
     runner: Runner = subprocess_runner,
@@ -115,7 +114,7 @@ def verify_slices_project_access(
     access_until = _parse_slices_expiry(output)
     if access_until is not None and current >= access_until:
         raise WorkspaceError("SLICES project access has expired")
-    record = AccessRecord(
+    return AccessRecord(
         provider="slices",
         subject=username,
         scope=project,
@@ -123,6 +122,26 @@ def verify_slices_project_access(
         refresh_after_utc=format_utc(_refresh_boundary(current, access_until)),
         access_until_utc=(format_utc(access_until) if access_until is not None else None),
         detail="authenticated project membership verified",
+    )
+
+
+def verify_slices_project_access(
+    *,
+    workspace_root: Path,
+    username: str,
+    project: str,
+    runner: Runner = subprocess_runner,
+    timeout_seconds: int = 30,
+    now: datetime | None = None,
+) -> AccessRecord:
+    """Verify SLICES project access and persist the resulting read-only evidence."""
+
+    record = probe_slices_project_access(
+        username=username,
+        project=project,
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+        now=now,
     )
     save_access_record(workspace_root, record)
     return record
@@ -164,9 +183,8 @@ def ensure_slices_project_access(
     )
 
 
-def verify_r2lab_gateway_access(
+def probe_r2lab_gateway_access(
     *,
-    workspace_root: Path,
     slice_name: str,
     identity_reference: str,
     runner: Runner = subprocess_runner,
@@ -197,7 +215,7 @@ def verify_r2lab_gateway_access(
     result = runner(command, timeout_seconds)
     if result.returncode != 0:
         raise WorkspaceError("R2Lab Faraday public-key access could not be verified")
-    record = AccessRecord(
+    return AccessRecord(
         provider="r2lab",
         subject=slice_name,
         scope="faraday.inria.fr",
@@ -205,6 +223,26 @@ def verify_r2lab_gateway_access(
         refresh_after_utc=format_utc(current + DEFAULT_ACCESS_REFRESH),
         identity_fingerprint=fingerprint,
         detail="strict public-key gateway access verified",
+    )
+
+
+def verify_r2lab_gateway_access(
+    *,
+    workspace_root: Path,
+    slice_name: str,
+    identity_reference: str,
+    runner: Runner = subprocess_runner,
+    timeout_seconds: int = 30,
+    now: datetime | None = None,
+) -> AccessRecord:
+    """Verify R2Lab gateway access and persist the resulting read-only evidence."""
+
+    record = probe_r2lab_gateway_access(
+        slice_name=slice_name,
+        identity_reference=identity_reference,
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+        now=now,
     )
     save_access_record(workspace_root, record)
     return record
