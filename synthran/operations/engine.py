@@ -35,9 +35,21 @@ from synthran.operations.policy import (
 )
 from synthran.workspace.desired import ExperimentDesiredState
 from synthran.workspace.model import WorkspaceError, format_utc, utc_now
-from synthran.workspace.observed import ObservedState
+from synthran.workspace.observed import (
+    OBSERVATION_STATES,
+    OBSERVED_DIMENSIONS,
+    ObservedState,
+)
 from synthran.workspace.reconciliation import plan_reconciliation
 from synthran.workspace.registry import WorkspaceRegistry
+
+
+def _safe_token(value: str, label: str, *, maximum: int = 64) -> str:
+    if not value or len(value) > maximum or any(
+        not (character.isalnum() or character in "._:-") for character in value
+    ):
+        raise WorkspaceError(f"{label} contains unsupported characters")
+    return value
 
 
 class OperationController:
@@ -68,6 +80,13 @@ class OperationController:
                 attributes=attributes or {},
             ),
         )
+
+    def _running_plan(self, operation_id: str) -> OperationPlan:
+        plan = load_plan(self.root, operation_id)
+        state = load_state(self.root, operation_id)
+        if state.status != "running":
+            raise WorkspaceError("operation progress can be emitted only while running")
+        return plan
 
     def begin(
         self,
@@ -227,6 +246,105 @@ class OperationController:
             plan_sha256=plan.plan_sha256,
             issued_at_utc=format_utc(current),
             targets=plan.targets,
+        )
+
+    def stage_started(
+        self,
+        operation_id: str,
+        stage: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = self._running_plan(operation_id)
+        self._event(
+            plan,
+            "stage.started",
+            now=current,
+            attributes={"stage": _safe_token(stage, "operation stage")},
+        )
+
+    def stage_progress(
+        self,
+        operation_id: str,
+        stage: str,
+        current_value: int,
+        total: int,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        if type(current_value) is not int or type(total) is not int:
+            raise WorkspaceError("operation progress values must be integers")
+        if total <= 0 or current_value < 0 or current_value > total:
+            raise WorkspaceError("operation progress must satisfy 0 <= current <= total")
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = self._running_plan(operation_id)
+        self._event(
+            plan,
+            "stage.progress",
+            now=current,
+            attributes={
+                "stage": _safe_token(stage, "operation stage"),
+                "current": str(current_value),
+                "total": str(total),
+            },
+        )
+
+    def stage_completed(
+        self,
+        operation_id: str,
+        stage: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = self._running_plan(operation_id)
+        self._event(
+            plan,
+            "stage.completed",
+            now=current,
+            attributes={"stage": _safe_token(stage, "operation stage")},
+        )
+
+    def stage_failed(
+        self,
+        operation_id: str,
+        stage: str,
+        code: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = self._running_plan(operation_id)
+        self._event(
+            plan,
+            "stage.failed",
+            now=current,
+            attributes={
+                "stage": _safe_token(stage, "operation stage"),
+                "code": _safe_token(code, "operation failure code"),
+            },
+        )
+
+    def state_changed(
+        self,
+        operation_id: str,
+        dimension: str,
+        state: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        if dimension not in OBSERVED_DIMENSIONS:
+            raise WorkspaceError("operation state-change dimension is unsupported")
+        if state not in OBSERVATION_STATES:
+            raise WorkspaceError("operation state-change value is unsupported")
+        current = (now or utc_now()).astimezone(timezone.utc)
+        plan = self._running_plan(operation_id)
+        self._event(
+            plan,
+            "state.changed",
+            now=current,
+            attributes={"dimension": dimension, "state": state},
         )
 
     def finish(

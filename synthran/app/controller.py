@@ -12,8 +12,10 @@ from synthran.operations import (
     ApprovalGrant,
     ExecutionPermit,
     OperationController,
+    OperationEvent,
     OperationPlan,
     OperationState,
+    load_operation_events,
     load_plan,
     select_reconciliation_step,
 )
@@ -345,6 +347,11 @@ class ApplicationController:
         else:
             self.finish_operation(operation_id, success=False, now=current)
         return result
+
+    def operation_events(self, operation_id: str) -> tuple[OperationEvent, ...]:
+        """Return the validated operation event stream for terminal rendering."""
+
+        return load_operation_events(self.root, operation_id)
 
     def finish_operation(
         self,

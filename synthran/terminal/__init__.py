@@ -12,6 +12,7 @@ from synthran.terminal.commands import (
     render_help,
     require_command_allowed,
 )
+from synthran.terminal.session import TerminalLine, TerminalResponse, TerminalSession
 
 __all__ = [
     "COMMANDS",
@@ -19,6 +20,9 @@ __all__ = [
     "CommandRequest",
     "CommandSpec",
     "TerminalCommandError",
+    "TerminalLine",
+    "TerminalResponse",
+    "TerminalSession",
     "command_allowed",
     "command_spec",
     "parse_command",

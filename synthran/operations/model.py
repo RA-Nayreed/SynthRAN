@@ -39,6 +39,11 @@ EVENT_TYPES = frozenset(
         "approval.requested",
         "approval.granted",
         "operation.authorized",
+        "stage.started",
+        "stage.progress",
+        "stage.completed",
+        "stage.failed",
+        "state.changed",
         "operation.completed",
         "operation.failed",
         "operation.interrupted",
@@ -323,7 +328,7 @@ class OperationEvent:
             ):
                 raise WorkspaceError("operation event attribute value is unsafe")
             clean[key] = value
-        object.__setattr__(self, "attributes", clean)
+        object.__setattr__(self, "attributes", MappingProxyType(clean))
 
     @property
     def event_id(self) -> str:
@@ -342,6 +347,35 @@ class OperationEvent:
             "plan_sha256": self.plan_sha256,
             "attributes": dict(self.attributes),
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "OperationEvent":
+        raw_attributes = value.get("attributes", {})
+        if not isinstance(raw_attributes, Mapping):
+            raise WorkspaceError("operation event attributes are malformed")
+        attributes: dict[str, str] = {}
+        for key, item in raw_attributes.items():
+            if not isinstance(key, str) or not isinstance(item, str):
+                raise WorkspaceError("operation event attribute entry is malformed")
+            attributes[key] = item
+        raw_sequence = value.get("sequence")
+        if type(raw_sequence) is not int:
+            raise WorkspaceError("operation event sequence is malformed")
+        event = cls(
+            schema=str(value.get("schema", "")),
+            operation_id=str(value.get("operation_id", "")),
+            sequence=raw_sequence,
+            event_type=str(value.get("event_type", "")),
+            occurred_at_utc=str(value.get("occurred_at_utc", "")),
+            risk=str(value.get("risk", "")),
+            mutates=value.get("mutates") is True,
+            plan_sha256=str(value.get("plan_sha256", "")),
+            attributes=attributes,
+        )
+        raw_event_id = value.get("event_id")
+        if raw_event_id is not None and raw_event_id != event.event_id:
+            raise WorkspaceError("operation event ID does not match its sequence")
+        return event
 
 
 @dataclass(frozen=True)
