@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import re
 from pathlib import Path
 import sqlite3
-from typing import Iterable
 
 from synthran.workspace.model import (
     ExperimentRecord,
@@ -119,12 +118,12 @@ class WorkspaceRegistry:
 
     def issue_experiment_id(self, now: datetime | None = None) -> str:
         current = (now or utc_now()).astimezone(timezone.utc)
-        date_token = current.strftime("%Y%m%d")
+        date_stamp = current.strftime("%Y%m%d")
         created = format_utc(current)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            ordinal = self._next_counter(connection, f"experiment:{date_token}")
-            experiment_id = f"sran-{date_token}-{ordinal:03d}"
+            ordinal = self._next_counter(connection, f"experiment:{date_stamp}")
+            experiment_id = f"sran-{date_stamp}-{ordinal:03d}"
             validate_experiment_id(experiment_id)
             relative = f"experiments/{experiment_id}"
             connection.execute(
@@ -356,9 +355,9 @@ class WorkspaceRegistry:
             connection.execute("DELETE FROM counters")
             record_map = {record.experiment_id: record for record in records}
             for experiment_id, status in consumed:
-                date_token, ordinal_text = experiment_id.split("-")[1:]
+                date_stamp, ordinal_text = experiment_id.split("-")[1:]
                 ordinal = int(ordinal_text)
-                counter_key = f"experiment:{date_token}"
+                counter_key = f"experiment:{date_stamp}"
                 current = connection.execute(
                     "SELECT value FROM counters WHERE key = ?", (counter_key,)
                 ).fetchone()
@@ -372,7 +371,7 @@ class WorkspaceRegistry:
                 created_at = (
                     record.created_at_utc
                     if record is not None
-                    else f"{date_token[0:4]}-{date_token[4:6]}-{date_token[6:8]}T00:00:00Z"
+                    else f"{date_stamp[0:4]}-{date_stamp[4:6]}-{date_stamp[6:8]}T00:00:00Z"
                 )
                 connection.execute(
                     "INSERT INTO experiments(experiment_id, created_at_utc, status, path) "
