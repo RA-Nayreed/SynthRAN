@@ -118,6 +118,8 @@ def resolve_workspace_authority(
         declared=declared_experiment,
     )
 
+    if (profile.r2lab_slice is None) != (profile.r2lab_identity is None):
+        raise WorkspaceError("selected profile has incomplete R2Lab authority data")
     declared_r2lab_slice = _declared_value(
         explicit=r2lab_slice,
         environment=env,
