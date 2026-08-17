@@ -35,6 +35,16 @@ def live(
     )
 
 
+def authority() -> dict[str, list[Observation]]:
+    return {
+        "controller": [live("controller", ownership="operator")],
+        "project_access": [live("project_access", ownership="operator")],
+        "provider_experiment": [
+            live("provider_experiment", ownership="operator", resource_id="provider-exp-01")
+        ],
+    }
+
+
 class ApplicationWorkflowControllerTests(unittest.TestCase):
     def _controller(self, base: Path) -> ApplicationController:
         root = base / "repo"
@@ -68,7 +78,10 @@ class ApplicationWorkflowControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             controller = self._controller(Path(temporary))
             controller.record_observations(
-                {"path": [live("path", resource_id="accepted-path")]},
+                {
+                    **authority(),
+                    "path": [live("path", resource_id="accepted-path")],
+                },
                 now=NOW,
             )
 
@@ -86,7 +99,10 @@ class ApplicationWorkflowControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             controller = self._controller(Path(temporary))
             controller.record_observations(
-                {"path": [live("path", resource_id="accepted-path")]},
+                {
+                    **authority(),
+                    "path": [live("path", resource_id="accepted-path")],
+                },
                 now=NOW,
             )
 
@@ -102,6 +118,7 @@ class ApplicationWorkflowControllerTests(unittest.TestCase):
             controller = self._controller(Path(temporary))
             controller.record_observations(
                 {
+                    **authority(),
                     "path": [live("path", resource_id="accepted-path")],
                     "reservation": [
                         live(
