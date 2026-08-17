@@ -45,7 +45,14 @@ class ResourceDecision:
     def to_dict(self) -> dict[str, object]:
         return {
             "selection": self.selection.to_dict(),
-            "states": [item.to_dict() for item in self.states],
+            "states": [
+                {
+                    "resource_id": item.resource_id,
+                    "availability": item.availability,
+                    "ownership": item.ownership,
+                }
+                for item in self.states
+            ],
         }
 
 
