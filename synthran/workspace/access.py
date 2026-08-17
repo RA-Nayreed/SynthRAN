@@ -14,6 +14,7 @@ from synthran.workspace.store import (
     load_access_record,
     resolve_identity_reference,
     save_access_record,
+    ssh_identity_fingerprint,
 )
 
 
@@ -75,11 +76,14 @@ def _matching_fresh_record(
     subject: str,
     scope: str,
     now: datetime,
+    identity_fingerprint: str | None = None,
 ) -> AccessRecord | None:
     record = load_access_record(workspace_root, provider)
     if record is None:
         return None
     if record.subject != subject or record.scope != scope:
+        return None
+    if identity_fingerprint is not None and record.identity_fingerprint != identity_fingerprint:
         return None
     return record if record.is_fresh(now) else None
 
@@ -173,6 +177,7 @@ def verify_r2lab_gateway_access(
 
     current = (now or utc_now()).astimezone(timezone.utc)
     identity = resolve_identity_reference(identity_reference)
+    fingerprint = ssh_identity_fingerprint(identity)
     command = (
         "ssh",
         "-o",
@@ -198,6 +203,7 @@ def verify_r2lab_gateway_access(
         scope="faraday.inria.fr",
         verified_at_utc=format_utc(current),
         refresh_after_utc=format_utc(current + DEFAULT_ACCESS_REFRESH),
+        identity_fingerprint=fingerprint,
         detail="strict public-key gateway access verified",
     )
     save_access_record(workspace_root, record)
@@ -217,6 +223,8 @@ def ensure_r2lab_gateway_access(
     """Return matching fresh gateway evidence, or refresh it read-only when needed."""
 
     current = (now or utc_now()).astimezone(timezone.utc)
+    identity = resolve_identity_reference(identity_reference)
+    fingerprint = ssh_identity_fingerprint(identity)
     if not force:
         cached = _matching_fresh_record(
             workspace_root=workspace_root,
@@ -224,6 +232,7 @@ def ensure_r2lab_gateway_access(
             subject=slice_name,
             scope="faraday.inria.fr",
             now=current,
+            identity_fingerprint=fingerprint,
         )
         if cached is not None:
             return cached, False

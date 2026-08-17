@@ -28,6 +28,7 @@ class ModuleLayoutTests(unittest.TestCase):
         self.assertTrue((SOURCE / "workspace" / "model.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "store.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "registry.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "records.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "access.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "status.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "session.py").is_file())
