@@ -2,7 +2,19 @@
 
 SynthRAN initialization establishes durable controller identity and one research workspace without changing provider resources.
 
-The initialization service is deliberately separate from reservation, allocation, deployment, R2Lab power control, and experiment execution.
+The initialization service is deliberately separate from reservation, allocation, deployment, R2Lab power control, provider-experiment creation, and experiment execution.
+
+## Production entrypoint
+
+Persistent initialization is currently reached through the no-argument interactive terminal:
+
+```sh
+synthran
+```
+
+If no persistent `workspace.toml` exists, the terminal runs the verified initialization flow before constructing the normal application session.
+
+There is currently no top-level scripted `synthran init` command. Do not document one unless the CLI parser actually adds and tests it.
 
 ## Inputs
 
@@ -14,48 +26,39 @@ A new controller profile requires:
 - optional R2Lab slice plus an exact SSH private-key path;
 - stable workspace defaults such as reservation duration and automatic/manual placement.
 
-The private key is never copied. SynthRAN stores its path reference and public-key SHA256 fingerprint.
+The private key is never copied. SynthRAN stores only its normalized path reference and public-key SHA-256 fingerprint.
 
-A later workspace can reuse an existing profile by profile name. Stable identity values are loaded from that profile rather than requested again. Reuse does not permit inline identity overrides; profile changes use the explicit profile-update path instead.
+A later workspace can reuse an existing profile by profile name. Stable identity values are loaded from that profile rather than requested again. Reuse does not permit inline identity overrides.
 
 ## Verify before persist
 
-Initialization has two distinct actions.
-
-### Read-only verification
-
-Before creating local persistent-workspace state, SynthRAN:
+Before creating persistent workspace state, initialization:
 
 1. validates profile and project names;
 2. verifies that no `workspace.toml` already exists;
-3. inspects an existing `.synthran` directory for ambiguous partial new-workspace state;
+3. inspects an existing `.synthran` directory for ambiguous partial new-format workspace state;
 4. reads and fingerprints the selected SSH identity when R2Lab is configured;
-5. verifies SLICES authentication;
-6. verifies that the currently selected SLICES project matches the requested workspace and confirms membership;
-7. records provider project expiry when reported;
-8. verifies strict public-key authentication to Faraday when R2Lab is configured;
-9. checks that the key fingerprint accepted for R2Lab is the same fingerprint stored by the profile.
+5. verifies SLICES authentication and current selected project;
+6. confirms requested project membership and records provider project expiry when reported;
+7. verifies strict public-key authentication to Faraday when R2Lab is configured;
+8. checks that the accepted R2Lab identity fingerprint matches the profile request.
 
-No profile, workspace configuration, access cache, reservation, allocation, lease, or remote resource is changed during this action.
+These checks are read-only with respect to external resources. They do not create reservations, allocations, leases, provider experiments, deployments, or experiment workloads.
 
-### Local persistence
+Only after verification succeeds does initialization persist local state:
 
-Only after every requested read-only check succeeds, SynthRAN:
+- a new profile when required;
+- `.synthran/workspace.toml` and missing managed directories;
+- the verified SLICES access record;
+- the R2Lab gateway access record when configured.
 
-1. writes a new profile when the request is creating one;
-2. creates `.synthran/workspace.toml` and any missing persistent-workspace subdirectories;
-3. writes the SLICES access record produced by the successful check;
-4. writes the R2Lab gateway access record when configured.
-
-If local persistence fails, initialization removes only profile/workspace/access state created by that same initialization attempt. A reused profile is never removed by rollback.
+If persistence fails, rollback removes only local profile/workspace/access objects created by that attempt. A reused profile and pre-existing research artifacts are preserved.
 
 If local state changes between verification and persistence, initialization fails closed instead of overwriting it.
 
 ## Adopting an existing experiment checkout
 
-The persistent workspace may be introduced into a repository that already contains accepted SynthRAN experiment artifacts under `.synthran`.
-
-Compatible legacy paths include:
+The persistent workspace may be introduced into a repository that already contains accepted SynthRAN artifacts such as:
 
 ```text
 .synthran/preparations/
@@ -65,11 +68,11 @@ Compatible legacy paths include:
 .synthran/experiments/pilot-*/
 ```
 
-Initialization preserves these paths exactly. It does not move, rename, rewrite, index as new-format experiments, or delete them.
+Initialization preserves those paths exactly. It does not move, rename, rewrite, index them as new-format experiments, or delete them.
 
-The new registry recognizes only its reviewed ID formats (`sran-YYYYMMDD-NNN`, `run-NNN[-label]`, and `op-NNNNNN`), so unrelated historical experiment directories can coexist with persistent workspace records.
+The persistent registry recognizes its reviewed identifier forms (`sran-YYYYMMDD-NNN`, `run-NNN[-label]`, and `op-NNNNNN`), so historical acceptance/research directories can coexist with newer records.
 
-Adoption fails closed when the existing `.synthran` appears to contain incomplete new-format workspace state without `workspace.toml`. Examples include:
+Adoption fails closed when an existing `.synthran` appears to contain incomplete new-format workspace state without `workspace.toml`, for example:
 
 - `registry.sqlite3`;
 - `active.json`;
@@ -77,41 +80,47 @@ Adoption fails closed when the existing `.synthran` appears to contain incomplet
 - an `experiments/sran-YYYYMMDD-NNN/` directory;
 - an `operations/op-NNNNNN/` directory.
 
-These are recovery cases, not safe first-use adoption cases.
+Those are recovery cases rather than safe first-use adoption cases.
 
-When `.synthran` existed before initialization, rollback never removes that directory recursively. Only the exact workspace file, access records, profile, and empty managed directories created by the failed initialization attempt may be removed. Pre-existing run/evidence content remains untouched.
+When `.synthran` existed before initialization, rollback never removes it recursively. Only exact local objects created by the failed initialization attempt may be removed.
 
-## Access records created at initialization
+## Access caches
 
-The SLICES access record contains:
+Initialization can persist SLICES and optional R2Lab gateway access records with verification and refresh boundaries.
 
-- SLICES username;
-- project;
-- verification time;
-- next refresh boundary;
-- provider expiry when available.
+These records are caches. They do not become reservation/allocation/lease/runtime mutation authority.
 
-The R2Lab access record contains:
+A changed R2Lab identity invalidates identity-bound gateway evidence. Provider experiment, reservation, allocation, lease, and runtime facts remain short-lived state that must be verified when required by current application/provider policy.
 
-- slice name;
-- Faraday scope;
-- verification time;
-- next refresh boundary;
-- exact SSH public-key fingerprint that was accepted.
+## Production startup after initialization
 
-These records accelerate later terminal startup but remain caches. They never authorize a resource mutation on their own.
+The production interactive shell constructs `ApplicationController`. The controller resolves durable authority through the initialized workspace/profile/active-experiment records and loads desired/observed state as required for snapshots and operation planning.
 
-## Later startup
+The production shell does **not** currently use `open_workspace_session()` as its primary startup path.
 
-After initialization, normal startup uses `open_workspace_session()`:
+The repository still contains `open_workspace_session()` as a lower-level workspace helper. That helper can:
 
-- local profile identity is checked first;
-- matching fresh SLICES/R2Lab access evidence is reused;
-- stale access evidence is refreshed read-only;
-- a changed R2Lab SSH identity invalidates cached gateway evidence immediately;
-- the active temporary provider experiment is rechecked every time it is resumed;
-- live reservation, allocation, lease, and runtime network facts are obtained as needed by the requested operation.
+- reuse or refresh cached SLICES project access;
+- reuse or refresh R2Lab gateway access;
+- recheck a bound provider experiment;
+- persist its compact provider summary in `status.json`.
 
-The no-argument interactive terminal invokes this initialization contract automatically when it starts in an uninitialized checkout. It chooses the nearest existing `.synthran` or Git project root as the workspace target so a command launched from a repository subdirectory does not create nested state accidentally.
+That helper remains distinct from the `ApplicationController` observed-state model, which uses `observed.json` for reconciled application observations.
 
-This separates long-lived identity from short-lived provider state while keeping ordinary terminal startup fast.
+Neither cached access records, `status.json`, nor `observed.json` can authorize provider mutation merely because they exist. Freshness, ownership, application policy, immutable operation approval, and final executor live checks remain required at their respective boundaries.
+
+## Empty workspace experiment setup
+
+After successful initialization, the workspace may have no active local SynthRAN experiment. The terminal can then create and activate a validated local experiment through `ApplicationController.create_experiment()`.
+
+This creates durable experiment identity plus desired state only. It does not create the SLICES provider experiment or mutate provider resources.
+
+A provider-experiment binding may be recorded when an existing provider experiment is known. If no provider binding exists, live-control planning remains fail-closed until one is durably bound and current authority is proven.
+
+## Project-root discovery
+
+First-use terminal initialization chooses the nearest existing SynthRAN/Git project root rather than creating nested workspace state from an arbitrary repository subdirectory.
+
+A generic user home `.synthran` directory is not treated as a project root merely because it exists; the initializer prefers an actual project/workspace boundary.
+
+This keeps long-lived identity, project-local requested state, short-lived provider facts, and historical research evidence separate while allowing compatible existing experiment checkouts to adopt the persistent workspace safely.
