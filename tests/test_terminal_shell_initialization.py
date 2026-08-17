@@ -54,7 +54,7 @@ class TerminalShellInitializationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output = StringIO()
-            prompt = FakePrompt(["/quit"])
+            prompt = FakePrompt(["n", "/quit"])
             app = FakeApplication()
             with patch(
                 "synthran.terminal.shell.ApplicationController",
