@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 from synthran.operations.journal import (
     acquire_mutation_claim,
@@ -74,6 +75,8 @@ class OperationController:
         desired: ExperimentDesiredState,
         observed: ObservedState,
         step_name: str | None = None,
+        targets: tuple[str, ...] = (),
+        bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
         now: datetime | None = None,
     ) -> OperationPlan:
         """Create one immutable operation from the current reconciliation result."""
@@ -92,6 +95,8 @@ class OperationController:
             observed=observed,
             reconciliation=reconciliation,
             step_name=step.name,
+            targets=targets,
+            bound_inputs=bound_inputs,
             now=current,
         )
         save_plan(self.root, plan)
@@ -174,6 +179,7 @@ class OperationController:
         *,
         desired: ExperimentDesiredState,
         observed: ObservedState,
+        bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
         now: datetime | None = None,
     ) -> ExecutionPermit:
         """Reconcile again, reject drift, and acquire exclusive mutation authority."""
@@ -190,6 +196,7 @@ class OperationController:
             desired=desired,
             observed=observed,
             reconciliation=reconciliation,
+            bound_inputs=bound_inputs,
         )
         approval = load_approval(self.root, operation_id)
         verify_approval(plan, approval)
@@ -219,6 +226,7 @@ class OperationController:
             mutates=plan.mutates,
             plan_sha256=plan.plan_sha256,
             issued_at_utc=format_utc(current),
+            targets=plan.targets,
         )
 
     def finish(
