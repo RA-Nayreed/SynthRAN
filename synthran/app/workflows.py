@@ -15,6 +15,20 @@ from synthran.workspace.reconciliation import (
 )
 
 
+TEARDOWN_DIMENSIONS = (
+    "reservation",
+    "allocation",
+    "preparation",
+    "kubernetes",
+    "core",
+    "ran",
+    "ue",
+    "pdu",
+    "upf",
+    "radio",
+)
+
+
 @dataclass(frozen=True)
 class WorkflowSpec:
     name: str
@@ -121,29 +135,49 @@ def _step(lifecycle: str, spec: WorkflowSpec) -> ReconciliationReport:
     )
 
 
-def _teardown_ownership_block(observed: ObservedState, now: datetime) -> str | None:
-    """Require current, non-foreign ownership facts before even planning teardown."""
+def _teardown_target_block(observed: ObservedState, now: datetime) -> str | None:
+    """Require current ownership and exact IDs before destructive planning."""
 
-    for dimension in (
-        "reservation",
-        "allocation",
-        "preparation",
-        "kubernetes",
-        "core",
-        "ran",
-        "ue",
-        "pdu",
-        "upf",
-        "radio",
-    ):
+    found = False
+    for dimension in TEARDOWN_DIMENSIONS:
         item = observed.get(dimension)
         if item is None or item.state == "absent":
             continue
+        found = True
         if not item.is_fresh(now):
             return f"current {dimension} ownership is stale"
         if item.ownership in {"unknown", "other"}:
             return f"current {dimension} ownership does not permit teardown"
+        if item.resource_id is None:
+            return f"current {dimension} has no exact resource ID for teardown"
+    if not found:
+        return "no exact live resource targets are currently known for teardown"
     return None
+
+
+def workflow_targets(
+    observed: ObservedState,
+    workflow: str,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, ...]:
+    """Return exact immutable targets required by a workflow plan."""
+
+    current = (now or utc_now()).astimezone(timezone.utc)
+    workflow_spec(workflow)
+    if workflow != "down":
+        return ()
+    block = _teardown_target_block(observed, current)
+    if block is not None:
+        raise WorkspaceError(block)
+    targets = {
+        item.resource_id
+        for dimension in TEARDOWN_DIMENSIONS
+        if (item := observed.get(dimension)) is not None
+        and item.state != "absent"
+        and item.resource_id is not None
+    }
+    return tuple(sorted(targets))
 
 
 def plan_workflow(
@@ -200,9 +234,9 @@ def plan_workflow(
             return _block(lifecycle, "stop the active experiment before teardown")
         if lifecycle == "CONFIGURED":
             return _block(lifecycle, "no live experiment resources are currently known for teardown")
-        ownership_block = _teardown_ownership_block(observed, current)
-        if ownership_block is not None:
-            return _block(lifecycle, ownership_block)
+        target_block = _teardown_target_block(observed, current)
+        if target_block is not None:
+            return _block(lifecycle, target_block)
         return _step(lifecycle, spec)
 
     raise AssertionError("unreachable application workflow")
