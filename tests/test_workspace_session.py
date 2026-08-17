@@ -9,6 +9,7 @@ from unittest.mock import patch
 from synthran.workspace import (
     AccessRecord,
     Profile,
+    WorkspaceError,
     WorkspaceRegistry,
     initialize_workspace,
     load_experiment_status,
@@ -34,6 +35,7 @@ def _fresh_access(provider: str, subject: str, scope: str) -> AccessRecord:
         access_until_utc=(
             format_utc(NOW + timedelta(days=60)) if provider == "slices" else None
         ),
+        identity_fingerprint=("SHA256:test" if provider == "r2lab" else None),
     )
 
 
@@ -86,9 +88,15 @@ class WorkspaceSessionTests(unittest.TestCase):
                 experiment_calls.append(command)
                 return ProbeResult(0, "Experiment provider-exp-01 is active")
 
-            with patch(
-                "synthran.workspace.session.verify_profile_identity",
-                return_value="SHA256:test",
+            with (
+                patch(
+                    "synthran.workspace.session.verify_profile_identity",
+                    return_value="SHA256:test",
+                ),
+                patch(
+                    "synthran.workspace.access.ssh_identity_fingerprint",
+                    return_value="SHA256:test",
+                ),
             ):
                 session = open_workspace_session(
                     start=root,
@@ -142,9 +150,15 @@ class WorkspaceSessionTests(unittest.TestCase):
                     "Current project research-project; you are a member and it expires on 2026-10-22 23:59 UTC.",
                 )
 
-            with patch(
-                "synthran.workspace.session.verify_profile_identity",
-                return_value="SHA256:test",
+            with (
+                patch(
+                    "synthran.workspace.session.verify_profile_identity",
+                    return_value="SHA256:test",
+                ),
+                patch(
+                    "synthran.workspace.access.ssh_identity_fingerprint",
+                    return_value="SHA256:test",
+                ),
             ):
                 session = open_workspace_session(
                     start=root,
@@ -178,9 +192,15 @@ class WorkspaceSessionTests(unittest.TestCase):
                 now=NOW,
             )
 
-            with patch(
-                "synthran.workspace.session.verify_profile_identity",
-                return_value="SHA256:test",
+            with (
+                patch(
+                    "synthran.workspace.session.verify_profile_identity",
+                    return_value="SHA256:test",
+                ),
+                patch(
+                    "synthran.workspace.access.ssh_identity_fingerprint",
+                    return_value="SHA256:test",
+                ),
             ):
                 session = open_workspace_session(
                     start=root,
@@ -207,7 +227,7 @@ class WorkspaceSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             initialize_workspace(root=root, profile="default", project="project", now=NOW)
-            with self.assertRaises(Exception):
+            with self.assertRaises(WorkspaceError):
                 save_experiment_status(
                     root,
                     ExperimentStatus(
