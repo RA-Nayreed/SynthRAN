@@ -3,8 +3,18 @@
 from synthran.workspace.access import (
     ensure_r2lab_gateway_access,
     ensure_slices_project_access,
+    probe_r2lab_gateway_access,
+    probe_slices_project_access,
     verify_r2lab_gateway_access,
     verify_slices_project_access,
+)
+from synthran.workspace.initialization import (
+    InitializationPlan,
+    InitializationRequest,
+    InitializationResult,
+    initialize_controller_workspace,
+    persist_initialization,
+    plan_initialization,
 )
 from synthran.workspace.model import (
     AccessRecord,
@@ -54,6 +64,9 @@ __all__ = [
     "ExperimentEntry",
     "ExperimentRecord",
     "ExperimentStatus",
+    "InitializationPlan",
+    "InitializationRequest",
+    "InitializationResult",
     "OperationRecord",
     "Profile",
     "ProviderExperimentObservation",
@@ -66,6 +79,7 @@ __all__ = [
     "ensure_r2lab_gateway_access",
     "ensure_slices_project_access",
     "find_workspace_root",
+    "initialize_controller_workspace",
     "initialize_workspace",
     "load_access_record",
     "load_active_experiment_id",
@@ -76,6 +90,10 @@ __all__ = [
     "load_run_record",
     "load_workspace",
     "open_workspace_session",
+    "persist_initialization",
+    "plan_initialization",
+    "probe_r2lab_gateway_access",
+    "probe_slices_project_access",
     "profile_path",
     "resolve_identity_reference",
     "save_experiment_status",
