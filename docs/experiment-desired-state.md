@@ -1,90 +1,79 @@
 # Experiment desired-state contract
 
-SynthRAN keeps requested network configuration separate from provider-assigned runtime observations.
+SynthRAN keeps requested experiment/network configuration separate from provider-assigned runtime observations.
 
-Every fully configured experiment contains:
+## Persistence
+
+A persistent new-format experiment has a durable identity record and a separate detailed desired-state document:
 
 ```text
 .synthran/experiments/sran-YYYYMMDD-NNN/
 ├── experiment.toml
 ├── desired.json
-├── status.json
-├── providers/
-├── operations/
-├── runs/
-├── evidence/
-└── datasets/
+├── observed.json        # only after application observations are persisted
+├── status.json          # optional legacy WorkspaceSession/provider summary
+└── runs/                # created when new-format runs are issued
 ```
 
-`experiment.toml` is the immutable experiment identity record. `desired.json` is the complete requested network configuration. `status.json` and provider evidence describe what was actually observed.
+`experiment.toml` is the durable issued experiment identity/binding record. `desired.json` is the complete validated requested state used by `ApplicationController` and policy.
 
-A runtime-assigned address, pod, allocation, reservation, lease, or interface never becomes desired configuration merely because it was observed once.
+`observed.json` is the reconciled application observation cache. A separate `status.json` may be written by the lower-level `WorkspaceSession` helper. Neither file is desired state or permanent mutation authority.
 
-## Intent and implementation
+Runtime-assigned addresses, pods, allocations, reservations, leases, resource IDs, or interfaces never become desired configuration merely because they were observed once.
 
-The desired-state document can describe the experiment at two levels at the same time:
+## Intent and implementation constraints
 
-- high-level intent, such as `virtual-5g`, `physical-5g`, `open-ran`, or `iot-to-5g`;
-- optional implementation pins for advanced operation.
+The desired-state model can express both high-level experiment intent and optional implementation constraints.
 
-Implementation values default to `automatic`. A terminal interface can therefore begin with intent and disclose implementation controls only when requested.
+Supported model values include multiple core/RAN/UE implementations even when the current live-accepted golden path supports only a narrower subset. A value being valid in `ExperimentDesiredState` is **not** proof that its full deployment/provider executor is live accepted.
 
-Supported core choices are currently:
+Current model core choices include:
 
-- `automatic`;
-- `open5gs`;
-- `oai`;
-- `free5gc`.
+```text
+automatic
+open5gs
+oai
+free5gc
+```
 
-Supported RAN choices are currently:
+Current model RAN choices include:
 
-- `automatic`;
-- `srsran`;
-- `oai`;
-- `ueransim`.
+```text
+automatic
+srsran
+oai
+ueransim
+```
 
-Supported UE choices are currently:
+Current model UE choices include:
 
-- `automatic`;
-- `srsue`;
-- `oai`;
-- `ueransim`.
+```text
+automatic
+srsue
+oai
+ueransim
+```
 
-These are desired implementation constraints, not proof that a deployment exists.
+The current accepted virtual live path is Open5GS + srsRAN + srsUE + RFSIM.
 
 ## Core and service addressing
 
-Core desired state contains:
+Core desired state contains requested implementation/service configuration, including NRF address policy.
 
-- enabled/disabled;
-- implementation;
-- Kubernetes namespace;
-- NRF address policy;
-- optional static NRF address.
-
-NRF addressing has two policies:
+NRF addressing supports:
 
 ```text
 discover
 static
 ```
 
-With `discover`, an NRF service or load-balancer address is runtime state and is not stored in the desired document. With `static`, the operator intentionally requests a particular valid IP address and that address is part of desired state.
+With `discover`, a provider/service-assigned NRF address remains runtime observation. With `static`, the operator explicitly requests a valid address and that value is part of desired state.
 
-This distinction applies generally: addresses produced by Kubernetes, a UE PDU session, SLICES, POS, or R2Lab are observations unless the experiment explicitly requests a static value.
+The same rule applies generally: provider/Kubernetes/UE-assigned addresses are observed state unless the desired-state schema explicitly models a static requested value.
 
 ## RAN topology
 
-RAN desired state includes:
-
-- enabled/disabled;
-- implementation;
-- namespace;
-- architecture;
-- gNB ID;
-- F1;
-- E1;
-- DU presence.
+RAN desired state models implementation plus requested topology/split constraints, including gNB identity and F1/E1/DU requirements.
 
 Architectures are:
 
@@ -95,22 +84,21 @@ cu-du
 cu-cp-up-du
 ```
 
-Validation rejects contradictory configurations. A monolithic RAN cannot request F1/E1. A CU/DU topology requires a DU and F1. A CU-CP/CU-UP/DU topology also requires E1.
+Validation rejects contradictory combinations. For example, a monolithic RAN cannot require split interfaces, while split topologies require their corresponding DU/F1/E1 structure.
+
+These values express desired constraints; they do not claim current live acceptance for every topology.
 
 ## UE configuration
 
-UE desired state contains:
+UE desired state contains requested enablement, implementation, namespace, and UE count.
 
-- enabled/disabled;
-- implementation;
-- namespace;
-- requested UE count.
+Assigned PDU addresses and live UE tunnel interfaces are observations and do not belong in desired state.
 
-Assigned PDU addresses and observed UE tunnel interfaces are not stored here. They are discovered during reconciliation and verification.
+The current live-accepted golden path uses one srsUE as the IoT edge gateway. Multiple-UE live acceptance remains deferred.
 
 ## Radio capability
 
-Radio desired state separates intent from exact hardware:
+Radio desired state separates mode, backend, and optional hardware intent:
 
 ```text
 mode       automatic | virtual | physical
@@ -118,13 +106,13 @@ backend    automatic | rfsim | r2lab
 hardware   automatic | n300 | n320
 ```
 
-Normal guided use can leave backend/hardware automatic. Exact hardware pinning remains available for research cases that require it.
+Validation prevents contradictory combinations such as virtual + R2Lab hardware or physical + RFSIM.
 
-Validation prevents impossible combinations such as a virtual radio with R2Lab or N300/N320 hardware, and a physical radio with RFSIM.
+A valid physical/R2Lab desired state is not evidence that physical radio operation has been live accepted. Physical radio acceptance remains separate from desired-state model support.
 
 ## PLMN and tracking area
 
-The experiment defines:
+The desired experiment defines:
 
 - MCC, exactly three digits;
 - MNC, two or three digits;
@@ -142,83 +130,77 @@ A DNN contains:
 - PDU session type (`ipv4`, `ipv6`, or `ipv4v6`);
 - canonical IPv4 and/or IPv6 network prefixes appropriate for that session type.
 
-Host addresses such as `12.1.1.1/24` are rejected when a network prefix such as `12.1.1.0/24` is required.
+Where the schema requires a network prefix, host-address CIDRs are rejected.
 
 ## Slices and QoS
 
 Every experiment configures at least one slice. A slice contains:
 
 - SST;
-- optional six-hex-digit SD;
+- optional SD;
 - DNN reference;
 - 5QI;
-- uplink AMBR in bits per second;
-- downlink AMBR in bits per second;
+- uplink/downlink AMBR in integer bits per second;
 - optional per-slice PLMN override.
 
 S-NSSAI values must be unique and every slice DNN must reference a configured DNN.
 
-Rates are stored as integer bits per second rather than display strings such as `200Mbps`. Interfaces may render human-readable units, but persistence remains unit-explicit and unambiguous.
+Persistence uses explicit integer units rather than display strings such as `200Mbps`.
 
-## Multus and RIC
+## Multus and RIC requested state
 
-Multus desired state contains:
+The desired-state schema can express optional Multus and RIC-related requested constraints.
 
-- enabled/disabled;
-- optional network-attachment name;
-- optional host-interface name.
-
-RIC desired state currently supports FlexRIC and can be enabled or disabled.
+Model support must not be confused with accepted runtime integration. Formal O-RAN A1/E2 control, general RIC integration, and generative-policy workflows remain deferred in the current product scope.
 
 ## Placement
 
-Placement is either `automatic` or `manual`.
+Placement is `automatic` or `manual`.
 
-Automatic placement cannot contain pinned resources. The resource resolver is responsible for selecting a compatible deployment node, core node, RAN node, and any additional required capabilities.
+Automatic placement cannot contain pinned resources. Resource requirements are derived from desired state and resolved against reviewed descriptors plus fresh complete provider inventory.
 
-Manual placement may pin:
+Manual placement pins are hard constraints, not permission. A pinned resource must still satisfy reviewed capability, current availability, ownership, provider authority, and operation policy.
 
-- deployment node;
-- core node;
-- RAN node;
-- extra resource names.
-
-Manual pins are constraints. They do not give SynthRAN permission to take over resources. Live ownership and availability checks still govern reservation/allocation operations.
+Runtime allocation results remain observed state and never rewrite desired placement silently.
 
 ## Issuance and persistence
 
-`create_desired_experiment()` allocates the concrete `sran-YYYYMMDD-NNN` identity first and then stores the complete desired document. If desired-state persistence fails, that experiment ID is marked failed and remains consumed.
+`create_desired_experiment()` allocates the concrete `sran-YYYYMMDD-NNN` identity first, persists `desired.json`, and optionally activates the experiment through `.synthran/active.json`.
+
+If desired-state persistence fails after ID issuance, the experiment is marked failed where possible and the ID remains consumed.
 
 Replacing an existing `desired.json` requires an explicit replace operation. Silent overwrite is not allowed.
 
-The immutable experiment identity summary and detailed desired document must agree on experiment intent and radio mode.
+The durable `experiment.toml` summary and detailed `desired.json` must agree on intent and radio mode.
 
-## Guided terminal use
+## Current terminal setup
 
-The intended terminal interaction is progressive rather than a long deployment form.
+The strict slash-command shell does not accept natural-language lifecycle requests such as “create a physical 5G testbed.”
 
-A normal user can provide intent such as:
+When an initialized workspace is `EMPTY`, the production terminal offers a small local setup wizard. It prompts for:
 
-```text
-Create a physical 5G testbed
-```
+- whether to create an active experiment;
+- experiment intent, defaulting to `iot-to-5g`;
+- radio mode, defaulting to `virtual`;
+- optional existing SLICES provider-experiment binding;
+- optional label.
 
-and accept a recommended desired state. Advanced configuration can expose core/RAN implementation, split topology, NRF policy, PLMN, DNNs, slicing/QoS, Multus, RIC, radio hardware, and manual placement.
+The wizard creates a validated `ExperimentDesiredState` through `ApplicationController.create_experiment()`. It does not reserve/allocate/deploy resources and does not create the provider experiment.
 
-Both interfaces produce the same validated `ExperimentDesiredState`. The UI is therefore not a second deployment implementation.
+Advanced desired-state fields are available in the Python/domain model, but the current terminal setup wizard does not expose the full model as an interactive deployment form.
 
 ## Reconciliation boundary
 
-The desired document answers:
+Desired state answers:
 
 ```text
-What network did the researcher request?
+What did the researcher request?
 ```
 
-Live providers answer:
+Observed state answers:
 
 ```text
-What exists now?
+What is currently known to exist?
 ```
 
-A later reconciler compares the two and emits an operation plan. Resource mutation is allowed only after current ownership, provider authority, reservation/lease, compatibility, and operation policy checks pass.
+Reconciliation and application workflow policy compare those models and can produce immutable operation plans. Resource mutation is possible only after current authority/ownership/freshness checks, required approval, authorization, and the concrete executor's final live checks.
