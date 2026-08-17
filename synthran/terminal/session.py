@@ -88,6 +88,16 @@ class TerminalSession:
         lines = self._append("error", (message,))
         return TerminalResponse("error", lines=lines)
 
+    def record_dispatch_result(
+        self,
+        lines: tuple[str, ...],
+        *,
+        error: bool = False,
+    ) -> tuple[TerminalLine, ...]:
+        """Record already-sanitized application-router output in the visible transcript."""
+
+        return self._append("error" if error else "result", lines)
+
     def submit(self, line: str) -> TerminalResponse:
         """Parse and route one slash command; mutating commands are not executed here."""
 
