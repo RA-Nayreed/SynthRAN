@@ -37,6 +37,9 @@ class ModuleLayoutTests(unittest.TestCase):
         self.assertTrue((SOURCE / "workspace" / "desired.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "desired_store.py").is_file())
         self.assertTrue((SOURCE / "workspace" / "experiment_service.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "observed.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "observed_store.py").is_file())
+        self.assertTrue((SOURCE / "workspace" / "reconciliation.py").is_file())
 
     def test_flat_duplicate_modules_do_not_return(self) -> None:
         removed = {
