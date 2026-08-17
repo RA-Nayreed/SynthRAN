@@ -13,6 +13,61 @@ from synthran.fiveg_ansible import NetworkInventory
 from synthran.live_preflight import ssh_command
 
 
+_LISTENER_PROBE = r'''
+import os
+import sys
+
+pidfile = sys.argv[1]
+port = int(sys.argv[2])
+try:
+    raw_pid = open(pidfile, encoding="utf-8", errors="strict").read().strip()
+    pid = int(raw_pid)
+except Exception:
+    raise SystemExit(2)
+if pid <= 1 or not os.path.isdir(f"/proc/{pid}"):
+    raise SystemExit(3)
+try:
+    argv = [
+        item.decode("utf-8", "replace")
+        for item in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+        if item
+    ]
+except OSError:
+    raise SystemExit(4)
+required = ("-s", "-1", "-p", str(port), "-I", pidfile)
+for token in required:
+    if token not in argv:
+        raise SystemExit(5)
+owned = set()
+try:
+    for name in os.listdir(f"/proc/{pid}/fd"):
+        try:
+            target = os.readlink(f"/proc/{pid}/fd/{name}")
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            owned.add(target[8:-1])
+except OSError:
+    raise SystemExit(6)
+port_hex = f"{port:04X}"
+for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        lines = open(table, encoding="utf-8", errors="replace").read().splitlines()[1:]
+    except OSError:
+        continue
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 10 or fields[3] != "0A":
+            continue
+        local = fields[1]
+        inode = fields[9]
+        if local.rsplit(":", 1)[-1].upper() == port_hex and inode in owned:
+            print(pid)
+            raise SystemExit(0)
+raise SystemExit(7)
+'''
+
+
 @dataclass(frozen=True)
 class OwnedIperfServer:
     owner_id: str
@@ -49,6 +104,76 @@ def _reap(
         orphan_only=orphan_only,
         label=label,
     )
+
+
+def _listener_ready(
+    inventory: NetworkInventory,
+    *,
+    pidfile: str,
+    port: int,
+) -> bool:
+    try:
+        base_runtime._remote(
+            inventory,
+            "python3",
+            "-c",
+            _LISTENER_PROBE,
+            pidfile,
+            str(port),
+            label="research iperf3 owned listener probe",
+            timeout_seconds=5,
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _cleanup_failed_start(
+    inventory: NetworkInventory,
+    *,
+    process: base_runtime.ManagedProcess,
+    workspace: str,
+    pidfile: str,
+    port: int,
+) -> None:
+    errors: list[str] = []
+    try:
+        process.stop()
+    except Exception as exc:
+        errors.append(f"local SSH process: {exc}")
+    try:
+        _reap(
+            inventory,
+            pidfile=pidfile,
+            port=port,
+            orphan_only=False,
+            label="failed research iperf3 startup cleanup",
+        )
+    except Exception as exc:
+        errors.append(f"remote iperf3 process: {exc}")
+    try:
+        base_runtime._remote(
+            inventory,
+            "rm",
+            "-f",
+            pidfile,
+            label="failed research iperf3 pidfile cleanup",
+            timeout_seconds=10,
+        )
+        base_runtime._remote(
+            inventory,
+            "rmdir",
+            workspace,
+            label="failed research iperf3 workspace cleanup",
+            timeout_seconds=10,
+        )
+    except Exception as exc:
+        errors.append(f"remote iperf3 workspace: {exc}")
+    if errors:
+        raise ExperimentError(
+            "failed research iperf3 startup cleanup failed closed: "
+            + "; ".join(errors)
+        )
 
 
 def start_owned_iperf_server(
@@ -102,46 +227,46 @@ def start_owned_iperf_server(
     )
     try:
         deadline = time.monotonic() + 10.0
+        published = False
         while time.monotonic() < deadline:
             if process.process.poll() is not None:
-                raise ExperimentError("research iperf3 server exited before becoming ready")
-            if base_runtime._remote_path_exists(
+                raise ExperimentError(
+                    "research iperf3 server exited before becoming ready"
+                )
+            if not published:
+                published = base_runtime._remote_path_exists(
+                    inventory,
+                    pidfile,
+                    timeout_seconds=3,
+                )
+            if published and _listener_ready(
                 inventory,
-                pidfile,
-                timeout_seconds=3,
+                pidfile=pidfile,
+                port=port,
             ):
                 break
             time.sleep(0.2)
         else:
-            raise ExperimentError("research iperf3 server did not publish its run-owned PID file")
-    except Exception:
+            if not published:
+                raise ExperimentError(
+                    "research iperf3 server did not publish its run-owned PID file"
+                )
+            raise ExperimentError(
+                "research iperf3 server did not prove an owned listening socket"
+            )
+    except Exception as exc:
         try:
-            process.stop()
-        finally:
-            try:
-                _reap(
-                    inventory,
-                    pidfile=pidfile,
-                    port=port,
-                    orphan_only=False,
-                    label="failed research iperf3 startup cleanup",
-                )
-            finally:
-                base_runtime._remote(
-                    inventory,
-                    "rm",
-                    "-f",
-                    pidfile,
-                    label="failed research iperf3 pidfile cleanup",
-                    timeout_seconds=10,
-                )
-                base_runtime._remote(
-                    inventory,
-                    "rmdir",
-                    workspace,
-                    label="failed research iperf3 workspace cleanup",
-                    timeout_seconds=10,
-                )
+            _cleanup_failed_start(
+                inventory,
+                process=process,
+                workspace=workspace,
+                pidfile=pidfile,
+                port=port,
+            )
+        except Exception as cleanup_exc:
+            raise ExperimentError(
+                f"research iperf3 startup failed and cleanup failed closed: {exc}; {cleanup_exc}"
+            ) from exc
         raise
     return OwnedIperfServer(owner_id, port, workspace, pidfile, process)
 
@@ -184,4 +309,6 @@ def stop_owned_iperf_server(
     except Exception as exc:
         errors.append(f"remote iperf3 workspace: {exc}")
     if errors:
-        raise ExperimentError("research iperf3 cleanup failed closed: " + "; ".join(errors))
+        raise ExperimentError(
+            "research iperf3 cleanup failed closed: " + "; ".join(errors)
+        )
