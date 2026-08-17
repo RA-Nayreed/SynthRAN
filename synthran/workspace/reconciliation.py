@@ -171,7 +171,7 @@ def _require_current_control_fact(
     if item is None or not item.is_fresh(now) or item.state == "unknown":
         steps.append(
             ReconciliationStep(
-                name=f"inspect-{dimension}",
+                name=f"inspect-{dimension.replace('_', '-')}",
                 risk="R0",
                 reason=f"current {label} state is not known",
                 mutates=False,
@@ -184,6 +184,18 @@ def _require_current_control_fact(
     return item
 
 
+def _report(
+    desired: ExperimentDesiredState,
+    observed: ObservedState,
+    *,
+    now: datetime,
+    steps: list[ReconciliationStep],
+    blocks: list[str],
+) -> ReconciliationReport:
+    lifecycle = "BLOCKED" if blocks else derive_lifecycle(desired, observed, now=now)
+    return ReconciliationReport(lifecycle, tuple(steps), tuple(blocks))
+
+
 def plan_reconciliation(
     desired: ExperimentDesiredState,
     observed: ObservedState,
@@ -191,7 +203,7 @@ def plan_reconciliation(
     provider_experiment_required: bool = True,
     now: datetime | None = None,
 ) -> ReconciliationReport:
-    """Describe the next safe actions without executing them."""
+    """Describe only the next safe reconciliation boundary without executing it."""
 
     current = (now or utc_now()).astimezone(timezone.utc)
     steps: list[ReconciliationStep] = []
@@ -205,7 +217,7 @@ def plan_reconciliation(
         if item is None or not item.is_fresh(current) or item.state == "unknown":
             steps.append(
                 ReconciliationStep(
-                    name=f"inspect-{dimension}",
+                    name=f"inspect-{dimension.replace('_', '-')}",
                     risk="R0",
                     reason=f"current {label} has not been verified",
                     mutates=False,
@@ -228,11 +240,9 @@ def plan_reconciliation(
         elif provider.state != "ready":
             blocks.append("temporary provider experiment is not active")
 
-    if blocks:
-        return ReconciliationReport(
-            lifecycle="BLOCKED",
-            steps=tuple(steps),
-            blocks=tuple(blocks),
+    if blocks or steps:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
         )
 
     reservation = _require_current_control_fact(
@@ -243,22 +253,31 @@ def plan_reconciliation(
         steps=steps,
         blocks=blocks,
     )
-    if reservation is not None:
-        if reservation.state == "absent":
-            steps.append(
-                ReconciliationStep(
-                    name="reserve",
-                    risk="R2",
-                    reason="no current reservation covers the requested testbed",
-                    mutates=True,
-                )
+    if reservation is None:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if reservation.state == "absent":
+        steps.append(
+            ReconciliationStep(
+                name="reserve",
+                risk="R2",
+                reason="no current reservation covers the requested testbed",
+                mutates=True,
             )
-        elif reservation.state != "ready":
-            blocks.append("reservation is not usable")
-
-    if blocks or any(item.name == "reserve" for item in steps):
-        lifecycle = "BLOCKED" if blocks else derive_lifecycle(desired, observed, now=current)
-        return ReconciliationReport(lifecycle, tuple(steps), tuple(blocks))
+        )
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if reservation.state != "ready":
+        blocks.append("reservation is not usable")
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if blocks:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
 
     allocation = _require_current_control_fact(
         observed,
@@ -268,30 +287,46 @@ def plan_reconciliation(
         steps=steps,
         blocks=blocks,
     )
-    if allocation is not None:
-        if allocation.state == "absent":
+    if allocation is None:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if blocks:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if allocation.state == "absent":
+        steps.append(
+            ReconciliationStep(
+                name="allocate",
+                risk="R2",
+                reason="required compute resources are not allocated",
+                mutates=True,
+            )
+        )
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if allocation.state in {"degraded", "failed"}:
+        if allocation.ownership == "synthran":
             steps.append(
                 ReconciliationStep(
-                    name="allocate",
+                    name="recover-allocation",
                     risk="R2",
-                    reason="required compute resources are not allocated",
+                    reason="SynthRAN-owned allocation is incomplete",
                     mutates=True,
                 )
             )
-        elif allocation.state in {"degraded", "failed"}:
-            if allocation.ownership == "synthran":
-                steps.append(
-                    ReconciliationStep(
-                        name="recover-allocation",
-                        risk="R2",
-                        reason="SynthRAN-owned allocation is incomplete",
-                        mutates=True,
-                    )
-                )
-            else:
-                blocks.append("incomplete allocation is not SynthRAN-owned")
-        elif allocation.state != "ready":
-            blocks.append("allocation is not usable")
+        else:
+            blocks.append("incomplete allocation is not SynthRAN-owned")
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if allocation.state != "ready":
+        blocks.append("allocation is not usable")
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
 
     if desired.radio.mode == "physical" or desired.radio.backend == "r2lab":
         lease = _require_current_control_fact(
@@ -302,25 +337,31 @@ def plan_reconciliation(
             steps=steps,
             blocks=blocks,
         )
-        if lease is not None:
-            if lease.state == "absent":
-                steps.append(
-                    ReconciliationStep(
-                        name="obtain-r2lab-lease",
-                        risk="R0",
-                        reason="physical radio operation requires an active R2Lab lease",
-                        mutates=False,
-                    )
+        if lease is None:
+            return _report(
+                desired, observed, now=current, steps=steps, blocks=blocks
+            )
+        if blocks:
+            return _report(
+                desired, observed, now=current, steps=steps, blocks=blocks
+            )
+        if lease.state == "absent":
+            steps.append(
+                ReconciliationStep(
+                    name="obtain-r2lab-lease",
+                    risk="R0",
+                    reason="physical radio operation requires an active R2Lab lease",
+                    mutates=False,
                 )
-            elif lease.state != "ready":
-                blocks.append("R2Lab lease is not usable")
-
-    if blocks or any(
-        item.name in {"allocate", "recover-allocation", "obtain-r2lab-lease"}
-        for item in steps
-    ):
-        lifecycle = "BLOCKED" if blocks else derive_lifecycle(desired, observed, now=current)
-        return ReconciliationReport(lifecycle, tuple(steps), tuple(blocks))
+            )
+            return _report(
+                desired, observed, now=current, steps=steps, blocks=blocks
+            )
+        if lease.state != "ready":
+            blocks.append("R2Lab lease is not usable")
+            return _report(
+                desired, observed, now=current, steps=steps, blocks=blocks
+            )
 
     preparation = observed.get("preparation")
     if preparation is None or not preparation.is_fresh(current) or preparation.state == "unknown":
@@ -332,7 +373,10 @@ def plan_reconciliation(
                 mutates=False,
             )
         )
-    elif preparation.state == "absent":
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if preparation.state == "absent":
         steps.append(
             ReconciliationStep(
                 name="prepare",
@@ -341,14 +385,19 @@ def plan_reconciliation(
                 mutates=True,
             )
         )
-    elif preparation.state in {"degraded", "failed"}:
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if preparation.state in {"degraded", "failed"}:
         blocks.append("resource preparation requires recovery")
-    elif preparation.state != "ready":
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if preparation.state != "ready":
         blocks.append("resource preparation is not usable")
-
-    if blocks or any(item.name == "prepare" for item in steps):
-        lifecycle = "BLOCKED" if blocks else derive_lifecycle(desired, observed, now=current)
-        return ReconciliationReport(lifecycle, tuple(steps), tuple(blocks))
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
 
     required_network = _required_network_dimensions(desired)
     unknown_network = [
@@ -369,29 +418,32 @@ def plan_reconciliation(
                 mutates=False,
             )
         )
-    else:
-        failed_network = [
-            dimension
-            for dimension in required_network
-            if observed.state(dimension) in {"degraded", "failed", "blocked"}
-        ]
-        if failed_network:
-            blocks.append(
-                "network runtime requires recovery: " + ", ".join(failed_network)
-            )
-        elif any(observed.state(dimension) == "absent" for dimension in required_network):
-            steps.append(
-                ReconciliationStep(
-                    name="up",
-                    risk="R2",
-                    reason="requested network components are not all running",
-                    mutates=True,
-                )
-            )
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
 
-    if blocks or any(item.name == "up" for item in steps):
-        lifecycle = "BLOCKED" if blocks else derive_lifecycle(desired, observed, now=current)
-        return ReconciliationReport(lifecycle, tuple(steps), tuple(blocks))
+    failed_network = [
+        dimension
+        for dimension in required_network
+        if observed.state(dimension) in {"degraded", "failed", "blocked"}
+    ]
+    if failed_network:
+        blocks.append("network runtime requires recovery: " + ", ".join(failed_network))
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
+    if any(observed.state(dimension) == "absent" for dimension in required_network):
+        steps.append(
+            ReconciliationStep(
+                name="up",
+                risk="R2",
+                reason="requested network components are not all running",
+                mutates=True,
+            )
+        )
+        return _report(
+            desired, observed, now=current, steps=steps, blocks=blocks
+        )
 
     if not _current_ready(observed, "path", now=current):
         steps.append(
@@ -403,8 +455,6 @@ def plan_reconciliation(
             )
         )
 
-    return ReconciliationReport(
-        lifecycle=derive_lifecycle(desired, observed, now=current),
-        steps=tuple(steps),
-        blocks=tuple(blocks),
+    return _report(
+        desired, observed, now=current, steps=steps, blocks=blocks
     )
