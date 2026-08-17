@@ -13,6 +13,7 @@ from prompt_toolkit.history import InMemoryHistory
 
 from synthran.app.controller import ApplicationController
 from synthran.terminal.commands import COMMANDS, command_spec
+from synthran.terminal.experiment_setup import ensure_active_experiment
 from synthran.terminal.initialize import initialization_root, initialize_from_terminal
 from synthran.terminal.router import DispatchResult, TerminalCommandRouter
 from synthran.terminal.session import TerminalLine, TerminalSession
@@ -104,16 +105,23 @@ def run_terminal(
 
     stream = output or sys.stdout
     prompt = prompt_session or create_prompt_session()
+    injected_application = application is not None
     try:
         app = application or _open_application(
             start=start,
             prompt=prompt,
             output=stream,
         )
+        if not injected_application:
+            ensure_active_experiment(
+                application=app,
+                prompt=prompt,
+                output=stream,
+            )
     except WorkspaceError as exc:
         print(f"error: {exc}", file=stream, flush=True)
         print(
-            "Workspace initialization did not complete; no provider resource mutation was attempted.",
+            "Terminal setup did not complete; no provider resource mutation was attempted.",
             file=stream,
             flush=True,
         )
