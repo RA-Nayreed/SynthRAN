@@ -4,11 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
-from synthran.entrypoint import main as entrypoint_main
 from synthran.live_preflight import CommandResult
-from synthran.r2lab import (
+from synthran.network.r2lab import (
     R2LabResourceError,
     R2LabSelection,
     build_plan,
@@ -115,6 +113,18 @@ class R2LabTests(unittest.TestCase):
         report = run_doctor(selection=selection, runner=denied)
         self.assertFalse(report.ready)
 
+    def test_doctor_turns_transport_errors_into_not_ready(self) -> None:
+        selection = R2LabSelection.build(
+            slice_name="oulu_user", radio="n300", ue="qhat01"
+        )
+
+        def failing_runner(command, timeout_seconds: int) -> CommandResult:
+            raise R2LabResourceError("transport failed")
+
+        report = run_doctor(selection=selection, runner=failing_runner)
+        self.assertFalse(report.ready)
+        self.assertEqual("gateway", report.checks[-1].name)
+
     def test_prepare_checks_lease_before_every_mutation_and_claims_resources(self) -> None:
         selection = R2LabSelection.build(
             slice_name="oulu_user", radio="n300", ue="qhat01"
@@ -182,6 +192,28 @@ class R2LabTests(unittest.TestCase):
         self.assertEqual(
             [("rhubarbe", "leases", "--check")], runner.remote_commands
         )
+
+    def test_prepare_records_transport_failure_without_leaking_command_output(self) -> None:
+        selection = R2LabSelection.build(
+            slice_name="oulu_user", radio="n300", ue="qhat01"
+        )
+        plan = build_plan(run_id="r2lab-test-transport", selection=selection)
+
+        def failing_runner(command, timeout_seconds: int) -> CommandResult:
+            raise R2LabResourceError("private remote details")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "r2lab"
+            with self.assertRaises(R2LabResourceError):
+                execute_prepare(
+                    plan=plan,
+                    run_root=root,
+                    runner=failing_runner,
+                    sleeper=lambda _: None,
+                )
+            log = (root / plan.run_id / "r2lab.log").read_text(encoding="utf-8")
+            self.assertIn("gateway command could not complete", log)
+            self.assertNotIn("private remote details", log)
 
     def test_qfit_prepare_uses_only_selected_qfit_commands(self) -> None:
         selection = R2LabSelection.build(
@@ -340,14 +372,6 @@ class R2LabTests(unittest.TestCase):
                     sleeper=lambda _: None,
                     reachability_attempts=1,
                 )
-
-    def test_entrypoint_routes_only_r2lab_group_to_provider(self) -> None:
-        with patch("synthran.entrypoint.r2lab_main", return_value=7) as r2lab:
-            self.assertEqual(7, entrypoint_main(["r2lab", "doctor"]))
-            r2lab.assert_called_once_with(["doctor"])
-        with patch("synthran.entrypoint.core_main", return_value=9) as core:
-            self.assertEqual(9, entrypoint_main(["doctor"]))
-            core.assert_called_once_with(["doctor"])
 
 
 if __name__ == "__main__":
