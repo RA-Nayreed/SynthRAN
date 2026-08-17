@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from synthran.app.workflows import plan_workflow
+from synthran.app.workflows import plan_workflow, workflow_targets
 from synthran.workspace.desired import ExperimentDesiredState
-from synthran.workspace.model import format_utc
+from synthran.workspace.model import WorkspaceError, format_utc
 from synthran.workspace.observed import Observation, ObservedState
 
 
@@ -21,6 +21,7 @@ def observation(
     ownership: str = "synthran",
     running: bool | None = None,
     fresh: bool = True,
+    exact: bool = True,
 ) -> Observation:
     facts = {} if running is None else {"running": running}
     return Observation(
@@ -32,6 +33,7 @@ def observation(
             NOW + timedelta(minutes=10) if fresh else NOW - timedelta(seconds=1)
         ),
         ownership=ownership,
+        resource_id=f"{dimension}-resource" if exact else None,
         facts=facts,
     )
 
@@ -141,22 +143,23 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
         self.assertFalse(ready.blocks)
         self.assertEqual(ready.steps[0].risk, "R1")
 
-    def test_down_is_r3_and_fails_closed_on_foreign_or_stale_ownership(self) -> None:
-        safe = plan_workflow(
-            self.desired,
-            state(
-                observation("path"),
-                observation("reservation", ownership="operator"),
-                observation("allocation"),
-                observation("core"),
-            ),
-            "down",
-            now=NOW,
+    def test_down_is_r3_and_binds_exact_sorted_targets(self) -> None:
+        current = state(
+            observation("path"),
+            observation("reservation", ownership="operator"),
+            observation("allocation"),
+            observation("core"),
         )
+        safe = plan_workflow(self.desired, current, "down", now=NOW)
         self.assertFalse(safe.blocks)
         self.assertEqual(safe.steps[0].risk, "R3")
         self.assertTrue(safe.steps[0].mutates)
+        self.assertEqual(
+            workflow_targets(current, "down", now=NOW),
+            ("allocation-resource", "core-resource", "reservation-resource"),
+        )
 
+    def test_down_fails_closed_on_foreign_stale_or_unidentified_resources(self) -> None:
         foreign = plan_workflow(
             self.desired,
             state(observation("path"), observation("allocation", ownership="other")),
@@ -174,6 +177,21 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
         )
         self.assertTrue(stale.blocks)
         self.assertIn("stale", stale.blocks[0])
+
+        unidentified = plan_workflow(
+            self.desired,
+            state(observation("path"), observation("allocation", exact=False)),
+            "down",
+            now=NOW,
+        )
+        self.assertTrue(unidentified.blocks)
+        self.assertIn("exact resource ID", unidentified.blocks[0])
+        with self.assertRaises(WorkspaceError):
+            workflow_targets(
+                state(observation("allocation", exact=False)),
+                "down",
+                now=NOW,
+            )
 
     def test_down_requires_stop_before_teardown(self) -> None:
         report = plan_workflow(
