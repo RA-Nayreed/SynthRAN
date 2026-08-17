@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Mapping
 
 from synthran.operations.journal import digest_json
 from synthran.operations.model import ApprovalGrant, OperationPlan
@@ -46,6 +47,17 @@ def select_reconciliation_step(
     return matches[0]
 
 
+def _bound_input_digests(
+    bound_inputs: Mapping[str, Mapping[str, object]] | None,
+) -> dict[str, str]:
+    if not bound_inputs:
+        return {}
+    return {
+        name: digest_json(value)
+        for name, value in sorted(bound_inputs.items())
+    }
+
+
 def build_operation_plan(
     *,
     operation_id: str,
@@ -53,6 +65,8 @@ def build_operation_plan(
     observed: ObservedState,
     reconciliation: ReconciliationReport,
     step_name: str | None = None,
+    targets: tuple[str, ...] = (),
+    bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
     now: datetime | None = None,
 ) -> OperationPlan:
     """Bind one reconciliation step to exact desired, observed, and policy inputs."""
@@ -62,7 +76,8 @@ def build_operation_plan(
     desired_sha256 = digest_json(desired.to_dict())
     observed_sha256 = digest_json(observed.to_dict())
     reconciliation_sha256 = digest_json(reconciliation_to_dict(reconciliation))
-    unsigned = {
+    input_sha256 = _bound_input_digests(bound_inputs)
+    unsigned: dict[str, object] = {
         "schema": "synthran/operation-plan/v1alpha1",
         "operation_id": operation_id,
         "experiment_id": observed.experiment_id,
@@ -75,6 +90,10 @@ def build_operation_plan(
         "reconciliation_sha256": reconciliation_sha256,
         "created_at_utc": format_utc(current),
     }
+    if targets:
+        unsigned["targets"] = list(targets)
+    if input_sha256:
+        unsigned["input_sha256"] = input_sha256
     return OperationPlan(
         operation_id=operation_id,
         experiment_id=observed.experiment_id,
@@ -87,6 +106,8 @@ def build_operation_plan(
         reconciliation_sha256=reconciliation_sha256,
         plan_sha256=digest_json(unsigned),
         created_at_utc=format_utc(current),
+        targets=targets,
+        input_sha256=input_sha256,
     )
 
 
@@ -96,6 +117,7 @@ def verify_plan_inputs(
     desired: ExperimentDesiredState,
     observed: ObservedState,
     reconciliation: ReconciliationReport,
+    bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
 ) -> None:
     """Reject execution whenever any planned input changed after review."""
 
@@ -107,6 +129,8 @@ def verify_plan_inputs(
         raise WorkspaceError("observed state changed after the operation was planned")
     if digest_json(reconciliation_to_dict(reconciliation)) != plan.reconciliation_sha256:
         raise WorkspaceError("reconciliation changed after the operation was planned")
+    if _bound_input_digests(bound_inputs) != dict(plan.input_sha256):
+        raise WorkspaceError("operation-bound inputs changed after the operation was planned")
     if reconciliation.blocks:
         raise WorkspaceError("current reconciliation is blocked")
     matches = [step for step in reconciliation.steps if step.name == plan.kind]
