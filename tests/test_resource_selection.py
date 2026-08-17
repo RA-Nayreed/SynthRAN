@@ -342,8 +342,8 @@ class ResourceSelectionTests(unittest.TestCase):
             resource_id="sopnode-new",
             provider="slices",
             kind="compute",
-            capabilities=frozenset({"compute", "role:core", "role:ran"}),
-            role_priority={"core": 50, "ran": 50},
+            capabilities=frozenset({"compute", "role:core"}),
+            role_priority={"core": 50},
         )
         states = slices_states(ownership={"sopnode-f1": "other"})
         states.append(ResourceState("sopnode-new", "allocated", "synthran"))
