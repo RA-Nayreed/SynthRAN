@@ -86,6 +86,8 @@ class Observation:
         if self.source not in OBSERVATION_SOURCES:
             raise WorkspaceError("unsupported observation source")
         observed = parse_utc(self.observed_at_utc, "observation observed_at_utc")
+        if self.source in {"provider", "observation"} and self.fresh_until_utc is None:
+            raise WorkspaceError("live observation requires an explicit freshness boundary")
         if self.fresh_until_utc is not None:
             fresh_until = parse_utc(
                 self.fresh_until_utc, "observation fresh_until_utc"
@@ -106,7 +108,7 @@ class Observation:
     def is_fresh(self, now: datetime | None = None) -> bool:
         current = (now or utc_now()).astimezone(timezone.utc)
         if self.fresh_until_utc is None:
-            return self.source in {"provider", "observation"}
+            return False
         return current < parse_utc(self.fresh_until_utc, "observation fresh_until_utc")
 
     @property
