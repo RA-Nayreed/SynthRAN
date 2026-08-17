@@ -32,9 +32,14 @@ Development milestones are engineering history, not product architecture. Do not
 
 There is exactly one product executable: `synthran`.
 
-Stable command groups are named for domains and operations, for example:
+SynthRAN provides a dual interaction interface sharing a single application and operation engine:
+
+- **Interactive Terminal Workbench:** Launching `synthran` with zero arguments on an interactive TTY starts the prompt-toolkit terminal shell (`synthran.terminal`) with slash-command vocabulary (`/status`, `/inspect`, `/plan`, `/up`, `/run`, `/stop`, `/collect`, `/logs`, `/down`), dynamic status toolbar, and session mode governance (`OBSERVE` vs `OPERATE`).
+- **Scriptable CLI Subcommands:** Passing explicit domain subcommands executes non-interactive, pipeline-friendly CLI operations, for example:
 
 ```text
+synthran (interactive terminal shell)
+synthran init [--project PROJECT] [--profile PROFILE]
 synthran network prepare|deploy|verify
 synthran experiment plan|run|verify
 synthran experiment research plan|run|calibrate|campaign-plan|campaign-run|analyze
@@ -42,7 +47,51 @@ synthran deps sync
 synthran privacy scan|redact
 ```
 
-Do not create milestone-specific executables or compatibility aliases for unreleased temporary interfaces. Internal Python modules should describe their responsibility, such as `experiment`, `experiment_runtime`, `experiment_resources`, `research`, `research_collector`, `research_instrumentation`, `research_iperf`, `research_sampling`, `iot`, `mqtt_collector`, or `ingress`.
+Do not create milestone-specific executables or compatibility aliases for unreleased temporary interfaces. Internal Python modules should describe their responsibility, such as `app`, `operations`, `resources`, `workspace`, `terminal`, `experiment`, `experiment_runtime`, `experiment_resources`, `research`, `research_collector`, `research_instrumentation`, `research_iperf`, `research_sampling`, `iot`, `mqtt_collector`, or `ingress`.
+
+## Shared Application Controller and Interface Invariants
+
+- `main` is the integration truth.
+- Scripted CLI subcommands and the interactive terminal workbench MUST share the exact same underlying `ApplicationController` (`synthran.app.controller`) and operation engine (`synthran.operations`).
+- The terminal layer must NEVER directly shell out to providers, execute ad-hoc mutations, or bypass application domain services.
+- Desired state must NEVER contain discovered runtime values (e.g. allocated node hostnames, dynamically assigned PDU IPs, pod names).
+- Desired state (`ExperimentDesiredState`) defines declared research intent; observed state (`ObservedState`) records testbed facts.
+
+## Workspace, Profile, and Identity Architecture
+
+- Global user profiles reside under `~/.config/synthran/profiles/<name>.toml` (mode 0600) with SHA-256 fingerprint verification of referenced private SSH keys.
+- Project-local workspace configuration resides under `.synthran/workspace.toml` (mode 0600).
+- SQLite registry (`.synthran/registry.sqlite3`) provides atomic sequential ID allocation (`sran-YYYYMMDD-NNN`, `run-NNN`, `op-NNNNNN`) in WAL mode. Filesystem folders (`experiments/`, `operations/`, `runs/`) remain durable source of truth and are rebuildable via `rebuild_from_experiment_folders` without counter reuse.
+- Strict source-of-truth precedence: durable workspace state is authoritative. Environment variables provide defaults only when workspace values are unset; explicit conflicting values fail closed.
+
+## Desired State, Observed State, and Truth Hierarchy
+
+- Truth ranking strictly governs reconciliation:
+  1. **Live Provider Truth** (fresh live probes);
+  2. **Persistent Run Evidence** (run-scoped manifests and receipts);
+  3. **Cached Observation Snapshot** (non-authoritative local cache).
+- Stale observations cannot authorize mutation. Observations expire after their configured TTL.
+- Unknown, foreign, expired, or ambiguous provider ownership strictly fails closed.
+- Reconciliation planning (`plan_reconciliation`) emits only the immediate next dependency step (`reserve` -> `allocate` -> `prepare` -> `deploy` -> `verify` -> `up`) and stops at the first unresolved boundary.
+
+## Operation Control Plane, Risk Governance, and Teardown
+
+- All mutating actions require an immutable `OperationPlan` bound to input, desired-state, and observed-state SHA-256 digests.
+- `ApprovalGrant` is plan-specific and validates digest integrity.
+- Execution requires a single-use `ExecutionPermit`.
+- Operations are classified by risk:
+  - **R0 (Read-Only):** `/help`, `/status`, `/inspect`, `/logs`, `verify`;
+  - **R1 (Controlled Non-Destructive):** `/stop`, `/collect`, `plan`;
+  - **R2 (Mutating Non-Destructive):** `/up`, `/run`, `deploy`;
+  - **R3 (Destructive Teardown):** `/down`, `clean`.
+- Destructive teardown (`/down`) is R3, requires explicit operator confirmation, and must be bound to exact target resources.
+- Operation progress uses structured event journals (`OperationEvent`), never UI string parsing.
+
+## Resource Selection and Composite Transactions
+
+- Resource selection (`ResourceSelector`) is deterministic, capability-based, and non-executing. Unsafe or foreign nodes are represented in inventory models but never selectable.
+- Composite transactions (`CompositeResourceTransaction`) execute multi-provider acquisitions in topological dependency order and roll back in exact reverse order upon failure.
+- Workspace mutation claims are released ONLY upon proven rollback; partial rollback retains the claim for fail-closed operator intervention.
 
 ## Current Acceptance State
 
@@ -271,6 +320,8 @@ Record material architecture, dependency, interface, security, workflow, and sco
 
 Run from the repository root after activating `synthran`.
 
+- `synthran` (launch interactive terminal workbench)
+- `python -m synthran init` (initialize controller profile and project workspace)
 - `python -m synthran deps sync --dry-run`
 - `python -m synthran deps sync`
 - `python -m synthran privacy scan --worktree`

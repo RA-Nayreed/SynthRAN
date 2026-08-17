@@ -75,7 +75,7 @@ STATIC_RULES = (
 )
 
 ASSIGNMENT_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_-])(?:[A-Za-z0-9]+[_-])*"
+    r"(?i)(?<![A-Za-z0-9_-])(?!(?:date|time|split|lex|char|line)[_-]token\b)(?:[A-Za-z0-9]+[_-])*"
     r"(password|passwd|secret|token|api[_-]?key|client[_-]?secret)\b"
     r"\s*[:=]\s*([^\s,;#]+)"
 )

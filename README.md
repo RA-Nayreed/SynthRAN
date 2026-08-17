@@ -102,13 +102,45 @@ python -c "import os; assert os.environ.get('CONDA_DEFAULT_ENV') == 'synthran'"
 python -m unittest discover -s tests -v
 ```
 
+### Interactive Terminal Workbench
+
+Launch the prompt-toolkit terminal workbench (no arguments on an interactive TTY):
+
+```sh
+synthran
+```
+
+On first launch in a new project root, the terminal automatically guides you through verified controller profile and workspace initialization. Within the workbench, use slash-commands to inspect state, reconcile infrastructure, and run experiments:
+
+```text
+/status      Render live workspace and experiment status
+/inspect     Inspect detailed desired, observed, and resource state
+/plan        Generate an immutable reconciliation or experiment plan
+/up          Execute the next immediate reconciliation step (requires /mode operate)
+/run         Execute the active experiment
+/stop        Stop running experiment services
+/collect     Collect run artifacts and derived Parquet datasets
+/logs        Display recent operation or service logs
+/down        Safely tear down deployed resources (requires confirmation)
+/mode        Switch between OBSERVE (read-only) and OPERATE (mutating) modes
+/quit        Exit the terminal session
+```
+
+### Scriptable CLI Workflows
+
+Initialize a workspace explicitly from the CLI:
+
+```sh
+python -m synthran init --project PROJECT --profile default
+```
+
 Preview immutable dependency synchronization:
 
 ```sh
 python -m synthran deps sync --dry-run
 ```
 
-After synchronizing dependencies, validate a golden-path inventory without contacting SLICES:
+Validate a golden-path inventory without contacting SLICES:
 
 ```sh
 python -m synthran doctor \
@@ -236,11 +268,11 @@ Controlled research runs additionally persist:
 ## Repository map
 
 ```text
-synthran/                 CLI, validation, adapters, collection, research, and orchestration
+synthran/                 CLI, terminal, app controller, operations, resources, workspace, and research runtime
 contracts/                Versioned preparation, network, telemetry, research, and evidence schemas
 deploy/                   SynthRAN-owned network overlays and out-of-tree IoT source
 tests/                    Offline unit tests and sanitized fixtures
-docs/                     Architecture, development, security and operator guides
+docs/                     Architecture, state management, operations, terminal, and operator guides
 dependencies.lock.yml     Immutable upstream and direct dependency record
 environment.yml           Complete Linux Conda environment, including Ansible
 THIRD_PARTY.md            License and provenance record
@@ -264,7 +296,27 @@ Formal O-RAN A1/E2 control and generative models are not shortcuts around the ba
 
 ## Documentation
 
+### Architecture & State Management
 - [Architecture and responsibility boundaries](docs/architecture.md)
+- [Workspace state, profiles, and durability](docs/workspace-state.md)
+- [Experiment desired-state specification](docs/experiment-desired-state.md)
+- [Observed testbed state and truth ranking](docs/observed-state.md)
+- [First-use controller initialization](docs/initialization.md)
+
+### Interactive Terminal Workbench
+- [Terminal shell and interactive UX](docs/terminal-shell.md)
+- [Slash-command reference and risk classification](docs/terminal-commands.md)
+- [Terminal session management and mode gating](docs/terminal-session.md)
+
+### Operations & Resource Engine
+- [Application controller and status projection](docs/application-controller.md)
+- [Operation control plane and approval gating](docs/operation-control.md)
+- [Structured operation events and stage journaling](docs/operation-events.md)
+- [Capability-based resource selection](docs/resource-selection.md)
+- [Resource-bound operation planning](docs/resource-operation-binding.md)
+- [Composite multi-provider transactions and rollback](docs/resource-transaction.md)
+
+### Experimentation & Operations
 - [Operator guide and safety gates](docs/operator-guide.md)
 - [Integrated IoT-to-5G experiment and controlled research](docs/experiment.md)
 - [Development environment and tests](docs/development.md)
