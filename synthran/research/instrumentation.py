@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import re
 import shlex
+import time
 from typing import Any, Callable, Iterator, Mapping
 
 from synthran.experiment import build_scenario as build_base_scenario
@@ -39,6 +40,87 @@ class ResearchRunResult:
     summary_path: Path
     ready_for_campaign_analysis: bool
     path_acceptance_ready: bool
+
+
+def _edge_sidecar_status(
+    inventory: NetworkInventory,
+    pod: str,
+) -> tuple[int, bool, bool, bool]:
+    payload = base_runtime._remote_json(
+        inventory,
+        "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pod "
+        f"-n {base_runtime.KUBERNETES_NAMESPACE} {shlex.quote(pod)} -o json",
+        label="edge MQTT sidecar status",
+    )
+    status = payload.get("status")
+    if not isinstance(status, Mapping):
+        raise ResearchError("edge MQTT sidecar status is unavailable")
+    container_statuses = status.get("containerStatuses")
+    if not isinstance(container_statuses, list):
+        raise ResearchError("edge MQTT sidecar container status is unavailable")
+    matches = [
+        item
+        for item in container_statuses
+        if isinstance(item, Mapping)
+        and item.get("name") == base_runtime.EDGE_CONTAINER
+    ]
+    if len(matches) != 1:
+        raise ResearchError("edge MQTT sidecar container status is ambiguous")
+    sidecar = matches[0]
+    restart_count = sidecar.get("restartCount")
+    if not isinstance(restart_count, int) or isinstance(restart_count, bool):
+        raise ResearchError("edge MQTT sidecar restart count is unavailable")
+    state = sidecar.get("state")
+    running = isinstance(state, Mapping) and isinstance(state.get("running"), Mapping)
+    container_ready = sidecar.get("ready") is True
+    conditions = status.get("conditions")
+    pod_ready = isinstance(conditions, list) and any(
+        isinstance(item, Mapping)
+        and item.get("type") == "Ready"
+        and item.get("status") == "True"
+        for item in conditions
+    )
+    return restart_count, container_ready, pod_ready, running
+
+
+def _restart_edge_sidecar_and_wait(
+    inventory: NetworkInventory,
+    pod: str,
+    *,
+    restart: Callable[[NetworkInventory, str], None],
+    timeout_seconds: int = 60,
+) -> None:
+    before_restart_count, _, _, _ = _edge_sidecar_status(inventory, pod)
+    restart(inventory, pod)
+
+    deadline = time.monotonic() + timeout_seconds
+    latest = "restart not yet observed"
+    while time.monotonic() < deadline:
+        try:
+            restart_count, container_ready, pod_ready, running = _edge_sidecar_status(
+                inventory,
+                pod,
+            )
+        except Exception as exc:
+            latest = str(exc)
+        else:
+            latest = (
+                f"restartCount={restart_count}, containerReady={container_ready}, "
+                f"podReady={pod_ready}, running={running}"
+            )
+            if (
+                restart_count > before_restart_count
+                and container_ready
+                and pod_ready
+                and running
+            ):
+                return
+        time.sleep(1)
+
+    raise ResearchError(
+        "edge MQTT sidecar restart did not reach a new Ready container instance "
+        f"within {timeout_seconds}s ({latest})"
+    )
 
 
 def _kubectl_exec_command(
@@ -471,6 +553,7 @@ def _runtime_overrides(
 ) -> Iterator[None]:
     original_builder = base_runtime.build_scenario
     original_collector = base_runtime.collect_mqtt
+    original_restart = base_runtime._restart_edge_sidecar
 
     def research_builder(**kwargs: Any) -> Any:
         return build_base_scenario(
@@ -479,10 +562,19 @@ def _runtime_overrides(
             cooja_seed=spec.cooja_seed,
         )
 
+    def research_restart(inventory: NetworkInventory, pod: str) -> None:
+        _restart_edge_sidecar_and_wait(
+            inventory,
+            pod,
+            restart=original_restart,
+        )
+
     base_runtime.build_scenario = research_builder
     base_runtime.collect_mqtt = collector
+    base_runtime._restart_edge_sidecar = research_restart
     try:
         yield
     finally:
         base_runtime.build_scenario = original_builder
         base_runtime.collect_mqtt = original_collector
+        base_runtime._restart_edge_sidecar = original_restart
