@@ -15,6 +15,11 @@ from synthran.workspace.reconciliation import (
 )
 
 
+CONTROL_DIMENSIONS = (
+    ("controller", "controller"),
+    ("project_access", "project access"),
+    ("provider_experiment", "provider experiment"),
+)
 TEARDOWN_DIMENSIONS = (
     "reservation",
     "allocation",
@@ -135,6 +140,18 @@ def _step(lifecycle: str, spec: WorkflowSpec) -> ReconciliationReport:
     )
 
 
+def _control_block(observed: ObservedState, now: datetime) -> str | None:
+    """Require current live authority before any provider-facing application workflow."""
+
+    for dimension, label in CONTROL_DIMENSIONS:
+        item = _current(observed, dimension, now)
+        if item is None:
+            return f"current {label} has not been verified"
+        if item.state != "ready":
+            return f"current {label} is not ready"
+    return None
+
+
 def _teardown_target_block(observed: ObservedState, now: datetime) -> str | None:
     """Require current ownership and exact IDs before destructive planning."""
 
@@ -192,6 +209,9 @@ def plan_workflow(
     current = (now or utc_now()).astimezone(timezone.utc)
     spec = workflow_spec(workflow)
     lifecycle = derive_lifecycle(desired, observed, now=current)
+    control_block = _control_block(observed, current)
+    if control_block is not None:
+        return _block(lifecycle, control_block)
 
     if workflow in {"run-baseline", "run-congestion"}:
         if lifecycle != "PATH_PROVEN" or not _ready(observed, "path", current):
