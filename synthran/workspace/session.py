@@ -6,17 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from synthran.workspace.access import (
-    ProbeResult,
+    AccessRecord,
     Runner,
     ensure_r2lab_gateway_access,
     ensure_slices_project_access,
     subprocess_runner,
 )
+from synthran.workspace.context import resolve_workspace_authority
 from synthran.workspace.model import (
-    AccessRecord,
     ExperimentRecord,
     ExperimentStatus,
     Profile,
@@ -27,14 +27,6 @@ from synthran.workspace.model import (
     validate_safe_name,
 )
 from synthran.workspace.status import save_experiment_status
-from synthran.workspace.store import (
-    find_workspace_root,
-    load_active_experiment_id,
-    load_experiment_record,
-    load_profile,
-    load_workspace,
-    verify_profile_identity,
-)
 
 
 CONTEXT_ALPHABET = r"A-Za-z0-9._:-"
@@ -163,20 +155,20 @@ def open_workspace_session(
     experiment_runner: Runner = subprocess_runner,
     now: datetime | None = None,
 ) -> WorkspaceSession:
-    """Load local state, reuse fresh access evidence, and recheck temporary experiment state."""
+    """Load durable authority, reuse fresh access evidence, and recheck temporary experiment state."""
 
     current = (now or utc_now()).astimezone(timezone.utc)
-    root = find_workspace_root(start, environment=environment)
-    workspace = load_workspace(root)
-    profile = load_profile(workspace.profile, environment=environment)
-    verify_profile_identity(profile)
+    authority = resolve_workspace_authority(start=start, environment=environment)
+    root = authority.root
+    workspace = authority.workspace
+    profile = authority.profile
     if profile.slices_username is None:
         raise WorkspaceError("selected profile has no SLICES username")
 
     slices_record, slices_refreshed = ensure_slices_project_access(
         workspace_root=root,
         username=profile.slices_username,
-        project=workspace.project,
+        project=authority.slices_project,
         force=force_access_refresh,
         runner=slices_runner,
         timeout_seconds=timeout_seconds,
@@ -185,11 +177,11 @@ def open_workspace_session(
     slices_access = AccessState(slices_record, slices_refreshed)
 
     r2lab_access: AccessState | None = None
-    if profile.r2lab_slice is not None and profile.r2lab_identity is not None:
+    if authority.r2lab_slice is not None and authority.r2lab_identity is not None:
         r2lab_record, r2lab_refreshed = ensure_r2lab_gateway_access(
             workspace_root=root,
-            slice_name=profile.r2lab_slice,
-            identity_reference=profile.r2lab_identity,
+            slice_name=authority.r2lab_slice,
+            identity_reference=str(authority.r2lab_identity),
             force=force_access_refresh,
             runner=r2lab_runner,
             timeout_seconds=timeout_seconds,
@@ -197,28 +189,21 @@ def open_workspace_session(
         )
         r2lab_access = AccessState(r2lab_record, r2lab_refreshed)
 
-    active_experiment: ExperimentRecord | None = None
+    active_experiment = authority.active_experiment
     provider_experiment: ProviderExperimentObservation | None = None
-    active_id = load_active_experiment_id(root)
-    if active_id is not None:
-        active_experiment = load_experiment_record(root, active_id)
-        if active_experiment.profile != workspace.profile:
-            raise WorkspaceError("active experiment profile does not match the workspace")
-        if active_experiment.project != workspace.project:
-            raise WorkspaceError("active experiment project does not match the workspace")
-        if active_experiment.slices_experiment is not None:
-            provider_experiment = verify_slices_experiment_binding(
-                experiment=active_experiment.slices_experiment,
-                runner=experiment_runner,
-                timeout_seconds=timeout_seconds,
-                now=current,
-            )
-            _persist_provider_observation(
-                root=root,
-                record=active_experiment,
-                observation=provider_experiment,
-                now=current,
-            )
+    if active_experiment is not None and authority.slices_experiment is not None:
+        provider_experiment = verify_slices_experiment_binding(
+            experiment=authority.slices_experiment,
+            runner=experiment_runner,
+            timeout_seconds=timeout_seconds,
+            now=current,
+        )
+        _persist_provider_observation(
+            root=root,
+            record=active_experiment,
+            observation=provider_experiment,
+            now=current,
+        )
 
     return WorkspaceSession(
         root=root,
