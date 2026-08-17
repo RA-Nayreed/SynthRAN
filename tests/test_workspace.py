@@ -40,7 +40,7 @@ class WorkspaceTests(unittest.TestCase):
             environment = {"SYNTHRAN_CONFIG_HOME": str(root / "config")}
             with patch(
                 "synthran.workspace.store.ssh_identity_fingerprint",
-                return_value="SHA256:test-fingerprint",
+                return_value="SHA256:testfingerprint",
             ):
                 profile = create_or_update_profile(
                     name="duckburg",
@@ -52,7 +52,7 @@ class WorkspaceTests(unittest.TestCase):
                 )
             saved = profile_path("duckburg", environment=environment)
             text = saved.read_text(encoding="utf-8")
-            self.assertEqual(profile.r2lab_identity_fingerprint, "SHA256:test-fingerprint")
+            self.assertEqual(profile.r2lab_identity_fingerprint, "SHA256:testfingerprint")
             self.assertIn(str(identity), text)
             self.assertNotIn("private material", text)
             self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
@@ -300,7 +300,7 @@ class WorkspaceTests(unittest.TestCase):
 
             with patch(
                 "synthran.workspace.access.ssh_identity_fingerprint",
-                return_value="SHA256:identity-one",
+                return_value="SHA256:identityone",
             ):
                 record = verify_r2lab_gateway_access(
                     workspace_root=root,
@@ -313,7 +313,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIn("StrictHostKeyChecking=yes", command)
             self.assertIn("IdentitiesOnly=yes", command)
             self.assertEqual(command[command.index("-i") + 1], str(identity.resolve()))
-            self.assertEqual(record.identity_fingerprint, "SHA256:identity-one")
+            self.assertEqual(record.identity_fingerprint, "SHA256:identityone")
             self.assertTrue(record.is_fresh(NOW + timedelta(hours=1)))
 
     def test_r2lab_cache_is_invalidated_when_identity_changes(self) -> None:
@@ -331,7 +331,7 @@ class WorkspaceTests(unittest.TestCase):
                     scope="faraday.inria.fr",
                     verified_at_utc="2026-08-17T18:00:00Z",
                     refresh_after_utc="2026-08-18T06:00:00Z",
-                    identity_fingerprint="SHA256:old-identity",
+                    identity_fingerprint="SHA256:oldidentity",
                 ),
             )
             seen: list[tuple[str, ...]] = []
@@ -342,7 +342,7 @@ class WorkspaceTests(unittest.TestCase):
 
             with patch(
                 "synthran.workspace.access.ssh_identity_fingerprint",
-                return_value="SHA256:new-identity",
+                return_value="SHA256:newidentity",
             ):
                 record, refreshed = ensure_r2lab_gateway_access(
                     workspace_root=root,
@@ -352,7 +352,7 @@ class WorkspaceTests(unittest.TestCase):
                     now=NOW,
                 )
             self.assertTrue(refreshed)
-            self.assertEqual(record.identity_fingerprint, "SHA256:new-identity")
+            self.assertEqual(record.identity_fingerprint, "SHA256:newidentity")
             self.assertEqual(len(seen), 1)
 
 
