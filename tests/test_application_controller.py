@@ -6,6 +6,12 @@ import tempfile
 import unittest
 
 from synthran.app import ApplicationController
+from synthran.resources import (
+    ProviderResourceSnapshot,
+    ResourceInventory,
+    ResourceState,
+    reviewed_resource_descriptors,
+)
 from synthran.workspace.desired import ExperimentDesiredState
 from synthran.workspace.model import Profile, WorkspaceError, format_utc
 from synthran.workspace.observed import Observation
@@ -29,6 +35,30 @@ def live(
         observed_at_utc=format_utc(NOW),
         fresh_until_utc=format_utc(NOW + timedelta(minutes=10)),
         ownership=ownership,
+    )
+
+
+def current_inventory() -> ResourceInventory:
+    descriptors = reviewed_resource_descriptors()
+    compute = [
+        item.resource_id
+        for item in descriptors
+        if item.provider == "slices" and item.kind == "compute"
+    ]
+    return ResourceInventory(
+        descriptors=descriptors,
+        snapshots=(
+            ProviderResourceSnapshot(
+                provider="slices",
+                observed_at_utc=format_utc(NOW),
+                fresh_until_utc=format_utc(NOW + timedelta(minutes=10)),
+                complete=True,
+                resources=tuple(
+                    ResourceState(item, "available", "unowned")
+                    for item in compute
+                ),
+            ),
+        ),
     )
 
 
@@ -115,12 +145,19 @@ class ApplicationControllerTests(unittest.TestCase):
             status = controller.snapshot(now=NOW)
             self.assertEqual(status.next_steps, ("reserve",))
 
-            plan = controller.begin_operation(now=NOW)
+            inventory = current_inventory()
+            plan = controller.begin_operation(inventory=inventory, now=NOW)
             self.assertEqual(plan.kind, "reserve")
             self.assertEqual(plan.risk, "R2")
+            self.assertTrue(plan.targets)
             controller.approve_operation(plan.operation_id, now=NOW)
-            permit = controller.authorize_operation(plan.operation_id, now=NOW)
+            permit = controller.authorize_operation(
+                plan.operation_id,
+                inventory=inventory,
+                now=NOW,
+            )
             self.assertEqual(permit.operation_id, plan.operation_id)
+            self.assertEqual(permit.targets, plan.targets)
             state = controller.finish_operation(
                 plan.operation_id,
                 success=True,
