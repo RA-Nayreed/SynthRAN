@@ -55,6 +55,20 @@ from synthran.research.sampling import ResearchNetworkSampler
 _RUNTIME_OVERRIDE_LOCK = threading.Lock()
 
 
+def _measurement_runtime_handoff(
+    inventory: NetworkInventory,
+    scenario: Any,
+) -> tuple[str, str]:
+    ue_pod = base_runtime._discover_ue_pod(
+        inventory,
+        scenario.network_run_id,
+    )
+    pdu_address = scenario.pdu_address
+    if not isinstance(pdu_address, str) or not pdu_address:
+        raise ResearchError("measurement runtime does not contain a live UE PDU address")
+    return ue_pod, pdu_address
+
+
 def execute_research_experiment(
     *,
     spec: ResearchExperimentSpec,
@@ -95,17 +109,14 @@ def execute_research_experiment(
         timeout_seconds: int,
     ) -> Any:
         del minimum_per_sensor, timeout_seconds
-        state = reconcile_rfsim_runtime(
-            inventory, network_run_id=scenario.network_run_id
-        )
-        ue_pod = state.ue_pod
+        ue_pod, runtime_pdu = _measurement_runtime_handoff(inventory, scenario)
         _check_research_tools(
             inventory, ue_pod, load_enabled=spec.load.enabled
         )
         route_installed = _install_target_route(
             inventory,
             ue_pod,
-            pdu_address=scenario.pdu_address,
+            pdu_address=runtime_pdu,
             target=spec.probe_target or "",
         )
         sampler: ResearchNetworkSampler | None = None
@@ -142,7 +153,7 @@ def execute_research_experiment(
                 client = _start_load_client(
                     inventory=inventory,
                     ue_pod=ue_pod,
-                    pdu_address=scenario.pdu_address,
+                    pdu_address=runtime_pdu,
                     target=spec.probe_target or "",
                     port=spec.load.server_port,
                     target_bps=per_stream_bps,
@@ -223,7 +234,7 @@ def execute_research_experiment(
                     _remove_target_route(
                         inventory,
                         ue_pod,
-                        pdu_address=scenario.pdu_address,
+                        pdu_address=runtime_pdu,
                         target=spec.probe_target or "",
                     )
                 except Exception as exc:
