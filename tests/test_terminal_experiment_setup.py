@@ -67,7 +67,7 @@ class TerminalExperimentSetupTests(unittest.TestCase):
             slices_experiment="provider-exp-01",
         )
         application.create_experiment.return_value = record
-        prompt = FakePrompt(["", "", "", ""])
+        prompt = FakePrompt(["", "", "", "", ""])
         output = StringIO()
 
         result = ensure_active_experiment(
