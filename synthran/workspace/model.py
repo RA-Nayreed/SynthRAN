@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 import re
 from typing import Mapping
 
@@ -14,13 +13,16 @@ WORKSPACE_SCHEMA = "synthran/workspace/v1alpha1"
 ACCESS_SCHEMA = "synthran/access/v1alpha1"
 EXPERIMENT_SCHEMA = "synthran/experiment-record/v1alpha1"
 EXPERIMENT_STATUS_SCHEMA = "synthran/experiment-status/v1alpha1"
+RUN_RECORD_SCHEMA = "synthran/run-record/v1alpha1"
+OPERATION_RECORD_SCHEMA = "synthran/operation-record/v1alpha1"
 ACTIVE_SCHEMA = "synthran/active-experiment/v1alpha1"
 
 PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 EXPERIMENT_ID_RE = re.compile(r"^sran-[0-9]{8}-[0-9]{3,}$")
-RUN_ID_RE = re.compile(r"^run-[0-9]{3,}(?:-[a-z0-9][a-z0-9-]{0,47})?$")
-OPERATION_ID_RE = re.compile(r"^op-[0-9]{6,}$")
+RUN_ID_RE = re.compile(r"^run-(?P<ordinal>[0-9]{3,})(?:-(?P<label>[a-z0-9][a-z0-9-]{0,47}))?$")
+OPERATION_ID_RE = re.compile(r"^op-(?P<ordinal>[0-9]{6,})$")
+FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]+={0,2}$")
 
 
 class WorkspaceError(RuntimeError):
@@ -86,6 +88,20 @@ def validate_operation_id(value: str) -> str:
     return value
 
 
+def parse_run_id(value: str) -> tuple[int, str | None]:
+    match = RUN_ID_RE.fullmatch(value)
+    if match is None:
+        raise WorkspaceError("run ID must use run-NNN or run-NNN-label")
+    return int(match.group("ordinal")), match.group("label")
+
+
+def parse_operation_id(value: str) -> int:
+    match = OPERATION_ID_RE.fullmatch(value)
+    if match is None:
+        raise WorkspaceError("operation ID must use op-NNNNNN")
+    return int(match.group("ordinal"))
+
+
 @dataclass(frozen=True)
 class Profile:
     """Durable controller identity references; private key material is never stored."""
@@ -113,6 +129,11 @@ class Profile:
             raise WorkspaceError(
                 "R2Lab identity path and fingerprint must either both be set or both be absent"
             )
+        if (
+            self.r2lab_identity_fingerprint is not None
+            and FINGERPRINT_RE.fullmatch(self.r2lab_identity_fingerprint) is None
+        ):
+            raise WorkspaceError("R2Lab identity fingerprint is malformed")
 
 
 @dataclass(frozen=True)
@@ -151,6 +172,7 @@ class AccessRecord:
     verified_at_utc: str
     refresh_after_utc: str
     access_until_utc: str | None = None
+    identity_fingerprint: str | None = None
     detail: str = "verified"
     schema: str = ACCESS_SCHEMA
 
@@ -171,6 +193,11 @@ class AccessRecord:
                 raise WorkspaceError("access_until_utc must be after verification")
             if refresh > until:
                 raise WorkspaceError("access refresh boundary cannot exceed provider expiry")
+        if (
+            self.identity_fingerprint is not None
+            and FINGERPRINT_RE.fullmatch(self.identity_fingerprint) is None
+        ):
+            raise WorkspaceError("access identity fingerprint is malformed")
 
     def is_fresh(self, now: datetime | None = None) -> bool:
         current = (now or utc_now()).astimezone(timezone.utc)
@@ -196,6 +223,7 @@ class AccessRecord:
             "verified_at_utc": self.verified_at_utc,
             "refresh_after_utc": self.refresh_after_utc,
             "access_until_utc": self.access_until_utc,
+            "identity_fingerprint": self.identity_fingerprint,
             "detail": self.detail,
         }
 
@@ -213,6 +241,9 @@ class AccessRecord:
         access_until = value.get("access_until_utc")
         if access_until is not None and not isinstance(access_until, str):
             raise WorkspaceError("access record expiry is malformed")
+        identity_fingerprint = value.get("identity_fingerprint")
+        if identity_fingerprint is not None and not isinstance(identity_fingerprint, str):
+            raise WorkspaceError("access identity fingerprint is malformed")
         detail = value.get("detail", "verified")
         if not isinstance(detail, str):
             raise WorkspaceError("access record detail is malformed")
@@ -224,6 +255,7 @@ class AccessRecord:
             verified_at_utc=str(value["verified_at_utc"]),
             refresh_after_utc=str(value["refresh_after_utc"]),
             access_until_utc=access_until,
+            identity_fingerprint=identity_fingerprint,
             detail=detail,
         )
 
@@ -313,3 +345,104 @@ class ExperimentStatus:
             "provider_state": self.provider_state,
             "notes": list(self.notes),
         }
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """Durable identity metadata for one measurement run within an experiment."""
+
+    experiment_id: str
+    run_id: str
+    ordinal: int
+    created_at_utc: str
+    label: str | None = None
+    schema: str = RUN_RECORD_SCHEMA
+
+    def __post_init__(self) -> None:
+        validate_experiment_id(self.experiment_id)
+        parsed_ordinal, parsed_label = parse_run_id(self.run_id)
+        parse_utc(self.created_at_utc, "run created_at_utc")
+        if self.schema != RUN_RECORD_SCHEMA:
+            raise WorkspaceError("run record schema is unsupported")
+        if self.ordinal != parsed_ordinal:
+            raise WorkspaceError("run ordinal does not match run ID")
+        if self.label != parsed_label:
+            raise WorkspaceError("run label does not match run ID")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "experiment_id": self.experiment_id,
+            "run_id": self.run_id,
+            "ordinal": self.ordinal,
+            "label": self.label,
+            "created_at_utc": self.created_at_utc,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "RunRecord":
+        if not isinstance(value.get("ordinal"), int):
+            raise WorkspaceError("run record ordinal is malformed")
+        label = value.get("label")
+        if label is not None and not isinstance(label, str):
+            raise WorkspaceError("run record label is malformed")
+        return cls(
+            schema=str(value.get("schema", "")),
+            experiment_id=str(value.get("experiment_id", "")),
+            run_id=str(value.get("run_id", "")),
+            ordinal=int(value["ordinal"]),
+            label=label,
+            created_at_utc=str(value.get("created_at_utc", "")),
+        )
+
+
+@dataclass(frozen=True)
+class OperationRecord:
+    """Durable identity metadata for one workspace control operation."""
+
+    operation_id: str
+    ordinal: int
+    kind: str
+    created_at_utc: str
+    experiment_id: str | None = None
+    schema: str = OPERATION_RECORD_SCHEMA
+
+    def __post_init__(self) -> None:
+        parsed_ordinal = parse_operation_id(self.operation_id)
+        parse_utc(self.created_at_utc, "operation created_at_utc")
+        if self.schema != OPERATION_RECORD_SCHEMA:
+            raise WorkspaceError("operation record schema is unsupported")
+        if self.ordinal != parsed_ordinal:
+            raise WorkspaceError("operation ordinal does not match operation ID")
+        if not self.kind or len(self.kind) > 64 or any(
+            not (character.isalnum() or character in "._-") for character in self.kind
+        ):
+            raise WorkspaceError("operation kind contains unsafe characters")
+        if self.experiment_id is not None:
+            validate_experiment_id(self.experiment_id)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "operation_id": self.operation_id,
+            "ordinal": self.ordinal,
+            "kind": self.kind,
+            "experiment_id": self.experiment_id,
+            "created_at_utc": self.created_at_utc,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "OperationRecord":
+        if not isinstance(value.get("ordinal"), int):
+            raise WorkspaceError("operation record ordinal is malformed")
+        experiment_id = value.get("experiment_id")
+        if experiment_id is not None and not isinstance(experiment_id, str):
+            raise WorkspaceError("operation record experiment ID is malformed")
+        return cls(
+            schema=str(value.get("schema", "")),
+            operation_id=str(value.get("operation_id", "")),
+            ordinal=int(value["ordinal"]),
+            kind=str(value.get("kind", "")),
+            experiment_id=experiment_id,
+            created_at_utc=str(value.get("created_at_utc", "")),
+        )
