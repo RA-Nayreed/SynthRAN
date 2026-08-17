@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
 
 from synthran.app.controller import ApplicationController, RESOURCE_BOUND_MUTATIONS
 from synthran.operations.model import OperationPlan
@@ -100,6 +100,10 @@ class TerminalCommandRouter:
         )
         return DispatchResult(self._plan_lines(plan), operation_id=plan.operation_id)
 
+    def _plan_workflow(self, workflow: str) -> DispatchResult:
+        plan = self.application.begin_workflow_operation(workflow)
+        return DispatchResult(self._plan_lines(plan), operation_id=plan.operation_id)
+
     def _plan_up(self) -> DispatchResult:
         snapshot = self.application.snapshot()
         if snapshot.blocks:
@@ -176,14 +180,18 @@ class TerminalCommandRouter:
                 return self._plan_exact("verify-path")
             if request.name == "/recover":
                 return self._plan_recovery()
-
-            # These commands are intentionally registered before their provider/domain
-            # executors are connected. Do not tunnel them into the legacy CLI: doing so
-            # would bypass the application/operation authority boundary.
-            if request.name in {"/down", "/run", "/stop", "/collect", "/logs"}:
-                return self._error(
-                    f"{request.name} is registered but its application workflow executor is not connected yet; no provider action was taken"
-                )
+            if request.name == "/down":
+                return self._plan_workflow("down")
+            if request.name == "/run":
+                assert request.subcommand is not None
+                return self._plan_workflow(f"run-{request.subcommand}")
+            if request.name == "/stop":
+                return self._plan_workflow("stop")
+            if request.name == "/collect":
+                return self._plan_workflow("collect")
+            if request.name == "/logs":
+                assert request.subcommand is not None
+                return self._plan_workflow(f"logs-{request.subcommand}")
         except WorkspaceError as exc:
             return self._error(str(exc))
         raise AssertionError("unreachable terminal dispatch")

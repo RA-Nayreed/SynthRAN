@@ -40,7 +40,7 @@ from synthran.workspace.observed import (
     OBSERVED_DIMENSIONS,
     ObservedState,
 )
-from synthran.workspace.reconciliation import plan_reconciliation
+from synthran.workspace.reconciliation import ReconciliationReport, plan_reconciliation
 from synthran.workspace.registry import WorkspaceRegistry
 
 
@@ -96,12 +96,15 @@ class OperationController:
         step_name: str | None = None,
         targets: tuple[str, ...] = (),
         bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
+        policy_report: ReconciliationReport | None = None,
         now: datetime | None = None,
     ) -> OperationPlan:
-        """Create one immutable operation from the current reconciliation result."""
+        """Create one immutable operation from current reconciliation or application policy."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
-        reconciliation = plan_reconciliation(desired, observed, now=current)
+        reconciliation = policy_report or plan_reconciliation(
+            desired, observed, now=current
+        )
         step = select_reconciliation_step(reconciliation, step_name)
         operation_id = self.registry.issue_operation_id(
             kind=step.name,
@@ -199,9 +202,10 @@ class OperationController:
         desired: ExperimentDesiredState,
         observed: ObservedState,
         bound_inputs: Mapping[str, Mapping[str, object]] | None = None,
+        policy_report: ReconciliationReport | None = None,
         now: datetime | None = None,
     ) -> ExecutionPermit:
-        """Reconcile again, reject drift, and acquire exclusive mutation authority."""
+        """Re-evaluate policy, reject drift, and acquire exclusive mutation authority."""
 
         current = (now or utc_now()).astimezone(timezone.utc)
         plan = load_plan(self.root, operation_id)
@@ -209,7 +213,9 @@ class OperationController:
         expected_status = "approved" if plan.approval_required else "planned"
         if state.status != expected_status:
             raise WorkspaceError("operation is not ready for authorization")
-        reconciliation = plan_reconciliation(desired, observed, now=current)
+        reconciliation = policy_report or plan_reconciliation(
+            desired, observed, now=current
+        )
         verify_plan_inputs(
             plan,
             desired=desired,
