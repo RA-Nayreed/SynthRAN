@@ -50,6 +50,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "network")
         self.assertEqual(args.network_command, "verify")
 
+    def test_parser_contains_r2lab_commands(self) -> None:
+        parser = _parser()
+        args = parser.parse_args(
+            [
+                "r2lab",
+                "plan",
+                "--slice",
+                "oulu_user",
+                "--radio",
+                "n300",
+                "--ue",
+                "qhat01",
+                "--run-id",
+                "r2lab-test-01",
+            ]
+        )
+        self.assertEqual(args.command, "r2lab")
+        self.assertEqual(args.r2lab_command, "plan")
+        self.assertEqual(args.radio, "n300")
+        self.assertEqual(args.ue, "qhat01")
+
 
 if __name__ == "__main__":
     unittest.main()
