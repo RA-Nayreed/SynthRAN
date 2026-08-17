@@ -21,11 +21,14 @@ from synthran.workspace.model import (
     WorkspaceError,
     format_utc,
     utc_now,
+    validate_experiment_id,
+    validate_operation_id,
     validate_profile_name,
     validate_safe_name,
 )
 from synthran.workspace.store import (
     DEFAULT_PROFILE_NAME,
+    access_path,
     initialize_workspace,
     load_profile,
     normalize_identity_reference,
@@ -37,6 +40,9 @@ from synthran.workspace.store import (
     workspace_directory,
     workspace_file,
 )
+
+
+MANAGED_WORKSPACE_DIRECTORIES = ("access", "experiments", "operations")
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,8 @@ class InitializationPlan:
     slices_access: AccessRecord
     r2lab_access: AccessRecord | None
     profile_created: bool
+    workspace_preexisting: bool = False
+    preexisting_managed_directories: tuple[str, ...] = ()
 
 
 def _profile_from_request(
@@ -146,6 +154,70 @@ def _profile_from_request(
     )
 
 
+def _looks_like_new_experiment(name: str) -> bool:
+    try:
+        validate_experiment_id(name)
+    except WorkspaceError:
+        return False
+    return True
+
+
+def _looks_like_new_operation(name: str) -> bool:
+    try:
+        validate_operation_id(name)
+    except WorkspaceError:
+        return False
+    return True
+
+
+def _inspect_workspace_target(root: Path) -> tuple[bool, tuple[str, ...]]:
+    """Allow legacy run artifacts but reject ambiguous partial new-workspace state."""
+
+    directory = workspace_directory(root)
+    if workspace_file(root).exists():
+        raise WorkspaceError("SynthRAN workspace is already initialized in this directory")
+    if not directory.exists():
+        return False, ()
+    if not directory.is_dir():
+        raise WorkspaceError("existing .synthran path is not a directory")
+
+    for name in ("registry.sqlite3", "active.json"):
+        if (directory / name).exists():
+            raise WorkspaceError(
+                "existing .synthran contains partial persistent-workspace state; recovery is required before initialization"
+            )
+
+    access = directory / "access"
+    for provider in ("slices", "r2lab"):
+        if (access / f"{provider}.json").exists():
+            raise WorkspaceError(
+                "existing .synthran contains persistent access state without workspace.toml"
+            )
+
+    experiments = directory / "experiments"
+    if experiments.is_dir() and any(
+        child.is_dir() and _looks_like_new_experiment(child.name)
+        for child in experiments.iterdir()
+    ):
+        raise WorkspaceError(
+            "existing .synthran contains new-format experiment state without workspace.toml"
+        )
+
+    operations = directory / "operations"
+    if operations.is_dir() and any(
+        child.is_dir() and _looks_like_new_operation(child.name)
+        for child in operations.iterdir()
+    ):
+        raise WorkspaceError(
+            "existing .synthran contains new-format operation state without workspace.toml"
+        )
+
+    preexisting = tuple(
+        name for name in MANAGED_WORKSPACE_DIRECTORIES if (directory / name).is_dir()
+    )
+    return True, preexisting
+
+
 def plan_initialization(
     request: InitializationRequest,
     *,
@@ -158,8 +230,7 @@ def plan_initialization(
     """Verify all remote access read-only before writing profile or workspace state."""
 
     root = request.root.expanduser().resolve()
-    if workspace_file(root).exists() or workspace_directory(root).exists():
-        raise WorkspaceError("SynthRAN workspace state already exists in this directory")
+    workspace_preexisting, preexisting_managed = _inspect_workspace_target(root)
     current = (now or utc_now()).astimezone(timezone.utc)
     profile, profile_created = _profile_from_request(
         request, environment=environment, now=current
@@ -197,7 +268,37 @@ def plan_initialization(
         slices_access=slices_access,
         r2lab_access=r2lab_access,
         profile_created=profile_created,
+        workspace_preexisting=workspace_preexisting,
+        preexisting_managed_directories=preexisting_managed,
     )
+
+
+def _rollback_workspace_persistence(
+    root: Path,
+    plan: InitializationPlan,
+) -> None:
+    directory = workspace_directory(root)
+    if not plan.workspace_preexisting:
+        if directory.exists():
+            shutil.rmtree(directory)
+        return
+
+    for provider in ("slices", "r2lab"):
+        path = access_path(root, provider)
+        if path.is_file():
+            path.unlink()
+    path = workspace_file(root)
+    if path.is_file():
+        path.unlink()
+
+    preexisting = set(plan.preexisting_managed_directories)
+    for name in reversed(MANAGED_WORKSPACE_DIRECTORIES):
+        child = directory / name
+        if name not in preexisting and child.is_dir():
+            try:
+                child.rmdir()
+            except OSError:
+                pass
 
 
 def persist_initialization(
@@ -211,8 +312,16 @@ def persist_initialization(
     request = plan.request
     root = request.root.expanduser().resolve()
     workspace_path = workspace_directory(root)
-    if workspace_path.exists():
+
+    if plan.workspace_preexisting:
+        current_preexisting, managed = _inspect_workspace_target(root)
+        if not current_preexisting:
+            raise WorkspaceError("existing .synthran directory disappeared after initialization planning")
+        if managed != plan.preexisting_managed_directories:
+            raise WorkspaceError("existing .synthran layout changed after initialization planning")
+    elif workspace_path.exists():
         raise WorkspaceError("SynthRAN workspace state appeared after initialization planning")
+
     profile_file = profile_path(request.profile_name, environment=environment)
     if plan.profile_created and profile_file.exists():
         raise WorkspaceError("SynthRAN profile appeared after initialization planning")
@@ -243,8 +352,7 @@ def persist_initialization(
         if plan.r2lab_access is not None:
             save_access_record(root, plan.r2lab_access)
     except Exception:
-        if workspace_path.exists():
-            shutil.rmtree(workspace_path)
+        _rollback_workspace_persistence(root, plan)
         if profile_written and profile_file.exists():
             profile_file.unlink()
         raise

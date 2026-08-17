@@ -10,6 +10,40 @@ synthran network verify ...  # scripted CLI
 
 The executable is a thin launcher. `synthran/cli.py` remains the single registration and implementation source for the scripted command tree; the launcher only chooses interactive versus scripted mode from whether argv is empty.
 
+## First launch
+
+If no persistent `workspace.toml` exists, the terminal starts a verified initialization flow instead of exiting immediately.
+
+The flow asks only for stable controller/workspace identity:
+
+- controller profile name;
+- SLICES project;
+- SLICES username when creating a new profile;
+- optional R2Lab slice and exact SSH identity when R2Lab is enabled.
+
+An existing profile is reused without asking the operator to re-enter its identity fields. `SYNTHRAN_SLICES_PROJECT` is used only as a prompt default; the initialization service still verifies the selected live project read-only before local persistence.
+
+Initialization never reserves, allocates, powers, deploys, or changes provider resources. It verifies access first and persists local workspace/profile/access state only after the read-only checks succeed.
+
+### Existing live-run artifacts
+
+A checkout may already contain legacy experiment evidence such as:
+
+```text
+.synthran/preparations/
+.synthran/runs/
+.synthran/experiments/iot-acceptance-*/
+.synthran/experiments/pilot-*/
+```
+
+These paths are compatible with first-launch adoption. Initialization creates the persistent workspace metadata alongside them and does not move, rename, rewrite, or delete the accepted legacy evidence.
+
+New-format experiment folders use `sran-YYYYMMDD-NNN`, so the registry can coexist with legacy experiment run IDs and ignores unrelated directory names when rebuilding indexes.
+
+Initialization fails closed when `.synthran` contains ambiguous partial new-workspace state without `workspace.toml`, including `registry.sqlite3`, `active.json`, persistent access records, `sran-*` experiment directories, or `op-*` operation directories. That state must be recovered rather than guessed.
+
+Rollback is ownership-safe. When adopting an existing `.synthran`, a failed initialization removes only profile/workspace/access objects created by that attempt; pre-existing run, preparation, experiment, evidence, and dataset artifacts remain untouched.
+
 ## Prompt model
 
 The shell uses `prompt_toolkit` for input, completion, history, and the bottom toolbar. It does not own provider state or lifecycle authority.

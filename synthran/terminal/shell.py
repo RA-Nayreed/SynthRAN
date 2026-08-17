@@ -13,9 +13,11 @@ from prompt_toolkit.history import InMemoryHistory
 
 from synthran.app.controller import ApplicationController
 from synthran.terminal.commands import COMMANDS, command_spec
+from synthran.terminal.initialize import initialization_root, initialize_from_terminal
 from synthran.terminal.router import DispatchResult, TerminalCommandRouter
 from synthran.terminal.session import TerminalLine, TerminalSession
 from synthran.workspace.model import WorkspaceError
+from synthran.workspace.store import workspace_file
 
 
 class SynthRANCompleter(Completer):
@@ -72,6 +74,23 @@ def _prompt(session: TerminalSession) -> str:
     return f"synthran[{session.mode.upper()}]> "
 
 
+def _open_application(
+    *,
+    start: Path | None,
+    prompt: PromptSession[str],
+    output: TextIO,
+) -> ApplicationController:
+    target = initialization_root(start)
+    try:
+        return ApplicationController(start=start or Path.cwd())
+    except WorkspaceError:
+        if workspace_file(target).is_file():
+            raise
+
+    initialize_from_terminal(root=target, prompt=prompt, output=output)
+    return ApplicationController(start=target)
+
+
 def run_terminal(
     *,
     start: Path | None = None,
@@ -84,12 +103,17 @@ def run_terminal(
     """Run the inline terminal transcript until `/quit` or EOF."""
 
     stream = output or sys.stdout
+    prompt = prompt_session or create_prompt_session()
     try:
-        app = application or ApplicationController(start=start or Path.cwd())
+        app = application or _open_application(
+            start=start,
+            prompt=prompt,
+            output=stream,
+        )
     except WorkspaceError as exc:
         print(f"error: {exc}", file=stream, flush=True)
         print(
-            "Initialize or enter a SynthRAN workspace before starting the interactive terminal.",
+            "Workspace initialization did not complete; no provider resource mutation was attempted.",
             file=stream,
             flush=True,
         )
@@ -97,7 +121,6 @@ def run_terminal(
 
     command_router = router or TerminalCommandRouter(app)
     terminal = TerminalSession(app)
-    prompt = prompt_session or create_prompt_session()
 
     if clear_screen is None:
         from prompt_toolkit.shortcuts import clear
