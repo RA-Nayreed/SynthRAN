@@ -90,7 +90,7 @@ class WorkspaceSessionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "synthran.workspace.session.verify_profile_identity",
+                    "synthran.workspace.context.verify_profile_identity",
                     return_value="SHA256:test",
                 ),
                 patch(
@@ -152,7 +152,7 @@ class WorkspaceSessionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "synthran.workspace.session.verify_profile_identity",
+                    "synthran.workspace.context.verify_profile_identity",
                     return_value="SHA256:test",
                 ),
                 patch(
@@ -194,7 +194,7 @@ class WorkspaceSessionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "synthran.workspace.session.verify_profile_identity",
+                    "synthran.workspace.context.verify_profile_identity",
                     return_value="SHA256:test",
                 ),
                 patch(
