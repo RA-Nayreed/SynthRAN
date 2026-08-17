@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "synthran/research/v1alpha1",
+  "title": "SynthRAN controlled research contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/experiment"},
+    {"$ref": "#/$defs/campaign"},
+    {"$ref": "#/$defs/capacity"},
+    {"$ref": "#/$defs/measurementWindow"},
+    {"$ref": "#/$defs/probe"},
+    {"$ref": "#/$defs/networkSample"},
+    {"$ref": "#/$defs/loadResult"},
+    {"$ref": "#/$defs/summary"}
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "conditionName": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,31}[a-z0-9])?$"
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warmup_seconds",
+        "duration_seconds",
+        "sample_interval_seconds",
+        "probe_interval_seconds"
+      ],
+      "properties": {
+        "warmup_seconds": {"type": "integer", "minimum": 0, "maximum": 900},
+        "duration_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        "sample_interval_seconds": {"type": "number", "minimum": 0.2, "maximum": 60},
+        "probe_interval_seconds": {"type": "number", "minimum": 0.2, "maximum": 60}
+      }
+    },
+    "load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "protocol",
+        "target_bps",
+        "target_fraction",
+        "reference_capacity_bps",
+        "resolved_target_bps",
+        "parallel_flows",
+        "server_port"
+      ],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "protocol": {"const": "udp"},
+        "target_bps": {"type": ["integer", "null"], "minimum": 1},
+        "target_fraction": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1},
+        "reference_capacity_bps": {"type": ["integer", "null"], "minimum": 1},
+        "resolved_target_bps": {"type": ["integer", "null"], "minimum": 1},
+        "parallel_flows": {"type": "integer", "minimum": 1, "maximum": 32},
+        "server_port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+      }
+    },
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "campaign_id",
+        "run_id",
+        "network_run_id",
+        "condition",
+        "cooja_seed",
+        "sensor_period_seconds",
+        "sensor_count",
+        "measurement",
+        "load",
+        "probe_target",
+        "expected_events_per_sensor",
+        "expected_events_total"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-experiment/v1alpha1"},
+        "campaign_id": {"$ref": "#/$defs/identifier"},
+        "run_id": {"$ref": "#/$defs/identifier"},
+        "network_run_id": {"$ref": "#/$defs/identifier"},
+        "condition": {"$ref": "#/$defs/conditionName"},
+        "cooja_seed": {"type": "integer", "minimum": 0},
+        "sensor_period_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "sensor_count": {"const": 10},
+        "measurement": {"$ref": "#/$defs/measurement"},
+        "load": {"$ref": "#/$defs/load"},
+        "probe_target": {"type": ["string", "null"]},
+        "expected_events_per_sensor": {"type": "integer", "minimum": 1},
+        "expected_events_total": {"type": "integer", "minimum": 10}
+      }
+    },
+    "campaignCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "load_fraction", "target_bps"],
+      "properties": {
+        "name": {"$ref": "#/$defs/conditionName"},
+        "load_fraction": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1},
+        "target_bps": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "campaignRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "block", "seed", "condition", "run_id"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 1},
+        "block": {"type": "integer", "minimum": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "condition": {"$ref": "#/$defs/conditionName"},
+        "run_id": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "campaign_id",
+        "network_run_id",
+        "campaign_seed",
+        "seeds",
+        "conditions",
+        "runs"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-campaign/v1alpha1"},
+        "campaign_id": {"$ref": "#/$defs/identifier"},
+        "network_run_id": {"$ref": "#/$defs/identifier"},
+        "campaign_seed": {"type": "integer", "minimum": 0},
+        "seeds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/campaignCondition"}
+        },
+        "runs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/campaignRun"}
+        }
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "network_run_id",
+        "ue_pod",
+        "ue_interface",
+        "pdu_address",
+        "target",
+        "duration_seconds",
+        "reference_capacity_bps",
+        "measured_at_utc"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-capacity/v1alpha1"},
+        "network_run_id": {"$ref": "#/$defs/identifier"},
+        "ue_pod": {"type": "string"},
+        "ue_interface": {"const": "tun_srsue1"},
+        "pdu_address": {"type": "string"},
+        "target": {"type": "string"},
+        "duration_seconds": {"type": "integer", "minimum": 5, "maximum": 120},
+        "reference_capacity_bps": {"type": "integer", "minimum": 1},
+        "measured_at_utc": {"type": "string"}
+      }
+    },
+    "measurementWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "run_id",
+        "warmup_seconds",
+        "requested_duration_seconds",
+        "started_at_utc",
+        "ended_at_utc"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-measurement-window/v1alpha1"},
+        "run_id": {"$ref": "#/$defs/identifier"},
+        "warmup_seconds": {"type": "integer", "minimum": 0},
+        "requested_duration_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        "started_at_utc": {"type": "string"},
+        "ended_at_utc": {"type": "string"}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sequence",
+        "elapsed_seconds",
+        "observed_at_utc",
+        "rtt_ms",
+        "timeout"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-probe/v1alpha1"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "elapsed_seconds": {"type": "number", "minimum": 0},
+        "observed_at_utc": {"type": ["string", "null"]},
+        "rtt_ms": {"type": ["number", "null"], "minimum": 0},
+        "timeout": {"type": "boolean"}
+      }
+    },
+    "networkSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "observed_at_utc",
+        "elapsed_seconds",
+        "ue_interface",
+        "upf_interface",
+        "ue_rx_bytes",
+        "ue_tx_bytes",
+        "ue_rx_packets",
+        "ue_tx_packets",
+        "ue_rx_dropped",
+        "ue_tx_dropped",
+        "upf_rx_bytes",
+        "upf_tx_bytes",
+        "upf_rx_packets",
+        "upf_tx_packets",
+        "upf_rx_dropped",
+        "upf_tx_dropped",
+        "ingress_accepted_connections",
+        "ingress_upstream_bytes",
+        "ingress_downstream_bytes"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-network-sample/v1alpha1"},
+        "observed_at_utc": {"type": "string"},
+        "elapsed_seconds": {"type": "number", "minimum": 0},
+        "ue_interface": {"const": "tun_srsue1"},
+        "upf_interface": {"const": "ogstun"},
+        "ue_rx_bytes": {"type": "integer", "minimum": 0},
+        "ue_tx_bytes": {"type": "integer", "minimum": 0},
+        "ue_rx_packets": {"type": "integer", "minimum": 0},
+        "ue_tx_packets": {"type": "integer", "minimum": 0},
+        "ue_rx_dropped": {"type": "integer", "minimum": 0},
+        "ue_tx_dropped": {"type": "integer", "minimum": 0},
+        "upf_rx_bytes": {"type": "integer", "minimum": 0},
+        "upf_tx_bytes": {"type": "integer", "minimum": 0},
+        "upf_rx_packets": {"type": "integer", "minimum": 0},
+        "upf_tx_packets": {"type": "integer", "minimum": 0},
+        "upf_rx_dropped": {"type": "integer", "minimum": 0},
+        "upf_tx_dropped": {"type": "integer", "minimum": 0},
+        "ingress_accepted_connections": {"type": "integer", "minimum": 0},
+        "ingress_upstream_bytes": {"type": "integer", "minimum": 0},
+        "ingress_downstream_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "loadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "protocol", "target_bps", "bits_per_second"],
+      "properties": {
+        "schema": {"const": "synthran/research-load-result/v1alpha1"},
+        "protocol": {"const": "udp"},
+        "target_bps": {"type": "integer", "minimum": 1},
+        "bits_per_second": {"type": "number", "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema",
+        "campaign_id",
+        "run_id",
+        "network_run_id",
+        "condition",
+        "cooja_seed",
+        "load",
+        "telemetry",
+        "probe",
+        "network",
+        "load_result",
+        "validity",
+        "ready_for_campaign_analysis",
+        "path_acceptance_ready",
+        "instrumentation_errors",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "schema": {"const": "synthran/research-summary/v1alpha1"},
+        "campaign_id": {"$ref": "#/$defs/identifier"},
+        "run_id": {"$ref": "#/$defs/identifier"},
+        "network_run_id": {"$ref": "#/$defs/identifier"},
+        "condition": {"$ref": "#/$defs/conditionName"},
+        "cooja_seed": {"type": "integer", "minimum": 0},
+        "load": {"$ref": "#/$defs/load"},
+        "telemetry": {"type": "object"},
+        "probe": {"type": "object"},
+        "network": {"type": "object"},
+        "load_result": {"type": "object"},
+        "validity": {
+          "type": "object",
+          "additionalProperties": {"type": "boolean"}
+        },
+        "ready_for_campaign_analysis": {"type": "boolean"},
+        "path_acceptance_ready": {"type": "boolean"},
+        "instrumentation_errors": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "artifact_sha256": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

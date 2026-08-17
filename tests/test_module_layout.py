@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from pathlib import Path
+import unittest
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE = REPOSITORY_ROOT / "synthran"
+
+
+class ModuleLayoutTests(unittest.TestCase):
+    def test_domain_code_is_grouped_in_packages(self) -> None:
+        self.assertTrue((SOURCE / "experiment" / "__init__.py").is_file())
+        self.assertTrue((SOURCE / "experiment" / "resources.py").is_file())
+        self.assertTrue((SOURCE / "experiment" / "runtime.py").is_file())
+        self.assertTrue((SOURCE / "network" / "__init__.py").is_file())
+        self.assertTrue((SOURCE / "network" / "runtime.py").is_file())
+        self.assertTrue((SOURCE / "network" / "resources.py").is_file())
+        self.assertTrue((SOURCE / "network" / "rfsim.py").is_file())
+        self.assertTrue((SOURCE / "research" / "__init__.py").is_file())
+        self.assertTrue((SOURCE / "research" / "collector.py").is_file())
+        self.assertTrue((SOURCE / "research" / "instrumentation.py").is_file())
+        self.assertTrue((SOURCE / "research" / "iperf.py").is_file())
+        self.assertTrue((SOURCE / "research" / "runtime.py").is_file())
+        self.assertTrue((SOURCE / "research" / "sampling.py").is_file())
+
+    def test_flat_duplicate_modules_do_not_return(self) -> None:
+        removed = {
+            "entrypoint.py",
+            "experiment.py",
+            "experiment_cli.py",
+            "experiment_resources.py",
+            "experiment_runtime.py",
+            "network_runtime.py",
+            "resource_runtime.py",
+            "rfsim_runtime.py",
+            "research.py",
+            "research_collector.py",
+            "research_instrumentation.py",
+            "research_iperf.py",
+            "research_runtime.py",
+            "research_sampling.py",
+        }
+        present = {path.name for path in SOURCE.iterdir() if path.is_file()}
+        self.assertTrue(removed.isdisjoint(present), sorted(removed & present))
+
+    def test_cli_is_the_only_command_source(self) -> None:
+        self.assertTrue((SOURCE / "cli.py").is_file())
+        self.assertFalse((SOURCE / "entrypoint.py").exists())
+        self.assertFalse((SOURCE / "experiment" / "commands.py").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

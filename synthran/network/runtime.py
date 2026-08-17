@@ -38,6 +38,7 @@ from synthran.slices_controller import (
     fingerprint as context_fingerprint,
     verify_slices_controller,
 )
+from synthran.upstream_overlay import UpstreamOverlayError, apply_network_overlay
 
 
 DEPLOYMENT_SCHEMA = "synthran/network-deployment/v1alpha1"
@@ -365,10 +366,8 @@ def execute_network_deployment(
         streaming: bool = False,
     ) -> CommandResult:
         log_parts.append(f"=== {name} ===")
-
         report(f"{name}: running...")
         started = monotonic()
-
         try:
             if streaming:
                 if runner is run_command:
@@ -404,19 +403,15 @@ def execute_network_deployment(
             raise
 
         elapsed = monotonic() - started
-
         log_parts.append(result.stdout)
         log_parts.append(result.stderr)
-
         if result.returncode != 0:
             report(f"{name}: FAILED ({elapsed:.1f}s)")
             write_manifest("failed", name)
             finish_log()
             raise NetworkRuntimeError(
-                f"deployment stage {name} failed; "
-                "see the sanitized run log"
+                f"deployment stage {name} failed; see the sanitized run log"
             )
-
         report(f"{name}: OK ({elapsed:.1f}s)")
         return result
 
@@ -457,21 +452,19 @@ def execute_network_deployment(
         write_manifest("failed", "prepare-overlay")
         finish_log()
         raise NetworkRuntimeError("unable to prepare the isolated deployment overlay") from exc
-    boundary_patch = overlay_directory / "patches" / "golden-path-boundary.patch"
-    if not boundary_patch.is_file():
-        write_manifest("failed", "prepare-overlay")
+
+    report("upstream-overlay: running...")
+    try:
+        apply_network_overlay(worktree)
+    except UpstreamOverlayError as exc:
+        write_manifest("failed", "upstream-overlay")
+        log_parts.append(f"=== upstream-overlay ===\n{exc}")
         finish_log()
-        raise NetworkRuntimeError("golden-path upstream boundary patch is missing")
-    stage(
-        "upstream-boundary-check",
-        ("git", "apply", "--check", str(boundary_patch)),
-        worktree,
-    )
-    stage(
-        "upstream-boundary-apply",
-        ("git", "apply", str(boundary_patch)),
-        worktree,
-    )
+        report("upstream-overlay: FAILED")
+        raise NetworkRuntimeError(str(exc)) from exc
+    log_parts.append("=== upstream-overlay ===\nexact pinned-source transformations applied")
+    report("upstream-overlay: OK")
+
     collections = run_directory / "collections"
     environment = dict(os.environ)
     environment.update(
@@ -577,9 +570,9 @@ class NetworkVerificationReport:
                 "slice": "slice1",
                 "sst": 1,
                 "dnn": "internet",
-            "ue_interface": GOLDEN_PATH_INTERFACE,
+                "ue_interface": GOLDEN_PATH_INTERFACE,
                 "pdu_address": self.pdu_address,
-            "pdu_network": str(GOLDEN_PATH_PDU_NETWORK),
+                "pdu_network": str(GOLDEN_PATH_PDU_NETWORK),
             },
             "checks": [
                 {"name": check.name, "passed": check.passed, "detail": check.detail}
@@ -648,8 +641,8 @@ def _one_ready_pod(payload: Any, label: str, run_id: str) -> Mapping[str, Any]:
         and item.get("status") == "True"
         for item in conditions
     )
-    if status.get("phase") != "Running" or not ready:
-        raise NetworkRuntimeError(f"{label} pod is not Running and Ready")
+    if not ready:
+        raise NetworkRuntimeError(f"{label} pod is not Ready")
     name = metadata.get("name")
     if not isinstance(name, str) or not KUBERNETES_NAME_RE.fullmatch(name):
         raise NetworkRuntimeError(f"{label} pod name is unsafe")
@@ -770,7 +763,7 @@ def verify_network_path(
                     "sh",
                     "-c",
                     "KUBECONFIG=/etc/kubernetes/admin.conf "
-                f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {gnb_name} "
+                    f"kubectl exec -n {GOLDEN_PATH_NAMESPACE} {gnb_name} "
                     "-c gnb-logs -- grep -q 'Cell was activated' "
                     "/var/log/gnb.log",
                 ),
@@ -846,9 +839,7 @@ def verify_network_path(
             ):
                 raise NetworkRuntimeError("UE slice-one route is missing")
             pdu_address = str(selected)
-            return (
-                f"{GOLDEN_PATH_INTERFACE} is UP with the expected PDU address and route"
-            )
+            return f"{GOLDEN_PATH_INTERFACE} is UP with the expected PDU address and route"
 
         record("ue-tunnel", verify_ue_tunnel)
 
@@ -944,7 +935,6 @@ def load_deployment_manifest(
         or controller.get("experiment_fingerprint") != context_fingerprint(slices_experiment)
     ):
         raise NetworkRuntimeError("deployment manifest SLICES context does not match")
-
     return payload
 
 

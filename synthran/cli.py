@@ -1,18 +1,23 @@
-"""Command-line interface for SynthRAN repository and experiment controls."""
+"""Single command-line interface for SynthRAN."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from synthran.dependencies import DependencyError, load_lock, sync_dependencies
-from synthran.experiment import ExperimentError
-from synthran.experiment_cli import add_experiment_parser, dispatch_experiment
+from synthran.experiment import ExperimentError, build_scenario
+from synthran.experiment.runtime import (
+    DEFAULT_COLLECTION_SECONDS,
+    DEFAULT_MINIMUM_PER_SENSOR,
+    execute_experiment,
+)
 from synthran.fiveg_ansible import (
     FiveGAnsibleError,
     build_network_plan,
@@ -24,7 +29,13 @@ from synthran.live_preflight import (
     run_live_preflight,
     save_live_evidence,
 )
-from synthran.network_runtime import (
+from synthran.network.resources import (
+    DEFAULT_DURATION_MINUTES,
+    ResourcePreparationError,
+    build_resource_preparation_plan,
+    execute_resource_preparation,
+)
+from synthran.network.runtime import (
     NetworkRuntimeError,
     execute_network_deployment,
     load_deployment_manifest,
@@ -41,17 +52,218 @@ from synthran.privacy import (
     scan_history,
     scan_worktree,
 )
-from synthran.resource_runtime import (
-    DEFAULT_DURATION_MINUTES,
-    ResourcePreparationError,
-    build_resource_preparation_plan,
-    execute_resource_preparation,
+from synthran.research import (
+    CampaignCondition,
+    LoadSpec,
+    MeasurementSpec,
+    ResearchCampaign,
+    ResearchError,
+    ResearchExperimentSpec,
+    analyze_campaign,
+    build_campaign,
+    load_run_summary,
+    save_campaign,
 )
+from synthran.research.runtime import calibrate_capacity, execute_research_experiment
 from synthran.slices_controller import (
     DEFAULT_CONTROLLER_TIMEOUT_SECONDS,
     SlicesControllerError,
     verify_slices_controller,
 )
+
+
+def _network_paths(root: Path, run_id: str) -> tuple[Path, Path]:
+    directory = root.resolve() / run_id
+    return directory / "manifest.json", directory / "network-evidence.json"
+
+
+def _add_research_spec_arguments(
+    parser: argparse.ArgumentParser, *, require_target: bool
+) -> None:
+    parser.add_argument("--campaign-id", required=True)
+    parser.add_argument("--network-run-id", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--condition", required=True)
+    parser.add_argument("--seed", type=int, default=424242)
+    parser.add_argument("--sensor-period", type=int, default=10)
+    parser.add_argument("--warmup-seconds", type=int, default=30)
+    parser.add_argument("--duration-seconds", type=int, default=180)
+    parser.add_argument("--sample-interval", type=float, default=1.0)
+    parser.add_argument("--probe-interval", type=float, default=1.0)
+    parser.add_argument("--target-bps", type=int)
+    parser.add_argument("--target-fraction", type=float)
+    parser.add_argument("--reference-capacity-bps", type=int)
+    parser.add_argument("--parallel-flows", type=int, default=1)
+    parser.add_argument("--load-port", type=int, default=5201)
+    parser.add_argument("--probe-target", required=require_target)
+
+
+def _add_research_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    research = commands.add_parser(
+        "research",
+        help="plan, run, schedule, or analyze controlled measurement experiments",
+    )
+    sub = research.add_subparsers(dest="research_command", required=True)
+
+    plan = sub.add_parser(
+        "plan", help="render one immutable controlled-experiment specification"
+    )
+    _add_research_spec_arguments(plan, require_target=False)
+
+    run = sub.add_parser(
+        "run", help="execute one controlled fixed-window measurement"
+    )
+    _add_research_spec_arguments(run, require_target=True)
+    run.add_argument("--inventory", type=Path, required=True)
+    run.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    run.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    run.add_argument(
+        "--network-run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+    run.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/experiments"),
+        help=argparse.SUPPRESS,
+    )
+
+    calibrate = sub.add_parser(
+        "calibrate", help="measure reference UE-path capacity"
+    )
+    calibrate.add_argument("--inventory", type=Path, required=True)
+    calibrate.add_argument("--network-run-id", required=True)
+    calibrate.add_argument("--target", required=True)
+    calibrate.add_argument("--duration-seconds", type=int, default=10)
+    calibrate.add_argument("--server-port", type=int, default=5201)
+    calibrate.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    calibrate.add_argument("--out", type=Path, required=True)
+
+    campaign_plan = sub.add_parser(
+        "campaign-plan", help="create a deterministic blocked campaign schedule"
+    )
+    campaign_plan.add_argument("--campaign-id", required=True)
+    campaign_plan.add_argument("--network-run-id", required=True)
+    campaign_plan.add_argument("--seeds", required=True)
+    campaign_plan.add_argument("--conditions", required=True)
+    campaign_plan.add_argument("--campaign-seed", type=int, required=True)
+    campaign_plan.add_argument("--out", type=Path, required=True)
+
+    campaign_run = sub.add_parser(
+        "campaign-run", help="execute a persisted campaign sequentially"
+    )
+    campaign_run.add_argument("--campaign", type=Path, required=True)
+    campaign_run.add_argument("--inventory", type=Path, required=True)
+    campaign_run.add_argument("--target", required=True)
+    campaign_run.add_argument("--reference-capacity-bps", type=int)
+    campaign_run.add_argument("--sensor-period", type=int, default=10)
+    campaign_run.add_argument("--warmup-seconds", type=int, default=30)
+    campaign_run.add_argument("--duration-seconds", type=int, default=180)
+    campaign_run.add_argument("--sample-interval", type=float, default=1.0)
+    campaign_run.add_argument("--probe-interval", type=float, default=1.0)
+    campaign_run.add_argument("--parallel-flows", type=int, default=1)
+    campaign_run.add_argument("--load-port", type=int, default=5201)
+    campaign_run.add_argument(
+        "--lock", type=Path, default=Path("dependencies.lock.yml")
+    )
+    campaign_run.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    campaign_run.add_argument(
+        "--network-run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+    campaign_run.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/experiments"),
+        help=argparse.SUPPRESS,
+    )
+
+    analyze = sub.add_parser(
+        "analyze", help="analyze persisted run summaries without live access"
+    )
+    analyze.add_argument("--campaign", type=Path, required=True)
+    analyze.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/experiments"),
+        help=argparse.SUPPRESS,
+    )
+    analyze.add_argument("--out", type=Path, required=True)
+
+
+def _add_experiment_parser(
+    subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    experiment = subcommands.add_parser(
+        "experiment",
+        help="plan, run, verify, or measure deterministic IoT-to-5G experiments",
+    )
+    commands = experiment.add_subparsers(dest="experiment_command", required=True)
+
+    plan = commands.add_parser(
+        "plan",
+        help="validate a path-proven network and print the experiment scenario",
+    )
+    plan.add_argument("--network-run-id", required=True)
+    plan.add_argument("--run-id", required=True)
+    plan.add_argument(
+        "--network-run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+
+    run = commands.add_parser(
+        "run",
+        help="run the ten-sensor experiment against a path-proven network",
+    )
+    run.add_argument("--inventory", type=Path, required=True)
+    run.add_argument("--network-run-id", required=True)
+    run.add_argument("--run-id", required=True)
+    run.add_argument("--lock", type=Path, default=Path("dependencies.lock.yml"))
+    run.add_argument("--deps-root", type=Path, default=Path(".deps"))
+    run.add_argument(
+        "--network-run-root",
+        type=Path,
+        default=Path(".synthran/runs"),
+        help=argparse.SUPPRESS,
+    )
+    run.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/experiments"),
+        help=argparse.SUPPRESS,
+    )
+    run.add_argument(
+        "--collection-seconds",
+        type=int,
+        default=DEFAULT_COLLECTION_SECONDS,
+    )
+    run.add_argument(
+        "--minimum-per-sensor",
+        type=int,
+        default=DEFAULT_MINIMUM_PER_SENSOR,
+    )
+
+    verify = commands.add_parser(
+        "verify",
+        help="read persisted experiment acceptance evidence without changing live state",
+    )
+    verify.add_argument("--run-id", required=True)
+    verify.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path(".synthran/experiments"),
+        help=argparse.SUPPRESS,
+    )
+
+    _add_research_parser(commands)
 
 
 def _add_slices_context(parser: argparse.ArgumentParser) -> None:
@@ -70,7 +282,8 @@ def _add_slices_context(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="synthran")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    add_experiment_parser(subcommands)
+    _add_experiment_parser(subcommands)
+
     slices = subcommands.add_parser(
         "slices", help="verify the SLICES CLI controller context"
     )
@@ -83,7 +296,6 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout", type=int, default=DEFAULT_CONTROLLER_TIMEOUT_SECONDS
     )
     _add_slices_context(slices_doctor)
-
 
     deps = subcommands.add_parser("deps", help="manage immutable external dependencies")
     deps_commands = deps.add_subparsers(dest="deps_command", required=True)
@@ -194,6 +406,7 @@ def _parser() -> argparse.ArgumentParser:
         default=3600,
         help="timeout in seconds for each preparation stage",
     )
+
     deploy = network_commands.add_parser(
         "deploy", help="plan the explicit 5G network deployment"
     )
@@ -270,9 +483,7 @@ def _require_slices_context(
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
-        raise SlicesControllerError(
-            f"{operation} requires " + ", ".join(missing)
-        )
+        raise SlicesControllerError(f"{operation} requires " + ", ".join(missing))
     return args.slices_project, args.slices_experiment
 
 
@@ -359,9 +570,7 @@ def _doctor(args: argparse.Namespace) -> int:
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
-        raise LivePreflightError(
-            "live doctor requires " + ", ".join(missing)
-        )
+        raise LivePreflightError("live doctor requires " + ", ".join(missing))
     inventory = load_inventory(args.inventory)
     lock = load_lock(args.lock)
     live_report = run_live_preflight(
@@ -526,11 +735,410 @@ def _network_verify(args: argparse.Namespace) -> int:
     return 0 if verification.ready else 2
 
 
+def _experiment_plan(args: argparse.Namespace) -> int:
+    manifest, evidence = _network_paths(
+        args.network_run_root, args.network_run_id
+    )
+    scenario = build_scenario(
+        run_id=args.run_id,
+        network_manifest=manifest,
+        network_evidence=evidence,
+    )
+    print(json.dumps(scenario.to_dict(), indent=2, sort_keys=True))
+    print(
+        "\nPDU note: the displayed address is accepted network evidence;\n"
+        "experiment execution rediscovers the live address after the srsUE rollout."
+    )
+    print("\nExecution action: none")
+    print("Reservation action: none")
+    print("Network deployment action: none")
+    return 0
+
+
+def _experiment_run(args: argparse.Namespace) -> int:
+    manifest, evidence = _network_paths(
+        args.network_run_root, args.network_run_id
+    )
+    result = execute_experiment(
+        inventory=load_inventory(args.inventory),
+        lock=load_lock(args.lock),
+        dependency_root=args.deps_root,
+        network_manifest=manifest,
+        network_evidence=evidence,
+        run_id=args.run_id,
+        repository_root=repository_root(),
+        run_root=args.run_root,
+        collection_seconds=args.collection_seconds,
+        minimum_per_sensor=args.minimum_per_sensor,
+        progress=sys.stdout,
+    )
+    print(f"Run directory: {result.run_directory}")
+    if result.evidence_path.is_file():
+        print(f"Sanitized evidence: {result.evidence_path}")
+    return 0 if result.ready else 2
+
+
+def _experiment_verify(args: argparse.Namespace) -> int:
+    run_directory = args.run_root.resolve() / args.run_id
+    evidence_path = run_directory / "experiment-evidence.json"
+    manifest_path = run_directory / "manifest.json"
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ExperimentError("experiment manifest/evidence is missing") from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExperimentError(
+            "experiment manifest/evidence must be readable JSON"
+        ) from exc
+
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("schema") != "synthran/iot-evidence/v1alpha1"
+    ):
+        raise ExperimentError("experiment evidence schema is unsupported")
+    if not isinstance(manifest, dict) or manifest.get("run_id") != args.run_id:
+        raise ExperimentError(
+            "experiment manifest does not match the requested run"
+        )
+
+    print(f"SynthRAN experiment verification ({args.run_id})")
+    checks = evidence.get("checks")
+    if not isinstance(checks, list):
+        raise ExperimentError("experiment evidence checks are malformed")
+    for check in checks:
+        if not isinstance(check, dict):
+            raise ExperimentError(
+                "experiment evidence contains a malformed check"
+            )
+        state = "PASS" if check.get("passed") is True else "FAIL"
+        print(f"[{state}] {check.get('name')}: {check.get('detail')}")
+    ready = (
+        evidence.get("ready") is True
+        and manifest.get("status") == "iot-to-5g-path-proven"
+    )
+    print(f"Result: {'IOT-TO-5G PATH PROVEN' if ready else 'NOT PROVEN'}")
+    return 0 if ready else 2
+
+
+def _research_spec(args: argparse.Namespace) -> ResearchExperimentSpec:
+    loaded = args.condition != "baseline"
+    return ResearchExperimentSpec(
+        campaign_id=args.campaign_id,
+        run_id=args.run_id,
+        network_run_id=args.network_run_id,
+        condition=args.condition,
+        cooja_seed=args.seed,
+        sensor_period_seconds=args.sensor_period,
+        measurement=MeasurementSpec(
+            warmup_seconds=args.warmup_seconds,
+            duration_seconds=args.duration_seconds,
+            sample_interval_seconds=args.sample_interval,
+            probe_interval_seconds=args.probe_interval,
+        ),
+        load=LoadSpec(
+            enabled=loaded,
+            target_bps=args.target_bps if loaded else None,
+            target_fraction=args.target_fraction if loaded else None,
+            reference_capacity_bps=(
+                args.reference_capacity_bps if loaded else None
+            ),
+            parallel_flows=args.parallel_flows,
+            server_port=args.load_port,
+        ),
+        probe_target=args.probe_target,
+    )
+
+
+def _parse_seeds(value: str) -> tuple[int, ...]:
+    try:
+        seeds = tuple(
+            int(item.strip()) for item in value.split(",") if item.strip()
+        )
+    except ValueError as exc:
+        raise ResearchError(
+            "campaign seeds must be comma-separated integers"
+        ) from exc
+    if not seeds:
+        raise ResearchError("campaign seeds must not be empty")
+    return seeds
+
+
+def _parse_conditions(value: str) -> tuple[CampaignCondition, ...]:
+    result: list[CampaignCondition] = []
+    for item in value.split(","):
+        text = item.strip()
+        if not text:
+            continue
+        if text == "baseline":
+            result.append(CampaignCondition("baseline"))
+            continue
+        if "=" not in text:
+            raise ResearchError(
+                "loaded conditions must use name=fraction or name=bps:<integer>"
+            )
+        name, raw = (part.strip() for part in text.split("=", 1))
+        try:
+            result.append(
+                CampaignCondition(name, target_bps=int(raw[4:]))
+                if raw.startswith("bps:")
+                else CampaignCondition(name, load_fraction=float(raw))
+            )
+        except ValueError as exc:
+            raise ResearchError("campaign load target is malformed") from exc
+    if not result:
+        raise ResearchError("campaign conditions must not be empty")
+    return tuple(result)
+
+
+def _load_campaign(path: Path) -> ResearchCampaign:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (
+        FileNotFoundError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ResearchError(
+            "campaign specification must be readable JSON"
+        ) from exc
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema") != "synthran/research-campaign/v1alpha1"
+    ):
+        raise ResearchError("campaign specification schema is unsupported")
+    raw_conditions = value.get("conditions")
+    raw_runs = value.get("runs")
+    if not isinstance(raw_conditions, list) or not isinstance(raw_runs, list):
+        raise ResearchError("campaign conditions and runs must be arrays")
+    conditions: list[CampaignCondition] = []
+    for item in raw_conditions:
+        if not isinstance(item, Mapping) or not isinstance(
+            item.get("name"), str
+        ):
+            raise ResearchError("campaign contains a malformed condition")
+        conditions.append(
+            CampaignCondition(
+                str(item["name"]),
+                load_fraction=(
+                    float(item["load_fraction"])
+                    if item.get("load_fraction") is not None
+                    else None
+                ),
+                target_bps=(
+                    int(item["target_bps"])
+                    if item.get("target_bps") is not None
+                    else None
+                ),
+            )
+        )
+    campaign = build_campaign(
+        campaign_id=str(value.get("campaign_id")),
+        network_run_id=str(value.get("network_run_id")),
+        seeds=tuple(int(seed) for seed in value.get("seeds", [])),
+        conditions=tuple(conditions),
+        campaign_seed=int(value.get("campaign_seed")),
+    )
+    expected_runs = [run.to_dict() for run in campaign.runs]
+    if raw_runs != expected_runs:
+        raise ResearchError(
+            "persisted campaign run schedule does not match its deterministic campaign contract"
+        )
+    return campaign
+
+
+def _dispatch_research(args: argparse.Namespace) -> int:
+    if args.research_command == "plan":
+        print(json.dumps(_research_spec(args).to_dict(), indent=2, sort_keys=True))
+        print(
+            "\nExecution action: none\nReservation action: none\nNetwork deployment action: none"
+        )
+        return 0
+
+    if args.research_command == "run":
+        spec = _research_spec(args)
+        manifest, evidence = _network_paths(
+            args.network_run_root, args.network_run_id
+        )
+        result = execute_research_experiment(
+            spec=spec,
+            inventory=load_inventory(args.inventory),
+            lock=load_lock(args.lock),
+            dependency_root=args.deps_root,
+            network_manifest=manifest,
+            network_evidence=evidence,
+            repository_root=repository_root(),
+            run_root=args.run_root,
+            progress=sys.stdout,
+        )
+        print(f"Run directory: {result.run_directory}")
+        print(f"Research summary: {result.summary_path}")
+        print(
+            "Research result: "
+            + (
+                "READY FOR CAMPAIGN ANALYSIS"
+                if result.ready_for_campaign_analysis
+                else "INVALID"
+            )
+        )
+        print(
+            "Path acceptance: "
+            + (
+                "IOT-TO-5G PATH PROVEN"
+                if result.path_acceptance_ready
+                else "NOT PROVEN"
+            )
+        )
+        return 0 if result.ready_for_campaign_analysis else 2
+
+    if args.research_command == "calibrate":
+        payload = calibrate_capacity(
+            inventory=load_inventory(args.inventory),
+            lock=load_lock(args.lock),
+            network_run_id=args.network_run_id,
+            target=args.target,
+            repository_root=repository_root(),
+            output_path=args.out,
+            duration_seconds=args.duration_seconds,
+            server_port=args.server_port,
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(f"Capacity evidence: {args.out}")
+        return 0
+
+    if args.research_command == "campaign-plan":
+        campaign = build_campaign(
+            campaign_id=args.campaign_id,
+            network_run_id=args.network_run_id,
+            seeds=_parse_seeds(args.seeds),
+            conditions=_parse_conditions(args.conditions),
+            campaign_seed=args.campaign_seed,
+        )
+        save_campaign(campaign, args.out)
+        print(json.dumps(campaign.to_dict(), indent=2, sort_keys=True))
+        print(f"Campaign schedule: {args.out}")
+        return 0
+
+    if args.research_command == "campaign-run":
+        campaign = _load_campaign(args.campaign)
+        manifest, evidence = _network_paths(
+            args.network_run_root, campaign.network_run_id
+        )
+        inventory = load_inventory(args.inventory)
+        lock = load_lock(args.lock)
+        conditions = {
+            condition.name: condition for condition in campaign.conditions
+        }
+        for scheduled in campaign.runs:
+            if (args.run_root.resolve() / scheduled.run_id).exists():
+                raise ResearchError(
+                    f"campaign run directory already exists for {scheduled.run_id}; "
+                    "run IDs are never reused"
+                )
+            condition = conditions[scheduled.condition]
+            if condition.name == "baseline":
+                load = LoadSpec(enabled=False)
+            elif condition.target_bps is not None:
+                load = LoadSpec(
+                    enabled=True,
+                    target_bps=condition.target_bps,
+                    parallel_flows=args.parallel_flows,
+                    server_port=args.load_port,
+                )
+            else:
+                if args.reference_capacity_bps is None:
+                    raise ResearchError(
+                        "fractional campaign conditions require --reference-capacity-bps"
+                    )
+                load = LoadSpec(
+                    enabled=True,
+                    target_fraction=condition.load_fraction,
+                    reference_capacity_bps=args.reference_capacity_bps,
+                    parallel_flows=args.parallel_flows,
+                    server_port=args.load_port,
+                )
+            spec = ResearchExperimentSpec(
+                campaign_id=campaign.campaign_id,
+                run_id=scheduled.run_id,
+                network_run_id=campaign.network_run_id,
+                condition=scheduled.condition,
+                cooja_seed=scheduled.seed,
+                sensor_period_seconds=args.sensor_period,
+                measurement=MeasurementSpec(
+                    args.warmup_seconds,
+                    args.duration_seconds,
+                    args.sample_interval,
+                    args.probe_interval,
+                ),
+                load=load,
+                probe_target=args.target,
+            )
+            print(
+                f"Campaign {campaign.campaign_id}: "
+                f"{scheduled.ordinal}/{len(campaign.runs)} {scheduled.run_id} "
+                f"({scheduled.condition}, seed={scheduled.seed})"
+            )
+            result = execute_research_experiment(
+                spec=spec,
+                inventory=inventory,
+                lock=lock,
+                dependency_root=args.deps_root,
+                network_manifest=manifest,
+                network_evidence=evidence,
+                repository_root=repository_root(),
+                run_root=args.run_root,
+                progress=sys.stdout,
+            )
+            if not result.ready_for_campaign_analysis:
+                print(
+                    f"Campaign stopped: {scheduled.run_id} is invalid for analysis"
+                )
+                return 2
+        print(f"Campaign complete: {campaign.campaign_id}")
+        return 0
+
+    if args.research_command == "analyze":
+        campaign = _load_campaign(args.campaign)
+        summaries = [
+            load_run_summary(path)
+            for run in campaign.runs
+            if (
+                path := args.run_root.resolve()
+                / run.run_id
+                / "research-summary.json"
+            ).is_file()
+        ]
+        analysis = analyze_campaign(campaign, summaries)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(
+            json.dumps(analysis, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(analysis, indent=2, sort_keys=True))
+        print(f"Campaign analysis: {args.out}")
+        return 0 if analysis["usable_runs"] == analysis["expected_runs"] else 2
+
+    raise AssertionError("unreachable research command")
+
+
+def _dispatch_experiment(args: argparse.Namespace) -> int:
+    if args.experiment_command == "plan":
+        return _experiment_plan(args)
+    if args.experiment_command == "run":
+        return _experiment_run(args)
+    if args.experiment_command == "verify":
+        return _experiment_verify(args)
+    if args.experiment_command == "research":
+        return _dispatch_research(args)
+    raise AssertionError("unreachable experiment command")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "experiment":
-            return dispatch_experiment(args)
+            return _dispatch_experiment(args)
         if args.command == "slices" and args.slices_command == "doctor":
             return _slices_doctor(args)
         if args.command == "deps" and args.deps_command == "sync":
@@ -557,6 +1165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         LivePreflightError,
         NetworkRuntimeError,
         PrivacyError,
+        ResearchError,
         ResourcePreparationError,
         SlicesControllerError,
         OSError,
