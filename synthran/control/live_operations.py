@@ -12,9 +12,9 @@ from typing import Mapping, Sequence
 
 from synthran.app import ApplicationController
 from synthran.dependencies import load_lock
-from synthran.fiveg_ansible import build_network_plan, load_inventory
+from synthran.fiveg_ansible import NetworkInventory, build_network_plan, load_inventory
 from synthran.live_preflight import (
-    LivePreflightError,
+    POS_TIMEZONE,
     Runner,
     run_live_preflight,
     save_live_evidence,
@@ -28,9 +28,7 @@ from synthran.network.resources import (
     build_resource_preparation_plan,
     execute_resource_preparation,
 )
-from synthran.network.rfsim import reconcile_rfsim_runtime
 from synthran.network.runtime import (
-    GOLDEN_PATH_NAMESPACE,
     execute_network_deployment,
     save_network_evidence,
     verify_network_path,
@@ -42,8 +40,9 @@ from synthran.resources.model import (
     ResourceInventory,
     ResourceState,
 )
-from synthran.workspace.context import resolve_workspace_authority
-from synthran.workspace.model import WorkspaceError, format_utc, parse_utc, utc_now, validate_operation_id
+from synthran.slices_controller import SlicesControllerError, verify_slices_controller
+from synthran.workspace.desired_store import load_desired_state
+from synthran.workspace.model import WorkspaceError, format_utc, utc_now, validate_operation_id
 from synthran.workspace.observed import Observation
 from synthran.workspace.observed_store import load_observed_state, observed_state_path
 
@@ -140,6 +139,13 @@ def _checked(
     return text
 
 
+def _active_desired(controller: ApplicationController):
+    record = controller.authority.active_experiment
+    if record is None:
+        raise LiveOperationError("workspace has no active experiment")
+    return load_desired_state(controller.root, record.experiment_id)
+
+
 def _current_allocation_id(controller: ApplicationController) -> str | None:
     record = controller.authority.active_experiment
     if record is None:
@@ -152,6 +158,27 @@ def _current_allocation_id(controller: ApplicationController) -> str | None:
     if item is None or item.ownership != "synthran":
         return None
     return item.resource_id
+
+
+def _verify_control_context(
+    controller: ApplicationController,
+    *,
+    runner: Runner,
+) -> None:
+    authority = controller.authority
+    if authority.slices_experiment is None:
+        raise LiveOperationError("active experiment has no provider experiment binding")
+    try:
+        verify_slices_controller(
+            lock=load_lock(controller.root / "dependencies.lock.yml"),
+            project=authority.slices_project,
+            experiment=authority.slices_experiment,
+            runner=runner,
+            environment=controller.environment,
+            timeout_seconds=min(POS_TIMEOUT_SECONDS, 300),
+        )
+    except SlicesControllerError as exc:
+        raise LiveOperationError(str(exc)) from exc
 
 
 def discover_slices_inventory(
@@ -167,7 +194,11 @@ def discover_slices_inventory(
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
     records = _json_array(
-        _checked(runner, ("pos", "allocations", "list", "--json"), label="POS allocation inventory"),
+        _checked(
+            runner,
+            ("pos", "allocations", "list", "--json"),
+            label="POS allocation inventory",
+        ),
         "POS allocation inventory",
     )
     known_claim = _current_allocation_id(controller)
@@ -200,41 +231,52 @@ def discover_slices_inventory(
             ownership = "operator"
         states.append(ResourceState(node, "allocated", ownership))
 
-    snapshot = ProviderResourceSnapshot(
-        provider="slices",
-        observed_at_utc=format_utc(current),
-        fresh_until_utc=format_utc(current + RESOURCE_FRESHNESS),
-        complete=True,
-        resources=tuple(states),
-    )
     return ResourceInventory(
         descriptors=reviewed_resource_descriptors(),
-        snapshots=(snapshot,),
+        snapshots=(
+            ProviderResourceSnapshot(
+                provider="slices",
+                observed_at_utc=format_utc(current),
+                fresh_until_utc=format_utc(current + RESOURCE_FRESHNESS),
+                complete=True,
+                resources=tuple(states),
+            ),
+        ),
     )
 
 
-def _selected_nodes(controller: ApplicationController, inventory: ResourceInventory, now: datetime) -> tuple[str, str]:
-    _, desired = controller._active_desired()
+def _selected_nodes(
+    controller: ApplicationController,
+    inventory: ResourceInventory,
+    now: datetime,
+) -> tuple[str, str]:
+    desired = _active_desired(controller)
     if desired.radio.mode != "virtual" or desired.radio.backend != "rfsim":
-        raise LiveOperationError("live workbench execution currently supports only the virtual RFSIM path")
+        raise LiveOperationError(
+            "live workbench execution currently supports only the virtual RFSIM path"
+        )
     decision = controller.resource_decision(inventory, now=now)
     core = decision.selection.for_role("core")
     ran = decision.selection.for_role("ran")
     if len(core) != 1 or len(ran) != 1:
-        raise LiveOperationError("virtual execution requires exactly one core node and one RAN node")
+        raise LiveOperationError(
+            "virtual execution requires exactly one core node and one RAN node"
+        )
     return core[0].resource_id, ran[0].resource_id
 
 
 def _parse_provider_time(value: object, label: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise LiveOperationError(f"{label} is missing")
-    text = value.strip().replace("Z", "+00:00")
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:
         raise LiveOperationError(f"{label} is not an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=POS_TIMEZONE)
     return parsed.astimezone(timezone.utc)
 
 
@@ -258,26 +300,28 @@ def _active_reservation(
         record_nodes = _nodes(record.get("nodes"), "POS reservation")
         if not nodes.issubset(record_nodes):
             continue
-        start = _parse_provider_time(
-            record.get("start_date", record.get("start", record.get("start_time"))),
-            "reservation start",
-        )
-        end = _parse_provider_time(
-            record.get("end_date", record.get("end", record.get("end_time"))),
-            "reservation end",
-        )
+        start = _parse_provider_time(record.get("start_date"), "reservation start")
+        end = _parse_provider_time(record.get("end_date"), "reservation end")
         if start <= now < end:
             matches.append((_identifier(record, "reservation ID"), record))
     if len(matches) > 1:
-        raise LiveOperationError("multiple current reservations cover the selected node pair")
+        raise LiveOperationError(
+            "multiple current reservations cover the selected node pair"
+        )
     return matches[0] if matches else None
 
 
-def _allocation_for_nodes(
-    *, runner: Runner, owner: str, nodes: set[str]
-) -> tuple[str, str] | None:
+def _touching_allocations(
+    *,
+    runner: Runner,
+    nodes: set[str],
+) -> tuple[tuple[str, str, set[str]], ...]:
     records = _json_array(
-        _checked(runner, ("pos", "allocations", "list", "--json"), label="POS allocation inventory"),
+        _checked(
+            runner,
+            ("pos", "allocations", "list", "--json"),
+            label="POS allocation inventory",
+        ),
         "POS allocation inventory",
     )
     touched: list[tuple[str, str, set[str]]] = []
@@ -291,14 +335,7 @@ def _allocation_for_nodes(
                     record_nodes,
                 )
             )
-    if not touched:
-        return None
-    if len(touched) != 1:
-        raise LiveOperationError("selected nodes are split across multiple allocations")
-    allocation_id, allocation_owner, record_nodes = touched[0]
-    if not nodes.issubset(record_nodes):
-        raise LiveOperationError("only part of the selected node pair is allocated")
-    return allocation_id, allocation_owner
+    return tuple(touched)
 
 
 def _observation(
@@ -351,7 +388,7 @@ def refresh_slices_control_state(
     runner: Runner = subprocess_runner,
     now: datetime | None = None,
 ) -> ResourceInventory:
-    """Refresh current control, reservation, and allocation facts without provider mutation."""
+    """Refresh provider authority, reservation, and allocation facts without mutation."""
 
     current = (now or utc_now()).astimezone(timezone.utc)
     controller = ApplicationController(start=start, environment=environment)
@@ -363,11 +400,11 @@ def refresh_slices_control_state(
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
 
+    _verify_control_context(controller, runner=runner)
     inventory = discover_slices_inventory(controller=controller, runner=runner, now=current)
     core_node, ran_node = _selected_nodes(controller, inventory, current)
     selected = {core_node, ran_node}
 
-    reservation = _active_reservation(runner=runner, owner=owner, nodes=selected, now=current)
     previous_reservation: str | None = None
     previous_allocation: str | None = None
     observed_path = observed_state_path(controller.root, record.experiment_id)
@@ -380,9 +417,19 @@ def refresh_slices_control_state(
         if allocation_item is not None and allocation_item.ownership == "synthran":
             previous_allocation = allocation_item.resource_id
 
+    reservation = _active_reservation(
+        runner=runner,
+        owner=owner,
+        nodes=selected,
+        now=current,
+    )
     if reservation is None:
         reservation_observation = _observation(
-            "reservation", "absent", now=current, ownership="unowned", detail="no current reservation covers the selected nodes"
+            "reservation",
+            "absent",
+            now=current,
+            ownership="unowned",
+            detail="no current reservation covers the selected nodes",
         )
     else:
         reservation_id, _ = reservation
@@ -390,19 +437,34 @@ def refresh_slices_control_state(
             "reservation",
             "ready",
             now=current,
-            ownership="synthran" if reservation_id == previous_reservation else "operator",
+            ownership=(
+                "synthran" if reservation_id == previous_reservation else "operator"
+            ),
             resource_id=reservation_id,
             detail="current POS reservation covers the selected nodes",
             facts={"core_node": core_node, "ran_node": ran_node},
         )
 
-    allocation = _allocation_for_nodes(runner=runner, owner=owner, nodes=selected)
-    if allocation is None:
+    touched = _touching_allocations(runner=runner, nodes=selected)
+    if not touched:
         allocation_observation = _observation(
-            "allocation", "absent", now=current, ownership="unowned", detail="selected nodes are not allocated"
+            "allocation",
+            "absent",
+            now=current,
+            ownership="unowned",
+            detail="selected nodes are not allocated",
+        )
+    elif len(touched) != 1:
+        allocation_observation = _observation(
+            "allocation",
+            "blocked",
+            now=current,
+            ownership="unknown",
+            detail="selected nodes touch multiple allocations",
         )
     else:
-        allocation_id, allocation_owner = allocation
+        allocation_id, allocation_owner, allocated_nodes = touched[0]
+        facts = {"core_node": core_node, "ran_node": ran_node}
         if allocation_owner != owner:
             allocation_observation = _observation(
                 "allocation",
@@ -411,7 +473,7 @@ def refresh_slices_control_state(
                 ownership="other",
                 resource_id=allocation_id,
                 detail="selected nodes are allocated to another operator",
-                facts={"core_node": core_node, "ran_node": ran_node},
+                facts=facts,
             )
         elif allocation_id != previous_allocation:
             allocation_observation = _observation(
@@ -421,57 +483,97 @@ def refresh_slices_control_state(
                 ownership="operator",
                 resource_id=allocation_id,
                 detail="selected nodes are allocated outside SynthRAN ownership",
-                facts={"core_node": core_node, "ran_node": ran_node},
+                facts=facts,
             )
         else:
+            complete = selected.issubset(allocated_nodes)
             allocation_observation = _observation(
                 "allocation",
-                "ready",
+                "ready" if complete else "degraded",
                 now=current,
                 ownership="synthran",
                 resource_id=allocation_id,
-                detail="current POS allocation matches SynthRAN ownership",
-                facts={"core_node": core_node, "ran_node": ran_node},
+                detail=(
+                    "current POS allocation matches SynthRAN ownership"
+                    if complete
+                    else "SynthRAN-owned allocation is incomplete"
+                ),
+                facts=facts,
             )
 
-    updates = {
-        "controller": _observation("controller", "ready", now=current, ownership="operator", detail="current controller context"),
-        "project_access": _observation("project_access", "ready", now=current, ownership="operator", detail="current project context"),
-        "provider_experiment": _observation("provider_experiment", "ready", now=current, ownership="operator", detail="current provider experiment binding"),
-        "reservation": reservation_observation,
-        "allocation": allocation_observation,
-    }
-    _merge_observations(controller, updates, now=current)
+    _merge_observations(
+        controller,
+        {
+            "controller": _observation(
+                "controller",
+                "ready",
+                now=current,
+                ownership="operator",
+                detail="current SLICES controller was verified",
+            ),
+            "project_access": _observation(
+                "project_access",
+                "ready",
+                now=current,
+                ownership="operator",
+                detail="current SLICES project was verified",
+            ),
+            "provider_experiment": _observation(
+                "provider_experiment",
+                "ready",
+                now=current,
+                ownership="operator",
+                detail="bound provider experiment was verified",
+            ),
+            "reservation": reservation_observation,
+            "allocation": allocation_observation,
+        },
+        now=current,
+    )
     return inventory
 
 
-def _require_current_observation(controller: ApplicationController, dimension: str, *, ownership: str | None = None) -> Observation:
+def _require_current_observation(
+    controller: ApplicationController,
+    dimension: str,
+    *,
+    now: datetime,
+    ownership: str | None = None,
+    resource_id_required: bool = True,
+) -> Observation:
     record = controller.authority.active_experiment
     if record is None:
         raise LiveOperationError("workspace has no active experiment")
     observed = load_observed_state(controller.root, record.experiment_id)
     item = observed.observation(dimension)
-    if item is None or not item.is_fresh():
+    if item is None or not item.is_fresh(now):
         raise LiveOperationError(f"current {dimension} evidence is unavailable")
     if ownership is not None and item.ownership != ownership:
         raise LiveOperationError(f"current {dimension} is not SynthRAN-owned")
-    if item.resource_id is None:
+    if resource_id_required and item.resource_id is None:
         raise LiveOperationError(f"current {dimension} has no exact resource ID")
     return item
 
 
-def _record_network_absent(controller: ApplicationController, *, now: datetime) -> None:
-    updates = {
-        dimension: _observation(
-            dimension,
-            "absent",
-            now=now,
-            ownership="unowned",
-            detail="no current run-owned network state is recorded",
-        )
-        for dimension in (*NETWORK_DIMENSIONS, "path")
-    }
-    _merge_observations(controller, updates, now=now)
+def _record_network_absent(
+    controller: ApplicationController,
+    *,
+    now: datetime,
+) -> None:
+    _merge_observations(
+        controller,
+        {
+            dimension: _observation(
+                dimension,
+                "absent",
+                now=now,
+                ownership="unowned",
+                detail="no current run-owned network state is recorded",
+            )
+            for dimension in (*NETWORK_DIMENSIONS, "path")
+        },
+        now=now,
+    )
 
 
 def _record_network_pending(
@@ -494,7 +596,11 @@ def _record_network_pending(
         for dimension in NETWORK_DIMENSIONS
     }
     updates["path"] = _observation(
-        "path", "absent", now=now, ownership="unowned", detail="end-to-end path has not been proven for the current deployment"
+        "path",
+        "absent",
+        now=now,
+        ownership="unowned",
+        detail="end-to-end path has not been proven for the current deployment",
     )
     _merge_observations(controller, updates, now=now)
 
@@ -543,11 +649,76 @@ def _known_hosts(path: Path):
             os.environ["SYNTHRAN_KNOWN_HOSTS"] = previous
 
 
-def _finish_failure(controller: ApplicationController, operation_id: str, stage: str, *, now: datetime) -> None:
+def _finish_failure(
+    controller: ApplicationController,
+    operation_id: str,
+    stage: str,
+    *,
+    now: datetime,
+) -> None:
     try:
-        controller.operations.stage_failed(operation_id, stage, "provider-action-failed", now=now)
+        controller.operations.stage_failed(
+            operation_id,
+            stage,
+            "provider-action-failed",
+            now=now,
+        )
     finally:
         controller.finish_operation(operation_id, success=False, now=now)
+
+
+def _verify_selected_reservation(
+    controller: ApplicationController,
+    runner: Runner,
+    *,
+    now: datetime,
+    core_node: str,
+    ran_node: str,
+) -> Observation:
+    reservation = _require_current_observation(
+        controller,
+        "reservation",
+        now=now,
+    )
+    owner = controller.authority.profile.slices_username
+    if owner is None:
+        raise LiveOperationError("workspace profile has no SLICES username")
+    verify_reservation(
+        runner=runner,
+        reservation_id=str(reservation.resource_id),
+        owner=owner,
+        nodes={core_node, ran_node},
+        now=now,
+        timeout_seconds=POS_TIMEOUT_SECONDS,
+    )
+    return reservation
+
+
+def _allocation_id_after(
+    runner: Runner,
+    *,
+    owner: str,
+    core_node: str,
+    ran_node: str,
+) -> str:
+    identifiers: set[str] = set()
+    for node in (core_node, ran_node):
+        record = _json_object(
+            _checked(
+                runner,
+                ("pos", "allocations", "show", node),
+                label=f"POS allocation query for {node}",
+            ),
+            f"POS allocation query for {node}",
+        )
+        if _owner(record, "allocation owner") != owner:
+            raise LiveOperationError(
+                "selected allocation is not owned by the expected operator"
+            )
+        identifiers.add(_identifier(record, "allocation ID"))
+    if len(identifiers) != 1:
+        raise LiveOperationError("selected nodes are not in one shared allocation")
+    return next(iter(identifiers))
 
 
 def _execute_reserve(
@@ -563,11 +734,15 @@ def _execute_reserve(
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
     core_node, ran_node = _selected_nodes(controller, inventory, now)
-    decision = controller.resource_decision(inventory, now=now)
-    selected_states = {item.resource_id: item for item in decision.states}
-    for node in (core_node, ran_node):
-        if selected_states[node].ownership != "unowned":
-            raise LiveOperationError("Reserve refuses nodes already allocated outside this action")
+    if _active_reservation(
+        runner=runner,
+        owner=owner,
+        nodes={core_node, ran_node},
+        now=now,
+    ) is not None:
+        raise LiveOperationError(
+            "a current reservation already covers the selected nodes; refresh and replan"
+        )
 
     controller.authorize_operation(operation_id, inventory=inventory, now=now)
     controller.operations.stage_started(operation_id, "reservation", now=now)
@@ -589,7 +764,9 @@ def _execute_reserve(
         )
         reservation_id = output.splitlines()[-1].strip()
         if RESERVATION_ID_RE.fullmatch(reservation_id) is None:
-            raise LiveOperationError("POS reservation creation did not return a numeric reservation ID")
+            raise LiveOperationError(
+                "POS reservation creation did not return a numeric reservation ID"
+            )
         verify_reservation(
             runner=runner,
             reservation_id=reservation_id,
@@ -610,35 +787,24 @@ def _execute_reserve(
                     detail="SynthRAN-created POS reservation is current",
                     facts={"core_node": core_node, "ran_node": ran_node},
                 ),
-                "allocation": _observation("allocation", "absent", now=now, ownership="unowned"),
-                "preparation": _observation("preparation", "absent", now=now, ownership="unowned"),
+                "allocation": _observation(
+                    "allocation", "absent", now=now, ownership="unowned"
+                ),
+                "preparation": _observation(
+                    "preparation", "absent", now=now, ownership="unowned"
+                ),
             },
             now=now,
         )
         _record_network_absent(controller, now=now)
-        controller.operations.state_changed(operation_id, "reservation", "ready", now=now)
+        controller.operations.state_changed(
+            operation_id, "reservation", "ready", now=now
+        )
         controller.operations.stage_completed(operation_id, "reservation", now=now)
         controller.finish_operation(operation_id, success=True, now=now)
     except Exception:
         _finish_failure(controller, operation_id, "reservation", now=now)
         raise
-
-
-def _allocation_id_after(
-    runner: Runner, *, owner: str, core_node: str, ran_node: str
-) -> str:
-    identifiers: set[str] = set()
-    for node in (core_node, ran_node):
-        record = _json_object(
-            _checked(runner, ("pos", "allocations", "show", node, "--json"), label=f"POS allocation query for {node}"),
-            f"POS allocation query for {node}",
-        )
-        if _owner(record, "allocation owner") != owner:
-            raise LiveOperationError("selected allocation is not owned by the expected operator")
-        identifiers.add(_identifier(record, "allocation ID"))
-    if len(identifiers) != 1:
-        raise LiveOperationError("selected nodes are not in one shared allocation")
-    return next(iter(identifiers))
 
 
 def _execute_allocate(
@@ -652,14 +818,24 @@ def _execute_allocate(
     owner = controller.authority.profile.slices_username
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
-    reservation = _require_current_observation(controller, "reservation")
     core_node, ran_node = _selected_nodes(controller, inventory, now)
-    expected_nodes = {reservation.facts.get("core_node"), reservation.facts.get("ran_node")}
-    if expected_nodes != {core_node, ran_node}:
-        raise LiveOperationError("selected nodes changed after the active reservation was established")
+    _verify_selected_reservation(
+        controller,
+        runner,
+        now=now,
+        core_node=core_node,
+        ran_node=ran_node,
+    )
     decision = controller.resource_decision(inventory, now=now)
-    if any(item.ownership != "unowned" for item in decision.states if item.resource_id in {core_node, ran_node}):
-        raise LiveOperationError("Allocate requires the selected nodes to be currently unallocated")
+    selected = {core_node, ran_node}
+    if any(
+        item.ownership != "unowned"
+        for item in decision.states
+        if item.resource_id in selected
+    ):
+        raise LiveOperationError(
+            "Allocate requires the selected nodes to be currently unallocated"
+        )
 
     controller.authorize_operation(operation_id, inventory=inventory, now=now)
     controller.operations.stage_started(operation_id, "allocation", now=now)
@@ -670,12 +846,17 @@ def _execute_allocate(
             label="POS allocation",
             allow_empty=True,
         )
-        allocation_id = _allocation_id_after(runner, owner=owner, core_node=core_node, ran_node=ran_node)
+        allocation_id = _allocation_id_after(
+            runner,
+            owner=owner,
+            core_node=core_node,
+            ran_node=ran_node,
+        )
         verify_allocations(
             runner=runner,
             allocation_id=allocation_id,
             owner=owner,
-            nodes={core_node, ran_node},
+            nodes=selected,
             timeout_seconds=POS_TIMEOUT_SECONDS,
         )
         _merge_observations(
@@ -690,12 +871,16 @@ def _execute_allocate(
                     detail="one SynthRAN-owned allocation covers the selected nodes",
                     facts={"core_node": core_node, "ran_node": ran_node},
                 ),
-                "preparation": _observation("preparation", "absent", now=now, ownership="unowned"),
+                "preparation": _observation(
+                    "preparation", "absent", now=now, ownership="unowned"
+                ),
             },
             now=now,
         )
         _record_network_absent(controller, now=now)
-        controller.operations.state_changed(operation_id, "allocation", "ready", now=now)
+        controller.operations.state_changed(
+            operation_id, "allocation", "ready", now=now
+        )
         controller.operations.stage_completed(operation_id, "allocation", now=now)
         controller.finish_operation(operation_id, success=True, now=now)
     except Exception:
@@ -707,6 +892,7 @@ def _execute_prepare(
     controller: ApplicationController,
     operation_id: str,
     inventory: ResourceInventory,
+    runner: Runner,
     *,
     now: datetime,
 ) -> None:
@@ -716,32 +902,47 @@ def _execute_prepare(
     owner = authority.profile.slices_username
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
-    reservation = _require_current_observation(controller, "reservation")
-    allocation = _require_current_observation(controller, "allocation", ownership="synthran")
     core_node, ran_node = _selected_nodes(controller, inventory, now)
-    if {allocation.facts.get("core_node"), allocation.facts.get("ran_node")} != {core_node, ran_node}:
-        raise LiveOperationError("current allocation does not match the selected node pair")
+    reservation = _verify_selected_reservation(
+        controller,
+        runner,
+        now=now,
+        core_node=core_node,
+        ran_node=ran_node,
+    )
+    allocation = _require_current_observation(
+        controller,
+        "allocation",
+        now=now,
+        ownership="synthran",
+    )
+    verify_allocations(
+        runner=runner,
+        allocation_id=str(allocation.resource_id),
+        owner=owner,
+        nodes={core_node, ran_node},
+        timeout_seconds=POS_TIMEOUT_SECONDS,
+    )
 
     controller.authorize_operation(operation_id, inventory=inventory, now=now)
     controller.operations.stage_started(operation_id, "preparation", now=now)
     try:
         lock = load_lock(controller.root / "dependencies.lock.yml")
-        preparation_plan = build_resource_preparation_plan(
-            lock=lock,
-            core_node=core_node,
-            ran_node=ran_node,
-            duration_minutes=authority.workspace.reservation_minutes,
-            run_id=operation_id,
-            reservation_id=reservation.resource_id,
-        )
         result = execute_resource_preparation(
-            plan=preparation_plan,
+            plan=build_resource_preparation_plan(
+                lock=lock,
+                core_node=core_node,
+                ran_node=ran_node,
+                duration_minutes=authority.workspace.reservation_minutes,
+                run_id=operation_id,
+                reservation_id=str(reservation.resource_id),
+            ),
             lock=lock,
             dependency_root=controller.root / ".deps",
             owner=owner,
             slices_project=authority.slices_project,
             slices_experiment=authority.slices_experiment,
-            reservation_id=reservation.resource_id,
+            reservation_id=str(reservation.resource_id),
             run_root=controller.root / ".synthran" / "preparations",
             repository_root=controller.root,
             now=now,
@@ -762,7 +963,9 @@ def _execute_prepare(
             now=now,
         )
         _record_network_absent(controller, now=now)
-        controller.operations.state_changed(operation_id, "preparation", "ready", now=now)
+        controller.operations.state_changed(
+            operation_id, "preparation", "ready", now=now
+        )
         controller.operations.stage_completed(operation_id, "preparation", now=now)
         controller.finish_operation(operation_id, success=True, now=now)
     except Exception:
@@ -770,9 +973,23 @@ def _execute_prepare(
         raise
 
 
-def _preparation_paths(controller: ApplicationController) -> tuple[Observation, Path, Path]:
-    preparation = _require_current_observation(controller, "preparation", ownership="synthran")
-    run_directory = controller.root / ".synthran" / "preparations" / str(preparation.resource_id)
+def _preparation_paths(
+    controller: ApplicationController,
+    *,
+    now: datetime,
+) -> tuple[Observation, Path, Path]:
+    preparation = _require_current_observation(
+        controller,
+        "preparation",
+        now=now,
+        ownership="synthran",
+    )
+    run_directory = (
+        controller.root
+        / ".synthran"
+        / "preparations"
+        / str(preparation.resource_id)
+    )
     inventory_path = run_directory / "hosts.ini"
     known_hosts = run_directory / "known_hosts"
     if not inventory_path.is_file() or not known_hosts.is_file():
@@ -784,6 +1001,7 @@ def _execute_up(
     controller: ApplicationController,
     operation_id: str,
     inventory: ResourceInventory,
+    runner: Runner,
     *,
     now: datetime,
 ) -> None:
@@ -793,20 +1011,49 @@ def _execute_up(
     owner = authority.profile.slices_username
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
-    reservation = _require_current_observation(controller, "reservation")
-    allocation = _require_current_observation(controller, "allocation", ownership="synthran")
-    preparation, inventory_path, known_hosts = _preparation_paths(controller)
     core_node, ran_node = _selected_nodes(controller, inventory, now)
+    reservation = _verify_selected_reservation(
+        controller,
+        runner,
+        now=now,
+        core_node=core_node,
+        ran_node=ran_node,
+    )
+    allocation = _require_current_observation(
+        controller,
+        "allocation",
+        now=now,
+        ownership="synthran",
+    )
+    verify_allocations(
+        runner=runner,
+        allocation_id=str(allocation.resource_id),
+        owner=owner,
+        nodes={core_node, ran_node},
+        timeout_seconds=POS_TIMEOUT_SECONDS,
+    )
+    preparation, inventory_path, known_hosts = _preparation_paths(
+        controller, now=now
+    )
     network_inventory = load_inventory(inventory_path)
-    if {network_inventory.core_node.name, network_inventory.ran_node.name} != {core_node, ran_node}:
-        raise LiveOperationError("prepared inventory no longer matches the selected resources")
+    if {
+        network_inventory.core_node.name,
+        network_inventory.ran_node.name,
+    } != {core_node, ran_node}:
+        raise LiveOperationError(
+            "prepared inventory no longer matches the selected resources"
+        )
 
     controller.authorize_operation(operation_id, inventory=inventory, now=now)
     controller.operations.stage_started(operation_id, "network", now=now)
     try:
         lock = load_lock(controller.root / "dependencies.lock.yml")
-        evidence_path = preparation.run_id and (
-            controller.root / ".synthran" / "preparations" / str(preparation.resource_id) / "live-preflight.json"
+        evidence_path = (
+            controller.root
+            / ".synthran"
+            / "preparations"
+            / str(preparation.resource_id)
+            / "live-preflight.json"
         )
         with _known_hosts(known_hosts):
             preflight = run_live_preflight(
@@ -819,11 +1066,16 @@ def _execute_up(
                 slices_experiment=authority.slices_experiment,
             )
             if not preflight.ready:
-                raise LiveOperationError("fresh live preflight did not authorize network deployment")
+                raise LiveOperationError(
+                    "fresh live preflight did not authorize network deployment"
+                )
             save_live_evidence(preflight, evidence_path)
-            deployment_plan = build_network_plan(lock=lock, inventory=network_inventory, profile="default")
             execute_network_deployment(
-                plan=deployment_plan,
+                plan=build_network_plan(
+                    lock=lock,
+                    inventory=network_inventory,
+                    profile="default",
+                ),
                 lock=lock,
                 dependency_root=controller.root / ".deps",
                 live_evidence_path=evidence_path,
@@ -849,7 +1101,12 @@ def _execute_up(
         raise
 
 
-def _current_network_run(controller: ApplicationController) -> str:
+def _current_network_run(
+    controller: ApplicationController,
+    *,
+    now: datetime,
+    required: bool = True,
+) -> str | None:
     record = controller.authority.active_experiment
     if record is None:
         raise LiveOperationError("workspace has no active experiment")
@@ -858,11 +1115,19 @@ def _current_network_run(controller: ApplicationController) -> str:
         item.resource_id
         for dimension in NETWORK_DIMENSIONS
         if (item := observed.observation(dimension)) is not None
+        and item.is_fresh(now)
         and item.ownership == "synthran"
         and item.resource_id is not None
+        and item.state != "absent"
     }
+    if not identifiers:
+        if required:
+            raise LiveOperationError("no current run-owned network is recorded")
+        return None
     if len(identifiers) != 1:
-        raise LiveOperationError("current network components do not identify one exact run")
+        raise LiveOperationError(
+            "current network components do not identify one exact run"
+        )
     return next(iter(identifiers))
 
 
@@ -872,8 +1137,11 @@ def _execute_verify(
     *,
     now: datetime,
 ) -> None:
-    preparation, inventory_path, known_hosts = _preparation_paths(controller)
-    network_run = _current_network_run(controller)
+    preparation, inventory_path, known_hosts = _preparation_paths(
+        controller, now=now
+    )
+    network_run = _current_network_run(controller, now=now)
+    assert network_run is not None
     network_inventory = load_inventory(inventory_path)
     controller.authorize_operation(operation_id, now=now)
     controller.operations.stage_started(operation_id, "verification", now=now)
@@ -886,9 +1154,19 @@ def _execute_verify(
                 run_id=network_run,
                 now=now,
             )
-        evidence_path = controller.root / ".synthran" / "runs" / network_run / "network-evidence.json"
-        manifest_path = controller.root / ".synthran" / "runs" / network_run / "manifest.json"
-        save_network_evidence(report, evidence_path, manifest_path)
+        save_network_evidence(
+            report,
+            controller.root
+            / ".synthran"
+            / "runs"
+            / network_run
+            / "network-evidence.json",
+            controller.root
+            / ".synthran"
+            / "runs"
+            / network_run
+            / "manifest.json",
+        )
         if not report.ready:
             raise LiveOperationError("end-to-end path verification failed")
         _record_network_ready(
@@ -897,8 +1175,12 @@ def _execute_verify(
             preparation_id=str(preparation.resource_id),
             now=now,
         )
-        controller.operations.state_changed(operation_id, "path", "ready", now=now)
-        controller.operations.stage_completed(operation_id, "verification", now=now)
+        controller.operations.state_changed(
+            operation_id, "path", "ready", now=now
+        )
+        controller.operations.stage_completed(
+            operation_id, "verification", now=now
+        )
         controller.finish_operation(operation_id, success=True, now=now)
     except Exception:
         _finish_failure(controller, operation_id, "verification", now=now)
@@ -916,18 +1198,41 @@ def _execute_recover_allocation(
     owner = controller.authority.profile.slices_username
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
-    allocation = _require_current_observation(controller, "allocation", ownership="synthran")
     core_node, ran_node = _selected_nodes(controller, inventory, now)
+    reservation = _verify_selected_reservation(
+        controller,
+        runner,
+        now=now,
+        core_node=core_node,
+        ran_node=ran_node,
+    )
+    allocation = _require_current_observation(
+        controller,
+        "allocation",
+        now=now,
+        ownership="synthran",
+    )
+    selected = {core_node, ran_node}
+    touched = _touching_allocations(runner=runner, nodes=selected)
+    if len(touched) != 1:
+        raise LiveOperationError(
+            "allocation recovery requires exactly one current partial allocation"
+        )
+    allocation_id, allocation_owner, allocated_nodes = touched[0]
+    if allocation_id != allocation.resource_id or allocation_owner != owner:
+        raise LiveOperationError("allocation recovery encountered ownership drift")
+    owned_selected = tuple(sorted(selected.intersection(allocated_nodes)))
+    if not owned_selected or set(owned_selected) == selected:
+        raise LiveOperationError(
+            "allocation recovery requires an incomplete SynthRAN-owned allocation"
+        )
+
     controller.authorize_operation(operation_id, inventory=inventory, now=now)
-    controller.operations.stage_started(operation_id, "allocation-recovery", now=now)
+    controller.operations.stage_started(
+        operation_id, "allocation-recovery", now=now
+    )
     try:
-        for node in (core_node, ran_node):
-            result = runner(("pos", "allocations", "show", node, "--json"), POS_TIMEOUT_SECONDS)
-            if result.returncode != 0:
-                continue
-            record = _json_object(result.stdout, f"POS allocation query for {node}")
-            if _identifier(record, "allocation ID") != allocation.resource_id or _owner(record, "allocation owner") != owner:
-                raise LiveOperationError("allocation recovery encountered ownership drift")
+        for node in owned_selected:
             _checked(
                 runner,
                 ("pos", "allocations", "free", "-k", node),
@@ -940,12 +1245,25 @@ def _execute_recover_allocation(
             label="POS allocation recovery",
             allow_empty=True,
         )
-        allocation_id = _allocation_id_after(runner, owner=owner, core_node=core_node, ran_node=ran_node)
+        restored_id = _allocation_id_after(
+            runner,
+            owner=owner,
+            core_node=core_node,
+            ran_node=ran_node,
+        )
         verify_allocations(
             runner=runner,
-            allocation_id=allocation_id,
+            allocation_id=restored_id,
             owner=owner,
-            nodes={core_node, ran_node},
+            nodes=selected,
+            timeout_seconds=POS_TIMEOUT_SECONDS,
+        )
+        verify_reservation(
+            runner=runner,
+            reservation_id=str(reservation.resource_id),
+            owner=owner,
+            nodes=selected,
+            now=now,
             timeout_seconds=POS_TIMEOUT_SECONDS,
         )
         _merge_observations(
@@ -956,35 +1274,53 @@ def _execute_recover_allocation(
                     "ready",
                     now=now,
                     ownership="synthran",
-                    resource_id=allocation_id,
+                    resource_id=restored_id,
                     detail="allocation recovery restored one exact owned pair",
                     facts={"core_node": core_node, "ran_node": ran_node},
                 ),
-                "preparation": _observation("preparation", "absent", now=now, ownership="unowned"),
+                "preparation": _observation(
+                    "preparation", "absent", now=now, ownership="unowned"
+                ),
             },
             now=now,
         )
         _record_network_absent(controller, now=now)
-        controller.operations.stage_completed(operation_id, "allocation-recovery", now=now)
+        controller.operations.stage_completed(
+            operation_id, "allocation-recovery", now=now
+        )
         controller.finish_operation(operation_id, success=True, now=now)
     except Exception:
-        _finish_failure(controller, operation_id, "allocation-recovery", now=now)
+        _finish_failure(
+            controller, operation_id, "allocation-recovery", now=now
+        )
         raise
 
 
 def _delete_run_owned_namespace(
-    *, runner: Runner, network_inventory, run_id: str
+    *,
+    runner: Runner,
+    network_inventory: NetworkInventory,
+    run_id: str,
 ) -> None:
-    command = "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get namespace open5gs -o json"
-    result = runner(ssh_command(network_inventory.core_node, "sh", "-c", command), POS_TIMEOUT_SECONDS)
-    if result.returncode != 0:
+    query = runner(
+        ssh_command(
+            network_inventory.core_node,
+            "sh",
+            "-c",
+            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get namespace open5gs -o json",
+        ),
+        POS_TIMEOUT_SECONDS,
+    )
+    if query.returncode != 0:
         return
-    namespace = _json_object(result.stdout, "Open5GS namespace ownership query")
+    namespace = _json_object(query.stdout, "Open5GS namespace ownership query")
     metadata = namespace.get("metadata")
     labels = metadata.get("labels") if isinstance(metadata, dict) else None
     if not isinstance(labels, dict) or labels.get("synthran.run/id") != run_id:
-        raise LiveOperationError("Open5GS namespace is not owned by the approved network run")
-    delete = runner(
+        raise LiveOperationError(
+            "Open5GS namespace is not owned by the approved network run"
+        )
+    result = runner(
         ssh_command(
             network_inventory.core_node,
             "sh",
@@ -993,7 +1329,7 @@ def _delete_run_owned_namespace(
         ),
         210,
     )
-    if delete.returncode != 0:
+    if result.returncode != 0:
         raise LiveOperationError("run-owned Open5GS namespace deletion failed")
 
 
@@ -1007,37 +1343,84 @@ def _execute_down(
     owner = controller.authority.profile.slices_username
     if owner is None:
         raise LiveOperationError("workspace profile has no SLICES username")
-    allocation = _require_current_observation(controller, "allocation", ownership="synthran")
-    preparation, inventory_path, known_hosts = _preparation_paths(controller)
-    network_inventory = load_inventory(inventory_path)
-    network_run = _current_network_run(controller)
+    allocation = _require_current_observation(
+        controller,
+        "allocation",
+        now=now,
+        ownership="synthran",
+    )
+    record = controller.authority.active_experiment
+    if record is None:
+        raise LiveOperationError("workspace has no active experiment")
+    observed = load_observed_state(controller.root, record.experiment_id)
+    preparation = observed.observation("preparation")
+    network_run = _current_network_run(controller, now=now, required=False)
+
+    network_inventory: NetworkInventory | None = None
+    known_hosts: Path | None = None
+    if preparation is not None and preparation.is_fresh(now) and preparation.state != "absent":
+        if preparation.ownership != "synthran" or preparation.resource_id is None:
+            raise LiveOperationError("current preparation is not safely owned")
+        run_directory = (
+            controller.root
+            / ".synthran"
+            / "preparations"
+            / preparation.resource_id
+        )
+        inventory_path = run_directory / "hosts.ini"
+        known_hosts = run_directory / "known_hosts"
+        if not inventory_path.is_file() or not known_hosts.is_file():
+            raise LiveOperationError("current preparation artifacts are incomplete")
+        network_inventory = load_inventory(inventory_path)
+    if network_run is not None and (network_inventory is None or known_hosts is None):
+        raise LiveOperationError(
+            "run-owned network exists without the preparation authority needed for teardown"
+        )
+
     controller.authorize_operation(operation_id, now=now)
     controller.operations.stage_started(operation_id, "teardown", now=now)
     try:
-        with _known_hosts(known_hosts):
-            _delete_run_owned_namespace(runner=runner, network_inventory=network_inventory, run_id=network_run)
-        for node in (network_inventory.core_node.name, network_inventory.ran_node.name):
-            record = _json_object(
-                _checked(runner, ("pos", "allocations", "show", node, "--json"), label=f"POS allocation query for {node}"),
-                f"POS allocation query for {node}",
+        if network_run is not None:
+            assert network_inventory is not None and known_hosts is not None
+            with _known_hosts(known_hosts):
+                _delete_run_owned_namespace(
+                    runner=runner,
+                    network_inventory=network_inventory,
+                    run_id=network_run,
+                )
+
+        selected_nodes = {
+            str(allocation.facts.get("core_node", "")),
+            str(allocation.facts.get("ran_node", "")),
+        }
+        if "" in selected_nodes or len(selected_nodes) != 2:
+            raise LiveOperationError(
+                "current allocation does not identify the exact selected node pair"
             )
-            if _identifier(record, "allocation ID") != allocation.resource_id or _owner(record, "allocation owner") != owner:
-                raise LiveOperationError("teardown allocation ownership changed after approval")
-        for node in (network_inventory.core_node.name, network_inventory.ran_node.name):
+        verify_allocations(
+            runner=runner,
+            allocation_id=str(allocation.resource_id),
+            owner=owner,
+            nodes=selected_nodes,
+            timeout_seconds=POS_TIMEOUT_SECONDS,
+        )
+        for node in sorted(selected_nodes):
             _checked(
                 runner,
                 ("pos", "allocations", "free", "-k", node),
                 label=f"POS allocation release for {node}",
                 allow_empty=True,
             )
-        _merge_observations(
-            controller,
-            {
-                "allocation": _observation("allocation", "absent", now=now, ownership="unowned"),
-                "preparation": _observation("preparation", "absent", now=now, ownership="unowned"),
-            },
-            now=now,
-        )
+
+        updates = {
+            "allocation": _observation(
+                "allocation", "absent", now=now, ownership="unowned"
+            ),
+            "preparation": _observation(
+                "preparation", "absent", now=now, ownership="unowned"
+            ),
+        }
+        _merge_observations(controller, updates, now=now)
         _record_network_absent(controller, now=now)
         controller.operations.stage_completed(operation_id, "teardown", now=now)
         controller.finish_operation(operation_id, success=True, now=now)
@@ -1067,11 +1450,17 @@ def execute_live_operation(
     if state.status != expected:
         raise LiveOperationError("operation is not ready for live execution")
 
+    _verify_control_context(controller, runner=runner)
     inventory: ResourceInventory | None = None
-    if plan.kind in {"reserve", "allocate", "prepare", "up", "recover-allocation"}:
-        inventory = refresh_slices_control_state(
-            start=start,
-            environment=environment,
+    if plan.kind in {
+        "reserve",
+        "allocate",
+        "prepare",
+        "up",
+        "recover-allocation",
+    }:
+        inventory = discover_slices_inventory(
+            controller=controller,
             runner=runner,
             now=current,
         )
@@ -1084,14 +1473,18 @@ def execute_live_operation(
         _execute_allocate(controller, operation_id, inventory, runner, now=current)
     elif plan.kind == "prepare":
         assert inventory is not None
-        _execute_prepare(controller, operation_id, inventory, now=current)
+        _execute_prepare(
+            controller, operation_id, inventory, runner, now=current
+        )
     elif plan.kind == "up":
         assert inventory is not None
-        _execute_up(controller, operation_id, inventory, now=current)
+        _execute_up(controller, operation_id, inventory, runner, now=current)
     elif plan.kind == "verify-path":
         _execute_verify(controller, operation_id, now=current)
     elif plan.kind == "recover-allocation":
         assert inventory is not None
-        _execute_recover_allocation(controller, operation_id, inventory, runner, now=current)
+        _execute_recover_allocation(
+            controller, operation_id, inventory, runner, now=current
+        )
     else:
         _execute_down(controller, operation_id, runner, now=current)
