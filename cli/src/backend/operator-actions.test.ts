@@ -34,7 +34,7 @@ const state = (lifecycle: string): WorkbenchState => ({
 
 test('primary actions follow the actual reconciliation boundary', () => {
   assert.deepEqual(primaryOperatorAction(state('CONFIGURED')), {
-    action: 'reserve', label: 'Reserve resources', destructive: false,
+    action: 'up', label: 'Reserve resources', destructive: false,
   });
   assert.equal(primaryOperatorAction(state('RESERVED'))?.label, 'Allocate nodes');
   assert.equal(primaryOperatorAction(state('ALLOCATED'))?.label, 'Prepare nodes');
@@ -61,5 +61,6 @@ test('operation kinds render concrete operator language', () => {
   assert.equal(operationKindLabel('allocate', 'fallback'), 'Allocate nodes');
   assert.equal(operationKindLabel('up', 'fallback'), 'Deploy 5G network');
   assert.equal(operationKindLabel('verify-path', 'fallback'), 'Verify 5G path');
+  assert.equal(operationKindLabel('down', 'Release allocation'), 'Release allocation');
   assert.equal(operationKindLabel('unknown', 'fallback'), 'fallback');
 });
