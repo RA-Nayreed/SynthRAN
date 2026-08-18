@@ -12,19 +12,22 @@ It keeps the underlying safety model intact while presenting only the action tha
 
 ## Setup
 
-Setup shows the current controller profile and the concrete configuration used by the accepted SynthRAN path:
+Setup shows and edits the concrete configuration used by SynthRAN:
 
-- profile and SLICES user;
+- saved controller profile and SLICES user;
 - SLICES project;
 - an existing SLICES experiment selected and bound explicitly;
 - Open5GS core;
 - srsRAN gNB;
 - srsUE;
 - Virtual / RFSIM or Physical / R2Lab radio selection;
-- reservation duration;
-- current resource-selection policy.
+- automatic or manual SLICES compute placement;
+- explicit core and RAN nodes when manual placement is selected;
+- reservation duration.
 
-For automatic SLICES placement, the current reviewed selector prefers `sopnode-f2` for core and `sopnode-f3` for RAN when those resources are safe and available. Exact resource choices are still bound from fresh provider inventory when an action is planned.
+An initialized workspace may switch to another saved controller profile before the active network configuration is bound or started. SynthRAN verifies the selected profile's SLICES project access before changing the durable workspace profile. An unbound local configuration is only deactivated; its experiment directory remains preserved as history.
+
+For automatic SLICES placement, the reviewed selector chooses safe resources from fresh provider inventory and currently prefers `sopnode-f2` for core and `sopnode-f3` for RAN when available. Manual placement stores the selected core/RAN node IDs directly in the experiment desired state. Planning still verifies those exact resources against fresh provider inventory and ownership before any provider mutation.
 
 R2Lab slice and SSH identity details are shown only when Physical / R2Lab is selected. Physical execution is not connected yet.
 
@@ -79,15 +82,16 @@ Live execution in this surface currently supports only the accepted virtual RFSI
 
 ## First use
 
-When no persistent workspace exists, Setup can reuse an existing controller profile or create a new profile with a SLICES username and optional R2Lab slice plus SSH identity. Provider access is verified before persistent local state is written.
+When no persistent workspace exists, Setup can reuse an existing controller profile or create a new profile with a SLICES username and optional R2Lab slice plus SSH identity. Provider access is verified before persistent local state is written. The operator also chooses the reservation default and whether later resource placement starts in automatic or manual mode.
 
 Initialization does not reserve, allocate, deploy or create the SLICES provider experiment.
 
 ## Local preview
 
-Run from the SynthRAN repository or any directory inside an initialized workspace:
+Use the locked SynthRAN environment, which includes the Node.js runtime required by the workbench:
 
 ```bash
+conda activate synthran
 cd cli
 npm install
 npm run typecheck
@@ -107,8 +111,10 @@ General controls:
 In Setup:
 
 - ↑/↓ moves focus;
-- ←/→ changes radio, reservation duration or provider selection;
-- Enter saves the focused explicit action, creates a new network configuration, loads provider experiments or binds the selected provider experiment.
+- ←/→ changes profile candidate, radio, placement, manual core/RAN nodes, reservation duration, or provider selection;
+- Enter on Profile verifies and switches the selected saved profile;
+- Enter on New network config persists the selected radio and placement, including exact core/RAN nodes in manual mode;
+- Enter can also save defaults, load provider experiments, or bind the selected provider experiment.
 
 In Resources or Network:
 
