@@ -173,13 +173,18 @@ def _reap(
 def _listener_ready(
     inventory: NetworkInventory,
     *,
-    server_node: str,
     pidfile: str,
     port: int,
+    server_node: str | None = None,
 ) -> bool:
+    remote_inventory = (
+        inventory
+        if server_node is None
+        else _server_inventory(inventory, server_node)
+    )
     try:
         base_runtime._remote(
-            _server_inventory(inventory, server_node),
+            remote_inventory,
             "python3",
             "-c",
             _LISTENER_PROBE,
