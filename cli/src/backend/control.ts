@@ -190,8 +190,13 @@ export const parseControlOutput = (output: string): ControlSnapshot => {
   return snapshot.result;
 };
 
-export const readLocalSnapshot = async (): Promise<ControlSnapshot> =>
+export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSnapshot> =>
   new Promise((resolveSnapshot, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('SynthRAN local state request was cancelled'));
+      return;
+    }
+
     const python = process.env.SYNTHRAN_PYTHON || 'python';
     const workspaceStart = findWorkspaceStart(process.cwd());
     const child = spawn(python, ['-m', 'synthran.control'], {
@@ -204,11 +209,16 @@ export const readLocalSnapshot = async (): Promise<ControlSnapshot> =>
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
 
+    const removeAbortListener = () => {
+      signal?.removeEventListener('abort', onAbort);
+    };
+
     const finishError = (message: string) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (!child.killed) child.kill();
+      removeAbortListener();
+      if (child.exitCode === null && !child.killed) child.kill();
       reject(new Error(message));
     };
 
@@ -216,8 +226,12 @@ export const readLocalSnapshot = async (): Promise<ControlSnapshot> =>
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      removeAbortListener();
       resolveSnapshot(snapshot);
     };
+
+    const onAbort = () => finishError('SynthRAN local state request was cancelled');
+    signal?.addEventListener('abort', onAbort, {once: true});
 
     timer = setTimeout(
       () => finishError('SynthRAN control service did not return local state'),
