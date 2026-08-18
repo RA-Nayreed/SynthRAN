@@ -13,6 +13,7 @@ export interface ObservationView {
 export interface WorkbenchState {
   project: string;
   experiment: string;
+  hasActiveExperiment: boolean;
   completedSections: SectionLabel[];
   intent: string;
   radio: RadioMode;
