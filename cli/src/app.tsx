@@ -140,6 +140,22 @@ export const App = () => {
     [],
   );
 
+  useEffect(() => {
+    if (resourcePreview === null) return;
+    const freshUntil = Date.parse(resourcePreview.inventory.fresh_until_utc);
+    const delay = freshUntil - Date.now();
+    const expire = () => {
+      setResourcePreview(current => (current === resourcePreview ? null : current));
+      setResourceNotice('Previous provider preview expired. Press Enter to refresh.');
+    };
+    if (!Number.isFinite(freshUntil) || delay <= 0) {
+      const timer = setTimeout(expire, 0);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(expire, Math.min(delay, 60_000));
+    return () => clearTimeout(timer);
+  }, [resourcePreview]);
+
   const selectSection = (section: SectionLabel) => {
     if (activeSection === 'Resources' && section !== 'Resources') {
       cancelResourcePreview();
