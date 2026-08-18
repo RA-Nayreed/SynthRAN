@@ -1,4 +1,4 @@
-"""Line-delimited JSON service for local SynthRAN control without provider mutation."""
+"""Line-delimited JSON service for SynthRAN control without provider mutation."""
 
 from __future__ import annotations
 
@@ -15,14 +15,22 @@ from synthran.app import ApplicationController
 from synthran.control.protocol import (
     CONTROL_VERSION,
     LOCAL_WRITE_METHODS,
+    PROVIDER_READ_METHODS,
     SUPPORTED_METHODS,
     error_response,
     parse_request,
     success_response,
 )
+from synthran.workspace.access import Runner, ensure_slices_project_access, subprocess_runner
+from synthran.workspace.context import resolve_workspace_authority
 from synthran.workspace.desired import ExperimentDesiredState, RadioDesiredState
-from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now
-from synthran.workspace.store import load_access_record
+from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now, validate_safe_name
+from synthran.workspace.provider_experiments import (
+    PROVIDER_READ_TIMEOUT_SECONDS,
+    discover_slices_experiments,
+    verified_slices_experiment,
+)
+from synthran.workspace.store import bind_slices_experiment, load_access_record
 
 
 class ControlInputError(ValueError):
@@ -83,23 +91,42 @@ def _desired_experiment(params: Mapping[str, object]) -> tuple[ExperimentDesired
     return desired, label
 
 
+def _provider_name(params: Mapping[str, object]) -> str:
+    if set(params) != {"provider_experiment"}:
+        raise ControlInputError(
+            "experiment.bind_provider requires only provider_experiment"
+        )
+    value = params.get("provider_experiment")
+    if not isinstance(value, str):
+        raise ControlInputError("provider experiment must be text")
+    try:
+        return validate_safe_name(value, "SLICES experiment")
+    except WorkspaceError as exc:
+        raise ControlInputError(str(exc)) from exc
+
+
 class ControlService:
-    """Serve validated local state and local configuration through a versioned method set."""
+    """Serve validated local state, provider reads, and local configuration writes."""
 
     def __init__(
         self,
         *,
         start: Path | None = None,
         environment: Mapping[str, str] | None = None,
+        provider_runner: Runner = subprocess_runner,
+        provider_timeout_seconds: int = PROVIDER_READ_TIMEOUT_SECONDS,
     ) -> None:
         self.start = start
         self.environment = dict(os.environ if environment is None else environment)
+        self.provider_runner = provider_runner
+        self.provider_timeout_seconds = provider_timeout_seconds
 
     def handshake(self) -> dict[str, object]:
         return {
             "service": "synthran-control",
             "protocol": CONTROL_VERSION,
             "local_writes": bool(LOCAL_WRITE_METHODS),
+            "provider_reads": bool(PROVIDER_READ_METHODS),
             "provider_mutation": False,
             "methods": sorted(SUPPORTED_METHODS),
         }
@@ -172,6 +199,77 @@ class ControlService:
             "provider_experiment": None,
         }
 
+    def _verify_project_context(self) -> object:
+        authority = resolve_workspace_authority(
+            start=self.start,
+            environment=self.environment,
+        )
+        username = authority.profile.slices_username
+        if username is None:
+            raise WorkspaceError("selected profile has no SLICES username")
+        ensure_slices_project_access(
+            workspace_root=authority.root,
+            username=username,
+            project=authority.slices_project,
+            force=True,
+            runner=self.provider_runner,
+            timeout_seconds=self.provider_timeout_seconds,
+        )
+        return authority
+
+    def provider_experiments(self) -> dict[str, object]:
+        self._verify_project_context()
+        choices = discover_slices_experiments(
+            runner=self.provider_runner,
+            timeout_seconds=self.provider_timeout_seconds,
+        )
+        return {"experiments": [choice.name for choice in choices]}
+
+    def bind_provider_experiment(self, params: Mapping[str, object]) -> dict[str, object]:
+        provider_experiment = _provider_name(params)
+        before = resolve_workspace_authority(
+            start=self.start,
+            environment=self.environment,
+        )
+        active = before.active_experiment
+        if active is None:
+            raise ControlInputError("create a local experiment before binding a provider experiment")
+        if active.slices_experiment is not None and active.slices_experiment != provider_experiment:
+            raise ControlInputError(
+                "active experiment already has a different SLICES provider binding"
+            )
+
+        self._verify_project_context()
+        verified_slices_experiment(
+            provider_experiment,
+            runner=self.provider_runner,
+            timeout_seconds=self.provider_timeout_seconds,
+        )
+
+        after = resolve_workspace_authority(
+            start=self.start,
+            environment=self.environment,
+        )
+        if after.experiment_id != active.experiment_id:
+            raise WorkspaceError("active experiment changed while provider binding was verified")
+        if after.active_experiment is None:
+            raise WorkspaceError("active experiment disappeared while provider binding was verified")
+        if (
+            after.active_experiment.slices_experiment is not None
+            and after.active_experiment.slices_experiment != provider_experiment
+        ):
+            raise WorkspaceError("provider binding changed while verification was in progress")
+
+        bound = bind_slices_experiment(
+            after.root,
+            after.active_experiment.experiment_id,
+            provider_experiment,
+        )
+        return {
+            "experiment_id": bound.experiment_id,
+            "provider_experiment": bound.slices_experiment,
+        }
+
     def handle(self, value: object) -> dict[str, object]:
         request_id: str | None = None
         try:
@@ -195,6 +293,24 @@ class ControlService:
             if method == "experiment.create":
                 try:
                     result = self.create_experiment(params)
+                except ControlInputError as exc:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message=str(exc),
+                    )
+                return success_response(request_id, result)
+            if method == "provider.experiments":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="provider.experiments does not accept params",
+                    )
+                return success_response(request_id, self.provider_experiments())
+            if method == "experiment.bind_provider":
+                try:
+                    result = self.bind_provider_experiment(params)
                 except ControlInputError as exc:
                     return error_response(
                         request_id,
