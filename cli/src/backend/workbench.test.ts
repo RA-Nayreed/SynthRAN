@@ -48,6 +48,7 @@ test('fresh access with no experiment opens configuration', () => {
   assert.equal(initialSection(value), 'Configure');
   const state = toWorkbenchState(value);
   assert.deepEqual(state.completedSections, ['Access']);
+  assert.equal(state.experimentId, null);
   assert.equal(state.experiment, 'No active experiment');
 });
 
@@ -76,7 +77,9 @@ test('physical radio requires fresh configured R2Lab access', () => {
     access: base.access,
   });
   assert.equal(initialSection(value), 'Access');
-  assert.deepEqual(toWorkbenchState(value).completedSections, ['Configure']);
+  const state = toWorkbenchState(value);
+  assert.equal(state.experimentId, 'sran-20260818-001');
+  assert.deepEqual(state.completedSections, ['Configure']);
 });
 
 test('path proven state marks only verified earlier work complete', () => {
