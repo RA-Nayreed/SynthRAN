@@ -8,21 +8,22 @@ import {
   createLocalExperiment,
   executeOperation,
   initializeWorkspace,
-  inspectOperation,
   inspectSetup,
   listProviderExperiments,
   planOperation,
   readLocalSnapshot,
   updateWorkspaceDefaults,
   type ControlSnapshot,
-  type ExperimentIntent,
-  type OperationAction,
-  type OperationInspection,
   type OperationSnapshot,
   type PlacementMode,
   type SetupProfile,
   type SetupSnapshot,
 } from './backend/control.js';
+import {
+  primaryOperatorAction,
+  secondaryOperatorAction,
+  type OperatorActionView,
+} from './backend/operator-actions.js';
 import {initialSection, toWorkbenchState} from './backend/workbench.js';
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
 import {ConfigurationPanel} from './components/configuration.js';
@@ -35,29 +36,19 @@ import {
   sectionLabels,
   type RadioMode,
   type SectionLabel,
-  type WorkbenchMode,
   type WorkbenchState,
 } from './model.js';
 import {theme} from './theme.js';
 
 const actions: PaletteAction[] = [
-  {label: 'Review access', section: 'Access'},
-  {label: 'Review configuration', section: 'Configure'},
+  {label: 'Open setup', section: 'Setup'},
   {label: 'Inspect resources', section: 'Resources'},
-  {label: 'Inspect network', section: 'Network'},
-  {label: 'Open run view', section: 'Run'},
-  {label: 'Review evidence', section: 'Evidence'},
+  {label: 'Inspect 5G network', section: 'Network'},
+  {label: 'Open experiment', section: 'Experiment'},
+  {label: 'Open data', section: 'Data'},
 ];
 
-const intentOptions: ExperimentIntent[] = [
-  'iot-to-5g',
-  'virtual-5g',
-  'physical-5g',
-  'open-ran',
-  'unspecified',
-];
-const allRadioOptions: RadioMode[] = ['virtual', 'physical', 'automatic'];
-const operationActions: OperationAction[] = ['reserve', 'up', 'verify', 'recover', 'down'];
+const radioOptions: RadioMode[] = ['virtual', 'physical'];
 
 const wrap = (value: number, length: number) => (value + length) % length;
 const cycle = <T,>(items: readonly T[], current: T, delta: number): T => {
@@ -67,25 +58,20 @@ const cycle = <T,>(items: readonly T[], current: T, delta: number): T => {
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value));
 
-const isIntent = (value: string | null): value is ExperimentIntent =>
-  value !== null && intentOptions.includes(value as ExperimentIntent);
-const isRadio = (value: string | null): value is RadioMode =>
-  value === 'automatic' || value === 'virtual' || value === 'physical';
-const isPlacement = (value: string): value is PlacementMode =>
-  value === 'automatic' || value === 'manual';
+const draftFromSnapshot = (snapshot: ControlSnapshot) => {
+  let radio: RadioMode = 'virtual';
+  if (snapshot.experiment.radio_mode === 'physical') radio = 'physical';
+  else if (snapshot.experiment.radio_mode === 'virtual') radio = 'virtual';
+  else if (snapshot.experiment.intent === 'physical-5g') radio = 'physical';
 
-const radioOptionsFor = (intent: ExperimentIntent): RadioMode[] => {
-  if (intent === 'virtual-5g') return ['virtual', 'automatic'];
-  if (intent === 'physical-5g') return ['physical', 'automatic'];
-  return allRadioOptions;
+  return {
+    radio,
+    reservation: snapshot.workspace.reservation_minutes,
+    placement: (
+      snapshot.workspace.placement === 'manual' ? 'manual' : 'automatic'
+    ) as PlacementMode,
+  };
 };
-
-const draftFromSnapshot = (snapshot: ControlSnapshot) => ({
-  intent: isIntent(snapshot.experiment.intent) ? snapshot.experiment.intent : 'iot-to-5g' as ExperimentIntent,
-  radio: isRadio(snapshot.experiment.radio_mode) ? snapshot.experiment.radio_mode : 'virtual' as RadioMode,
-  reservation: snapshot.workspace.reservation_minutes,
-  placement: isPlacement(snapshot.workspace.placement) ? snapshot.workspace.placement : 'automatic' as PlacementMode,
-});
 
 const freshProfileName = (setup: SetupSnapshot) => {
   const preferred = setup.defaults.profile || 'default';
@@ -138,20 +124,18 @@ const safeText = (value: string, profileName: boolean) => {
 
 export const App = () => {
   const {exit} = useApp();
-  const [activeSection, setActiveSection] = useState<SectionLabel>('Access');
+  const [activeSection, setActiveSection] = useState<SectionLabel>('Setup');
   const [state, setState] = useState<WorkbenchState | null>(null);
   const [setup, setSetup] = useState<SetupSnapshot | null>(null);
   const [setupDraft, setSetupDraft] = useState<SetupDraftView | null>(null);
   const [setupProfileIndex, setSetupProfileIndex] = useState(0);
   const [setupIdentityIndex, setSetupIdentityIndex] = useState(0);
   const [setupFocus, setSetupFocus] = useState(0);
-  const [mode, setMode] = useState<WorkbenchMode>('OBSERVE');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [configFocus, setConfigFocus] = useState(0);
-  const [draftIntent, setDraftIntent] = useState<ExperimentIntent>('iot-to-5g');
   const [draftRadio, setDraftRadio] = useState<RadioMode>('virtual');
   const [draftReservation, setDraftReservation] = useState(120);
   const [draftPlacement, setDraftPlacement] = useState<PlacementMode>('automatic');
@@ -159,14 +143,14 @@ export const App = () => {
   const [providerBusy, setProviderBusy] = useState<'loading' | 'binding' | null>(null);
   const [providerExperiments, setProviderExperiments] = useState<string[] | null>(null);
   const [providerIndex, setProviderIndex] = useState(0);
-  const [operationActionIndex, setOperationActionIndex] = useState(1);
-  const [operationInspection, setOperationInspection] = useState<OperationInspection | null>(null);
   const [operationSnapshot, setOperationSnapshot] = useState<OperationSnapshot | null>(null);
-  const [operationBusy, setOperationBusy] = useState<'review' | 'prepare' | 'approve' | 'execute' | 'cancel' | null>(null);
+  const [operationLabel, setOperationLabel] = useState<string | null>(null);
+  const [operationBusy, setOperationBusy] = useState<'prepare' | 'approve' | 'execute' | 'cancel' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
 
-  const operationAction = operationActions[operationActionIndex];
+  const primaryAction = state ? primaryOperatorAction(state) : null;
+  const secondaryAction = state ? secondaryOperatorAction(state) : null;
   const providerCandidate =
     providerExperiments && providerExperiments.length > 0
       ? providerExperiments[Math.min(providerIndex, providerExperiments.length - 1)]
@@ -182,7 +166,6 @@ export const App = () => {
     setState(next);
     setSetup(null);
     setSetupDraft(null);
-    setDraftIntent(draft.intent);
     setDraftRadio(draft.radio);
     setDraftReservation(draft.reservation);
     setDraftPlacement(draft.placement);
@@ -194,9 +177,9 @@ export const App = () => {
     setProviderIndex(0);
   };
 
-  const resetOperationReview = () => {
-    setOperationInspection(null);
+  const resetOperation = () => {
     setOperationSnapshot(null);
+    setOperationLabel(null);
   };
 
   useEffect(() => {
@@ -205,11 +188,10 @@ export const App = () => {
     setState(null);
     setSetup(null);
     setSetupDraft(null);
-    setMode('OBSERVE');
     setLoadError(null);
     setNotice(null);
     resetProviderChoices();
-    resetOperationReview();
+    resetOperation();
 
     inspectSetup(requestController.signal)
       .then(async setupState => {
@@ -226,14 +208,14 @@ export const App = () => {
         setSetupProfileIndex(initial.profileIndex);
         setSetupIdentityIndex(0);
         setSetupFocus(0);
-        setActiveSection('Configure');
+        setActiveSection('Setup');
       })
       .catch(error => {
         if (cancelled) return;
         setState(null);
         setSetup(null);
         setSetupDraft(null);
-        setLoadError(error instanceof Error ? error.message : 'SynthRAN configuration could not be loaded');
+        setLoadError(error instanceof Error ? error.message : 'SynthRAN setup could not be loaded');
       });
 
     return () => {
@@ -253,27 +235,13 @@ export const App = () => {
 
   const selectSection = (section: SectionLabel) => {
     setActiveSection(section);
-    setMode('OBSERVE');
     setNotice(null);
+    resetOperation();
   };
 
   const moveSection = (delta: number) => {
     const current = sectionLabels.indexOf(activeSection);
     selectSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
-  };
-
-  const changeIntent = (delta: number) => {
-    const nextIntent = cycle(intentOptions, draftIntent, delta);
-    const validRadios = radioOptionsFor(nextIntent);
-    setDraftIntent(nextIntent);
-    if (!validRadios.includes(draftRadio)) setDraftRadio('automatic');
-    setNotice(null);
-  };
-
-  const changeRadio = (delta: number) => {
-    const options = radioOptionsFor(draftIntent);
-    setDraftRadio(cycle(options, draftRadio, delta));
-    setNotice(null);
   };
 
   const runLocalWrite = (
@@ -282,10 +250,6 @@ export const App = () => {
     success: (snapshot: ControlSnapshot) => string,
   ) => {
     if (busy) return;
-    if (mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before changing local configuration.');
-      return;
-    }
     const requestController = new AbortController();
     actionRequest.current?.abort();
     actionRequest.current = requestController;
@@ -295,14 +259,13 @@ export const App = () => {
       .then(snapshot => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
-        setActiveSection('Configure');
-        setMode('OBSERVE');
+        setActiveSection('Setup');
         if (kind === 'experiment') resetProviderChoices();
         setNotice(success(snapshot));
       })
       .catch(error => {
         if (requestController.signal.aborted) return;
-        setNotice(error instanceof Error ? error.message : 'SynthRAN local configuration could not be changed');
+        setNotice(error instanceof Error ? error.message : 'SynthRAN setup could not be changed');
       })
       .finally(() => {
         if (actionRequest.current === requestController) {
@@ -318,26 +281,22 @@ export const App = () => {
       {reservationMinutes: draftReservation, placement: draftPlacement},
       signal,
     ),
-    snapshot => `Saved ${snapshot.workspace.reservation_minutes} minute reservation and ${snapshot.workspace.placement} placement defaults.`,
+    snapshot => `Saved ${snapshot.workspace.reservation_minutes} minute reservation default.`,
   );
 
   const saveConfiguration = () => runLocalWrite(
     'experiment',
     signal => createLocalExperiment(
-      {intent: draftIntent, radioMode: draftRadio},
+      {intent: 'iot-to-5g', radioMode: draftRadio},
       signal,
     ),
     snapshot => snapshot.experiment.id
-      ? `Created ${snapshot.experiment.id}. Provider experiment is not bound.`
-      : 'Local configuration was created.',
+      ? `Created ${snapshot.experiment.id}. Select the existing SLICES experiment to bind.`
+      : 'Network configuration was created.',
   );
 
   const initializeFirstUse = () => {
     if (!setup || !setupDraft || busy) return;
-    if (mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before initializing local configuration.');
-      return;
-    }
     if (!setupDraft.project) {
       setNotice('SLICES project is required.');
       return;
@@ -372,8 +331,7 @@ export const App = () => {
       .then(snapshot => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, true);
-        setActiveSection('Configure');
-        setMode('OBSERVE');
+        setActiveSection('Setup');
         setNotice(`Workspace initialized for ${snapshot.workspace.project}.`);
       })
       .catch(error => {
@@ -439,11 +397,11 @@ export const App = () => {
 
   const loadProviders = () => {
     if (!state?.hasActiveExperiment) {
-      setNotice('Create a local configuration before loading provider experiments.');
+      setNotice('Create a network configuration before selecting a SLICES experiment.');
       return;
     }
     if (state.providerExperiment) {
-      setNotice(`Provider experiment is already bound to ${state.providerExperiment}.`);
+      setNotice(`SLICES experiment is already bound to ${state.providerExperiment}.`);
       return;
     }
     if (busy) return;
@@ -459,7 +417,7 @@ export const App = () => {
         setProviderIndex(0);
         setNotice(
           experiments.length > 0
-            ? `Loaded ${experiments.length} SLICES experiment${experiments.length === 1 ? '' : 's'}.`
+            ? `Loaded ${experiments.length} existing SLICES experiment${experiments.length === 1 ? '' : 's'}.`
             : 'No SLICES experiments are available in the verified project.',
         );
       })
@@ -484,22 +442,18 @@ export const App = () => {
 
   const bindProvider = () => {
     if (!state?.hasActiveExperiment) {
-      setNotice('Create a local configuration before binding a provider experiment.');
+      setNotice('Create a network configuration before binding a SLICES experiment.');
       return;
     }
     if (state.providerExperiment) {
-      setNotice(`Provider experiment is already bound to ${state.providerExperiment}.`);
+      setNotice(`SLICES experiment is already bound to ${state.providerExperiment}.`);
       return;
     }
     if (!providerCandidate) {
-      setNotice('Load and select a provider experiment first.');
+      setNotice('Load and select an existing SLICES experiment first.');
       return;
     }
     if (busy) return;
-    if (mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before binding the provider experiment.');
-      return;
-    }
     const selected = providerCandidate;
     const requestController = new AbortController();
     actionRequest.current?.abort();
@@ -510,9 +464,8 @@ export const App = () => {
       .then(snapshot => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
-        setActiveSection('Configure');
-        setMode('OBSERVE');
-        setNotice(`Bound ${selected} to ${snapshot.experiment.id ?? 'the active experiment'}.`);
+        setActiveSection('Setup');
+        setNotice(`Bound existing SLICES experiment ${selected}.`);
       })
       .catch(error => {
         if (requestController.signal.aborted) return;
@@ -526,59 +479,27 @@ export const App = () => {
       });
   };
 
-  const changeOperationAction = (delta: number) => {
-    setOperationActionIndex(index => wrap(index + delta, operationActions.length));
-    resetOperationReview();
-    setNotice(null);
-  };
-
-  const reviewOperation = () => {
+  const prepareAction = (candidate: OperatorActionView) => {
     if (busy) return;
-    const requestController = new AbortController();
-    actionRequest.current?.abort();
-    actionRequest.current = requestController;
-    setOperationBusy('review');
-    setOperationSnapshot(null);
-    setNotice(null);
-    inspectOperation(operationAction, requestController.signal)
-      .then(inspection => {
-        if (requestController.signal.aborted) return;
-        setOperationInspection(inspection);
-      })
-      .catch(error => {
-        if (requestController.signal.aborted) return;
-        setOperationInspection(null);
-        setNotice(error instanceof Error ? error.message : 'Current action could not be reviewed');
-      })
-      .finally(() => {
-        if (actionRequest.current === requestController) {
-          actionRequest.current = null;
-          setOperationBusy(null);
-        }
-      });
-  };
-
-  const prepareOperation = () => {
-    if (busy) return;
-    const mutating = operationAction !== 'verify';
-    if (mutating && mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before preparing a change.');
-      return;
-    }
     const requestController = new AbortController();
     actionRequest.current?.abort();
     actionRequest.current = requestController;
     setOperationBusy('prepare');
+    setOperationLabel(candidate.label);
     setNotice(null);
-    planOperation(operationAction, requestController.signal)
+    planOperation(candidate.action, requestController.signal)
       .then(operation => {
         if (requestController.signal.aborted) return;
         setOperationSnapshot(operation);
-        setOperationInspection(null);
-        setNotice(`Prepared ${operation.plan.operation_id} for review.`);
+        setNotice(
+          operation.plan.approval_required
+            ? `Review the exact action, then press Enter to confirm ${candidate.label.toLowerCase()}.`
+            : `Review the exact action, then press Enter to execute ${candidate.label.toLowerCase()}.`,
+        );
       })
       .catch(error => {
         if (requestController.signal.aborted) return;
+        resetOperation();
         setNotice(error instanceof Error ? error.message : 'Action could not be prepared');
       })
       .finally(() => {
@@ -589,93 +510,35 @@ export const App = () => {
       });
   };
 
-  const approvePreparedOperation = (destructive: boolean) => {
-    if (busy || !operationSnapshot) {
-      if (!operationSnapshot) setNotice('Prepare an action before recording approval.');
-      return;
-    }
-    if (mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before recording approval.');
-      return;
-    }
-    if (!operationSnapshot.plan.approval_required) {
-      setNotice('This read-only action does not require approval.');
-      return;
-    }
-    if (operationSnapshot.plan.risk === 'R3' && !destructive) {
-      setNotice('Use d to confirm the destructive teardown approval.');
-      return;
-    }
-    if (operationSnapshot.plan.risk !== 'R3' && destructive) {
-      setNotice('Destructive approval is reserved for teardown.');
-      return;
-    }
-
-    const requestController = new AbortController();
-    actionRequest.current?.abort();
-    actionRequest.current = requestController;
-    setOperationBusy('approve');
-    setNotice(null);
-    approveOperation(
-      operationSnapshot.plan.operation_id,
-      destructive ? 'destructive' : 'standard',
-      requestController.signal,
-    )
-      .then(operation => {
-        if (requestController.signal.aborted) return;
-        setOperationSnapshot(operation);
-        setMode('OBSERVE');
-        setNotice(`Approval recorded for ${operation.plan.operation_id}.`);
-      })
-      .catch(error => {
-        if (requestController.signal.aborted) return;
-        setNotice(error instanceof Error ? error.message : 'Approval could not be recorded');
-      })
-      .finally(() => {
-        if (actionRequest.current === requestController) {
-          actionRequest.current = null;
-          setOperationBusy(null);
-        }
-      });
-  };
-
   const executePreparedOperation = () => {
-    if (busy || !operationSnapshot) {
-      if (!operationSnapshot) setNotice('Prepare an action before executing it.');
-      return;
-    }
-    const readyStatus = operationSnapshot.plan.approval_required ? 'approved' : 'planned';
-    if (operationSnapshot.state.status !== readyStatus) {
-      setNotice(
-        operationSnapshot.plan.approval_required
-          ? 'Record the required approval before execution.'
-          : 'Prepare a fresh action before execution.',
-      );
-      return;
-    }
-    if (operationSnapshot.plan.mutates && mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before executing the approved change.');
-      return;
-    }
-
+    if (busy || !operationSnapshot) return;
     const requestController = new AbortController();
     actionRequest.current?.abort();
     actionRequest.current = requestController;
     setOperationBusy('execute');
     setNotice(null);
+    const label = operationLabel ?? 'action';
     executeOperation(operationSnapshot.plan.operation_id, requestController.signal)
       .then(async operation => {
         if (requestController.signal.aborted) return;
         const snapshot = await readLocalSnapshot(requestController.signal);
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
-        setOperationSnapshot(operation);
-        setOperationInspection(null);
-        setMode('OBSERVE');
-        setNotice(`Completed ${operation.plan.operation_id}.`);
+        resetOperation();
+        setNotice(`Completed ${label}.`);
+        if (operation.state.status !== 'completed') {
+          setNotice(`${label} finished with state ${operation.state.status}.`);
+        }
       })
-      .catch(error => {
+      .catch(async error => {
         if (requestController.signal.aborted) return;
+        try {
+          const snapshot = await readLocalSnapshot(requestController.signal);
+          if (!requestController.signal.aborted) applySnapshot(snapshot, false);
+        } catch {
+          // Preserve the original execution error when the follow-up read also fails.
+        }
+        resetOperation();
         setNotice(error instanceof Error ? error.message : 'Live action did not complete');
       })
       .finally(() => {
@@ -686,26 +549,60 @@ export const App = () => {
       });
   };
 
+  const advancePreparedOperation = () => {
+    if (busy || !operationSnapshot) return;
+    if (operationSnapshot.state.status === 'planned' && operationSnapshot.plan.approval_required) {
+      const requestController = new AbortController();
+      actionRequest.current?.abort();
+      actionRequest.current = requestController;
+      setOperationBusy('approve');
+      setNotice(null);
+      approveOperation(
+        operationSnapshot.plan.operation_id,
+        operationSnapshot.plan.risk === 'R3' ? 'destructive' : 'standard',
+        requestController.signal,
+      )
+        .then(operation => {
+          if (requestController.signal.aborted) return;
+          setOperationSnapshot(operation);
+          setNotice(`Confirmation recorded. Press Enter to execute ${operationLabel?.toLowerCase() ?? 'the action'}.`);
+        })
+        .catch(error => {
+          if (requestController.signal.aborted) return;
+          setNotice(error instanceof Error ? error.message : 'Confirmation could not be recorded');
+        })
+        .finally(() => {
+          if (actionRequest.current === requestController) {
+            actionRequest.current = null;
+            setOperationBusy(null);
+          }
+        });
+      return;
+    }
+
+    if (
+      operationSnapshot.state.status === 'approved' ||
+      (operationSnapshot.state.status === 'planned' && !operationSnapshot.plan.approval_required)
+    ) {
+      executePreparedOperation();
+      return;
+    }
+
+    setNotice(`Action is currently ${operationSnapshot.state.status}. Reload before continuing.`);
+  };
+
   const cancelPreparedOperation = () => {
-    if (busy || !operationSnapshot) {
-      if (!operationSnapshot) setNotice('Prepare an action before cancelling it.');
-      return;
-    }
-    if (mode !== 'OPERATE') {
-      setNotice('Switch to OPERATE with m before cancelling an action.');
-      return;
-    }
+    if (busy || !operationSnapshot) return;
     const requestController = new AbortController();
     actionRequest.current?.abort();
     actionRequest.current = requestController;
     setOperationBusy('cancel');
     setNotice(null);
     cancelOperation(operationSnapshot.plan.operation_id, requestController.signal)
-      .then(operation => {
+      .then(() => {
         if (requestController.signal.aborted) return;
-        setOperationSnapshot(operation);
-        setMode('OBSERVE');
-        setNotice(`Cancelled ${operation.plan.operation_id}.`);
+        resetOperation();
+        setNotice('Prepared action cancelled.');
       })
       .catch(error => {
         if (requestController.signal.aborted) return;
@@ -727,7 +624,7 @@ export const App = () => {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       if (operationBusy === 'execute') {
-        setNotice('A live action is running; interruption is disabled at this boundary.');
+        setNotice('A live provider action is running and cannot be interrupted safely here.');
         return;
       }
       actionRequest.current?.abort();
@@ -736,7 +633,7 @@ export const App = () => {
     }
     if (!setupTextFocused && input.toLowerCase() === 'q') {
       if (operationBusy === 'execute') {
-        setNotice('A live action is running; interruption is disabled at this boundary.');
+        setNotice('A live provider action is running and cannot be interrupted safely here.');
         return;
       }
       actionRequest.current?.abort();
@@ -747,21 +644,15 @@ export const App = () => {
 
     if (setup && setupDraft && state === null) {
       if (!setupTextFocused && input.toLowerCase() === 'r') {
-        setMode('OBSERVE');
         setReloadToken(value => value + 1);
         return;
       }
-      if (!setupTextFocused && input.toLowerCase() === 'm') {
-        setMode(current => current === 'OBSERVE' ? 'OPERATE' : 'OBSERVE');
-        setNotice(null);
-        return;
-      }
       if (key.upArrow) {
-        setSetupFocus(index => wrap(index - 1, 10));
+        setSetupFocus(index => wrap(index - 1, 9));
         return;
       }
       if (key.downArrow || key.tab) {
-        setSetupFocus(index => wrap(index + 1, 10));
+        setSetupFocus(index => wrap(index + 1, 9));
         return;
       }
       if (setupFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
@@ -803,12 +694,7 @@ export const App = () => {
         setNotice(null);
         return;
       }
-      if (setupFocus === 8 && (key.leftArrow || key.rightArrow || key.return)) {
-        setSetupDraft({...setupDraft, placement: setupDraft.placement === 'automatic' ? 'manual' : 'automatic'});
-        setNotice(null);
-        return;
-      }
-      if (setupFocus === 9 && key.return) {
+      if (setupFocus === 8 && key.return) {
         initializeFirstUse();
       }
       return;
@@ -816,8 +702,7 @@ export const App = () => {
 
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
-      setMode('OBSERVE');
-      resetOperationReview();
+      resetOperation();
       setReloadToken(value => value + 1);
       return;
     }
@@ -843,91 +728,69 @@ export const App = () => {
       return;
     }
 
-    if (
-      input.toLowerCase() === 'm' &&
-      (activeSection === 'Configure' || activeSection === 'Resources' || activeSection === 'Network')
-    ) {
-      setMode(current => current === 'OBSERVE' ? 'OPERATE' : 'OBSERVE');
-      setNotice(null);
-      return;
-    }
     if (input === '/') {
       setPaletteOpen(true);
       setPaletteIndex(0);
       return;
     }
-    if (/^[1-6]$/.test(input)) {
+    if (/^[1-5]$/.test(input)) {
       selectSection(sectionLabels[Number(input) - 1]);
       return;
     }
 
     if (activeSection === 'Resources' || activeSection === 'Network') {
-      if (key.leftArrow || key.rightArrow) {
-        changeOperationAction(key.leftArrow ? -1 : 1);
+      if (input.toLowerCase() === 'x' && operationSnapshot) {
+        cancelPreparedOperation();
+        return;
+      }
+      if (input.toLowerCase() === 's' && !operationSnapshot && secondaryAction) {
+        prepareAction(secondaryAction);
         return;
       }
       if (key.return) {
-        reviewOperation();
-        return;
-      }
-      if (input.toLowerCase() === 'p') {
-        prepareOperation();
-        return;
-      }
-      if (input.toLowerCase() === 'a') {
-        approvePreparedOperation(false);
-        return;
-      }
-      if (input.toLowerCase() === 'd') {
-        approvePreparedOperation(true);
-        return;
-      }
-      if (input.toLowerCase() === 'e') {
-        executePreparedOperation();
-        return;
-      }
-      if (input.toLowerCase() === 'x') {
-        cancelPreparedOperation();
+        if (operationSnapshot) {
+          advancePreparedOperation();
+          return;
+        }
+        if (primaryAction) {
+          prepareAction(primaryAction);
+          return;
+        }
+        if (state.lifecycle === 'PATH_PROVEN') {
+          selectSection('Experiment');
+        }
         return;
       }
     }
 
-    if (activeSection === 'Configure') {
+    if (activeSection === 'Setup') {
       if (key.upArrow) {
-        setConfigFocus(index => wrap(index - 1, 8));
+        setConfigFocus(index => wrap(index - 1, 6));
         return;
       }
       if (key.downArrow) {
-        setConfigFocus(index => wrap(index + 1, 8));
+        setConfigFocus(index => wrap(index + 1, 6));
         return;
       }
       if (configFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
-        changeIntent(key.leftArrow ? -1 : 1);
+        setDraftRadio(value => cycle(radioOptions, value === 'automatic' ? 'virtual' : value, key.leftArrow ? -1 : 1));
+        setNotice(null);
         return;
       }
       if (configFocus === 1 && (key.leftArrow || key.rightArrow || key.return)) {
-        changeRadio(key.leftArrow ? -1 : 1);
-        return;
-      }
-      if (configFocus === 2 && (key.leftArrow || key.rightArrow || key.return)) {
         setDraftReservation(value => clamp(value + (key.leftArrow ? -10 : 10), 10, 1440));
         setNotice(null);
         return;
       }
-      if (configFocus === 3 && (key.leftArrow || key.rightArrow || key.return)) {
-        setDraftPlacement(value => value === 'automatic' ? 'manual' : 'automatic');
-        setNotice(null);
-        return;
-      }
-      if (configFocus === 4 && key.return) {
+      if (configFocus === 2 && key.return) {
         saveDefaults();
         return;
       }
-      if (configFocus === 5 && key.return) {
+      if (configFocus === 3 && key.return) {
         saveConfiguration();
         return;
       }
-      if (configFocus === 6) {
+      if (configFocus === 4) {
         if (providerExperiments === null && key.return) {
           loadProviders();
           return;
@@ -937,7 +800,7 @@ export const App = () => {
           return;
         }
       }
-      if (configFocus === 7 && key.return) {
+      if (configFocus === 5 && key.return) {
         bindProvider();
         return;
       }
@@ -958,20 +821,18 @@ export const App = () => {
           <Text color={theme.muted}>{headerProject}</Text>
           <Text color={theme.hairline}> · </Text>
           <Text color={theme.muted}>{headerExperiment}</Text>
-          <Text>   </Text>
-          <Text inverse>{` ${mode} `}</Text>
         </Box>
 
         {state ? (
           <SectionStrip sections={sectionLabels} selected={activeSection} completed={state.completedSections} />
         ) : setup ? (
-          <SectionStrip sections={sectionLabels} selected="Configure" completed={[]} />
+          <SectionStrip sections={sectionLabels} selected="Setup" completed={[]} />
         ) : null}
 
         <Box borderTop borderStyle="single" borderColor={theme.hairline}>
           {loadError ? (
             <Box flexDirection="column" paddingX={1} paddingY={1}>
-              <Text bold color={theme.error}>Configuration unavailable</Text>
+              <Text bold color={theme.error}>Setup unavailable</Text>
               <Text color={theme.muted}>{loadError}</Text>
               <Box height={1} />
               <Text color={theme.bodyStrong}>Press r to retry or q to quit.</Text>
@@ -982,24 +843,20 @@ export const App = () => {
               selectedProfile={selectedSetupProfile}
               draft={setupDraft}
               focusedIndex={setupFocus}
-              mode={mode}
               busy={localBusy === 'initializing'}
               notice={notice}
             />
           ) : state === null ? (
             <Box paddingX={1} paddingY={1}>
-              <Text color={theme.muted}>Reading SynthRAN configuration…</Text>
+              <Text color={theme.muted}>Reading SynthRAN setup…</Text>
             </Box>
           ) : paletteOpen ? (
             <ActionPalette actions={actions} selectedIndex={paletteIndex} />
-          ) : activeSection === 'Configure' ? (
+          ) : activeSection === 'Setup' ? (
             <ConfigurationPanel
               state={state}
-              mode={mode}
-              draftIntent={draftIntent}
               draftRadio={draftRadio}
               draftReservation={draftReservation}
-              draftPlacement={draftPlacement}
               focusedIndex={configFocus}
               localBusy={localBusy}
               providerBusy={providerBusy}
@@ -1011,10 +868,10 @@ export const App = () => {
             <OperationPanel
               section={activeSection}
               state={state}
-              mode={mode}
-              action={operationAction}
-              inspection={operationInspection}
+              primary={primaryAction}
+              secondary={secondaryAction}
               operation={operationSnapshot}
+              operationLabel={operationLabel}
               busy={operationBusy !== null}
               notice={notice}
             />
@@ -1027,7 +884,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>OBSERVE by default · OPERATE gates live changes · virtual RFSIM execution enabled</Text>
+        <Text color={theme.muted}>Exact action plan · explicit confirmation · live authority rechecked before provider changes</Text>
       </Box>
     </Box>
   );
