@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,8 +24,10 @@ from synthran.research import (
 )
 from synthran.research.collector import collect_mqtt_window
 from synthran.research.instrumentation import (
+    _IPERF_CONNECT_TIMEOUT_MS,
     _parse_probe_log,
     _prove_target_reachability,
+    _start_load_client,
     _wait_load_client_connected,
 )
 from synthran.research.iperf import _listener_ready
@@ -188,6 +191,43 @@ class LoadReadinessTests(unittest.TestCase):
                 port=5201,
                 process=managed,
             )
+
+    def test_pre_window_readiness_budget_exceeds_iperf_connect_timeout(self) -> None:
+        wait_default = inspect.signature(_wait_load_client_connected).parameters[
+            "timeout_seconds"
+        ].default
+        self.assertGreater(wait_default * 1000, _IPERF_CONNECT_TIMEOUT_MS)
+        self.assertEqual(15000, _IPERF_CONNECT_TIMEOUT_MS)
+
+    def test_load_client_uses_the_bounded_connect_timeout(self) -> None:
+        managed = MagicMock()
+        with (
+            patch(
+                "synthran.research.instrumentation._kubectl_exec_command",
+                return_value=("ssh", "load"),
+            ) as command,
+            patch(
+                "synthran.research.instrumentation.base_runtime._start_process",
+                return_value=managed,
+            ),
+        ):
+            result = _start_load_client(
+                inventory=object(),
+                ue_pod="ue-pod",
+                pdu_address="12.1.0.2",
+                target="192.0.2.1",
+                port=5201,
+                target_bps=1_000_000,
+                protocol="udp",
+                parallel_flows=2,
+                duration_seconds=30,
+                repository_root=Path("."),
+                log_path=Path("load.log"),
+            )
+        self.assertIs(result, managed)
+        args = command.call_args.args
+        index = args.index("--connect-timeout")
+        self.assertEqual(str(_IPERF_CONNECT_TIMEOUT_MS), args[index + 1])
 
     def test_owned_listener_probe_is_non_connecting_remote_inspection(self) -> None:
         with patch(
