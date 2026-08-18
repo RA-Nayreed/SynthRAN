@@ -186,6 +186,11 @@
         "role": "runtime",
         "license": "PSF-2.0"
       },
+      "nodejs": {
+        "version": "22.21.1",
+        "role": "Ink workbench runtime and package tooling",
+        "license": "MIT"
+      },
       "git": {
         "version": "2.51.0",
         "role": "dependency synchronization and repository hooks",
@@ -235,7 +240,7 @@
       "repository": "conda-incubator/setup-miniconda",
       "source_ref": "v4",
       "commit": "8ee1f361103df19b6f8c8655fd3967a8ecb162d5",
-      "license": "MIT"
+      "license": "BSD-3-Clause"
     },
     "gitleaks_action": {
       "repository": "gitleaks/gitleaks-action",

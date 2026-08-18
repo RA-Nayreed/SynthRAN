@@ -32,23 +32,50 @@ from synthran.control.protocol import (
     parse_request,
     success_response,
 )
-from synthran.workspace.access import Runner, ensure_slices_project_access, subprocess_runner
+from synthran.operations.journal import active_mutation_path
+from synthran.resources.catalog import reviewed_resource_descriptors
+from synthran.workspace.access import (
+    Runner,
+    ensure_slices_project_access,
+    probe_slices_project_access,
+    subprocess_runner,
+)
 from synthran.workspace.configuration import (
+    available_profiles,
     configuration_root,
     first_use_snapshot,
     resolve_ssh_identity_reference,
+    switch_workspace_profile,
     update_workspace_defaults,
 )
 from synthran.workspace.context import resolve_workspace_authority
-from synthran.workspace.desired import ExperimentDesiredState, RadioDesiredState
+from synthran.workspace.desired import (
+    ExperimentDesiredState,
+    PlacementDesiredState,
+    RadioDesiredState,
+)
+from synthran.workspace.desired_store import load_desired_state
 from synthran.workspace.initialization import InitializationRequest, initialize_controller_workspace
-from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now, validate_safe_name
+from synthran.workspace.model import (
+    AccessRecord,
+    WorkspaceError,
+    utc_now,
+    validate_profile_name,
+    validate_safe_name,
+)
 from synthran.workspace.provider_experiments import (
     PROVIDER_READ_TIMEOUT_SECONDS,
     discover_slices_experiments,
     verified_slices_experiment,
 )
-from synthran.workspace.store import bind_slices_experiment, load_access_record
+from synthran.workspace.store import (
+    access_path,
+    bind_slices_experiment,
+    load_access_record,
+    load_profile,
+    save_access_record,
+    verify_profile_identity,
+)
 
 
 class ControlInputError(ValueError):
@@ -76,17 +103,33 @@ def _access_summary(record: AccessRecord | None, *, now: datetime) -> dict[str, 
 def _desired_experiment(
     params: Mapping[str, object],
 ) -> tuple[ExperimentDesiredState, str | None]:
-    allowed = {"intent", "radio_mode", "label"}
+    allowed = {
+        "intent",
+        "radio_mode",
+        "label",
+        "placement",
+        "core_node",
+        "ran_node",
+    }
     if set(params) - allowed:
         raise ControlInputError("experiment.create contains unsupported fields")
 
     intent = params.get("intent", "iot-to-5g")
     radio_mode = params.get("radio_mode", "virtual")
+    placement_mode = params.get("placement", "automatic")
+    core_node = params.get("core_node")
+    ran_node = params.get("ran_node")
     label = params.get("label")
     if not isinstance(intent, str):
         raise ControlInputError("experiment intent must be text")
     if not isinstance(radio_mode, str):
         raise ControlInputError("experiment radio mode must be text")
+    if not isinstance(placement_mode, str):
+        raise ControlInputError("experiment placement must be text")
+    if core_node is not None and not isinstance(core_node, str):
+        raise ControlInputError("core node must be text or null")
+    if ran_node is not None and not isinstance(ran_node, str):
+        raise ControlInputError("RAN node must be text or null")
     if label is not None:
         if not isinstance(label, str):
             raise ControlInputError("experiment label must be text or null")
@@ -104,10 +147,31 @@ def _desired_experiment(
     if radio is None:
         raise ControlInputError("experiment radio mode is unsupported")
 
+    if placement_mode == "automatic":
+        if core_node is not None or ran_node is not None:
+            raise ControlInputError("automatic placement cannot pin core or RAN nodes")
+        placement = PlacementDesiredState(mode="automatic")
+    elif placement_mode == "manual":
+        if core_node is None or ran_node is None:
+            raise ControlInputError("manual placement requires core and RAN nodes")
+        if core_node == ran_node:
+            raise ControlInputError("core and RAN nodes must be different")
+        try:
+            placement = PlacementDesiredState(
+                mode="manual",
+                core_node=core_node,
+                ran_node=ran_node,
+            )
+        except WorkspaceError as exc:
+            raise ControlInputError(str(exc)) from exc
+    else:
+        raise ControlInputError("experiment placement must be automatic or manual")
+
     try:
         desired = replace(
             ExperimentDesiredState.recommended(intent=intent),
             radio=radio,
+            placement=placement,
         )
     except WorkspaceError as exc:
         raise ControlInputError(str(exc)) from exc
@@ -124,6 +188,18 @@ def _provider_name(params: Mapping[str, object]) -> str:
         raise ControlInputError("provider experiment must be text")
     try:
         return validate_safe_name(value, "SLICES experiment")
+    except WorkspaceError as exc:
+        raise ControlInputError(str(exc)) from exc
+
+
+def _profile_name(params: Mapping[str, object]) -> str:
+    if set(params) != {"profile_name"}:
+        raise ControlInputError("workspace.switch_profile requires only profile_name")
+    value = params.get("profile_name")
+    if not isinstance(value, str):
+        raise ControlInputError("profile name must be text")
+    try:
+        return validate_profile_name(value)
     except WorkspaceError as exc:
         raise ControlInputError(str(exc)) from exc
 
@@ -285,11 +361,41 @@ class ControlService:
         authority = controller.authority
 
         slices_record = load_access_record(controller.root, "slices")
+        if slices_record is not None and (
+            slices_record.subject != authority.profile.slices_username
+            or slices_record.scope != authority.slices_project
+        ):
+            slices_record = None
         r2lab_record = load_access_record(controller.root, "r2lab")
+        if r2lab_record is not None and (
+            r2lab_record.subject != authority.r2lab_slice
+            or r2lab_record.scope != "faraday.inria.fr"
+            or r2lab_record.identity_fingerprint
+            != authority.r2lab_identity_fingerprint
+        ):
+            r2lab_record = None
         identity_name = (
             authority.r2lab_identity.name
             if authority.r2lab_identity is not None
             else None
+        )
+
+        placement_mode: str | None = None
+        core_node: str | None = None
+        ran_node: str | None = None
+        if authority.active_experiment is not None:
+            desired = load_desired_state(
+                controller.root,
+                authority.active_experiment.experiment_id,
+            )
+            placement_mode = desired.placement.mode
+            core_node = desired.placement.core_node
+            ran_node = desired.placement.ran_node
+
+        compute_nodes = sorted(
+            descriptor.resource_id
+            for descriptor in reviewed_resource_descriptors()
+            if descriptor.provider == "slices" and descriptor.kind == "compute"
         )
 
         return {
@@ -299,11 +405,18 @@ class ControlService:
                 "reservation_minutes": authority.workspace.reservation_minutes,
                 "placement": authority.workspace.placement,
             },
+            "profiles": [
+                item.to_dict() for item in available_profiles(self.environment)
+            ],
+            "compute_nodes": compute_nodes,
             "experiment": {
                 "id": snapshot.experiment_id,
                 "provider_experiment": snapshot.provider_experiment,
                 "intent": snapshot.intent,
                 "radio_mode": snapshot.radio_mode,
+                "placement_mode": placement_mode,
+                "core_node": core_node,
+                "ran_node": ran_node,
                 "lifecycle": snapshot.lifecycle,
             },
             "access": {
@@ -340,6 +453,52 @@ class ControlService:
             "placement": updated.placement,
         }
 
+    def switch_profile(self, params: Mapping[str, object]) -> dict[str, object]:
+        profile_name = _profile_name(params)
+        before = resolve_workspace_authority(
+            start=self.start,
+            environment=self.environment,
+        )
+        if before.profile.name == profile_name:
+            return {"profile": profile_name, "project": before.slices_project}
+        if active_mutation_path(before.root).exists():
+            raise ControlInputError("cannot switch profile while a provider change is active")
+
+        if before.active_experiment is not None:
+            snapshot = ApplicationController(
+                start=before.root,
+                environment=self.environment,
+            ).snapshot()
+            if (
+                before.active_experiment.slices_experiment is not None
+                or snapshot.lifecycle != "CONFIGURED"
+            ):
+                raise ControlInputError(
+                    "switch profile before binding or starting the active network configuration"
+                )
+
+        try:
+            target = load_profile(profile_name, environment=self.environment)
+            verify_profile_identity(target)
+        except WorkspaceError as exc:
+            raise ControlInputError(str(exc)) from exc
+        if target.slices_username is None:
+            raise ControlInputError("selected profile has no SLICES username")
+
+        verified = probe_slices_project_access(
+            username=target.slices_username,
+            project=before.slices_project,
+            runner=self.provider_runner,
+            timeout_seconds=self.provider_timeout_seconds,
+        )
+        updated = switch_workspace_profile(
+            before.root,
+            profile_name=profile_name,
+        )
+        save_access_record(before.root, verified)
+        access_path(before.root, "r2lab").unlink(missing_ok=True)
+        return {"profile": updated.profile, "project": updated.project}
+
     def create_experiment(
         self,
         params: Mapping[str, object],
@@ -362,6 +521,9 @@ class ControlService:
             "experiment_id": record.experiment_id,
             "intent": record.network_intent,
             "radio_mode": record.radio_mode,
+            "placement": desired.placement.mode,
+            "core_node": desired.placement.core_node,
+            "ran_node": desired.placement.ran_node,
             "provider_experiment": None,
         }
 
@@ -498,6 +660,16 @@ class ControlService:
             if method == "workspace.update_defaults":
                 try:
                     result = self.update_defaults(params)
+                except ControlInputError as exc:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message=str(exc),
+                    )
+                return success_response(request_id, result)
+            if method == "workspace.switch_profile":
+                try:
+                    result = self.switch_profile(params)
                 except ControlInputError as exc:
                     return error_response(
                         request_id,

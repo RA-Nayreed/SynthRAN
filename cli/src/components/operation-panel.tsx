@@ -1,32 +1,24 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
-import type {
-  OperationAction,
-  OperationInspection,
-  OperationSnapshot,
-} from '../backend/control.js';
-import type {ObservationView, SectionLabel, WorkbenchMode, WorkbenchState} from '../model.js';
+import type {OperationSnapshot} from '../backend/control.js';
+import {
+  operationKindLabel,
+  type OperatorActionView,
+} from '../backend/operator-actions.js';
+import type {ObservationView, SectionLabel, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface OperationPanelProps {
   section: Extract<SectionLabel, 'Resources' | 'Network'>;
   state: WorkbenchState;
-  mode: WorkbenchMode;
-  action: OperationAction;
-  inspection: OperationInspection | null;
+  primary: OperatorActionView | null;
+  secondary: OperatorActionView | null;
   operation: OperationSnapshot | null;
+  operationLabel: string | null;
   busy: boolean;
   notice: string | null;
 }
-
-const actionLabels: Record<OperationAction, string> = {
-  reserve: 'Reserve',
-  up: 'Bring up',
-  verify: 'Verify',
-  recover: 'Recover',
-  down: 'Tear down',
-};
 
 const Row = ({label, value}: {label: string; value: string}) => (
   <Box marginBottom={1}>
@@ -40,14 +32,7 @@ const observation = (state: WorkbenchState, name: string): ObservationView | und
 
 const observedValue = (item: ObservationView | undefined) => {
   if (!item) return '—';
-  return `${item.fresh ? '●' : '○'} ${item.state}${item.fresh ? '' : ' · stale'}`;
-};
-
-const riskLabel = (risk: string) => {
-  if (risk === 'R3') return 'Destructive change';
-  if (risk === 'R2') return 'Controlled change';
-  if (risk === 'R1') return 'Live read only';
-  return 'Local read only';
+  return `${item.fresh ? '✓' : '○'} ${item.state}${item.fresh ? '' : ' · stale'}`;
 };
 
 const eventText = (event: OperationSnapshot['events'][number]) => {
@@ -60,8 +45,7 @@ const eventText = (event: OperationSnapshot['events'][number]) => {
   if (event.event_type === 'stage.started') return `${event.attributes.stage ?? 'work'} started`;
   if (event.event_type === 'stage.completed') return `${event.attributes.stage ?? 'work'} complete`;
   if (event.event_type === 'stage.failed') return `${event.attributes.stage ?? 'work'} failed`;
-  if (event.event_type === 'approval.requested') return 'Approval requested';
-  if (event.event_type === 'approval.granted') return 'Approval recorded';
+  if (event.event_type === 'approval.granted') return 'Confirmation recorded';
   if (event.event_type === 'operation.authorized') return 'Execution authorized';
   if (event.event_type === 'operation.interrupted') return 'Action cancelled';
   if (event.event_type === 'recovery.required') return 'Recovery required';
@@ -70,41 +54,43 @@ const eventText = (event: OperationSnapshot['events'][number]) => {
   return event.event_type.replaceAll('.', ' ');
 };
 
-const ActionStrip = ({selected}: {selected: OperationAction}) => (
-  <Box marginTop={1} marginBottom={1}>
-    {(Object.keys(actionLabels) as OperationAction[]).map(action => (
-      <Box key={action} marginRight={1}>
-        <Text inverse={action === selected} color={action === selected ? undefined : theme.muted}>
-          {` ${actionLabels[action]} `}
-        </Text>
-      </Box>
-    ))}
-  </Box>
-);
+const pendingPrompt = (
+  operation: OperationSnapshot | null,
+  primary: OperatorActionView | null,
+  operationLabel: string | null,
+) => {
+  if (!operation) return primary ? `Enter  ${primary.label}` : null;
+  const label = operationKindLabel(operation.plan.kind, operationLabel ?? primary?.label ?? 'Continue');
+  if (operation.state.status === 'planned' && operation.plan.approval_required) {
+    return `Enter  Confirm ${label.toLowerCase()}`;
+  }
+  if (operation.state.status === 'planned' || operation.state.status === 'approved') {
+    return `Enter  Execute ${label.toLowerCase()}`;
+  }
+  return null;
+};
 
 export const OperationPanel = ({
   section,
   state,
-  mode,
-  action,
-  inspection,
+  primary,
+  secondary,
   operation,
+  operationLabel,
   busy,
   notice,
 }: OperationPanelProps) => {
   const isResources = section === 'Resources';
-  const currentRisk = operation?.plan.risk ?? inspection?.risk ?? null;
-  const currentReason = operation?.plan.reason ?? inspection?.reason ?? null;
-  const lastEvents = operation?.events.slice(-6) ?? [];
+  const lastEvents = operation?.events.slice(-5) ?? [];
+  const prompt = pendingPrompt(operation, primary, operationLabel);
+  const radioName = state.radio === 'physical' ? 'R2Lab' : 'RFSIM';
+  const activeLabel = operation
+    ? operationKindLabel(operation.plan.kind, operationLabel ?? primary?.label ?? 'Action')
+    : null;
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Text bold color={theme.bodyStrong}>{section}</Text>
-      <Text color={theme.muted}>
-        {isResources
-          ? 'Reservation, allocation and preparation state.'
-          : 'Virtual RFSIM runtime and end-to-end path state.'}
-      </Text>
+      <Text bold color={theme.bodyStrong}>{isResources ? 'Resources' : '5G Network'}</Text>
       <Box height={1} />
 
       {isResources ? (
@@ -115,41 +101,40 @@ export const OperationPanel = ({
         </>
       ) : (
         <>
-          <Row label="Core" value={observedValue(observation(state, 'core'))} />
-          <Row label="RAN / gNB" value={observedValue(observation(state, 'ran'))} />
-          <Row label="UE" value={observedValue(observation(state, 'ue'))} />
-          <Row label="PDU" value={observedValue(observation(state, 'pdu'))} />
+          <Row label="Core / Open5GS" value={observedValue(observation(state, 'core'))} />
+          <Row label="RAN / srsRAN" value={observedValue(observation(state, 'ran'))} />
+          <Row label="UE / srsUE" value={observedValue(observation(state, 'ue'))} />
+          <Row label={`Radio / ${radioName}`} value={observedValue(observation(state, 'radio'))} />
+          <Row label="PDU session" value={observedValue(observation(state, 'pdu'))} />
           <Row label="UPF" value={observedValue(observation(state, 'upf'))} />
-          <Row label="Path" value={observedValue(observation(state, 'path'))} />
+          <Row label="5G path" value={observedValue(observation(state, 'path'))} />
         </>
       )}
-      <Row label="Lifecycle" value={state.lifecycle} />
+      <Row label="Status" value={state.lifecycle} />
       {state.blocks.length > 0 ? <Row label="Blocked" value={state.blocks[0]} /> : null}
 
       <Box borderTop borderStyle="single" borderColor={theme.hairline} marginTop={1} paddingTop={1} flexDirection="column">
-        <Text color={theme.muted}>Actions</Text>
-        <ActionStrip selected={action} />
-
-        {inspection ? (
-          <>
-            <Row label="Change" value={riskLabel(inspection.risk)} />
-            <Row label="Why" value={inspection.reason} />
-            {inspection.targets.length > 0 ? <Row label="Targets" value={inspection.targets.join(', ')} /> : null}
-            {inspection.plan_block ? <Row label="Needs" value={inspection.plan_block} /> : null}
-          </>
-        ) : null}
-
         {operation ? (
           <>
+            <Text bold color={theme.bodyStrong}>{activeLabel}</Text>
             <Row label="Action ID" value={operation.plan.operation_id} />
-            <Row label="Status" value={operation.state.status} />
-            <Row label="Approval" value={operation.approval ? 'Recorded' : operation.plan.approval_required ? 'Required' : 'Not required'} />
+            <Row label="State" value={operation.state.status} />
             {operation.plan.targets.length > 0 ? <Row label="Targets" value={operation.plan.targets.join(', ')} /> : null}
+            {operation.plan.approval_required ? (
+              <Row label="Confirmation" value={operation.approval ? 'Recorded' : operation.plan.risk === 'R3' ? 'Destructive confirmation required' : 'Required'} />
+            ) : null}
+          </>
+        ) : primary ? (
+          <>
+            <Text color={theme.muted}>Next</Text>
+            <Text bold color={theme.bodyStrong}>  {primary.label}</Text>
+          </>
+        ) : state.lifecycle === 'PATH_PROVEN' ? (
+          <>
+            <Text color={theme.muted}>Next</Text>
+            <Text bold color={theme.bodyStrong}>  Open Experiment</Text>
           </>
         ) : null}
-
-        {currentRisk ? <Row label="Safety" value={riskLabel(currentRisk)} /> : null}
-        {currentReason && !inspection ? <Row label="Why" value={currentReason} /> : null}
 
         {lastEvents.length > 0 ? (
           <Box flexDirection="column" marginTop={1}>
@@ -160,18 +145,15 @@ export const OperationPanel = ({
           </Box>
         ) : null}
 
-        <Box marginTop={1}>
-          <Text color={theme.muted}>
-            {busy
-              ? 'Working…'
-              : '←→ Choose   Enter Review   p Prepare   a Approve   d Teardown approval   e Execute   x Cancel'}
-          </Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text color={theme.muted}>{busy ? 'Working…' : prompt ?? 'No infrastructure action is required.'}</Text>
+          {!busy && secondary && !operation ? (
+            <Text color={theme.muted}>s      {secondary.label}</Text>
+          ) : null}
+          {!busy && operation && ['planned', 'approved'].includes(operation.state.status) ? (
+            <Text color={theme.muted}>x      Cancel prepared action</Text>
+          ) : null}
         </Box>
-        <Text color={theme.muted}>
-          {mode === 'OPERATE'
-            ? 'OPERATE permits approved virtual RFSIM changes. Execute remains a separate action.'
-            : 'OBSERVE reviews live provider state without mutation.'}
-        </Text>
 
         {notice ? (
           <Box marginTop={1}>

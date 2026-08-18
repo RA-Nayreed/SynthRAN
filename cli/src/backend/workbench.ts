@@ -25,10 +25,14 @@ const accessReady = (snapshot: ControlSnapshot): boolean => {
   );
 };
 
+const setupReady = (snapshot: ControlSnapshot): boolean =>
+  accessReady(snapshot) &&
+  snapshot.experiment.id !== null &&
+  snapshot.experiment.provider_experiment !== null;
+
 const completedSections = (snapshot: ControlSnapshot): SectionLabel[] => {
   const completed: SectionLabel[] = [];
-  if (accessReady(snapshot)) completed.push('Access');
-  if (snapshot.experiment.id !== null) completed.push('Configure');
+  if (setupReady(snapshot)) completed.push('Setup');
   if (lifecycleIn(snapshot.experiment.lifecycle, [
     'ALLOCATED',
     'PREPARED',
@@ -43,10 +47,9 @@ const completedSections = (snapshot: ControlSnapshot): SectionLabel[] => {
 };
 
 export const initialSection = (snapshot: ControlSnapshot): SectionLabel => {
-  if (!accessReady(snapshot)) return 'Access';
-  if (snapshot.experiment.id === null) return 'Configure';
+  if (!setupReady(snapshot)) return 'Setup';
   if (snapshot.experiment.lifecycle === 'PATH_PROVEN' || snapshot.experiment.lifecycle === 'EXPERIMENT_RUNNING') {
-    return 'Run';
+    return 'Experiment';
   }
   if (['PREPARED', 'NETWORK_READY'].includes(snapshot.experiment.lifecycle)) return 'Network';
   return 'Resources';
@@ -54,6 +57,14 @@ export const initialSection = (snapshot: ControlSnapshot): SectionLabel => {
 
 export const toWorkbenchState = (snapshot: ControlSnapshot): WorkbenchState => ({
   project: snapshot.workspace.project,
+  profile: snapshot.workspace.profile,
+  profiles: snapshot.profiles.map(profile => ({
+    name: profile.name,
+    slicesUsername: profile.slices_username,
+    r2labSlice: profile.r2lab_slice,
+    identityName: profile.identity_name,
+  })),
+  computeNodes: [...snapshot.compute_nodes],
   experiment: snapshot.experiment.id ?? 'No active experiment',
   hasActiveExperiment: snapshot.experiment.id !== null,
   completedSections: completedSections(snapshot),
@@ -69,6 +80,9 @@ export const toWorkbenchState = (snapshot: ControlSnapshot): WorkbenchState => (
   sshIdentity: snapshot.access.r2lab.identity_name ?? 'Not configured',
   reservationMinutes: snapshot.workspace.reservation_minutes,
   placement: snapshot.workspace.placement,
+  experimentPlacement: snapshot.experiment.placement_mode,
+  coreNode: snapshot.experiment.core_node,
+  ranNode: snapshot.experiment.ran_node,
   lifecycle: snapshot.experiment.lifecycle,
   observations: snapshot.observations,
   nextSteps: snapshot.next_steps,
