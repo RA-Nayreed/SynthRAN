@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from time import monotonic
 from typing import Any, Mapping, Sequence, TextIO
+from zoneinfo import ZoneInfo
 
 from synthran.ansible_streaming import parse_ansible_line, run_streaming_ansible_command
 from synthran.dependencies import DependencyLock
@@ -41,6 +42,7 @@ PREPARATION_SCHEMA = "synthran/resource-preparation/v1alpha1"
 DEFAULT_DURATION_MINUTES = 120
 DEFAULT_PREPARATION_TIMEOUT_SECONDS = 3600
 RESERVATION_ID_RE = re.compile(r"^[0-9]+$")
+POS_TIMEZONE = ZoneInfo("Europe/Berlin")
 
 
 class ResourcePreparationError(RuntimeError):
@@ -204,6 +206,21 @@ def _record_owner(record: Mapping[str, Any], label: str) -> str:
     return value.strip()
 
 
+def _record_time(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ResourcePreparationError(f"{label} is missing from POS output")
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ResourcePreparationError(f"{label} is not ISO-8601") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=POS_TIMEZONE)
+    return parsed.astimezone(timezone.utc)
+
+
 def _reservation_ids(text: str) -> set[str]:
     identifiers: set[str] = set()
     for record in _json_records(text, "POS reservation query"):
@@ -214,6 +231,36 @@ def _reservation_ids(text: str) -> set[str]:
             )
         identifiers.add(identifier)
     return identifiers
+
+
+def _discover_active_reservation(
+    text: str,
+    *,
+    owner: str,
+    nodes: set[str],
+    now: datetime,
+) -> str | None:
+    """Choose the active owned reservation covering the nodes with most runway."""
+
+    candidates: list[tuple[datetime, datetime, int, str]] = []
+    for record in _json_records(text, "POS reservation query"):
+        identifier = _record_identifier(record, "reservation ID")
+        if not RESERVATION_ID_RE.fullmatch(identifier):
+            raise ResourcePreparationError(
+                "POS reservation query returned a non-numeric identifier"
+            )
+        if _record_owner(record, "reservation owner") != owner:
+            continue
+        record_nodes = _record_nodes(record.get("nodes"), "POS reservation")
+        if not nodes.issubset(record_nodes):
+            continue
+        starts_at = _record_time(record.get("start_date"), "reservation start")
+        ends_at = _record_time(record.get("end_date"), "reservation end")
+        if starts_at <= now < ends_at:
+            candidates.append((ends_at, starts_at, int(identifier), identifier))
+    if not candidates:
+        return None
+    return max(candidates)[3]
 
 
 @dataclass(frozen=True)
@@ -228,6 +275,16 @@ class ResourcePreparationPlan:
     bootstrap_reason: str
 
     def to_dict(self) -> dict[str, Any]:
+        reservation_commands = (
+            ["pos calendar list --filter owner='<operator>' --json"]
+            if self.reservation_action == "reuse"
+            else [
+                "pos calendar list --filter owner='<operator>' --json",
+                "pos calendar create -d "
+                f"{self.duration_minutes} -s now {self.core_node.name} {self.ran_node.name} "
+                "(only when no active owned reservation covers both nodes)",
+            ]
+        )
         return {
             "schema": PREPARATION_SCHEMA,
             "execution_enabled": False,
@@ -245,14 +302,12 @@ class ResourcePreparationPlan:
                 f"'<isolated-worktree>' {self.fiveg_ansible_commit}",
                 "apply SynthRAN upstream preparation overlay",
                 "ansible-playbook --syntax-check '<upstream-deploy.yml>'",
-                (
-                    "pos calendar create -d "
-                    f"{self.duration_minutes} -s now {self.core_node.name} {self.ran_node.name}"
-                    if self.reservation_action == "create"
-                    else "pos calendar list --filter owner='<operator>' --json"
-                ),
+                *reservation_commands,
+                f"pos allocations free -k {self.core_node.name} (only if stale/conflicting)",
+                f"pos allocations free -k {self.ran_node.name} (only if stale/conflicting)",
                 f"pos allocations allocate {self.core_node.name} {self.ran_node.name}",
                 "ansible-playbook '<upstream-deploy.yml>' -e synthran_prepare_only=true",
+                "ansible-playbook '<prepare-network.yml>'",
                 "ansible-playbook '<prepare-tools.yml>'",
             ],
         }
@@ -273,7 +328,7 @@ class ResourcePreparationPlan:
         lines.extend(
             (
                 "Live execution images and resets both nodes, rebuilds Kubernetes, "
-                "and installs locked deployment tools.",
+                "reconciles the keyed GRE foundation, and installs locked deployment tools.",
                 "It stops before Open5GS or srsRAN deployment.",
             )
         )
@@ -316,7 +371,7 @@ def build_resource_preparation_plan(
         ran_node=ran,
         duration_minutes=_validate_duration(duration_minutes),
         fiveg_ansible_commit=_fiveg_commit(lock),
-        reservation_action="reuse" if reservation_id is not None else "create",
+        reservation_action="reuse" if reservation_id is not None else "discover-or-create",
         bootstrap_status=bootstrap_status,
         bootstrap_reason=bootstrap_reason,
     )
@@ -353,30 +408,29 @@ def locked_preparation_variables(lock: DependencyLock) -> dict[str, Any]:
     }
 
 
-def _allocation_before_mutation(
+def _allocation_state_before_mutation(
     text: str, *, owner: str, nodes: set[str]
-) -> str | None:
+) -> tuple[str, str | None, set[str]]:
+    """Classify selected-node allocation state after reservation authority is proven."""
+
     touched: list[tuple[Mapping[str, Any], set[str]]] = []
+    reclaim_nodes: set[str] = set()
     for record in _json_records(text, "POS allocation list"):
         record_nodes = _record_nodes(record.get("nodes"), "POS allocation")
-        if nodes.intersection(record_nodes):
+        intersection = nodes.intersection(record_nodes)
+        if intersection:
             touched.append((record, record_nodes))
+            reclaim_nodes.update(intersection)
     if not touched:
-        return None
-    if len(touched) != 1:
-        raise ResourcePreparationError(
-            "selected nodes are split across multiple allocations"
-        )
-    record, record_nodes = touched[0]
-    if not nodes.issubset(record_nodes):
-        raise ResourcePreparationError(
-            "only part of the selected node pair is already allocated"
-        )
-    if _record_owner(record, "allocation owner") != owner:
-        raise ResourcePreparationError(
-            "selected nodes are allocated to another operator"
-        )
-    return _record_identifier(record, "allocation ID")
+        return "create", None, set()
+    if len(touched) == 1:
+        record, record_nodes = touched[0]
+        if (
+            nodes.issubset(record_nodes)
+            and _record_owner(record, "allocation owner") == owner
+        ):
+            return "reuse", _record_identifier(record, "allocation ID"), set()
+    return "reclaim-and-create", None, reclaim_nodes
 
 
 def _allocation_after_mutation(
@@ -407,6 +461,7 @@ def _preparation_manifest(
     reservation_id: str | None,
     allocation_id: str | None,
     slices_controller: Mapping[str, Any],
+    reservation_action: str,
     allocation_action: str,
     failure_stage: str | None = None,
 ) -> dict[str, Any]:
@@ -432,7 +487,7 @@ def _preparation_manifest(
                 _fingerprint(allocation_id) if allocation_id is not None else None
             ),
         },
-        "reservation_action": plan.reservation_action,
+        "reservation_action": reservation_action,
         "allocation_action": allocation_action,
         "inventory_file": "hosts.ini",
         "authority_file": "authority.env",
@@ -524,10 +579,13 @@ def execute_resource_preparation(
     if plan.reservation_action == "reuse":
         if reservation_id is None or not RESERVATION_ID_RE.fullmatch(reservation_id):
             raise ResourcePreparationError("a numeric reservation ID is required")
-    elif reservation_id is not None:
-        raise ResourcePreparationError(
-            "the plan creates a reservation but a reservation ID was supplied"
-        )
+    elif plan.reservation_action == "discover-or-create":
+        if reservation_id is not None:
+            raise ResourcePreparationError(
+                "automatic reservation discovery cannot also receive a reservation ID"
+            )
+    else:
+        raise ResourcePreparationError("unsupported reservation action")
     if timeout_seconds < 60 or timeout_seconds > 14400:
         raise ResourcePreparationError(
             "preparation timeout must be between 60 and 14400 seconds"
@@ -553,7 +611,14 @@ def execute_resource_preparation(
 
     missing_tools = [
         name
-        for name in ("slices", "pos", "git", "ansible-galaxy", "ansible-playbook")
+        for name in (
+            "slices",
+            "post5g",
+            "pos",
+            "git",
+            "ansible-galaxy",
+            "ansible-playbook",
+        )
         if shutil.which(name) is None
     ]
     if missing_tools:
@@ -564,8 +629,13 @@ def execute_resource_preparation(
     checkout = validate_fiveg_checkout(lock, dependency_root)
     overlay_source = repository_root.resolve() / "deploy" / "ansible"
     preparation_playbook = overlay_source / "prepare-tools.yml"
+    network_foundation_playbook = overlay_source / "prepare-network.yml"
     preparation_requirements = overlay_source / "preparation-requirements.yml"
-    if not preparation_playbook.is_file() or not preparation_requirements.is_file():
+    if (
+        not preparation_playbook.is_file()
+        or not network_foundation_playbook.is_file()
+        or not preparation_requirements.is_file()
+    ):
         raise ResourcePreparationError(
             "SynthRAN resource preparation overlay is incomplete"
         )
@@ -598,6 +668,7 @@ def execute_resource_preparation(
 
     current_reservation = reservation_id
     current_allocation: str | None = None
+    reservation_action = "reuse-explicit" if reservation_id is not None else "pending"
     allocation_action = "pending"
     log_parts: list[str] = []
 
@@ -613,6 +684,7 @@ def execute_resource_preparation(
                 reservation_id=current_reservation,
                 allocation_id=current_allocation,
                 slices_controller=controller_report.to_dict(),
+                reservation_action=reservation_action,
                 allocation_action=allocation_action,
                 failure_stage=stage_name,
             ),
@@ -820,6 +892,12 @@ def execute_resource_preparation(
         "no_boot=false",
         str(worktree / "playbooks" / "deploy.yml"),
     )
+    foundation_command = (
+        "ansible-playbook",
+        "-i",
+        str(inventory_path),
+        str(overlay_directory / "prepare-network.yml"),
+    )
     tools_command = (
         "ansible-playbook",
         "-i",
@@ -835,97 +913,85 @@ def execute_resource_preparation(
         environment,
     )
     stage(
+        "network-foundation-syntax",
+        (*foundation_command[:-1], "--syntax-check", foundation_command[-1]),
+        worktree,
+        environment,
+    )
+    stage(
         "tool-preparation-syntax",
         (*tools_command[:-1], "--syntax-check", tools_command[-1]),
         worktree,
         environment,
     )
 
-    allocation_list = stage(
-        "allocation-inspection",
-        ("pos", "allocations", "list", "--json"),
-        repository_root,
-        retain_output=False,
-    ).stdout
-    try:
-        current_allocation = _allocation_before_mutation(
-            allocation_list,
-            owner=owner,
-            nodes={plan.core_node.name, plan.ran_node.name},
-        )
-    except ResourcePreparationError:
-        fail("allocation-inspection", "selected node allocation state is unsafe")
-        raise
-    allocation_action = "reuse" if current_allocation is not None else "create"
-    write_manifest("running")
-    persist_authority()
-
+    reservation_query = (
+        "pos",
+        "calendar",
+        "list",
+        "--filter",
+        f"owner={owner}",
+        "--json",
+    )
+    provider_now = now or datetime.now(timezone.utc)
     if current_reservation is None:
-        reservation_query = (
-            "pos",
-            "calendar",
-            "list",
-            "--filter",
-            f"owner={owner}",
-            "--json",
-        )
-        before_ids = reservation_ids(
-            stage(
-                "reservation-inspection",
-                reservation_query,
-                repository_root,
-                retain_output=False,
-            ).stdout,
+        reservation_snapshot = stage(
             "reservation-inspection",
-        )
-        created_output = stage(
-            "reservation-create",
-            (
-                "pos",
-                "calendar",
-                "create",
-                "-d",
-                str(plan.duration_minutes),
-                "-s",
-                "now",
-                plan.core_node.name,
-                plan.ran_node.name,
-            ),
+            reservation_query,
             repository_root,
             retain_output=False,
-        ).stdout.strip()
-        if not RESERVATION_ID_RE.fullmatch(created_output) or created_output in before_ids:
-            fail(
-                "reservation-create",
-                "POS did not return one new numeric reservation ID",
+        ).stdout
+        before_ids = reservation_ids(reservation_snapshot, "reservation-inspection")
+        try:
+            discovered = _discover_active_reservation(
+                reservation_snapshot,
+                owner=owner,
+                nodes={plan.core_node.name, plan.ran_node.name},
+                now=provider_now,
             )
-            raise ResourcePreparationError(
-                "created reservation did not return one new numeric identifier"
-            )
-        current_reservation = created_output
-        persist_authority()
-        write_manifest("running")
-        after_ids = reservation_ids(
+        except ResourcePreparationError:
+            fail("reservation-inspection", "active reservation discovery failed closed")
+            raise
+        if discovered is not None:
+            current_reservation = discovered
+            reservation_action = "reuse-discovered"
+            report("reservation-discovery: active owned reservation selected")
+        else:
             stage(
+                "reservation-create",
+                (
+                    "pos",
+                    "calendar",
+                    "create",
+                    "-d",
+                    str(plan.duration_minutes),
+                    "-s",
+                    "now",
+                    plan.core_node.name,
+                    plan.ran_node.name,
+                ),
+                repository_root,
+                retain_output=False,
+            )
+            after_snapshot = stage(
                 "reservation-discovery",
                 reservation_query,
                 repository_root,
                 retain_output=False,
-            ).stdout,
-            "reservation-discovery",
-        )
-        new_ids = after_ids - before_ids
-        if created_output not in before_ids:
-            new_ids.add(created_output)
-        if len(new_ids) != 1:
-            fail(
-                "reservation-discovery",
-                "POS did not expose exactly one new numeric reservation identifier",
-            )
-            raise ResourcePreparationError(
-                "created reservation could not be identified unambiguously"
-            )
-        current_reservation = next(iter(new_ids))
+            ).stdout
+            after_ids = reservation_ids(after_snapshot, "reservation-discovery")
+            new_ids = after_ids - before_ids
+            if len(new_ids) != 1:
+                fail(
+                    "reservation-discovery",
+                    "POS did not expose exactly one new numeric reservation identifier",
+                )
+                raise ResourcePreparationError(
+                    "created reservation could not be identified unambiguously"
+                )
+            current_reservation = next(iter(new_ids))
+            reservation_action = "create"
+        persist_authority()
         write_manifest("running")
 
     def provider_runner(
@@ -939,13 +1005,13 @@ def execute_resource_preparation(
             reservation_id=current_reservation,
             owner=owner,
             nodes={plan.core_node.name, plan.ran_node.name},
-            now=now or datetime.now(timezone.utc),
+            now=provider_now,
             timeout_seconds=timeout_seconds,
         )
     except (LivePreflightError, OSError, RuntimeError) as exc:
         fail("reservation-verification", "reservation verification failed closed")
         raise ResourcePreparationError(
-            "created or supplied reservation could not be verified"
+            "created, discovered, or supplied reservation could not be verified"
         ) from exc
     log_parts.extend(
         (
@@ -953,6 +1019,39 @@ def execute_resource_preparation(
             "reservation ownership, node coverage, and active time verified",
         )
     )
+
+    allocation_list = stage(
+        "allocation-inspection",
+        ("pos", "allocations", "list", "--json"),
+        repository_root,
+        retain_output=False,
+    ).stdout
+    try:
+        allocation_action, current_allocation, reclaim_nodes = (
+            _allocation_state_before_mutation(
+                allocation_list,
+                owner=owner,
+                nodes={plan.core_node.name, plan.ran_node.name},
+            )
+        )
+    except ResourcePreparationError:
+        fail("allocation-inspection", "selected node allocation state is malformed")
+        raise
+
+    if allocation_action == "reclaim-and-create":
+        for role, node in (
+            ("core", plan.core_node.name),
+            ("ran", plan.ran_node.name),
+        ):
+            if node not in reclaim_nodes:
+                continue
+            stage(
+                f"allocation-reclaim-{role}",
+                ("pos", "allocations", "free", "-k", node),
+                repository_root,
+                retain_output=False,
+            )
+        current_allocation = None
 
     if current_allocation is None:
         stage(
@@ -1001,6 +1100,13 @@ def execute_resource_preparation(
     stage(
         "upstream-resource-preparation",
         upstream_command,
+        worktree,
+        environment,
+        streaming=True,
+    )
+    stage(
+        "network-foundation-reconciliation",
+        foundation_command,
         worktree,
         environment,
         streaming=True,
