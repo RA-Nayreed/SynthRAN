@@ -26,7 +26,9 @@ const accessReady = (snapshot: ControlSnapshot): boolean => {
 };
 
 const setupReady = (snapshot: ControlSnapshot): boolean =>
-  accessReady(snapshot) && snapshot.experiment.id !== null;
+  accessReady(snapshot) &&
+  snapshot.experiment.id !== null &&
+  snapshot.experiment.provider_experiment !== null;
 
 const completedSections = (snapshot: ControlSnapshot): SectionLabel[] => {
   const completed: SectionLabel[] = [];
