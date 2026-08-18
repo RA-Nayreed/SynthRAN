@@ -21,6 +21,7 @@ from synthran.control.protocol import (
     parse_request,
     success_response,
 )
+from synthran.resources.live_inventory import read_resource_inventory, resource_inventory_view
 from synthran.workspace.access import Runner, ensure_slices_project_access, subprocess_runner
 from synthran.workspace.context import resolve_workspace_authority
 from synthran.workspace.desired import ExperimentDesiredState, RadioDesiredState
@@ -177,6 +178,17 @@ class ControlService:
             "blocks": list(snapshot.blocks),
         }
 
+    def resource_snapshot(self, *, now: datetime | None = None) -> dict[str, object]:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        inventory = read_resource_inventory(
+            start=self.start,
+            environment=self.environment,
+            runner=self.provider_runner,
+            timeout_seconds=self.provider_timeout_seconds,
+            now=current,
+        )
+        return resource_inventory_view(inventory, now=current)
+
     def create_experiment(
         self,
         params: Mapping[str, object],
@@ -290,6 +302,14 @@ class ControlService:
                         message="workspace.snapshot does not accept params",
                     )
                 return success_response(request_id, self.workspace_snapshot())
+            if method == "resources.snapshot":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="resources.snapshot does not accept params",
+                    )
+                return success_response(request_id, self.resource_snapshot())
             if method == "experiment.create":
                 try:
                     result = self.create_experiment(params)
