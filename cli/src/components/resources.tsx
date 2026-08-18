@@ -2,7 +2,7 @@ import React from 'react';
 import {Box, Text} from 'ink';
 
 import type {ResourcePreview, ResourceStateView} from '../backend/control.js';
-import type {WorkbenchState} from '../model.js';
+import type {ObservationView, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface ResourcesPanelProps {
@@ -19,6 +19,14 @@ const Row = ({label, value}: {label: string; value: string}) => (
   </Box>
 );
 
+const observation = (state: WorkbenchState, name: string): ObservationView | undefined =>
+  state.observations.find(item => item.name === name);
+
+const observedValue = (item: ObservationView | undefined) => {
+  if (!item) return '—';
+  return `${item.fresh ? '●' : '○'} ${item.state}${item.fresh ? '' : ' · stale'}`;
+};
+
 const resourceValue = (item: ResourceStateView) =>
   `${item.availability} · ${item.ownership}`;
 
@@ -30,8 +38,13 @@ export const ResourcesPanel = ({state, preview, busy, notice}: ResourcesPanelPro
       <Text color={theme.muted}>Read-only placement preview. No reservation or allocation is performed.</Text>
       <Box height={1} />
 
+      <Text bold color={theme.bodyStrong}>Local workspace</Text>
       <Row label="Lifecycle" value={state.lifecycle} />
+      <Row label="Reservation" value={observedValue(observation(state, 'reservation'))} />
+      <Row label="Allocation" value={observedValue(observation(state, 'allocation'))} />
+      <Row label="Preparation" value={observedValue(observation(state, 'preparation'))} />
       <Row label="Next local action" value={state.nextSteps[0] ?? '—'} />
+      {state.blocks.length > 0 ? <Row label="Blocked" value={state.blocks[0]} /> : null}
 
       <Box height={1} />
       <Text bold color={theme.bodyStrong}>Live SLICES compute</Text>
