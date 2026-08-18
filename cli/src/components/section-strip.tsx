@@ -1,29 +1,27 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
-import type {Section} from '../mock.js';
+import type {SectionLabel} from '../mock.js';
 import {theme} from '../theme.js';
 
 interface SectionStripProps {
-  sections: Section[];
+  sections: SectionLabel[];
+  selected: SectionLabel;
+  completed: readonly SectionLabel[];
 }
 
-const marker = (section: Section): string => {
-  if (section.status === 'complete') return '✓';
-  if (section.status === 'active') return '●';
-  return '○';
-};
-
-export const SectionStrip = ({sections}: SectionStripProps) => (
+export const SectionStrip = ({sections, selected, completed}: SectionStripProps) => (
   <Box gap={3} marginTop={1} marginBottom={1}>
-    {sections.map(section => (
-      <Text
-        key={section.label}
-        color={section.status === 'complete' ? theme.success : section.status === 'active' ? theme.bodyStrong : theme.muted}
-        bold={section.status === 'active'}
-      >
-        {marker(section)} {section.label}
-      </Text>
-    ))}
+    {sections.map(section => {
+      const isSelected = section === selected;
+      const isComplete = completed.includes(section);
+      const marker = isSelected ? '●' : isComplete ? '✓' : '○';
+      const color = isSelected ? theme.bodyStrong : isComplete ? theme.success : theme.muted;
+      return (
+        <Text key={section} color={color} bold={isSelected}>
+          {marker} {section}
+        </Text>
+      );
+    })}
   </Box>
 );
