@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from synthran.workspace.model import WorkspaceError
 
 
-CONTROL_VERSION = 4
+CONTROL_VERSION = 5
 SUPPORTED_METHODS = frozenset(
     {
         "system.handshake",
@@ -18,6 +18,11 @@ SUPPORTED_METHODS = frozenset(
         "experiment.create",
         "provider.experiments",
         "experiment.bind_provider",
+        "operation.inspect",
+        "operation.plan",
+        "operation.read",
+        "operation.approve",
+        "operation.cancel",
     }
 )
 LOCAL_WRITE_METHODS = frozenset(
@@ -26,6 +31,9 @@ LOCAL_WRITE_METHODS = frozenset(
         "workspace.update_defaults",
         "experiment.create",
         "experiment.bind_provider",
+        "operation.plan",
+        "operation.approve",
+        "operation.cancel",
     }
 )
 PROVIDER_READ_METHODS = frozenset(

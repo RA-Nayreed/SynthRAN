@@ -12,6 +12,14 @@ import sys
 from typing import Mapping, TextIO
 
 from synthran.app import ApplicationController
+from synthran.control.operation_api import (
+    OperationInputError,
+    approve_operation,
+    cancel_operation,
+    inspect_operation_action,
+    plan_operation,
+    read_operation,
+)
 from synthran.control.protocol import (
     CONTROL_VERSION,
     LOCAL_WRITE_METHODS,
@@ -437,6 +445,56 @@ class ControlService:
                 try:
                     result = self.bind_provider_experiment(params)
                 except ControlInputError as exc:
+                    return error_response(request_id, code="invalid_params", message=str(exc))
+                return success_response(request_id, result)
+            if method == "operation.inspect":
+                try:
+                    result = inspect_operation_action(
+                        start=self.start,
+                        environment=self.environment,
+                        params=params,
+                    )
+                except OperationInputError as exc:
+                    return error_response(request_id, code="invalid_params", message=str(exc))
+                return success_response(request_id, result)
+            if method == "operation.plan":
+                try:
+                    result = plan_operation(
+                        start=self.start,
+                        environment=self.environment,
+                        params=params,
+                    )
+                except OperationInputError as exc:
+                    return error_response(request_id, code="invalid_params", message=str(exc))
+                return success_response(request_id, result)
+            if method == "operation.read":
+                try:
+                    result = read_operation(
+                        start=self.start,
+                        environment=self.environment,
+                        params=params,
+                    )
+                except OperationInputError as exc:
+                    return error_response(request_id, code="invalid_params", message=str(exc))
+                return success_response(request_id, result)
+            if method == "operation.approve":
+                try:
+                    result = approve_operation(
+                        start=self.start,
+                        environment=self.environment,
+                        params=params,
+                    )
+                except OperationInputError as exc:
+                    return error_response(request_id, code="invalid_params", message=str(exc))
+                return success_response(request_id, result)
+            if method == "operation.cancel":
+                try:
+                    result = cancel_operation(
+                        start=self.start,
+                        environment=self.environment,
+                        params=params,
+                    )
+                except OperationInputError as exc:
                     return error_response(request_id, code="invalid_params", message=str(exc))
                 return success_response(request_id, result)
             return error_response(

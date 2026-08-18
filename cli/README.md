@@ -5,7 +5,7 @@ This directory contains the interactive terminal surface for SynthRAN.
 The current implementation provides:
 
 - one terminal workbench with Access → Configure → Resources → Network → Run → Evidence navigation;
-- keyboard navigation with Tab, Shift+Tab, direct numeric shortcuts, and focused configuration controls;
+- keyboard navigation with Tab, Shift+Tab, direct numeric shortcuts, and focused controls;
 - an action palette opened with `/`;
 - first-use workspace configuration inside the same workbench instead of a separate prompt sequence;
 - sanitized discovery of existing controller profiles and private SSH identity references;
@@ -18,11 +18,16 @@ The current implementation provides:
 - virtual, physical, and automatic radio selection with compatible experiment intent choices;
 - read-only discovery of SLICES experiments in the verified workspace project;
 - explicit one-time binding of a selected, reverified SLICES experiment to the active local experiment;
-- OBSERVE by default, with OPERATE available only on Configure for explicit local writes;
+- OBSERVE by default, with OPERATE used only for explicit local changes;
+- Resources and Network views that review Reserve, Bring up, Verify, Recover, and Tear down against current durable state;
+- immutable action records, standard approval for controlled changes, separate destructive approval for teardown, cancellation before execution, and recent event rendering;
+- fail-closed handling when a resource-changing action does not yet have fresh provider inventory bound to exact targets;
 - completion markers derived from durable state rather than the selected screen;
 - bounded startup, response-size, exact capability, protocol, provider-read, and cancellation handling;
 - `r` to reload local state;
 - `q` or Ctrl+C to quit.
+
+The terminal styling is intentionally restrained. Neutral text, modest emphasis, thin separators, whitespace, and semantic success/error color carry the hierarchy. Saturated accent colors, decorative terminal gradients, and neon dashboard styling are not used.
 
 ## First use
 
@@ -40,9 +45,19 @@ Provider discovery verifies the configured SLICES project before listing experim
 
 Provider discovery is available in OBSERVE because it is read-only. First-use initialization, workspace-default updates, experiment creation, and provider binding require an explicit switch to OPERATE. Reloading, navigating away from Configure, or completing a local write returns the workbench to OBSERVE.
 
-The workbench does not create SLICES experiments, reservations, allocations, or resources. It does not change provider state, deploy networks, start experiments, collect evidence, or tear resources down.
+## Resources and Network
 
-The control protocol is version 4. Its handshake declares the exact supported local-write and provider-read methods while declaring provider mutation unavailable. The client requires the exact expected method set and fails closed if additional capabilities are advertised. Earlier contract versions remain frozen in `contracts/`.
+Resources and Network share the same state-sensitive action review surface. Use ←/→ to choose Reserve, Bring up, Verify, Recover, or Tear down, then Enter to review what the current state permits.
+
+Review is read-only. It shows the current action, safety class in plain language, rationale, known exact targets, and anything still required before an immutable action record can be created.
+
+`p` prepares the selected action when its immutable inputs are available. Resource-changing actions require OPERATE and fail closed when current provider inventory has not been bound to exact targets. Verify is read-only and does not require approval. Controlled changes require standard approval with `a`. Tear down requires the separate destructive approval key `d`. `x` can cancel a prepared or approved action before execution begins.
+
+The workbench displays the durable event history for prepared actions, including approval requests, approval grants, progress records, interruptions, failures, and recovery requirements when those events exist.
+
+Provider execution is still disabled at this boundary. The workbench does not call the scripted CLI behind the scenes and does not claim that Reserve, Bring up, Recover, or Tear down changed the testbed merely because an action was reviewed or approved. A resource-changing action that lacks a connected exact provider executor remains blocked rather than silently falling back to another path.
+
+The control protocol is version 5. Its handshake declares the exact supported local-write and provider-read methods while declaring provider mutation unavailable. The client requires the exact expected method set and fails closed if additional capabilities are advertised. Earlier contract versions remain frozen in `contracts/`.
 
 The npm package is marked `private` in `package.json` to prevent accidental publication while the interface is not yet released.
 
@@ -77,5 +92,15 @@ After initialization, Configure supports:
 - Enter on `Provider experiment` in OBSERVE or OPERATE to load SLICES experiments when no provider is bound;
 - ←/→ to select one of the loaded provider experiments;
 - Enter on `Bind provider` in OPERATE to reverify and record the selected provider experiment locally.
+
+On Resources or Network:
+
+- ←/→ chooses the action;
+- Enter reviews the action without writing state;
+- `m` switches between OBSERVE and OPERATE;
+- `p` creates an immutable action record when all required inputs are available;
+- `a` records standard approval for a controlled change;
+- `d` records destructive approval for teardown only;
+- `x` cancels prepared or approved local action state before provider execution.
 
 Set `SYNTHRAN_PYTHON` when the desired Python executable is not available as `python` in the current environment.
