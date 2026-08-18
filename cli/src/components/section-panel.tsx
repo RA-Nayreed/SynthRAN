@@ -1,7 +1,7 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
-import type {ObservationView, SectionLabel, WorkbenchState} from '../model.js';
+import type {SectionLabel, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface SectionPanelProps {
@@ -16,88 +16,40 @@ const Row = ({label, value}: {label: string; value: string}) => (
   </Box>
 );
 
-const observation = (state: WorkbenchState, name: string): ObservationView | undefined =>
-  state.observations.find(item => item.name === name);
-
-const observedValue = (item: ObservationView | undefined) => {
-  if (!item) return '—';
-  return `${item.fresh ? '●' : '○'} ${item.state}${item.fresh ? '' : ' · stale'}`;
-};
-
 export const SectionPanel = ({section, state}: SectionPanelProps) => {
-  if (section === 'Access') {
+  if (section === 'Experiment') {
+    const networkReady = state.lifecycle === 'PATH_PROVEN' || state.lifecycle === 'EXPERIMENT_RUNNING';
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.bodyStrong}>Access</Text>
+        <Text bold color={theme.bodyStrong}>Experiment</Text>
         <Box height={1} />
-        <Row
-          label="SLICES identity"
-          value={`${state.slicesAccessFresh ? '✓' : '○'} ${state.slicesIdentity ?? 'Not configured'}`}
-        />
-        <Row
-          label="SLICES project"
-          value={`${state.slicesAccessFresh ? '✓' : '○'} ${state.slicesProject}`}
-        />
-        <Row
-          label="R2Lab access"
-          value={state.r2labConfigured ? `${state.r2labAccessFresh ? '✓' : '○'} ${state.r2labSlice}` : 'Not configured'}
-        />
-        <Row label="SSH identity" value={state.sshIdentity} />
+        <Row label="Scenario" value="IoT → 5G" />
+        <Row label="Network" value={networkReady ? '✓ PATH PROVEN' : `○ ${state.lifecycle}`} />
+        <Row label="Baseline" value={networkReady ? 'Available through scripted workflow' : 'Requires PATH PROVEN'} />
+        <Row label="Congestion" value={networkReady ? 'Available through scripted workflow' : 'Requires PATH PROVEN'} />
+        <Text color={theme.muted}>Interactive experiment execution will appear here when that executor is connected.</Text>
       </Box>
     );
   }
 
-  if (section === 'Resources') {
+  if (section === 'Data') {
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.bodyStrong}>Resources</Text>
+        <Text bold color={theme.bodyStrong}>Data</Text>
         <Box height={1} />
-        <Row label="Lifecycle" value={state.lifecycle} />
-        <Row label="Reservation" value={observedValue(observation(state, 'reservation'))} />
-        <Row label="Allocation" value={observedValue(observation(state, 'allocation'))} />
-        <Row label="Preparation" value={observedValue(observation(state, 'preparation'))} />
-        <Row label="Next action" value={state.nextSteps[0] ?? '—'} />
-        {state.blocks.length > 0 ? <Row label="Blocked" value={state.blocks[0]} /> : null}
-      </Box>
-    );
-  }
-
-  if (section === 'Network') {
-    return (
-      <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.bodyStrong}>Network</Text>
-        <Box height={1} />
-        <Row label="Core" value={observedValue(observation(state, 'core'))} />
-        <Row label="RAN / gNB" value={observedValue(observation(state, 'ran'))} />
-        <Row label="UE" value={observedValue(observation(state, 'ue'))} />
-        <Row label="PDU" value={observedValue(observation(state, 'pdu'))} />
-        <Row label="UPF" value={observedValue(observation(state, 'upf'))} />
-        <Row label="Path" value={observedValue(observation(state, 'path'))} />
-        <Row label="Lifecycle" value={state.lifecycle} />
-      </Box>
-    );
-  }
-
-  if (section === 'Run') {
-    return (
-      <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.bodyStrong}>Run</Text>
-        <Box height={1} />
-        <Row label="Lifecycle" value={state.lifecycle} />
-        <Row label="Intent" value={state.intent} />
-        <Row label="Next action" value={state.nextSteps[0] ?? '—'} />
-        <Text color={theme.muted}>Experiment execution is not available through this read-only connection.</Text>
+        <Row label="Network status" value={state.lifecycle} />
+        <Row label="Observations" value={String(state.observations.length)} />
+        <Row label="Collection" value="Available through scripted workflow" />
+        <Text color={theme.muted}>JSONL, Parquet and provenance will appear here when interactive collection is connected.</Text>
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Text bold color={theme.bodyStrong}>Evidence</Text>
+      <Text bold color={theme.bodyStrong}>{section}</Text>
       <Box height={1} />
-      <Row label="Lifecycle" value={state.lifecycle} />
-      <Row label="Observations" value={String(state.observations.length)} />
-      <Text color={theme.muted}>Evidence collection is not available through this read-only connection.</Text>
+      <Row label="Status" value={state.lifecycle} />
     </Box>
   );
 };
