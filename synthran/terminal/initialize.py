@@ -22,7 +22,8 @@ from synthran.workspace.store import (
 
 PRIVATE_KEY_BEGIN = b"-----BEGIN "
 PRIVATE_KEY_SUFFIX = b" KEY-----"
-PRIVATE_KEY_TOKEN = b"PRIVATE"
+PRIVATE_KEY_MARKER = b"PRIVATE"
+INITIALIZATION_PROVIDER_TIMEOUT_SECONDS = 60
 
 
 class PromptLike(Protocol):
@@ -83,7 +84,7 @@ def _looks_like_private_identity(prefix: bytes) -> bool:
     return (
         first_line.startswith(PRIVATE_KEY_BEGIN)
         and first_line.endswith(PRIVATE_KEY_SUFFIX)
-        and PRIVATE_KEY_TOKEN in first_line
+        and PRIVATE_KEY_MARKER in first_line
     )
 
 
@@ -212,7 +213,11 @@ def initialize_from_terminal(
     )
 
     print("Verifying provider access read-only...", file=output, flush=True)
-    result = initialize_controller_workspace(request, environment=env)
+    result = initialize_controller_workspace(
+        request,
+        environment=env,
+        timeout_seconds=INITIALIZATION_PROVIDER_TIMEOUT_SECONDS,
+    )
     print(
         f"Workspace initialized: project={result.workspace.project}, profile={result.workspace.profile}",
         file=output,
