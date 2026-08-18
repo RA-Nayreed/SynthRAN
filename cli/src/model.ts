@@ -1,6 +1,5 @@
-export type SectionLabel = 'Access' | 'Configure' | 'Resources' | 'Network' | 'Run' | 'Evidence';
+export type SectionLabel = 'Setup' | 'Resources' | 'Network' | 'Experiment' | 'Data';
 export type RadioMode = 'automatic' | 'virtual' | 'physical';
-export type WorkbenchMode = 'OBSERVE' | 'OPERATE';
 
 export interface ObservationView {
   name: string;
@@ -13,6 +12,7 @@ export interface ObservationView {
 
 export interface WorkbenchState {
   project: string;
+  profile: string;
   experiment: string;
   hasActiveExperiment: boolean;
   completedSections: SectionLabel[];
@@ -35,10 +35,9 @@ export interface WorkbenchState {
 }
 
 export const sectionLabels: SectionLabel[] = [
-  'Access',
-  'Configure',
+  'Setup',
   'Resources',
   'Network',
-  'Run',
-  'Evidence',
+  'Experiment',
+  'Data',
 ];
