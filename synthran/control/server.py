@@ -20,6 +20,13 @@ from synthran.control.protocol import (
     parse_request,
     success_response,
 )
+from synthran.resources.catalog import reviewed_resource_descriptors
+from synthran.resources.model import ResourceInventory, ResourceSelectionError
+from synthran.resources.slices_inventory import (
+    Runner as SlicesInventoryRunner,
+    read_slices_compute_snapshot,
+    subprocess_runner as slices_inventory_runner,
+)
 from synthran.workspace.desired import ExperimentDesiredState, RadioDesiredState
 from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now
 from synthran.workspace.store import load_access_record
@@ -83,23 +90,45 @@ def _desired_experiment(params: Mapping[str, object]) -> tuple[ExperimentDesired
     return desired, label
 
 
+def _require_slices_access(
+    controller: ApplicationController,
+    *,
+    now: datetime,
+) -> str:
+    authority = controller.authority
+    username = authority.profile.slices_username
+    if username is None:
+        raise WorkspaceError("SLICES access is not configured for the selected profile")
+    record = load_access_record(controller.root, "slices")
+    if record is None:
+        raise WorkspaceError("fresh SLICES access verification is required")
+    if record.subject != username or record.scope != authority.workspace.project:
+        raise WorkspaceError("cached SLICES access does not match the selected workspace")
+    if not record.is_fresh(now):
+        raise WorkspaceError("cached SLICES access is stale and must be refreshed")
+    return username
+
+
 class ControlService:
-    """Serve validated local state and local configuration through a versioned method set."""
+    """Serve local state, local configuration, and bounded provider reads."""
 
     def __init__(
         self,
         *,
         start: Path | None = None,
         environment: Mapping[str, str] | None = None,
+        inventory_runner: SlicesInventoryRunner = slices_inventory_runner,
     ) -> None:
         self.start = start
         self.environment = dict(os.environ if environment is None else environment)
+        self.inventory_runner = inventory_runner
 
     def handshake(self) -> dict[str, object]:
         return {
             "service": "synthran-control",
             "protocol": CONTROL_VERSION,
             "local_writes": bool(LOCAL_WRITE_METHODS),
+            "provider_reads": True,
             "provider_mutation": False,
             "methods": sorted(SUPPORTED_METHODS),
         }
@@ -172,6 +201,38 @@ class ControlService:
             "provider_experiment": None,
         }
 
+    def resource_preview(self, *, now: datetime | None = None) -> dict[str, object]:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        controller = ApplicationController(start=self.start, environment=self.environment)
+        username = _require_slices_access(controller, now=current)
+        snapshot = read_slices_compute_snapshot(
+            operator=username,
+            runner=self.inventory_runner,
+            now=current,
+        )
+        inventory = ResourceInventory(
+            descriptors=reviewed_resource_descriptors(),
+            snapshots=(snapshot,),
+        )
+        decision = controller.resource_decision(inventory, now=current)
+        return {
+            "inventory": {
+                "provider": snapshot.provider,
+                "observed_at_utc": snapshot.observed_at_utc,
+                "fresh_until_utc": snapshot.fresh_until_utc,
+                "complete": snapshot.complete,
+                "resources": [
+                    {
+                        "resource_id": item.resource_id,
+                        "availability": item.availability,
+                        "ownership": item.ownership,
+                    }
+                    for item in snapshot.resources
+                ],
+            },
+            "decision": decision.to_dict(),
+        }
+
     def handle(self, value: object) -> dict[str, object]:
         request_id: str | None = None
         try:
@@ -199,6 +260,22 @@ class ControlService:
                     return error_response(
                         request_id,
                         code="invalid_params",
+                        message=str(exc),
+                    )
+                return success_response(request_id, result)
+            if method == "resources.preview":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="resources.preview does not accept params",
+                    )
+                try:
+                    result = self.resource_preview()
+                except ResourceSelectionError as exc:
+                    return error_response(
+                        request_id,
+                        code="resource_unavailable",
                         message=str(exc),
                     )
                 return success_response(request_id, result)
