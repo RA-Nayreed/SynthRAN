@@ -58,6 +58,13 @@ export const initialSection = (snapshot: ControlSnapshot): SectionLabel => {
 export const toWorkbenchState = (snapshot: ControlSnapshot): WorkbenchState => ({
   project: snapshot.workspace.project,
   profile: snapshot.workspace.profile,
+  profiles: snapshot.profiles.map(profile => ({
+    name: profile.name,
+    slicesUsername: profile.slices_username,
+    r2labSlice: profile.r2lab_slice,
+    identityName: profile.identity_name,
+  })),
+  computeNodes: [...snapshot.compute_nodes],
   experiment: snapshot.experiment.id ?? 'No active experiment',
   hasActiveExperiment: snapshot.experiment.id !== null,
   completedSections: completedSections(snapshot),
@@ -73,6 +80,9 @@ export const toWorkbenchState = (snapshot: ControlSnapshot): WorkbenchState => (
   sshIdentity: snapshot.access.r2lab.identity_name ?? 'Not configured',
   reservationMinutes: snapshot.workspace.reservation_minutes,
   placement: snapshot.workspace.placement,
+  experimentPlacement: snapshot.experiment.placement_mode,
+  coreNode: snapshot.experiment.core_node,
+  ranNode: snapshot.experiment.ran_node,
   lifecycle: snapshot.experiment.lifecycle,
   observations: snapshot.observations,
   nextSteps: snapshot.next_steps,
