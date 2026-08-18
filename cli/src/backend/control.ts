@@ -16,6 +16,9 @@ export type ApprovalMode = 'standard' | 'destructive';
 export interface ExperimentCreateInput {
   intent: ExperimentIntent;
   radioMode: ExperimentRadioMode;
+  placement: PlacementMode;
+  coreNode: string | null;
+  ranNode: string | null;
   label?: string | null;
 }
 
@@ -75,11 +78,16 @@ export interface ControlSnapshot {
     reservation_minutes: number;
     placement: string;
   };
+  profiles: SetupProfile[];
+  compute_nodes: string[];
   experiment: {
     id: string | null;
     provider_experiment: string | null;
     intent: string | null;
     radio_mode: string | null;
+    placement_mode: string | null;
+    core_node: string | null;
+    ran_node: string | null;
     lifecycle: string;
   };
   access: {
@@ -192,12 +200,14 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const CONTROL_VERSION = 6;
+const CONTROL_VERSION = 7;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
 const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
 const LIVE_OPERATION_TIMEOUT_MS = 4_500_000;
 const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const RESOURCE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const OPERATION_ID_RE = /^op-[0-9]{6,}$/;
 const REQUIRED_METHODS = [
   'system.handshake',
@@ -205,6 +215,7 @@ const REQUIRED_METHODS = [
   'workspace.initialize',
   'workspace.snapshot',
   'workspace.update_defaults',
+  'workspace.switch_profile',
   'experiment.create',
   'provider.experiments',
   'experiment.bind_provider',
@@ -329,10 +340,16 @@ const isSnapshot = (value: unknown): value is ControlSnapshot => {
     typeof workspace.reservation_minutes === 'number' &&
     Number.isInteger(workspace.reservation_minutes) &&
     typeof workspace.placement === 'string' &&
+    Array.isArray(value.profiles) && value.profiles.every(isSetupProfile) &&
+    isStringArray(value.compute_nodes) &&
+    value.compute_nodes.every(node => RESOURCE_NAME_RE.test(node)) &&
     isNullableString(experiment.id) &&
     isNullableString(experiment.provider_experiment) &&
     isNullableString(experiment.intent) &&
     isNullableString(experiment.radio_mode) &&
+    isNullableString(experiment.placement_mode) &&
+    isNullableString(experiment.core_node) &&
+    isNullableString(experiment.ran_node) &&
     typeof experiment.lifecycle === 'string' &&
     isAccessEntry(access.slices) &&
     isAccessEntry(access.r2lab) &&
@@ -662,6 +679,31 @@ export const updateWorkspaceDefaults = async (
   return requireSnapshot(responses);
 };
 
+export const switchWorkspaceProfile = async (
+  profileName: string,
+  signal?: AbortSignal,
+): Promise<ControlSnapshot> => {
+  if (!PROFILE_NAME_RE.test(profileName)) throw new Error('SynthRAN profile name is invalid');
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {
+        id: 'profile',
+        method: 'workspace.switch_profile',
+        params: {profile_name: profileName},
+      },
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  const profile = responses.find(item => item.id === 'profile');
+  if (!profile?.ok) {
+    throw new Error(controlError(profile, 'SynthRAN controller profile could not be switched'));
+  }
+  return requireSnapshot(responses);
+};
+
 export const createLocalExperiment = async (
   input: ExperimentCreateInput,
   signal?: AbortSignal,
@@ -669,6 +711,9 @@ export const createLocalExperiment = async (
   const params: Record<string, unknown> = {
     intent: input.intent,
     radio_mode: input.radioMode,
+    placement: input.placement,
+    core_node: input.coreNode,
+    ran_node: input.ranNode,
   };
   if (input.label !== undefined) params.label = input.label;
 
