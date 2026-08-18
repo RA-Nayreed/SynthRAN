@@ -136,6 +136,7 @@ const isHandshake = (value: unknown): value is HandshakeResult => {
     value.protocol === CONTROL_VERSION &&
     value.local_writes === true &&
     value.provider_mutation === false &&
+    methods.length === REQUIRED_METHODS.length &&
     REQUIRED_METHODS.every(method => methods.includes(method))
   );
 };
