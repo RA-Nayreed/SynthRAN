@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
+import ipaddress
+import json
 import os
 import platform
 import re
@@ -33,6 +36,22 @@ class ControllerCommandResult:
 
 
 @dataclass(frozen=True)
+class Post5GNetworkLease:
+    """Live Post5G provider-assigned network identity for one experiment."""
+
+    subnet: str
+    load_balancer_ip: str
+    expiration_time_utc: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "subnet": self.subnet,
+            "load_balancer_ip": self.load_balancer_ip,
+            "expiration_time_utc": self.expiration_time_utc,
+        }
+
+
+@dataclass(frozen=True)
 class SlicesControllerReport:
     dependency_lock_sha256: str
     project_fingerprint: str
@@ -41,6 +60,7 @@ class SlicesControllerReport:
     ansible_version: str
     pos_version: str
     slices_cli_version: str
+    post5g_network: Post5GNetworkLease | None = None
 
     @property
     def ready(self) -> bool:
@@ -57,9 +77,17 @@ class SlicesControllerReport:
             "ansible_version": self.ansible_version,
             "pos_version": self.pos_version,
             "slices_cli_version": self.slices_cli_version,
+            "post5g_network": (
+                self.post5g_network.to_dict() if self.post5g_network else None
+            ),
         }
 
     def render(self) -> str:
+        post5g_line = (
+            "[PASS] Post5G: provider network prefix and load balancer verified"
+            if self.post5g_network is not None
+            else "[PASS] Post5G: provider network context not requested"
+        )
         return "\n".join(
             (
                 "SynthRAN SLICES controller doctor (read-only)",
@@ -70,6 +98,7 @@ class SlicesControllerReport:
                 f"[PASS] POS: exact supported version {self.pos_version}",
                 f"[PASS] SLICES CLI: authenticated version {self.slices_cli_version}",
                 "[PASS] context: selected project and existing experiment verified",
+                post5g_line,
                 "Result: READY",
             )
         )
@@ -169,6 +198,64 @@ def _contains_context(output: str, expected: str, label: str) -> None:
         raise SlicesControllerError(f"active SLICES {label} does not match the request")
 
 
+def _format_utc(value: datetime) -> str:
+    return (
+        value.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _parse_post5g_network(output: str) -> Post5GNetworkLease:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise SlicesControllerError("Post5G prefix probe did not return JSON") from exc
+    if not isinstance(payload, dict):
+        raise SlicesControllerError("Post5G prefix probe must return one JSON object")
+
+    subnet_value = payload.get("subnet")
+    lb_value = payload.get("lb")
+    expiry_value = payload.get("expiration_time")
+    if not isinstance(subnet_value, str) or not subnet_value.strip():
+        raise SlicesControllerError("Post5G prefix probe is missing subnet")
+    if not isinstance(lb_value, str) or not lb_value.strip():
+        raise SlicesControllerError("Post5G prefix probe is missing load balancer IP")
+    if not isinstance(expiry_value, str) or not expiry_value.strip():
+        raise SlicesControllerError("Post5G prefix probe is missing expiration time")
+
+    try:
+        subnet = ipaddress.ip_network(subnet_value.strip(), strict=True)
+    except ValueError as exc:
+        raise SlicesControllerError("Post5G subnet is not a valid network prefix") from exc
+    try:
+        load_balancer = ipaddress.ip_address(lb_value.strip())
+    except ValueError as exc:
+        raise SlicesControllerError("Post5G load balancer is not a valid IP address") from exc
+    if subnet.version != 4 or load_balancer.version != 4:
+        raise SlicesControllerError("Post5G provider network must use IPv4")
+
+    expiry_text = expiry_value.strip()
+    if expiry_text.endswith("Z"):
+        expiry_text = expiry_text[:-1] + "+00:00"
+    try:
+        expiry = datetime.fromisoformat(expiry_text)
+    except ValueError as exc:
+        raise SlicesControllerError("Post5G expiration time is not ISO-8601") from exc
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    expiry = expiry.astimezone(timezone.utc)
+    if expiry <= datetime.now(timezone.utc):
+        raise SlicesControllerError("Post5G provider network lease is expired")
+
+    return Post5GNetworkLease(
+        subnet=str(subnet),
+        load_balancer_ip=str(load_balancer),
+        expiration_time_utc=_format_utc(expiry),
+    )
+
+
 def verify_slices_controller(
     *,
     lock: DependencyLock,
@@ -181,7 +268,7 @@ def verify_slices_controller(
     python_version: str | None = None,
     timeout_seconds: int = DEFAULT_CONTROLLER_TIMEOUT_SECONDS,
 ) -> SlicesControllerReport:
-    """Verify the supported Linux SLICES CLI context without changing it."""
+    """Verify the supported Linux SLICES/Post5G controller without changing it."""
 
     project = validate_context(project, "SLICES project")
     experiment = validate_context(experiment, "SLICES experiment")
@@ -204,6 +291,7 @@ def verify_slices_controller(
 
     required_tools = (
         "slices",
+        "post5g",
         "pos",
         "git",
         "ssh",
@@ -279,6 +367,14 @@ def verify_slices_controller(
         label="SLICES experiment probe",
     )
     _contains_context(experiment_output, experiment, "experiment")
+    post5g_network = _parse_post5g_network(
+        _checked_output(
+            runner,
+            ("post5g", "experiment", "prefix", experiment),
+            timeout_seconds=timeout_seconds,
+            label="Post5G prefix probe",
+        )
+    )
 
     return SlicesControllerReport(
         dependency_lock_sha256=dependency_lock_sha256(lock),
@@ -288,4 +384,5 @@ def verify_slices_controller(
         ansible_version=ansible_version,
         pos_version=pos_version,
         slices_cli_version=slices_version,
+        post5g_network=post5g_network,
     )
