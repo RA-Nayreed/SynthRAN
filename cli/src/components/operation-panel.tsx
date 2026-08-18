@@ -15,6 +15,7 @@ interface OperationPanelProps {
   primary: OperatorActionView | null;
   secondary: OperatorActionView | null;
   operation: OperationSnapshot | null;
+  operationLabel: string | null;
   busy: boolean;
   notice: string | null;
 }
@@ -56,9 +57,10 @@ const eventText = (event: OperationSnapshot['events'][number]) => {
 const pendingPrompt = (
   operation: OperationSnapshot | null,
   primary: OperatorActionView | null,
+  operationLabel: string | null,
 ) => {
   if (!operation) return primary ? `Enter  ${primary.label}` : null;
-  const label = operationKindLabel(operation.plan.kind, primary?.label ?? 'Continue');
+  const label = operationKindLabel(operation.plan.kind, operationLabel ?? primary?.label ?? 'Continue');
   if (operation.state.status === 'planned' && operation.plan.approval_required) {
     return `Enter  Confirm ${label.toLowerCase()}`;
   }
@@ -74,13 +76,17 @@ export const OperationPanel = ({
   primary,
   secondary,
   operation,
+  operationLabel,
   busy,
   notice,
 }: OperationPanelProps) => {
   const isResources = section === 'Resources';
   const lastEvents = operation?.events.slice(-5) ?? [];
-  const prompt = pendingPrompt(operation, primary);
+  const prompt = pendingPrompt(operation, primary, operationLabel);
   const radioName = state.radio === 'physical' ? 'R2Lab' : 'RFSIM';
+  const activeLabel = operation
+    ? operationKindLabel(operation.plan.kind, operationLabel ?? primary?.label ?? 'Action')
+    : null;
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
@@ -110,9 +116,7 @@ export const OperationPanel = ({
       <Box borderTop borderStyle="single" borderColor={theme.hairline} marginTop={1} paddingTop={1} flexDirection="column">
         {operation ? (
           <>
-            <Text bold color={theme.bodyStrong}>
-              {operationKindLabel(operation.plan.kind, primary?.label ?? 'Action')}
-            </Text>
+            <Text bold color={theme.bodyStrong}>{activeLabel}</Text>
             <Row label="Action ID" value={operation.plan.operation_id} />
             <Row label="State" value={operation.state.status} />
             {operation.plan.targets.length > 0 ? <Row label="Targets" value={operation.plan.targets.join(', ')} /> : null}
