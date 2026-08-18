@@ -75,12 +75,31 @@ python -m synthran experiment research run \
   --reference-capacity-bps "$REFERENCE_CAPACITY_BPS"
 ```
 
+## Pre-window target readiness
+
+The readiness proof must match the transport that defines the experimental condition.
+
+For a loaded condition, SynthRAN does **not** require ICMP echo replies before the measurement window. Instead it proves the actual load transport:
+
+1. the exact target `/32` route is through `tun_srsue1`;
+2. the run-owned iperf3 server is started on the external measurement peer;
+3. the UE iperf3 client is bound to the live PDU address;
+4. the client's TCP control connection becomes `ESTABLISHED` to the peer before the measurement window opens.
+
+Only after those checks pass is `pre_window.target_ready` set to true. UDP data then runs under that established iperf3 control session.
+
+Baseline conditions have no load transport to prove, so they retain the bounded pre-window ICMP reachability check.
+
+ICMP remains useful during every measurement as RTT evidence. The continuous RTT probe records every attempt and timeout, but an external peer that does not answer ICMP must not veto an otherwise proven loaded iperf3 transport.
+
+`CLOSE-WAIT` is not accepted as readiness. The load control connection must be genuinely established.
+
 ## Evidence expectations
 
 Before accepting a loaded result, confirm all of the following:
 
 1. the effective UE route to the peer is through `tun_srsue1`;
-2. the iperf3 TCP control connection remains established while UDP data is running;
+2. the iperf3 TCP control connection becomes established before the window and remains healthy while UDP data is running;
 3. the external peer receives the flow after core/UPF egress rather than from a Kubernetes pod address;
 4. the load client and run-owned server complete normally;
 5. the post-window network proof succeeds;
@@ -88,8 +107,35 @@ Before accepting a loaded result, confirm all of the following:
 
 A failed or same-host calibration is debugging evidence only. It must not be reused as reference capacity for campaign fractions.
 
-## 2026-08-18 diagnosis
+## 2026-08-18 live acceptance
 
-A same-host target on the core node produced an iperf3 UDP control connection in `CLOSE-WAIT`; the core-side server observed the UE through the Kubernetes pod network and exited early. A cross-host test to the prepared RAN node kept both TCP control and UDP data active for the full measurement, completed with return code 0 on both sides, and delivered approximately the requested bitrate with zero packet loss.
+The same-host core target was rejected after diagnosis because it produced a Kubernetes/hairpin path and an iperf3 UDP control connection in `CLOSE-WAIT`.
 
-That result established the external-peer requirement implemented by this change. A fresh capacity calibration against the external peer is still required before new load50/load80/load95 campaign evidence is accepted.
+A managed cross-host diagnostic to the prepared RAN node proved the intended topology. With the UE bound to its PDU address and routed through `tun_srsue1`, the external peer received the flow after core/UPF egress. Both iperf3 processes exited successfully and a 1 Mbps UDP test delivered approximately 995 Kbps with zero packet loss.
+
+After the measurement-peer fix was merged, the network was redeployed under the current dependency-lock epoch as:
+
+```text
+network-acceptance-20260818-04
+Result: PATH PROVEN
+```
+
+The prepared RAN node's provider-facing address was:
+
+```text
+sopnode-f3 -> 172.28.2.95
+```
+
+A fresh external-peer capacity calibration then completed successfully:
+
+```text
+artifact: .synthran/research/calibration-20260818-external-01.json
+network_run_id: network-acceptance-20260818-04
+target: 172.28.2.95
+ue_interface: tun_srsue1
+reference_capacity_bps: 66,687,096
+```
+
+That value is the current accepted reference for subsequent fractional load experiments on this network run. Historical same-host capacity results remain debugging evidence only.
+
+The first 1 Mbps production-path smoke run after calibration, `smoke-20260818-01-udp1m`, is **invalid diagnostic evidence**. It never opened the measurement window because the old runtime required three successful ICMP replies before starting iperf3. Cleanup reproved the base network. That failure established the transport-aware readiness correction documented above; the invalid run must not be reused or reclassified.
