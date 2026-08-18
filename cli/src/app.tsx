@@ -12,6 +12,7 @@ import {
   listProviderExperiments,
   planOperation,
   readLocalSnapshot,
+  switchWorkspaceProfile,
   updateWorkspaceDefaults,
   type ControlSnapshot,
   type OperationSnapshot,
@@ -49,6 +50,7 @@ const actions: PaletteAction[] = [
 ];
 
 const radioOptions: RadioMode[] = ['virtual', 'physical'];
+const placementOptions: PlacementMode[] = ['automatic', 'manual'];
 
 const wrap = (value: number, length: number) => (value + length) % length;
 const cycle = <T,>(items: readonly T[], current: T, delta: number): T => {
@@ -58,18 +60,39 @@ const cycle = <T,>(items: readonly T[], current: T, delta: number): T => {
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value));
 
+const preferredNode = (
+  nodes: string[],
+  preferred: string,
+  excluded: string | null = null,
+): string | null => {
+  if (nodes.includes(preferred) && preferred !== excluded) return preferred;
+  return nodes.find(node => node !== excluded) ?? null;
+};
+
 const draftFromSnapshot = (snapshot: ControlSnapshot) => {
   let radio: RadioMode = 'virtual';
   if (snapshot.experiment.radio_mode === 'physical') radio = 'physical';
   else if (snapshot.experiment.radio_mode === 'virtual') radio = 'virtual';
   else if (snapshot.experiment.intent === 'physical-5g') radio = 'physical';
 
+  const placement = (
+    snapshot.experiment.placement_mode === 'manual' ||
+    (snapshot.experiment.placement_mode === null && snapshot.workspace.placement === 'manual')
+      ? 'manual'
+      : 'automatic'
+  ) as PlacementMode;
+  const coreNode = snapshot.experiment.core_node
+    ?? preferredNode(snapshot.compute_nodes, 'sopnode-f2');
+  const ranNode = snapshot.experiment.ran_node
+    ?? preferredNode(snapshot.compute_nodes, 'sopnode-f3', coreNode);
+
   return {
+    profile: snapshot.workspace.profile,
     radio,
     reservation: snapshot.workspace.reservation_minutes,
-    placement: (
-      snapshot.workspace.placement === 'manual' ? 'manual' : 'automatic'
-    ) as PlacementMode,
+    placement,
+    coreNode,
+    ranNode,
   };
 };
 
@@ -136,10 +159,13 @@ export const App = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [configFocus, setConfigFocus] = useState(0);
+  const [draftProfile, setDraftProfile] = useState('default');
   const [draftRadio, setDraftRadio] = useState<RadioMode>('virtual');
   const [draftReservation, setDraftReservation] = useState(120);
   const [draftPlacement, setDraftPlacement] = useState<PlacementMode>('automatic');
-  const [localBusy, setLocalBusy] = useState<'initializing' | 'defaults' | 'experiment' | null>(null);
+  const [draftCoreNode, setDraftCoreNode] = useState<string | null>(null);
+  const [draftRanNode, setDraftRanNode] = useState<string | null>(null);
+  const [localBusy, setLocalBusy] = useState<'initializing' | 'profile' | 'defaults' | 'experiment' | null>(null);
   const [providerBusy, setProviderBusy] = useState<'loading' | 'binding' | null>(null);
   const [providerExperiments, setProviderExperiments] = useState<string[] | null>(null);
   const [providerIndex, setProviderIndex] = useState(0);
@@ -166,9 +192,12 @@ export const App = () => {
     setState(next);
     setSetup(null);
     setSetupDraft(null);
+    setDraftProfile(draft.profile);
     setDraftRadio(draft.radio);
     setDraftReservation(draft.reservation);
     setDraftPlacement(draft.placement);
+    setDraftCoreNode(draft.coreNode);
+    setDraftRanNode(draft.ranNode);
     if (chooseSection) setActiveSection(initialSection(snapshot));
   };
 
@@ -284,16 +313,34 @@ export const App = () => {
     snapshot => `Saved ${snapshot.workspace.reservation_minutes} minute reservation default.`,
   );
 
-  const saveConfiguration = () => runLocalWrite(
-    'experiment',
-    signal => createLocalExperiment(
-      {intent: 'iot-to-5g', radioMode: draftRadio},
-      signal,
-    ),
-    snapshot => snapshot.experiment.id
-      ? `Created ${snapshot.experiment.id}. Select the existing SLICES experiment to bind.`
-      : 'Network configuration was created.',
-  );
+  const saveConfiguration = () => {
+    if (draftPlacement === 'manual') {
+      if (!draftCoreNode || !draftRanNode) {
+        setNotice('Choose both a core node and a RAN node.');
+        return;
+      }
+      if (draftCoreNode === draftRanNode) {
+        setNotice('Core and RAN nodes must be different.');
+        return;
+      }
+    }
+    runLocalWrite(
+      'experiment',
+      signal => createLocalExperiment(
+        {
+          intent: 'iot-to-5g',
+          radioMode: draftRadio,
+          placement: draftPlacement,
+          coreNode: draftPlacement === 'manual' ? draftCoreNode : null,
+          ranNode: draftPlacement === 'manual' ? draftRanNode : null,
+        },
+        signal,
+      ),
+      snapshot => snapshot.experiment.id
+        ? `Created ${snapshot.experiment.id}. Select the existing SLICES experiment to bind.`
+        : 'Network configuration was created.',
+    );
+  };
 
   const initializeFirstUse = () => {
     if (!setup || !setupDraft || busy) return;
@@ -392,6 +439,65 @@ export const App = () => {
     const nextIndex = wrap(setupIdentityIndex + delta, setup.ssh_identities.length);
     setSetupIdentityIndex(nextIndex);
     setSetupDraft({...setupDraft, identityReference: setup.ssh_identities[nextIndex]});
+    setNotice(null);
+  };
+
+  const changeProfile = (delta: number) => {
+    if (!state || state.profiles.length === 0) return;
+    const names = state.profiles.map(profile => profile.name);
+    setDraftProfile(current => cycle(names, current, delta));
+    setNotice(null);
+  };
+
+  const activateProfile = () => {
+    if (!state || busy) return;
+    if (draftProfile === state.profile) {
+      setNotice(`${state.profile} is already the active controller profile.`);
+      return;
+    }
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setLocalBusy('profile');
+    setNotice(null);
+    switchWorkspaceProfile(draftProfile, requestController.signal)
+      .then(snapshot => {
+        if (requestController.signal.aborted) return;
+        applySnapshot(snapshot, true);
+        resetProviderChoices();
+        resetOperation();
+        setActiveSection('Setup');
+        setNotice(`Switched controller profile to ${snapshot.workspace.profile}.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'Controller profile could not be switched');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setLocalBusy(null);
+        }
+      });
+  };
+
+  const changeNode = (role: 'core' | 'ran', delta: number) => {
+    if (!state || state.computeNodes.length === 0 || draftPlacement !== 'manual') return;
+    if (role === 'core') {
+      const current = draftCoreNode ?? state.computeNodes[0];
+      let next = cycle(state.computeNodes, current, delta);
+      if (state.computeNodes.length > 1 && next === draftRanNode) {
+        next = cycle(state.computeNodes, next, delta);
+      }
+      setDraftCoreNode(next);
+    } else {
+      const current = draftRanNode ?? state.computeNodes[0];
+      let next = cycle(state.computeNodes, current, delta);
+      if (state.computeNodes.length > 1 && next === draftCoreNode) {
+        next = cycle(state.computeNodes, next, delta);
+      }
+      setDraftRanNode(next);
+    }
     setNotice(null);
   };
 
@@ -648,11 +754,11 @@ export const App = () => {
         return;
       }
       if (key.upArrow) {
-        setSetupFocus(index => wrap(index - 1, 9));
+        setSetupFocus(index => wrap(index - 1, 10));
         return;
       }
       if (key.downArrow || key.tab) {
-        setSetupFocus(index => wrap(index + 1, 9));
+        setSetupFocus(index => wrap(index + 1, 10));
         return;
       }
       if (setupFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
@@ -694,7 +800,12 @@ export const App = () => {
         setNotice(null);
         return;
       }
-      if (setupFocus === 8 && key.return) {
+      if (setupFocus === 8 && (key.leftArrow || key.rightArrow || key.return)) {
+        setSetupDraft({...setupDraft, placement: cycle(placementOptions, setupDraft.placement, key.leftArrow ? -1 : 1)});
+        setNotice(null);
+        return;
+      }
+      if (setupFocus === 9 && key.return) {
         initializeFirstUse();
       }
       return;
@@ -765,32 +876,55 @@ export const App = () => {
 
     if (activeSection === 'Setup') {
       if (key.upArrow) {
-        setConfigFocus(index => wrap(index - 1, 6));
+        setConfigFocus(index => wrap(index - 1, 10));
         return;
       }
       if (key.downArrow) {
-        setConfigFocus(index => wrap(index + 1, 6));
+        setConfigFocus(index => wrap(index + 1, 10));
         return;
       }
-      if (configFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
+      if (configFocus === 0) {
+        if (key.leftArrow || key.rightArrow) {
+          changeProfile(key.leftArrow ? -1 : 1);
+          return;
+        }
+        if (key.return) {
+          activateProfile();
+          return;
+        }
+      }
+      if (configFocus === 1 && (key.leftArrow || key.rightArrow || key.return)) {
         setDraftRadio(value => cycle(radioOptions, value === 'automatic' ? 'virtual' : value, key.leftArrow ? -1 : 1));
         setNotice(null);
         return;
       }
-      if (configFocus === 1 && (key.leftArrow || key.rightArrow || key.return)) {
+      if (configFocus === 2 && (key.leftArrow || key.rightArrow || key.return)) {
+        setDraftPlacement(value => cycle(placementOptions, value, key.leftArrow ? -1 : 1));
+        setNotice(null);
+        return;
+      }
+      if (configFocus === 3 && draftPlacement === 'manual' && (key.leftArrow || key.rightArrow || key.return)) {
+        changeNode('core', key.leftArrow ? -1 : 1);
+        return;
+      }
+      if (configFocus === 4 && draftPlacement === 'manual' && (key.leftArrow || key.rightArrow || key.return)) {
+        changeNode('ran', key.leftArrow ? -1 : 1);
+        return;
+      }
+      if (configFocus === 5 && (key.leftArrow || key.rightArrow || key.return)) {
         setDraftReservation(value => clamp(value + (key.leftArrow ? -10 : 10), 10, 1440));
         setNotice(null);
         return;
       }
-      if (configFocus === 2 && key.return) {
+      if (configFocus === 6 && key.return) {
         saveDefaults();
         return;
       }
-      if (configFocus === 3 && key.return) {
+      if (configFocus === 7 && key.return) {
         saveConfiguration();
         return;
       }
-      if (configFocus === 4) {
+      if (configFocus === 8) {
         if (providerExperiments === null && key.return) {
           loadProviders();
           return;
@@ -800,7 +934,7 @@ export const App = () => {
           return;
         }
       }
-      if (configFocus === 5 && key.return) {
+      if (configFocus === 9 && key.return) {
         bindProvider();
         return;
       }
@@ -855,7 +989,11 @@ export const App = () => {
           ) : activeSection === 'Setup' ? (
             <ConfigurationPanel
               state={state}
+              draftProfile={draftProfile}
               draftRadio={draftRadio}
+              draftPlacement={draftPlacement}
+              draftCoreNode={draftCoreNode}
+              draftRanNode={draftRanNode}
               draftReservation={draftReservation}
               focusedIndex={configFocus}
               localBusy={localBusy}
