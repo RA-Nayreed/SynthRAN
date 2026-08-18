@@ -39,18 +39,19 @@ class ControlServiceTests(unittest.TestCase):
         )
         return root, ControlService(start=root, environment=environment)
 
-    def test_handshake_is_read_only_and_does_not_require_workspace(self) -> None:
+    def test_handshake_advertises_local_write_without_provider_mutation(self) -> None:
         service = ControlService(start=Path("/missing"), environment={})
         response = service.handle(
-            {"v": 1, "id": "req-1", "method": "system.handshake", "params": {}}
+            {"v": 2, "id": "req-1", "method": "system.handshake", "params": {}}
         )
         self.assertTrue(response["ok"])
         result = response["result"]
-        self.assertTrue(result["read_only"])
-        self.assertEqual(result["protocol"], 1)
+        self.assertFalse(result["provider_mutation"])
+        self.assertEqual(result["protocol"], 2)
+        self.assertEqual(result["local_write_methods"], ["experiment.create"])
         self.assertEqual(
             result["methods"],
-            ["system.handshake", "workspace.snapshot"],
+            ["experiment.create", "system.handshake", "workspace.snapshot"],
         )
 
     def test_workspace_snapshot_exposes_sanitized_local_state(self) -> None:
@@ -81,7 +82,7 @@ class ControlServiceTests(unittest.TestCase):
     def test_unknown_method_fails_closed(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 1, "id": "req-2", "method": "resource.reserve", "params": {}}
+            {"v": 2, "id": "req-2", "method": "resource.reserve", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "method_not_found")
@@ -90,7 +91,7 @@ class ControlServiceTests(unittest.TestCase):
         service = ControlService(environment={})
         source = StringIO(
             "not-json\n"
-            '{"v":1,"id":"req-3","method":"system.handshake","params":{}}\n'
+            '{"v":2,"id":"req-3","method":"system.handshake","params":{}}\n'
         )
         target = StringIO()
         serve(service, input_stream=source, output_stream=target)
