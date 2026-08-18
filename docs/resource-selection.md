@@ -64,6 +64,25 @@ Only `available` or `allocated` resources with ownership `synthran`, `operator`,
 
 Selection does not turn `operator` ownership into SynthRAN mutation authority. Provider executors must still prove exact live authority immediately before mutation.
 
+### Read-only SLICES compute inventory
+
+The interactive workbench can now request a live placement preview for the reviewed SLICES compute catalog. The adapter first requires a fresh cached SLICES access record matching the selected profile and project. It then performs only these POS reads:
+
+```text
+pos calendar list --json
+pos allocations list --json
+```
+
+Reservation and allocation data are combined before a node is classified. An active reservation owned by another operator makes the node unavailable even when no allocation exists. Foreign allocations are also unsafe. Conflicting ownership, overlapping active reservations, duplicate allocation records, malformed provider output, failed commands, and incomplete reads fail closed.
+
+A free node is represented as `available/unowned`. A node actively reserved by the current operator but not yet allocated is represented as `available/operator`. Current allocations retain their observed ownership. The snapshot covers all reviewed SLICES compute descriptors and is marked complete only after both POS reads validate successfully.
+
+The default freshness window is short, and it is shortened further to end before any known reservation start or end that could change availability. A placement preview therefore cannot be reused indefinitely as provider truth.
+
+The Resources view invokes this provider read only when the operator presses Enter. Normal workbench startup remains local-only. The result is passed through the existing `ResourceDecision` path; no parallel placement algorithm exists in the UI.
+
+This interface currently supplies live SLICES compute inventory only. Virtual RFSIM needs no real-provider snapshot. A physical-radio request still fails closed because a current complete R2Lab radio/UE inventory is not yet connected to this preview path.
+
 ## Requirements derived from experiment state
 
 Requested state becomes role requirements rather than fixed node names.
@@ -152,4 +171,4 @@ desired state
     -> exact provider mutation
 ```
 
-The generic resource transaction engine exists, but concrete transaction adapters for every provider path are not yet connected to the interactive terminal. Dynamic placement therefore must not be documented as proof that terminal `/reserve` or physical R2Lab execution is live operational.
+The interactive terminal now has a read-only SLICES placement preview, but concrete mutation adapters for the complete dynamic provider path are still not connected to it. The preview therefore must not be documented as proof that terminal reservation, allocation, deployment, or physical R2Lab execution is live operational.
