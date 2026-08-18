@@ -7,8 +7,9 @@ import tempfile
 import unittest
 
 from synthran.control import ControlService
+from synthran.resources.model import ResourceSelectionError
 from synthran.resources.slices_inventory import InventoryCommandResult
-from synthran.workspace.model import AccessRecord, Profile, format_utc
+from synthran.workspace.model import AccessRecord, Profile, WorkspaceError, format_utc
 from synthran.workspace.store import initialize_workspace, save_access_record, save_profile
 
 
@@ -122,7 +123,7 @@ class ResourcePreviewControlTests(unittest.TestCase):
                 now=NOW,
             )
 
-            with self.assertRaisesRegex(Exception, "stale"):
+            with self.assertRaisesRegex(WorkspaceError, "stale"):
                 service.resource_preview(now=NOW)
             self.assertEqual([], runner.calls)
 
@@ -136,7 +137,10 @@ class ResourcePreviewControlTests(unittest.TestCase):
                 now=NOW,
             )
 
-            with self.assertRaisesRegex(Exception, "complete r2lab resource inventory"):
+            with self.assertRaisesRegex(
+                ResourceSelectionError,
+                "complete r2lab resource inventory",
+            ):
                 service.resource_preview(now=NOW)
             self.assertEqual(2, len(runner.calls))
 
