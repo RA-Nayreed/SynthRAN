@@ -2,15 +2,22 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Box, Spacer, Text, useApp, useInput} from 'ink';
 
 import {
+  approveOperation,
   bindProviderExperiment,
+  cancelOperation,
   createLocalExperiment,
   initializeWorkspace,
+  inspectOperation,
   inspectSetup,
   listProviderExperiments,
+  planOperation,
   readLocalSnapshot,
   updateWorkspaceDefaults,
   type ControlSnapshot,
   type ExperimentIntent,
+  type OperationAction,
+  type OperationInspection,
+  type OperationSnapshot,
   type PlacementMode,
   type SetupProfile,
   type SetupSnapshot,
@@ -19,6 +26,7 @@ import {initialSection, toWorkbenchState} from './backend/workbench.js';
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
 import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
+import {OperationPanel} from './components/operation-panel.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
 import {SetupPanel, type SetupDraftView} from './components/setup.js';
@@ -48,6 +56,7 @@ const intentOptions: ExperimentIntent[] = [
   'unspecified',
 ];
 const allRadioOptions: RadioMode[] = ['virtual', 'physical', 'automatic'];
+const operationActions: OperationAction[] = ['reserve', 'up', 'verify', 'recover', 'down'];
 
 const wrap = (value: number, length: number) => (value + length) % length;
 const cycle = <T,>(items: readonly T[], current: T, delta: number): T => {
@@ -149,9 +158,14 @@ export const App = () => {
   const [providerBusy, setProviderBusy] = useState<'loading' | 'binding' | null>(null);
   const [providerExperiments, setProviderExperiments] = useState<string[] | null>(null);
   const [providerIndex, setProviderIndex] = useState(0);
+  const [operationActionIndex, setOperationActionIndex] = useState(1);
+  const [operationInspection, setOperationInspection] = useState<OperationInspection | null>(null);
+  const [operationSnapshot, setOperationSnapshot] = useState<OperationSnapshot | null>(null);
+  const [operationBusy, setOperationBusy] = useState<'review' | 'prepare' | 'approve' | 'cancel' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
 
+  const operationAction = operationActions[operationActionIndex];
   const providerCandidate =
     providerExperiments && providerExperiments.length > 0
       ? providerExperiments[Math.min(providerIndex, providerExperiments.length - 1)]
@@ -179,6 +193,11 @@ export const App = () => {
     setProviderIndex(0);
   };
 
+  const resetOperationReview = () => {
+    setOperationInspection(null);
+    setOperationSnapshot(null);
+  };
+
   useEffect(() => {
     const requestController = new AbortController();
     let cancelled = false;
@@ -189,6 +208,7 @@ export const App = () => {
     setLoadError(null);
     setNotice(null);
     resetProviderChoices();
+    resetOperationReview();
 
     inspectSetup(requestController.signal)
       .then(async setupState => {
@@ -228,7 +248,7 @@ export const App = () => {
     [],
   );
 
-  const busy = localBusy !== null || providerBusy !== null;
+  const busy = localBusy !== null || providerBusy !== null || operationBusy !== null;
 
   const selectSection = (section: SectionLabel) => {
     setActiveSection(section);
@@ -505,6 +525,152 @@ export const App = () => {
       });
   };
 
+  const changeOperationAction = (delta: number) => {
+    setOperationActionIndex(index => wrap(index + delta, operationActions.length));
+    resetOperationReview();
+    setNotice(null);
+  };
+
+  const reviewOperation = () => {
+    if (busy) return;
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setOperationBusy('review');
+    setOperationSnapshot(null);
+    setNotice(null);
+    inspectOperation(operationAction, requestController.signal)
+      .then(inspection => {
+        if (requestController.signal.aborted) return;
+        setOperationInspection(inspection);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setOperationInspection(null);
+        setNotice(error instanceof Error ? error.message : 'Current action could not be reviewed');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setOperationBusy(null);
+        }
+      });
+  };
+
+  const prepareOperation = () => {
+    if (busy) return;
+    const mutating = operationAction !== 'verify';
+    if (mutating && mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before preparing a change.');
+      return;
+    }
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setOperationBusy('prepare');
+    setNotice(null);
+    planOperation(operationAction, requestController.signal)
+      .then(operation => {
+        if (requestController.signal.aborted) return;
+        setOperationSnapshot(operation);
+        setOperationInspection(null);
+        setNotice(`Prepared ${operation.plan.operation_id} for review.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'Action could not be prepared');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setOperationBusy(null);
+        }
+      });
+  };
+
+  const approvePreparedOperation = (destructive: boolean) => {
+    if (busy || !operationSnapshot) {
+      if (!operationSnapshot) setNotice('Prepare an action before recording approval.');
+      return;
+    }
+    if (mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before recording approval.');
+      return;
+    }
+    if (!operationSnapshot.plan.approval_required) {
+      setNotice('This read-only action does not require approval.');
+      return;
+    }
+    if (operationSnapshot.plan.risk === 'R3' && !destructive) {
+      setNotice('Use d to confirm the destructive teardown approval.');
+      return;
+    }
+    if (operationSnapshot.plan.risk !== 'R3' && destructive) {
+      setNotice('Destructive approval is reserved for teardown.');
+      return;
+    }
+
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setOperationBusy('approve');
+    setNotice(null);
+    approveOperation(
+      operationSnapshot.plan.operation_id,
+      destructive ? 'destructive' : 'standard',
+      requestController.signal,
+    )
+      .then(operation => {
+        if (requestController.signal.aborted) return;
+        setOperationSnapshot(operation);
+        setMode('OBSERVE');
+        setNotice(`Approval recorded for ${operation.plan.operation_id}.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'Approval could not be recorded');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setOperationBusy(null);
+        }
+      });
+  };
+
+  const cancelPreparedOperation = () => {
+    if (busy || !operationSnapshot) {
+      if (!operationSnapshot) setNotice('Prepare an action before cancelling it.');
+      return;
+    }
+    if (mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before cancelling an action.');
+      return;
+    }
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setOperationBusy('cancel');
+    setNotice(null);
+    cancelOperation(operationSnapshot.plan.operation_id, requestController.signal)
+      .then(operation => {
+        if (requestController.signal.aborted) return;
+        setOperationSnapshot(operation);
+        setMode('OBSERVE');
+        setNotice(`Cancelled ${operation.plan.operation_id}.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'Action could not be cancelled');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setOperationBusy(null);
+        }
+      });
+  };
+
   const setupTextFocused = setupDraft !== null && (
     setupFocus === 2 ||
     (!setupDraft.reuseProfile && (setupFocus === 1 || setupFocus === 3 || (setupFocus === 5 && setupDraft.r2labEnabled)))
@@ -595,6 +761,7 @@ export const App = () => {
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
       setMode('OBSERVE');
+      resetOperationReview();
       setReloadToken(value => value + 1);
       return;
     }
@@ -620,7 +787,10 @@ export const App = () => {
       return;
     }
 
-    if (input.toLowerCase() === 'm' && activeSection === 'Configure') {
+    if (
+      input.toLowerCase() === 'm' &&
+      (activeSection === 'Configure' || activeSection === 'Resources' || activeSection === 'Network')
+    ) {
       setMode(current => current === 'OBSERVE' ? 'OPERATE' : 'OBSERVE');
       setNotice(null);
       return;
@@ -633,6 +803,33 @@ export const App = () => {
     if (/^[1-6]$/.test(input)) {
       selectSection(sectionLabels[Number(input) - 1]);
       return;
+    }
+
+    if (activeSection === 'Resources' || activeSection === 'Network') {
+      if (key.leftArrow || key.rightArrow) {
+        changeOperationAction(key.leftArrow ? -1 : 1);
+        return;
+      }
+      if (key.return) {
+        reviewOperation();
+        return;
+      }
+      if (input.toLowerCase() === 'p') {
+        prepareOperation();
+        return;
+      }
+      if (input.toLowerCase() === 'a') {
+        approvePreparedOperation(false);
+        return;
+      }
+      if (input.toLowerCase() === 'd') {
+        approvePreparedOperation(true);
+        return;
+      }
+      if (input.toLowerCase() === 'x') {
+        cancelPreparedOperation();
+        return;
+      }
     }
 
     if (activeSection === 'Configure') {
@@ -750,6 +947,17 @@ export const App = () => {
               providerCandidate={providerCandidate}
               notice={notice}
             />
+          ) : activeSection === 'Resources' || activeSection === 'Network' ? (
+            <OperationPanel
+              section={activeSection}
+              state={state}
+              mode={mode}
+              action={operationAction}
+              inspection={operationInspection}
+              operation={operationSnapshot}
+              busy={operationBusy !== null}
+              notice={notice}
+            />
           ) : (
             <SectionPanel section={activeSection} state={state} />
           )}
@@ -759,7 +967,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>Local writes require OPERATE · provider reads enabled · provider mutation disabled</Text>
+        <Text color={theme.muted}>OBSERVE by default · OPERATE records local changes · provider execution remains disabled</Text>
       </Box>
     </Box>
   );
