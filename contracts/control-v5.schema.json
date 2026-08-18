@@ -24,37 +24,49 @@
     "emptyParams": {"type": "object", "maxProperties": 0},
     "operationId": {"type": "string", "pattern": "^op-[0-9]{6,}$"},
     "operationAction": {"enum": ["reserve", "up", "verify", "recover", "down"]},
-    "baseRequest": {
+    "handshakeRequest": {
       "type": "object",
       "required": ["v", "id", "method", "params"],
       "properties": {
         "v": {"const": 5},
-        "id": {"$ref": "#/$defs/requestId"}
-      }
-    },
-    "handshakeRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/baseRequest"},
-        {"properties": {"method": {"const": "system.handshake"}, "params": {"$ref": "#/$defs/emptyParams"}}, "additionalProperties": false}
-      ]
+        "id": {"$ref": "#/$defs/requestId"},
+        "method": {"const": "system.handshake"},
+        "params": {"$ref": "#/$defs/emptyParams"}
+      },
+      "additionalProperties": false
     },
     "setupInspectRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/baseRequest"},
-        {"properties": {"method": {"const": "setup.inspect"}, "params": {"$ref": "#/$defs/emptyParams"}}, "additionalProperties": false}
-      ]
+      "type": "object",
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": {"const": 5},
+        "id": {"$ref": "#/$defs/requestId"},
+        "method": {"const": "setup.inspect"},
+        "params": {"$ref": "#/$defs/emptyParams"}
+      },
+      "additionalProperties": false
     },
     "snapshotRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/baseRequest"},
-        {"properties": {"method": {"const": "workspace.snapshot"}, "params": {"$ref": "#/$defs/emptyParams"}}, "additionalProperties": false}
-      ]
+      "type": "object",
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": {"const": 5},
+        "id": {"$ref": "#/$defs/requestId"},
+        "method": {"const": "workspace.snapshot"},
+        "params": {"$ref": "#/$defs/emptyParams"}
+      },
+      "additionalProperties": false
     },
     "providerExperimentsRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/baseRequest"},
-        {"properties": {"method": {"const": "provider.experiments"}, "params": {"$ref": "#/$defs/emptyParams"}}, "additionalProperties": false}
-      ]
+      "type": "object",
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": {"const": 5},
+        "id": {"$ref": "#/$defs/requestId"},
+        "method": {"const": "provider.experiments"},
+        "params": {"$ref": "#/$defs/emptyParams"}
+      },
+      "additionalProperties": false
     },
     "initializeWorkspaceRequest": {
       "type": "object",
