@@ -1,16 +1,10 @@
-export type SectionStatus = 'complete' | 'active' | 'pending';
 export type SectionLabel = 'Access' | 'Configure' | 'Resources' | 'Network' | 'Run' | 'Evidence';
-
-export interface Section {
-  label: SectionLabel;
-  status: SectionStatus;
-}
 
 export interface WorkbenchState {
   project: string;
   experiment: string;
   mode: 'OBSERVE' | 'OPERATE';
-  sections: Section[];
+  completedSections: SectionLabel[];
   intent: string;
   radio: 'virtual' | 'physical';
   slicesProject: string;
@@ -29,19 +23,11 @@ export const sectionLabels: SectionLabel[] = [
   'Evidence',
 ];
 
-export const sectionsFor = (activeSection: SectionLabel): Section[] => {
-  const activeIndex = sectionLabels.indexOf(activeSection);
-  return sectionLabels.map((label, index) => ({
-    label,
-    status: index < activeIndex ? 'complete' : index === activeIndex ? 'active' : 'pending',
-  }));
-};
-
 export const mockWorkbenchState: WorkbenchState = {
   project: 'example-project',
   experiment: 'sran-20260818-001',
   mode: 'OBSERVE',
-  sections: sectionsFor('Configure'),
+  completedSections: ['Access'],
   intent: 'IoT → 5G',
   radio: 'physical',
   slicesProject: 'example-project',
