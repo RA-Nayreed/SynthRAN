@@ -6,6 +6,8 @@ import {
   createLocalExperiment,
   listProviderExperiments,
   readLocalSnapshot,
+  readResourceSnapshot,
+  type ControlResourceSnapshot,
   type ControlSnapshot,
   type ExperimentIntent,
 } from './backend/control.js';
@@ -13,6 +15,7 @@ import {initialSection, toWorkbenchState} from './backend/workbench.js';
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
 import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
+import {ResourcePanel} from './components/resources.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
 import {
@@ -81,6 +84,8 @@ export const App = () => {
   const [providerBusy, setProviderBusy] = useState<'loading' | 'binding' | null>(null);
   const [providerExperiments, setProviderExperiments] = useState<string[] | null>(null);
   const [providerIndex, setProviderIndex] = useState(0);
+  const [resourceBusy, setResourceBusy] = useState(false);
+  const [resourceInventory, setResourceInventory] = useState<ControlResourceSnapshot | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
 
@@ -110,6 +115,7 @@ export const App = () => {
     setMode('OBSERVE');
     setLoadError(null);
     setNotice(null);
+    setResourceInventory(null);
     resetProviderChoices();
     readLocalSnapshot(requestController.signal)
       .then(snapshot => {
@@ -160,7 +166,7 @@ export const App = () => {
   };
 
   const saveConfiguration = () => {
-    if (saving || providerBusy) return;
+    if (saving || providerBusy || resourceBusy) return;
     if (mode !== 'OPERATE') {
       setNotice('Switch to OPERATE with m before creating local configuration.');
       return;
@@ -180,6 +186,7 @@ export const App = () => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
         resetProviderChoices();
+        setResourceInventory(null);
         setActiveSection('Configure');
         setMode('OBSERVE');
         setNotice(
@@ -213,7 +220,7 @@ export const App = () => {
       setNotice(`Provider experiment is already bound to ${state.providerExperiment}.`);
       return;
     }
-    if (saving || providerBusy) return;
+    if (saving || providerBusy || resourceBusy) return;
 
     const requestController = new AbortController();
     actionRequest.current?.abort();
@@ -264,7 +271,7 @@ export const App = () => {
       setNotice('Load and select a provider experiment first.');
       return;
     }
-    if (saving || providerBusy) return;
+    if (saving || providerBusy || resourceBusy) return;
     if (mode !== 'OPERATE') {
       setNotice('Switch to OPERATE with m before binding the provider experiment.');
       return;
@@ -281,6 +288,7 @@ export const App = () => {
       .then(snapshot => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
+        setResourceInventory(null);
         setActiveSection('Configure');
         setMode('OBSERVE');
         setNotice(`Bound ${selected} to ${snapshot.experiment.id ?? 'the active experiment'}.`);
@@ -297,6 +305,33 @@ export const App = () => {
       });
   };
 
+  const loadResources = () => {
+    if (saving || providerBusy || resourceBusy) return;
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setResourceBusy(true);
+    setNotice(null);
+
+    readResourceSnapshot(requestController.signal)
+      .then(inventory => {
+        if (requestController.signal.aborted) return;
+        setResourceInventory(inventory);
+        setNotice('Resource observations refreshed. Incomplete providers remain non-authoritative.');
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setResourceInventory(null);
+        setNotice(error instanceof Error ? error.message : 'Resource inventory could not be loaded');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setResourceBusy(false);
+        }
+      });
+  };
+
   useInput((input, key) => {
     if ((key.ctrl && input === 'c') || input.toLowerCase() === 'q') {
       actionRequest.current?.abort();
@@ -304,7 +339,7 @@ export const App = () => {
       return;
     }
 
-    if (saving || providerBusy) return;
+    if (saving || providerBusy || resourceBusy) return;
 
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
@@ -389,6 +424,11 @@ export const App = () => {
       }
     }
 
+    if (activeSection === 'Resources' && key.return) {
+      loadResources();
+      return;
+    }
+
     if (key.tab) {
       moveSection(key.shift ? -1 : 1);
     }
@@ -439,6 +479,13 @@ export const App = () => {
               providerBusy={providerBusy}
               providerExperiments={providerExperiments}
               providerCandidate={providerCandidate}
+              notice={notice}
+            />
+          ) : activeSection === 'Resources' ? (
+            <ResourcePanel
+              state={state}
+              inventory={resourceInventory}
+              loading={resourceBusy}
               notice={notice}
             />
           ) : (
