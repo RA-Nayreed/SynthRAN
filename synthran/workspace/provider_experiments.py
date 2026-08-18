@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable
 
 from synthran.workspace.access import ProbeResult, Runner, subprocess_runner
 from synthran.workspace.model import WorkspaceError, validate_safe_name
