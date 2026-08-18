@@ -65,17 +65,18 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 ## Current status
 
-The repository foundation, Open5GS + srsRAN + RFSIM base network, deterministic IoT-to-5G data path, and one controlled baseline measurement are implemented and live accepted. The external measurement-peer topology for capacity calibration and loaded conditions is implemented after a live cross-host diagnosis on 2026-08-18; a fresh accepted capacity calibration against that peer is still required before loaded campaign evidence is generated.
+The repository foundation, Open5GS + srsRAN + RFSIM base network, deterministic IoT-to-5G data path, one controlled baseline measurement, and the external measurement-peer capacity path are implemented and live accepted. Loaded campaign evidence is still pending.
 
 Canonical accepted SLICES evidence includes:
 
-- **Base 5G network:** `network-acceptance-20260817-04` (`Result: PATH PROVEN`)
+- **Current base 5G network:** `network-acceptance-20260818-04` (`Result: PATH PROVEN`)
 - **Integrated IoT-to-5G experiment:** `iot-acceptance-20260817-06` (`Result: IOT-TO-5G PATH PROVEN`)
+- **External-peer reference capacity:** `calibration-20260818-external-01.json` (`66,687,096 bps` to the prepared RAN-node peer over `tun_srsue1`)
 - **Controlled research baseline:** `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, 360/360 telemetry events, zero gaps or duplicates, 180 successful RTT samples, complete transport-path sampling)
 
-The historical `calibration-20260817-02.json` (`67,253,028 bps`) and the later same-host calibration against the core-node provider address are retained only as debugging evidence. They terminated on the 5G core host and must not be reused as scientific reference capacity. A fresh calibration must target the prepared RAN node's provider-facing IPv4 address through `tun_srsue1`.
+The historical `calibration-20260817-02.json` (`67,253,028 bps`) and the later same-host calibration against the core-node provider address are retained only as debugging evidence. They terminated on the 5G core host and must not be reused as scientific reference capacity.
 
-The historical `pilot-20260817-03-load50` and `pilot-20260818-01-load50` runs are **invalid evidence for loaded-condition results**. The first lost the underlying path; the second exposed the same-host iperf topology bug before the measurement window. Fresh valid load50/load80/load95 runs are still required before scientific conclusions are drawn.
+The historical `pilot-20260817-03-load50`, `pilot-20260818-01-load50`, and `smoke-20260818-01-udp1m` runs are **invalid evidence for loaded-condition results**. The first lost the underlying path; the second exposed the same-host iperf topology bug; the smoke run exposed an ICMP-only pre-window gate that aborted before the now-proven external iperf transport could start. Invalid runs remain diagnostic evidence and are never rewritten or reclassified.
 
 | Capability | Status |
 |---|---|
@@ -88,9 +89,9 @@ The historical `pilot-20260817-03-load50` and `pilot-20260818-01-load50` runs ar
 | `tunslip6/tun0` ingress and UE-side Mosquitto bridge | Implemented and live accepted |
 | Central MQTT collection and JSONL/Parquet derivation | Implemented and live accepted |
 | Integrated IoT-to-5G evidence and cleanup reproof | Implemented and live accepted (`IOT-TO-5G PATH PROVEN`) |
-| External-peer reference capacity calibration over `tun_srsue1` | Implemented; fresh accepted calibration pending |
+| External-peer reference capacity calibration over `tun_srsue1` | Implemented and live accepted (`66,687,096 bps` on `network-acceptance-20260818-04`) |
 | Controlled baseline measurement and RTT/network sampling | Implemented and live accepted |
-| Loaded-condition validity gates, blocked campaign scheduling, and offline analysis | Implemented and offline tested; valid loaded campaign evidence still pending |
+| Loaded-condition transport-aware readiness, validity gates, blocked campaign scheduling, and offline analysis | Implemented and offline tested; fresh live loaded evidence pending |
 | Persistent workspace, desired/observed state, reconciliation and operation control | Implemented and offline tested |
 | Session-first `prompt_toolkit` terminal | Implemented for state inspection and workflow planning |
 | Terminal-triggered provider/domain execution | Not connected yet; plans stop at `Execution: not started` |
@@ -245,7 +246,9 @@ python -m synthran experiment research run \
   --duration-seconds 180
 ```
 
-The run-owned iperf3 server for calibration and loaded conditions now runs on `inventory.ran_node`, while the client remains inside the UE pod and binds its PDU address. The lifecycle rejects the core node as the measurement server. Read [research measurement peer](docs/research-measurement-peer.md) before generating loaded campaign evidence.
+The run-owned iperf3 server for calibration and loaded conditions runs on `inventory.ran_node`, while the client remains inside the UE pod and binds its live PDU address. The lifecycle rejects the core node as the measurement server. For loaded conditions, pre-window target readiness is proved by the actual iperf3 transport: the external run-owned listener plus an `ESTABLISHED` UE TCP control connection. ICMP remains RTT evidence and is not a loaded-run veto. Baseline conditions, which have no load transport, retain the bounded ICMP reachability proof.
+
+Read [research measurement peer](docs/research-measurement-peer.md) before generating loaded campaign evidence.
 
 Plan and analyze a deterministic blocked campaign with the dedicated research commands. Do not interpret a loaded condition scientifically unless its own validity gates report it ready for campaign analysis.
 
