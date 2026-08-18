@@ -4,7 +4,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 
-import {findWorkspaceStart, parseControlOutput, readLocalSnapshot} from './control.js';
+import {
+  findWorkspaceStart,
+  parseControlOutput,
+  parseCreateOutput,
+  readLocalSnapshot,
+} from './control.js';
 
 const snapshot = {
   workspace: {
@@ -44,20 +49,28 @@ const snapshot = {
   blocks: [],
 };
 
-const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
+const handshakeResult = (overrides: Record<string, unknown> = {}) => ({
+  service: 'synthran-control',
+  protocol: 2,
+  provider_mutation: false,
+  methods: ['experiment.create', 'system.handshake', 'workspace.snapshot'],
+  local_write_methods: ['experiment.create'],
+  ...overrides,
+});
+
+const snapshotLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 1,
+    v: 2,
     id: 'handshake',
     ok: true,
-    result: {
-      service: 'synthran-control',
-      protocol: 1,
-      read_only: true,
-      methods: ['system.handshake', 'workspace.snapshot'],
-      ...handshakeOverrides,
-    },
+    result: handshakeResult(handshakeOverrides),
   }),
-  JSON.stringify({v: 1, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 2, id: 'snapshot', ok: true, result: snapshot}),
+];
+
+const createLines = (target: Record<string, unknown>) => [
+  JSON.stringify({v: 2, id: 'handshake', ok: true, result: handshakeResult()}),
+  JSON.stringify({v: 2, id: 'create', ...target}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -85,47 +98,93 @@ test('explicit workspace directory resolves to its repository parent', () => {
 });
 
 test('valid framed responses return the sanitized snapshot', () => {
-  assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
+  assert.deepEqual(parseControlOutput(`${snapshotLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove the expected read-only protocol', () => {
+test('handshake requires exact safe capabilities', () => {
   assert.throws(
-    () => parseControlOutput(responseLines({read_only: false}).join('\n')),
+    () => parseControlOutput(snapshotLines({provider_mutation: true}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 2}).join('\n')),
+    () => parseControlOutput(snapshotLines({protocol: 3}).join('\n')),
+    /handshake is incompatible/,
+  );
+  assert.throws(
+    () =>
+      parseControlOutput(
+        snapshotLines({
+          methods: [
+            'experiment.create',
+            'system.handshake',
+            'workspace.snapshot',
+            'resource.reserve',
+          ],
+        }).join('\n'),
+      ),
+    /handshake is incompatible/,
+  );
+  assert.throws(
+    () => parseControlOutput(snapshotLines({local_write_methods: []}).join('\n')),
     /handshake is incompatible/,
   );
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 1, id: 'extra', ok: true, result: {}})];
-  assert.throws(
-    () => parseControlOutput(lines.join('\n')),
-    /unexpected response set/,
-  );
+  const lines = [
+    ...snapshotLines(),
+    JSON.stringify({v: 2, id: 'extra', ok: true, result: {}}),
+  ];
+  assert.throws(() => parseControlOutput(lines.join('\n')), /unexpected response set/);
 });
 
 test('malformed snapshots fail closed', () => {
-  const lines = responseLines();
+  const lines = snapshotLines();
   lines[1] = JSON.stringify({
-    v: 1,
+    v: 2,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
   });
+  assert.throws(() => parseControlOutput(lines.join('\n')), /usable local snapshot/);
+});
+
+test('create responses return the new experiment snapshot', () => {
+  const createdSnapshot = {
+    ...snapshot,
+    experiment: {
+      id: 'sran-20260818-001',
+      provider_experiment: null,
+      intent: 'iot-to-5g',
+      radio_mode: 'virtual',
+      lifecycle: 'CONFIGURED',
+    },
+  };
+  const result = parseCreateOutput(
+    createLines({
+      ok: true,
+      result: {experiment_id: 'sran-20260818-001', snapshot: createdSnapshot},
+    }).join('\n'),
+  );
+  assert.equal(result.experiment_id, 'sran-20260818-001');
+  assert.deepEqual(result.snapshot, createdSnapshot);
+});
+
+test('bounded server validation errors are surfaced for local writes', () => {
   assert.throws(
-    () => parseControlOutput(lines.join('\n')),
-    /usable local snapshot/,
+    () =>
+      parseCreateOutput(
+        createLines({
+          ok: false,
+          error: {code: 'workspace_error', message: 'workspace already has an active experiment'},
+        }).join('\n'),
+      ),
+    /already has an active experiment/,
   );
 });
 
 test('already cancelled reads fail before starting the control service', async () => {
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(
-    readLocalSnapshot(controller.signal),
-    /local state request was cancelled/,
-  );
+  await assert.rejects(readLocalSnapshot(controller.signal), /local control request was cancelled/);
 });
