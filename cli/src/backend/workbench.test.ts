@@ -53,7 +53,7 @@ test('fresh access with no experiment opens setup', () => {
   assert.equal(state.hasActiveExperiment, false);
 });
 
-test('configured experiment completes setup and opens resources', () => {
+test('local configuration without provider binding remains in setup', () => {
   const value = snapshot({
     experiment: {
       id: 'sran-20260818-001',
@@ -64,15 +64,36 @@ test('configured experiment completes setup and opens resources', () => {
     },
   });
   const state = toWorkbenchState(value);
-  assert.equal(initialSection(value), 'Resources');
+  assert.equal(initialSection(value), 'Setup');
   assert.equal(state.hasActiveExperiment, true);
   assert.equal(state.experiment, 'sran-20260818-001');
-  assert.deepEqual(state.completedSections, ['Setup']);
+  assert.deepEqual(state.completedSections, []);
+});
+
+test('bound virtual configuration completes setup and opens resources', () => {
+  const value = snapshot({
+    experiment: {
+      id: 'sran-20260818-001',
+      provider_experiment: 'provider-exp',
+      intent: 'iot-to-5g',
+      radio_mode: 'virtual',
+      lifecycle: 'CONFIGURED',
+    },
+  });
+  assert.equal(initialSection(value), 'Resources');
+  assert.deepEqual(toWorkbenchState(value).completedSections, ['Setup']);
 });
 
 test('stale SLICES access keeps setup incomplete and selected', () => {
   const base = snapshot();
   const value = snapshot({
+    experiment: {
+      id: 'sran-20260818-001',
+      provider_experiment: 'provider-exp',
+      intent: 'iot-to-5g',
+      radio_mode: 'virtual',
+      lifecycle: 'CONFIGURED',
+    },
     access: {
       ...base.access,
       slices: {...base.access.slices, fresh: false},
