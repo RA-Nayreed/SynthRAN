@@ -49,6 +49,22 @@ test('fresh access with no experiment opens configuration', () => {
   const state = toWorkbenchState(value);
   assert.deepEqual(state.completedSections, ['Access']);
   assert.equal(state.experiment, 'No active experiment');
+  assert.equal(state.hasActiveExperiment, false);
+});
+
+test('configured experiment is represented explicitly as active', () => {
+  const value = snapshot({
+    experiment: {
+      id: 'sran-20260818-001',
+      provider_experiment: null,
+      intent: 'iot-to-5g',
+      radio_mode: 'virtual',
+      lifecycle: 'CONFIGURED',
+    },
+  });
+  const state = toWorkbenchState(value);
+  assert.equal(state.hasActiveExperiment, true);
+  assert.equal(state.experiment, 'sran-20260818-001');
 });
 
 test('stale SLICES access keeps access incomplete and selected', () => {

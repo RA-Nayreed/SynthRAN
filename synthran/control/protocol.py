@@ -7,15 +7,18 @@ from collections.abc import Mapping
 from synthran.workspace.model import WorkspaceError
 
 
-CONTROL_VERSION = 2
+CONTROL_VERSION = 3
 SUPPORTED_METHODS = frozenset(
     {
         "system.handshake",
         "workspace.snapshot",
         "experiment.create",
+        "provider.experiments",
+        "experiment.bind_provider",
     }
 )
-LOCAL_WRITE_METHODS = frozenset({"experiment.create"})
+LOCAL_WRITE_METHODS = frozenset({"experiment.create", "experiment.bind_provider"})
+PROVIDER_READ_METHODS = frozenset({"provider.experiments", "experiment.bind_provider"})
 
 
 def parse_request(value: object) -> tuple[str, str, Mapping[str, object]]:

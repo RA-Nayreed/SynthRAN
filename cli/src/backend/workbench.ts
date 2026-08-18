@@ -55,6 +55,7 @@ export const initialSection = (snapshot: ControlSnapshot): SectionLabel => {
 export const toWorkbenchState = (snapshot: ControlSnapshot): WorkbenchState => ({
   project: snapshot.workspace.project,
   experiment: snapshot.experiment.id ?? 'No active experiment',
+  hasActiveExperiment: snapshot.experiment.id !== null,
   completedSections: completedSections(snapshot),
   intent: snapshot.experiment.intent ?? 'Not configured',
   radio: radioMode(snapshot.experiment.radio_mode),

@@ -2,7 +2,9 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Box, Spacer, Text, useApp, useInput} from 'ink';
 
 import {
+  bindProviderExperiment,
   createLocalExperiment,
+  listProviderExperiments,
   readLocalSnapshot,
   type ControlSnapshot,
   type ExperimentIntent,
@@ -76,8 +78,16 @@ export const App = () => {
   const [draftIntent, setDraftIntent] = useState<ExperimentIntent>('iot-to-5g');
   const [draftRadio, setDraftRadio] = useState<RadioMode>('virtual');
   const [saving, setSaving] = useState(false);
+  const [providerBusy, setProviderBusy] = useState<'loading' | 'binding' | null>(null);
+  const [providerExperiments, setProviderExperiments] = useState<string[] | null>(null);
+  const [providerIndex, setProviderIndex] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const saveRequest = useRef<AbortController | null>(null);
+  const actionRequest = useRef<AbortController | null>(null);
+
+  const providerCandidate =
+    providerExperiments && providerExperiments.length > 0
+      ? providerExperiments[Math.min(providerIndex, providerExperiments.length - 1)]
+      : null;
 
   const applySnapshot = (snapshot: ControlSnapshot, chooseSection: boolean) => {
     const next = toWorkbenchState(snapshot);
@@ -88,6 +98,11 @@ export const App = () => {
     if (chooseSection) setActiveSection(initialSection(snapshot));
   };
 
+  const resetProviderChoices = () => {
+    setProviderExperiments(null);
+    setProviderIndex(0);
+  };
+
   useEffect(() => {
     const requestController = new AbortController();
     let cancelled = false;
@@ -95,6 +110,7 @@ export const App = () => {
     setMode('OBSERVE');
     setLoadError(null);
     setNotice(null);
+    resetProviderChoices();
     readLocalSnapshot(requestController.signal)
       .then(snapshot => {
         if (cancelled) return;
@@ -113,7 +129,7 @@ export const App = () => {
 
   useEffect(
     () => () => {
-      saveRequest.current?.abort();
+      actionRequest.current?.abort();
     },
     [],
   );
@@ -144,15 +160,15 @@ export const App = () => {
   };
 
   const saveConfiguration = () => {
-    if (saving) return;
+    if (saving || providerBusy) return;
     if (mode !== 'OPERATE') {
       setNotice('Switch to OPERATE with m before creating local configuration.');
       return;
     }
 
     const requestController = new AbortController();
-    saveRequest.current?.abort();
-    saveRequest.current = requestController;
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
     setSaving(true);
     setNotice(null);
 
@@ -163,6 +179,7 @@ export const App = () => {
       .then(snapshot => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
+        resetProviderChoices();
         setActiveSection('Configure');
         setMode('OBSERVE');
         setNotice(
@@ -180,21 +197,114 @@ export const App = () => {
         );
       })
       .finally(() => {
-        if (saveRequest.current === requestController) {
-          saveRequest.current = null;
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
           setSaving(false);
+        }
+      });
+  };
+
+  const loadProviders = () => {
+    if (!state?.hasActiveExperiment) {
+      setNotice('Create a local configuration before loading provider experiments.');
+      return;
+    }
+    if (state.providerExperiment) {
+      setNotice(`Provider experiment is already bound to ${state.providerExperiment}.`);
+      return;
+    }
+    if (saving || providerBusy) return;
+
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setProviderBusy('loading');
+    setNotice(null);
+
+    listProviderExperiments(requestController.signal)
+      .then(experiments => {
+        if (requestController.signal.aborted) return;
+        setProviderExperiments(experiments);
+        setProviderIndex(0);
+        setNotice(
+          experiments.length > 0
+            ? `Loaded ${experiments.length} SLICES experiment${experiments.length === 1 ? '' : 's'}.`
+            : 'No SLICES experiments are available in the verified project.',
+        );
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        resetProviderChoices();
+        setNotice(error instanceof Error ? error.message : 'SLICES experiments could not be loaded');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setProviderBusy(null);
+        }
+      });
+  };
+
+  const changeProvider = (delta: number) => {
+    if (!providerExperiments || providerExperiments.length === 0) return;
+    setProviderIndex(index => wrap(index + delta, providerExperiments.length));
+    setNotice(null);
+  };
+
+  const bindProvider = () => {
+    if (!state?.hasActiveExperiment) {
+      setNotice('Create a local configuration before binding a provider experiment.');
+      return;
+    }
+    if (state.providerExperiment) {
+      setNotice(`Provider experiment is already bound to ${state.providerExperiment}.`);
+      return;
+    }
+    if (!providerCandidate) {
+      setNotice('Load and select a provider experiment first.');
+      return;
+    }
+    if (saving || providerBusy) return;
+    if (mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before binding the provider experiment.');
+      return;
+    }
+
+    const selected = providerCandidate;
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setProviderBusy('binding');
+    setNotice(null);
+
+    bindProviderExperiment(selected, requestController.signal)
+      .then(snapshot => {
+        if (requestController.signal.aborted) return;
+        applySnapshot(snapshot, false);
+        setActiveSection('Configure');
+        setMode('OBSERVE');
+        setNotice(`Bound ${selected} to ${snapshot.experiment.id ?? 'the active experiment'}.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'SLICES experiment could not be bound');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setProviderBusy(null);
         }
       });
   };
 
   useInput((input, key) => {
     if ((key.ctrl && input === 'c') || input.toLowerCase() === 'q') {
-      saveRequest.current?.abort();
+      actionRequest.current?.abort();
       exit();
       return;
     }
 
-    if (saving) return;
+    if (saving || providerBusy) return;
 
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
@@ -244,11 +354,11 @@ export const App = () => {
 
     if (activeSection === 'Configure') {
       if (key.upArrow) {
-        setConfigFocus(index => wrap(index - 1, 3));
+        setConfigFocus(index => wrap(index - 1, 5));
         return;
       }
       if (key.downArrow) {
-        setConfigFocus(index => wrap(index + 1, 3));
+        setConfigFocus(index => wrap(index + 1, 5));
         return;
       }
       if (configFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
@@ -261,6 +371,20 @@ export const App = () => {
       }
       if (configFocus === 2 && key.return) {
         saveConfiguration();
+        return;
+      }
+      if (configFocus === 3) {
+        if (providerExperiments === null && key.return) {
+          loadProviders();
+          return;
+        }
+        if (key.leftArrow || key.rightArrow) {
+          changeProvider(key.leftArrow ? -1 : 1);
+          return;
+        }
+      }
+      if (configFocus === 4 && key.return) {
+        bindProvider();
         return;
       }
     }
@@ -312,6 +436,9 @@ export const App = () => {
               draftRadio={draftRadio}
               focusedIndex={configFocus}
               saving={saving}
+              providerBusy={providerBusy}
+              providerExperiments={providerExperiments}
+              providerCandidate={providerCandidate}
               notice={notice}
             />
           ) : (
@@ -323,7 +450,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>Local configuration enabled · provider operations disabled</Text>
+        <Text color={theme.muted}>Local writes require OPERATE · provider reads enabled · provider mutation disabled</Text>
       </Box>
     </Box>
   );

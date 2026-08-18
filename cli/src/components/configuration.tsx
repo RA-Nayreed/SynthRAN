@@ -12,6 +12,9 @@ interface ConfigurationPanelProps {
   draftRadio: RadioMode;
   focusedIndex: number;
   saving: boolean;
+  providerBusy: 'loading' | 'binding' | null;
+  providerExperiments: string[] | null;
+  providerCandidate: string | null;
   notice: string | null;
 }
 
@@ -38,6 +41,33 @@ const intentLabel = (value: ExperimentIntent) => {
   return 'Unspecified';
 };
 
+const providerValue = (
+  state: WorkbenchState,
+  providerBusy: 'loading' | 'binding' | null,
+  providerExperiments: string[] | null,
+  providerCandidate: string | null,
+) => {
+  if (state.providerExperiment) return `${state.providerExperiment} · bound`;
+  if (!state.hasActiveExperiment) return 'Create local configuration first';
+  if (providerBusy === 'loading') return 'Reading SLICES experiments…';
+  if (providerExperiments === null) return 'Enter to load';
+  if (providerExperiments.length === 0) return 'No experiments available';
+  return providerCandidate ?? 'No selection';
+};
+
+const bindValue = (
+  state: WorkbenchState,
+  mode: WorkbenchMode,
+  providerBusy: 'loading' | 'binding' | null,
+  providerCandidate: string | null,
+) => {
+  if (state.providerExperiment) return 'Already bound';
+  if (!state.hasActiveExperiment) return 'Unavailable';
+  if (providerBusy === 'binding') return 'Verifying and binding…';
+  if (!providerCandidate) return 'Select provider experiment first';
+  return mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE';
+};
+
 export const ConfigurationPanel = ({
   state,
   mode,
@@ -45,11 +75,14 @@ export const ConfigurationPanel = ({
   draftRadio,
   focusedIndex,
   saving,
+  providerBusy,
+  providerExperiments,
+  providerCandidate,
   notice,
 }: ConfigurationPanelProps) => (
   <Box flexDirection="column" paddingX={1} paddingY={1}>
     <Text bold color={theme.bodyStrong}>Configuration</Text>
-    <Text color={theme.muted}>Changes create a new local experiment. Provider resources are not changed.</Text>
+    <Text color={theme.muted}>Provider discovery is read-only. Local writes require OPERATE.</Text>
     <Box height={1} />
 
     <Row label="Intent" focused={focusedIndex === 0}>{intentLabel(draftIntent)}</Row>
@@ -57,12 +90,17 @@ export const ConfigurationPanel = ({
     <Row label="Create configuration" focused={focusedIndex === 2}>
       {saving ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
     </Row>
+    <Row label="Provider experiment" focused={focusedIndex === 3}>
+      {providerValue(state, providerBusy, providerExperiments, providerCandidate)}
+    </Row>
+    <Row label="Bind provider" focused={focusedIndex === 4}>
+      {bindValue(state, mode, providerBusy, providerCandidate)}
+    </Row>
 
     <Box height={1} />
     <Row label="Mode">{mode}</Row>
     <Row label="Active experiment">{state.experiment}</Row>
     <Row label="SLICES project">{state.slicesProject}</Row>
-    <Row label="Provider experiment">{state.providerExperiment ?? 'Not bound'}</Row>
     <Row label="R2Lab slice">{state.r2labSlice}</Row>
     <Row label="SSH identity">{state.sshIdentity}</Row>
     <Row label="Reservation">{state.reservationMinutes} minutes</Row>
