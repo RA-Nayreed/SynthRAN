@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 
@@ -24,12 +25,18 @@ class ControllerRunner:
         auth_ok: bool = True,
         project: str = "project-test",
         experiment: str = "experiment-test",
+        post5g_payload: dict[str, str] | None = None,
     ) -> None:
         self.ansible_version = ansible_version
         self.pos_version = pos_version
         self.auth_ok = auth_ok
         self.project = project
         self.experiment = experiment
+        self.post5g_payload = post5g_payload or {
+            "subnet": "172.28.6.32/27",
+            "lb": "172.28.3.130",
+            "expiration_time": "2099-08-19 05:15:03Z",
+        }
         self.calls: list[tuple[str, ...]] = []
         self.timeouts: list[int] = []
 
@@ -58,6 +65,8 @@ class ControllerRunner:
             return ControllerCommandResult(0, f"project: {self.project}\n")
         if argv[:3] == ("slices", "experiment", "show"):
             return ControllerCommandResult(0, f"experiment: {self.experiment}\n")
+        if argv[:3] == ("post5g", "experiment", "prefix"):
+            return ControllerCommandResult(0, json.dumps(self.post5g_payload))
         return ControllerCommandResult(2, "", "unsupported")
 
 
@@ -85,10 +94,19 @@ class SlicesControllerTests(unittest.TestCase):
         self.assertTrue(report.ready)
         self.assertEqual("2.20.5", report.ansible_version)
         self.assertEqual("2.5.35", report.pos_version)
+        self.assertIsNotNone(report.post5g_network)
+        assert report.post5g_network is not None
+        self.assertEqual("172.28.6.32/27", report.post5g_network.subnet)
+        self.assertEqual("172.28.3.130", report.post5g_network.load_balancer_ip)
         rendered = report.render()
         self.assertNotIn("project-test", rendered)
         self.assertNotIn("experiment-test", rendered)
-
+        self.assertNotIn("172.28.6.32", rendered)
+        self.assertIn("Post5G", rendered)
+        self.assertIn(
+            ("post5g", "experiment", "prefix", "experiment-test"),
+            runner.calls,
+        )
         self.assertEqual({60}, set(runner.timeouts))
 
     def test_cli_uses_controller_timeout_default(self) -> None:
@@ -132,6 +150,28 @@ class SlicesControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(SlicesControllerError, "experiment"):
             self.verify(runner=ControllerRunner(experiment="experiment-test-extra"))
 
+    def test_rejects_invalid_or_expired_post5g_network(self) -> None:
+        with self.assertRaisesRegex(SlicesControllerError, "subnet"):
+            self.verify(
+                runner=ControllerRunner(
+                    post5g_payload={
+                        "subnet": "not-a-prefix",
+                        "lb": "172.28.3.130",
+                        "expiration_time": "2099-08-19 05:15:03Z",
+                    }
+                )
+            )
+        with self.assertRaisesRegex(SlicesControllerError, "expired"):
+            self.verify(
+                runner=ControllerRunner(
+                    post5g_payload={
+                        "subnet": "172.28.6.32/27",
+                        "lb": "172.28.3.130",
+                        "expiration_time": "2020-08-19 05:15:03Z",
+                    }
+                )
+            )
+
     def test_timeout_names_the_slow_controller_probe(self) -> None:
         runner = ControllerRunner()
 
@@ -151,7 +191,7 @@ class SlicesControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(SlicesControllerError, "missing required"):
             self.verify(
                 runner=runner,
-                which=lambda name: None if name == "slices" else "/tool",
+                which=lambda name: None if name == "post5g" else "/tool",
             )
         self.assertEqual([], runner.calls)
 
