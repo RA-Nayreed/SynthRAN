@@ -112,7 +112,7 @@ export const App = () => {
     if (configFocus === 1 && key.return) {
       setState(current => ({
         ...current,
-        providerExperiment: current.providerExperiment === null ? 'demo-provider-exp' : null,
+        providerExperiment: current.providerExperiment === null ? 'example-provider' : null,
       }));
       setNotice(null);
       return;
@@ -121,7 +121,7 @@ export const App = () => {
     if (configFocus === 2 && key.return) {
       setState(current => ({
         ...current,
-        sshIdentity: current.sshIdentity === 'id_rsa_r2lab_duckburg' ? 'demo_identity' : 'id_rsa_r2lab_duckburg',
+        sshIdentity: current.sshIdentity === 'id_r2lab' ? 'id_ed25519' : 'id_r2lab',
       }));
       setNotice(null);
       return;
