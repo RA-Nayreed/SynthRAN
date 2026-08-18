@@ -16,18 +16,18 @@ A descriptor does not carry current availability. A provider snapshot does not r
 
 ## Current reviewed catalog
 
-The catalog currently describes the resources already supported elsewhere in SynthRAN:
+The catalog currently describes resources already modeled by reviewed SynthRAN integration code:
 
 - SLICES compute: `sopnode-f1`, `sopnode-f2`, `sopnode-f3`, `sopnode-w3`;
 - R2Lab radios: `n300`, `n320`;
-- the QHAT and QFIT UEs already accepted by the R2Lab provider;
+- the reviewed QHAT/QFIT UE identifiers supported by the R2Lab resource-control model;
 - one synthetic `virtual:rfsim` resource.
 
-The SLICES role preferences preserve the currently recommended `sopnode-f2` core and `sopnode-f3` RAN pair when all else is equal. This is only a ranking preference. If the preferred node is unavailable, unsafe, or incompatible, another current compatible resource can be selected.
+The SLICES role preferences preserve the recommended `sopnode-f2` core and `sopnode-f3` RAN pair when all else is equal. This is only a ranking preference. If a preferred node is unavailable, unsafe, or incompatible, another reviewed compatible resource can be selected.
 
-The R2Lab radio descriptors expose the RAN combinations already supported by the reviewed deployment tooling. The catalog intentionally does not claim support for additional RUs until the corresponding SynthRAN provider adapter can control them safely.
+R2Lab descriptors represent combinations understood by the resource-selection/provider-control code. They do **not** constitute live physical 5G path acceptance. Physical radio acceptance remains deferred until an actual R2Lab radio/UE path is exercised and evidenced end to end.
 
-Additional descriptors can be supplied without changing the selector. This is how new testbed resources can be introduced after their capabilities are reviewed.
+Additional descriptors can be supplied without changing the selector after their stable capabilities and provider-control implications are reviewed.
 
 ## Provider inventory contract
 
@@ -62,7 +62,7 @@ unowned
 
 Only `available` or `allocated` resources with ownership `synthran`, `operator`, or `unowned` are selection candidates. Foreign or unknown ownership is never selected automatically.
 
-The selector does not turn `operator` ownership into SynthRAN mutation authority. Provider executors must still prove exact live authority immediately before any mutation.
+Selection does not turn `operator` ownership into SynthRAN mutation authority. Provider executors must still prove exact live authority immediately before mutation.
 
 ## Requirements derived from experiment state
 
@@ -109,9 +109,9 @@ When more than one placement is valid, SynthRAN ranks whole resource sets in thi
 4. fewer distinct resources;
 5. lexical resource IDs as a deterministic final tie-break.
 
-Explicit manual pins are applied before ranking, so they always win when they are safe and compatible.
+Explicit manual pins are applied before ranking, so they always win when safe and compatible.
 
-Core and RAN assignments are non-overlapping in the current selector. This matches the existing SLICES preparation contract, which prepares a separate core and RAN node.
+Core and RAN assignments are non-overlapping in the current selector. This matches the current SLICES preparation contract, which prepares separate core and RAN compute nodes.
 
 ## Provider resource sets
 
@@ -122,33 +122,34 @@ slices  -> sopnode-f2, sopnode-f3
 virtual -> virtual:rfsim
 ```
 
-or:
+or, for a modeled physical request:
 
 ```text
 slices -> sopnode-f2, sopnode-f3
 r2lab  -> n300, qhat01
 ```
 
-The grouped SLICES set is important: a later acquisition adapter must reason about the compute selection as one set. It must not reproduce per-node free/allocate behavior that can split an experiment across unrelated allocations.
+The grouped SLICES set is important: a concrete acquisition adapter must reason about the compute selection as one set. It must not reproduce per-node free/allocate behavior that can split an experiment across unrelated allocations.
 
-For R2Lab, selection only chooses a compatible radio/UE set. It does not book a lease. The R2Lab provider continues to require a current active lease immediately before every physical-resource mutation.
+For R2Lab, selection only chooses a compatible radio/UE set. It does not book a lease. R2Lab mutation still requires a current active lease and the provider-specific live safety checks.
 
 ## Safety boundary
 
-`ResourceSelection` is placement output, not authority. It may be persisted later as planning evidence, but it cannot authorize a reservation, allocation, lease, power action, or deployment by itself.
+`ResourceSelection` is placement output, not authority. It may be persisted as planning evidence, but it cannot authorize a reservation, allocation, lease, power action, or deployment by itself.
 
 The execution chain remains:
 
 ```text
 desired state
     -> fresh complete provider inventory
-    -> capability selection
-    -> observed-state reconciliation
-    -> immutable operation plan
+    -> select_resources()
+    -> ResourceDecision for exact operation binding when required
+    -> current observed-state / application policy
+    -> immutable OperationPlan
     -> approval when required
-    -> execution permit
+    -> ExecutionPermit
     -> provider live authority check
     -> exact provider mutation
 ```
 
-This lets placement become dynamic without weakening the ownership and freshness rules already enforced by SynthRAN.
+The generic resource transaction engine exists, but concrete transaction adapters for every provider path are not yet connected to the interactive terminal. Dynamic placement therefore must not be documented as proof that terminal `/reserve` or physical R2Lab execution is live operational.

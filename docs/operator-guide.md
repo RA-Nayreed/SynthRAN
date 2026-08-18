@@ -2,7 +2,27 @@
 
 ## Current capability
 
-SynthRAN provides an offline-tested guarded network and experiment lifecycle:
+SynthRAN has two operator-facing interface paths with different current execution boundaries.
+
+### Interactive terminal
+
+Running:
+
+```sh
+synthran
+```
+
+opens the session-first `prompt_toolkit` terminal. It provides truthful workspace/application status, strict slash-command parsing, OBSERVE/OPERATE mode gating, and state-sensitive immutable operation planning.
+
+Every registered workflow command now reaches application policy, including `/reserve`, `/up`, `/verify`, `/recover`, `/run baseline|congestion`, `/stop`, `/collect`, `/logs ...`, and `/down`.
+
+**The terminal does not yet execute those provider/domain operations.** A successful workflow plan renders `Execution: not started`. Do not interpret that as a reservation, deployment, experiment start/stop, remote collection/log read, or teardown.
+
+The terminal must not call the scripted CLI secretly to cross that boundary.
+
+### Scripted live workflow
+
+The existing explicit CLI remains the current live operator path:
 
 ```text
 resource preparation
@@ -11,16 +31,17 @@ resource preparation
 -> read-only gNB/srsUE/tunnel/UPF proof
 -> integrated IoT-to-5G experiment
 -> capacity calibration
--> controlled research measurement & campaign execution
+-> controlled research measurement
+-> optional campaign execution and offline analysis
 ```
 
-Every live step is operator-executed from a verified SLICES shell. The lean preparation implementation can create a reservation, jointly allocate two nodes, image and reset them, build Kubernetes, and install version-pinned remote tools. The operator accepted that upstream bootstrap transitives are not artifact-locked, so the guarded live preparation path is enabled.
+Live commands are operator-executed from a verified Linux SLICES controller. The accepted virtual configuration uses Open5GS + srsRAN + one srsUE + RFSIM.
 
-The supported pair defaults to `sopnode-f2` for the core and `sopnode-f3` for the RAN. The adapter also knows the locked upstream mappings for `sopnode-f1` and `sopnode-w3`. Core and RAN must be different nodes.
-
-Run live commands only from the Linux SLICES Webshell, or an SSH session to that documented management host. The exact locked `synthran` Conda environment must be active. Local and CI environments support only offline validation and dry-run planning.
+The controlled research **baseline** is live accepted. Campaign scheduling/execution machinery is implemented, but the historical load50 pilot is invalid and does not prove loaded-condition behavior. Fresh valid loaded runs are still required.
 
 ## 1. Prepare the controller
+
+Run live commands only from the Linux SLICES Webshell, or an SSH session to its documented management host. Activate the exact `synthran` Conda environment:
 
 ```sh
 cd ~/SynthRAN
@@ -30,7 +51,7 @@ python -m synthran deps sync
 python -m unittest discover -s tests -v
 ```
 
-The operator establishes the SLICES session and context. These are intentionally not automated by SynthRAN:
+The operator establishes SLICES login, project, and provider-experiment context. SynthRAN does not perform these account/context mutations:
 
 ```sh
 slices auth login
@@ -39,9 +60,9 @@ slices project use PROJECT
 slices experiment show EXPERIMENT
 ```
 
-If the experiment does not exist, the operator may create it explicitly with `slices experiment create EXPERIMENT`, then inspect it again. SynthRAN never logs in, changes projects, or creates experiments.
+If the provider experiment does not exist, the operator creates it explicitly outside SynthRAN and verifies it again.
 
-Verify the complete read-only controller boundary:
+Verify the read-only controller boundary:
 
 ```sh
 python -m synthran slices doctor \
@@ -49,16 +70,24 @@ python -m synthran slices doctor \
   --slices-experiment EXPERIMENT
 ```
 
-This check requires Linux, the active `synthran` environment, the exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and the existing experiment. Each read-only controller probe allows 60 seconds because project lookup can be slower than local version checks. Export the non-secret context for later commands:
+Export non-secret context for later explicit CLI commands:
 
 ```sh
 export SYNTHRAN_SLICES_PROJECT=PROJECT
 export SYNTHRAN_SLICES_EXPERIMENT=EXPERIMENT
 ```
 
+### Persistent terminal workspace
+
+There is currently no top-level scripted `synthran init` command.
+
+When `synthran` is launched with no arguments in an uninitialized checkout, the terminal performs the verified local initialization flow. It can adopt compatible pre-existing `.synthran` experiment evidence without moving or deleting it and can create the durable local SynthRAN requested experiment when the workspace is `EMPTY`.
+
+Initialization and local experiment creation do not reserve/allocate/deploy provider resources and do not create the SLICES provider experiment.
+
 ## 2. Preview resource preparation
 
-Choose a unique lowercase run ID:
+Choose a unique lowercase run ID and preview:
 
 ```sh
 python -m synthran network prepare \
@@ -67,13 +96,13 @@ python -m synthran network prepare \
   --run-id network-001
 ```
 
-The default plan creates a 120-minute reservation for `sopnode-f2` and `sopnode-f3`. To reuse an active reservation, add `--reservation-id NUMERIC_ID`. To select another reviewed pair, add `--core-node NODE --ran-node NODE`.
+The default reviewed pair uses `sopnode-f2` for core and `sopnode-f3` for RAN. Core and RAN must be different nodes. The adapter also knows other reviewed locked upstream mappings.
 
-Dry-run writes nothing and does not contact POS.
+Dry-run does not contact POS or mutate provider resources.
 
-## 3. Live preparation
+## 3. Live resource preparation
 
-`dependencies.lock.yml` records `resource_bootstrap.status` as `ready` after explicit operator acceptance. Run the modifying command only from the verified Linux SLICES controller; it may reserve, allocate, image, and reset the selected nodes:
+Run only from the verified Linux controller:
 
 ```sh
 python -m synthran network prepare \
@@ -81,31 +110,28 @@ python -m synthran network prepare \
   --run-id network-001
 ```
 
-The implementation is intentionally smaller than an air-gapped or artifact-complete bootstrap. It accepts upstream apt, chart, manifest, and installer transitives for the first native experiment. Do not represent this preparation as bit-for-bit artifact reproducible.
+The guarded preparation path can:
 
-The command performs these guarded steps:
-
-- validate the dependency lock, selected nodes, tools, run ID, and exact locked checkout;
+- validate the lock, selected nodes, tools, run ID, and locked checkout;
 - create an isolated detached worktree and apply the commit-bound preparation patch;
-- install the exact required Ansible collections and syntax-check both playbooks before POS;
+- install exact required Ansible collections and syntax-check playbooks before POS mutation;
 - reject foreign, partial, or split allocations;
 - create or verify one current reservation;
-- allocate both nodes together and verify their shared allocation owner;
-- record newly imaged SSH host keys in a run-scoped ignored file and reject later changes;
-- reuse upstream imaging, Linux, Kubernetes, CNI, storage, and GRE roles;
-- install required host runtime packages (`net-tools` for `ifconfig`), exact direct Python packages, checksum-verified yq, and exact Helm;
-- stop before every Open5GS and srsRAN deployment role.
+- allocate the reviewed node pair together and verify shared allocation ownership;
+- image/reset nodes and build the reviewed Kubernetes foundation;
+- install required pinned direct tooling;
+- stop before Open5GS/srsRAN deployment.
 
-It never calls `deploy.sh`, never frees an allocation, never ignores reservation failure, and never rolls back a partially modified testbed automatically.
+It never calls upstream interactive `deploy.sh`, never guesses ownership, and never performs broad rollback of partially modified provider state.
 
-After a successful preparation, load the ignored private authority and SLICES-context variables:
+After successful preparation:
 
 ```sh
 source .synthran/preparations/network-001/authority.env
 INVENTORY=.synthran/preparations/network-001/hosts.ini
 ```
 
-The authority file contains raw owner, reservation and allocation identifiers plus project and experiment names with mode `0600`. It is written incrementally as provider IDs become known so a later failure remains recoverable. Do not print, copy, or commit it. The sibling manifest and log contain only fingerprints and sanitized facts.
+The ignored authority file contains sensitive provider identifiers with restricted permissions. Do not print, copy, or commit it.
 
 ## 4. Run read-only live preflight
 
@@ -115,11 +141,9 @@ python -m synthran doctor \
   --evidence-out .synthran/preflight.json
 ```
 
-`doctor` reads authority and context from the exported `SYNTHRAN_OWNER`, `SYNTHRAN_RESERVATION_ID`, `SYNTHRAN_ALLOCATION_ID`, `SYNTHRAN_SLICES_PROJECT`, and `SYNTHRAN_SLICES_EXPERIMENT` variables. Explicit CLI arguments remain available and override the environment.
+The live doctor verifies current controller/provider authority, strict SSH/tool state, Kubernetes prerequisites, and locked inputs. READY evidence is bound to the exact reviewed inputs and has a limited freshness window.
 
-The POS 2.5.35 adapter queries `pos calendar list --filter owner=... --json` and `pos allocations show NODE`. It then checks strict SSH identity, exact remote tools, the empty Ready Kubernetes cluster, networking support, and every digest-addressed image. Any mismatch is terminal.
-
-READY evidence is bound to the exact dependency-lock bytes, inventory, authority fingerprints, SLICES project and experiment fingerprints, controller versions, and complete required check set. It is valid for 15 minutes.
+A timeout or controller-context failure is not proof of a radio/network-path failure; keep controller readiness and path proof distinct.
 
 ## 5. Explicitly deploy the 5G network
 
@@ -130,11 +154,17 @@ python -m synthran network deploy \
   --run-id network-001
 ```
 
-Deployment creates a separate isolated worktree, applies the locked narrow deployment patch, passes immutable Open5GS and srsRAN commits, pins eight images by digest, deploys one slice and one srsUE, and writes sanitized run artifacts. It never reserves, allocates, images, resets, or rebuilds nodes.
+Deployment uses the locked `5g_ansible` checkout plus narrow SynthRAN overlays, pinned transitive source commits, and selected digest-pinned images. It never reserves, allocates, images, or resets nodes.
 
-A successful deployment ends as `deployed-unverified`; that is not path proof.
+Successful deployment ends at:
 
-## 6. Record network path proof
+```text
+deployed-unverified
+```
+
+That is not path proof.
+
+## 6. Prove the base 5G path
 
 ```sh
 python -m synthran network verify \
@@ -143,41 +173,55 @@ python -m synthran network verify \
   --timeout 120
 ```
 
-Verification requires exactly one run-owned Ready gNB, srsUE, and selected UPF. It checks locked image IDs, gNB cell activation, `tun_srsue1`, its PDU address and route, and the UPF `ogstun` route. Full success writes ignored network evidence and marks the deployment manifest `path-proven`. Re-running `verify` on an already `path-proven` network performs read-only reproof idempotently.
+The verifier requires exactly one run-owned Ready gNB, srsUE, and selected UPF; verifies pinned runtime identity; proves gNB cell activation; validates `tun_srsue1`, its current PDU/route; and verifies the UPF `ogstun` path.
 
-## 7. Run the integrated IoT-to-5G experiment
+Only full success marks the network manifest `path-proven`.
 
-Once the network manifest is `path-proven` and `network-evidence.json` is ready, preview and execute the deterministic ten-sensor experiment:
+The accepted reference base network is `network-acceptance-20260817-04` (`PATH PROVEN`).
+
+## 7. Run the deterministic IoT-to-5G experiment
+
+Preview the scenario without live mutation:
 
 ```sh
 synthran experiment plan \
   --network-run-id network-001 \
   --run-id exp-001
+```
 
+Execute explicitly:
+
+```sh
 synthran experiment run \
   --inventory "$INVENTORY" \
   --network-run-id network-001 \
   --run-id exp-001
 ```
 
-Runtime lifecycle and safety:
-- **Preflight host recovery:** Before mutation, SynthRAN automatically scans `/proc` on the core node and reclaims only provably stale/orphaned processes (PPID 1) matching exact SynthRAN signatures (`18883:1883`, `18885:18884`, `ingress.py`, `tunslip6`). Unknown, foreign, or active processes remain fail-closed.
-- **Port reservation:** Remote ports `60001`, `18883`, and `18885` are verified free before cluster mutation.
-- **Privilege isolation:** Duckburg does **not** require `sudo`. SynthRAN executes `tunslip6` and `tun0` (`fd00::1/64`) and TCP ingress on the root core node (`inventory.core_node`) via a strict loopback-only reverse SSH tunnel (`-R 127.0.0.1:60001:127.0.0.1:60001`).
-- **Dynamic PDU rediscovery:** The live UE PDU address on `tun_srsue1` is rediscovered after srsUE rollout and used for bridge binding; it is never assumed from historical manifests.
-- **Exact cleanup & postconditions:** Cleanup reaps exact run-scoped remote processes, removes `tun0` and workspace, verifies host postconditions (ports free, tun0 absent, workspace absent), and reproves the base network.
+Important runtime safety properties:
 
-Render persisted acceptance evidence without touching live state:
+- the base network must already be path-proven;
+- stale/orphan recovery targets only provably SynthRAN-owned process signatures;
+- reserved remote ports are checked before mutation;
+- privileged `tunslip6/tun0` creation is isolated to the root core node;
+- the live UE PDU is rediscovered after srsUE/RFSIM reconciliation rather than assumed from old evidence;
+- the edge broker route is explicit through `tun_srsue1`;
+- cleanup removes exact run-scoped resources and then reproves the base network;
+- failed runs retain their evidence and run IDs are never reused.
+
+Read persisted acceptance evidence without live mutation:
 
 ```sh
 synthran experiment verify --run-id exp-001
 ```
 
-See the [integrated experiment guide](experiment.md) for full scenario details, topology, artifacts, and acceptance criteria.
+The accepted reference IoT run is `iot-acceptance-20260817-06` (`IOT-TO-5G PATH PROVEN`).
+
+See `docs/experiment.md` for topology, artifacts, and acceptance criteria.
 
 ## 8. Calibrate reference UE-path capacity
 
-Before conducting controlled fractional-load research runs, calibrate the saturating UDP goodput over `tun_srsue1`:
+Before fractional-load research runs:
 
 ```sh
 python -m synthran experiment research calibrate \
@@ -188,15 +232,13 @@ python -m synthran experiment research calibrate \
   --out .synthran/research/capacity-network-001.json
 ```
 
-The command verifies the base network is `path-proven`, discovers the live UE PDU, manages the transient target `/32` route, starts a run-owned `iperf3` server on the core node, measures saturating UDP goodput, and safely cleans up server and routing artifacts.
+The command verifies the accepted network, discovers live UE state, manages the temporary target route and run-owned iperf3 server, measures saturating UDP goodput, and cleans its temporary artifacts.
 
-The resulting JSON records reference capacity (e.g. `67,253,028 bps` from accepted calibration `calibration-20260817-02.json`).
+Accepted reference calibration: `calibration-20260817-02.json`, recording `67,253,028 bps`.
 
 ## 9. Plan and execute controlled research measurements
 
-### Plan a single research measurement
-
-Render the immutable research experiment specification:
+Render one immutable research specification:
 
 ```sh
 python -m synthran experiment research plan \
@@ -209,22 +251,7 @@ python -m synthran experiment research plan \
   --duration-seconds 180
 ```
 
-For loaded runs, specify `--target-fraction` and `--reference-capacity-bps` (or `--target-bps`):
-
-```sh
-python -m synthran experiment research plan \
-  --campaign-id pilot-01 \
-  --network-run-id network-001 \
-  --run-id pilot-01-load50 \
-  --condition load50 \
-  --target-fraction 0.5 \
-  --reference-capacity-bps 67253028 \
-  --sensor-period 5 \
-  --warmup-seconds 30 \
-  --duration-seconds 180
-```
-
-### Execute a single research measurement
+Execute the baseline:
 
 ```sh
 python -m synthran experiment research run \
@@ -239,11 +266,41 @@ python -m synthran experiment research run \
   --duration-seconds 180
 ```
 
-The research collector consumes the single RFSIM reconciliation handoff, enforces the sidecar restart readiness barrier, manages the transient target route, runs the synchronized network sampler and continuous RTT probe, executes the background load client/server (when enabled), verifies base-network cleanup reproof, and saves `research-summary.json`.
+For loaded runs, configure the target rate from a fixed reference capacity using `--target-fraction` or `--target-bps` as required by the research specification.
 
-## 10. Multi-run campaigns and offline analysis
+The current research runtime includes validity gates for:
 
-### Plan a randomized blocked campaign
+- current base-path proof before measurement;
+- current path reproof after warmup and after measurement;
+- exact run-owned UE/PDU/route handoff;
+- bounded RTT probe behavior including all-timeout records;
+- owned iperf3 server/control readiness;
+- load-client establishment and load-target validity;
+- synchronized network sampling and transport-path completeness;
+- telemetry sequence integrity;
+- cleanup and base-network reproof.
+
+Zero telemetry is not automatically interpreted as a network scientific result; independent path/load/instrumentation validity must remain healthy.
+
+The accepted reference baseline is `pilot-20260817-03-baseline`, which is ready for campaign analysis.
+
+### Invalid historical load50 run
+
+`pilot-20260817-03-load50` is diagnostic evidence only.
+
+It must **not** be interpreted as proof that 50% load caused telemetry failure or congestion because:
+
+- the iperf3 client did not establish its control connection;
+- the requested background UDP load was not established;
+- telemetry was absent and RTT probes failed;
+- local/ingress counters moved while the UPF path did not;
+- the underlying RFSIM/5G transport collapsed before a valid measurement condition existed.
+
+A fresh valid load50 run is required before load50 can enter campaign analysis. The same validity standard applies to later load80/load95 runs.
+
+## 10. Multi-run campaign and offline analysis
+
+Plan a deterministic blocked campaign:
 
 ```sh
 python -m synthran experiment research campaign-plan \
@@ -255,9 +312,7 @@ python -m synthran experiment research campaign-plan \
   --out .synthran/campaigns/campaign-01.json
 ```
 
-This generates a deterministic schedule of runs blocked by seed with condition order randomized within each block.
-
-### Execute the campaign
+Execute it explicitly only when each condition can satisfy the live validity gates:
 
 ```sh
 python -m synthran experiment research campaign-run \
@@ -270,9 +325,7 @@ python -m synthran experiment research campaign-run \
   --duration-seconds 180
 ```
 
-Runs execute sequentially, creating run-scoped directories below `.synthran/experiments/<run-id>/`.
-
-### Analyze the campaign offline
+Analyze persisted valid runs offline:
 
 ```sh
 python -m synthran experiment research analyze \
@@ -280,35 +333,48 @@ python -m synthran experiment research analyze \
   --out .synthran/reports/campaign-01-analysis.json
 ```
 
-The analyzer computes paired differences against baseline across all seed blocks and estimates 95% bootstrap confidence intervals for delivery ratios, inter-arrival latencies, and RTT distributions without requiring live network access.
+The analyzer computes paired differences against baseline across seed blocks and bootstrap confidence intervals for the supported research metrics.
+
+Do not include invalid runs as if they were valid treatment observations.
+
+## Interactive workflow planning examples
+
+The terminal can inspect and plan against the durable workspace once initialized:
+
+```text
+/status
+/inspect resources
+/inspect network
+/config experiment
+/mode operate
+/run baseline
+```
+
+A successful `/run baseline` request creates an R2 `run-baseline` operation plan only if current application state is `PATH_PROVEN`. It does not invoke `synthran experiment research run` and does not start the live measurement.
+
+Similarly, `/down` can create an R3 plan only when the experiment is stopped and current exact teardown targets with permitted ownership are known. It does not execute provider teardown yet.
+
+See `docs/terminal-shell.md` and `docs/application-controller.md`.
 
 ## Failure and recovery
 
-Do not reuse a preparation, deployment, or experiment run ID. A failure keeps a sanitized partial manifest and log. If preparation failed after imaging or reset began, inspect the named stage and preserve the artifacts; do not guess resource names, broadly delete, or automatically free the allocation.
+Do not reuse preparation, deployment, experiment, campaign-run, or operation IDs.
 
-The canonical accepted evidence on SLICES includes:
-- Base network `network-acceptance-20260817-04` (`PATH PROVEN`)
-- Integrated experiment `iot-acceptance-20260817-06` (`IOT-TO-5G PATH PROVEN`)
-- Capacity calibration `calibration-20260817-02.json` (`67,253,028 bps`)
-- Controlled baseline measurement `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, `IOT-TO-5G PATH PROVEN`)
+Preserve partial manifests/logs after failure. Never broadly delete resources or infer ownership from naming alone.
 
-### Decoupled network and experiment lifecycles
+Network and experiment lifecycles are decoupled. An experiment failure does not by itself require base-network redeployment. When RFSIM state stalls, use the reviewed process-level recovery/reconciliation path and re-run network verification rather than defaulting to destructive redeployment.
 
-The base 5G network deployment and experiment/research execution lifecycles are completely decoupled:
-- **Do not redeploy the network after experiment failures:** An experiment failure (e.g. `pilot-20260817-03-load50`) does not invalidate the underlying Kubernetes or Open5GS deployment.
-- **Process-level RFSIM reconciliation:** If radio attachment stalls or `tun_srsue1` drops during an experiment or teardown, recover the data path via process-level RFSIM reconciliation and re-verify the network (`synthran network verify --inventory "$INVENTORY" --run-id <network-run-id>`) rather than tearing down and redeploying the base network.
-- **Preserve invalid run evidence:** Never delete or overwrite failed run directories. Preserved logs and summaries (e.g. from `pilot-20260817-03-load50`) provide essential diagnostic records explaining why a condition did not achieve validity.
-- **Fail-closed ownership:** Do not use broad process termination (`pkill`, `killall`) or manual route hacks. SynthRAN strictly manages route lifecycles and reaps only provably orphaned SynthRAN processes.
-
-All subsequent live runs must use fresh, never-before-used run IDs.
-
-If preflight finds an existing `open5gs` namespace, stop. Verify ownership and use a separate operator-approved teardown procedure.
+If a mutation is under the new operation-control path and clean rollback cannot be proven, retain the mutation claim and enter recovery-required state.
 
 ## Safety boundary
 
-- The user executes resource preparation, deployment, verification, experiments, and infrastructure teardown.
+- The operator executes live preparation, deployment, verification, experiment/research runs, and infrastructure changes.
+- The interactive terminal currently plans provider-facing workflows but does not execute them.
 - Resource preparation is explicit and stops before 5G deployment.
-- Network deployment is a separate explicit operation and never changes reservations or base node setup.
-- Experiment execution never reserves nodes or silently deploys the network.
-- Automated agents may author offline code, tests, and documentation, prepare non-mutating plans, and interpret operator-provided evidence, but do not execute live SLICES mutations.
-- No SLICES or golden-path success is claimed without operator-provided evidence.
+- Network deployment is separate from reservation/allocation preparation.
+- Experiment execution never silently reserves nodes or deploys the base network.
+- Provider experiment creation remains outside SynthRAN.
+- Unknown/foreign ownership fails closed.
+- Destructive work requires exact target scope; never use broad guessed cleanup.
+- Automated agents may author offline code/tests/docs, inspect read-only state, prepare non-mutating plans, and analyze evidence, but require explicit operator authorization for live provider mutation.
+- No live SLICES or golden-path success is claimed without evidence from the actual run.

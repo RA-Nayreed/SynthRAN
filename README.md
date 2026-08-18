@@ -2,9 +2,9 @@
 
 **A reproducible experiment platform joining emulated IoT workloads, programmable 5G/Open RAN, and intelligence-ready datasets.**
 
-SynthRAN connects networked IoT simulation to a real 5G user plane and preserves enough evidence to prove what happened. It supports deterministic Contiki-NG/Cooja sensor workloads transported through an srsUE tunnel, an srsRAN gNB, and an Open5GS core into auditable JSONL and reproducible Parquet datasets, alongside controlled research experiments measuring telemetry impact under reproducible background 5G load.
+SynthRAN connects deterministic IoT simulation to a real 5G user plane and preserves enough evidence to prove what happened. It supports Contiki-NG/Cooja sensor workloads transported through an srsUE tunnel, an srsRAN gNB, and an Open5GS core into auditable JSONL and reproducible Parquet datasets, alongside controlled research measurements of telemetry behavior under reproducible 5G load.
 
-SynthRAN is the integration and experiment-control layer. It reuses upstream systems that already implement 5G deployment, radio access, constrained IoT networking, and MQTT instead of copying them into another fork.
+SynthRAN is the integration and experiment-control layer. It reuses upstream systems that already implement 5G deployment, radio access, constrained IoT networking, MQTT, and load generation instead of copying them into another fork.
 
 ## Why SynthRAN exists
 
@@ -46,9 +46,9 @@ flowchart LR
     O -. validates records .-> D
 ```
 
-The initial experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the dynamically discovered UE PDU address, and is explicitly routed through `tun_srsue1`.
+The accepted experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the dynamically discovered UE PDU address, and is explicitly routed through `tun_srsue1`.
 
-In controlled research workflows, the same deterministic workload runs alongside controlled UDP background load over `tun_srsue1` to evaluate 5G transport performance, sequence integrity, RTT latency, and interface throughput across fixed measurement windows.
+In controlled research workflows, the same deterministic workload runs alongside controlled UDP background load over `tun_srsue1` to evaluate sequence integrity, inter-arrival behavior, RTT, and interface throughput across fixed measurement windows.
 
 ## What is reused
 
@@ -65,17 +65,20 @@ These repositories are not merged into SynthRAN, copied selectively, or tracked 
 
 ## Current status
 
-The repository foundation, the Open5GS + srsRAN + RFSIM network baseline, the integrated deterministic IoT-to-5G experiment path, and controlled research execution are implemented and live-accepted.
+The repository foundation, Open5GS + srsRAN + RFSIM base network, deterministic IoT-to-5G data path, capacity calibration, and one controlled baseline measurement are implemented and live accepted.
 
-The canonical accepted evidence on SLICES includes:
+Canonical accepted SLICES evidence includes:
+
 - **Base 5G network:** `network-acceptance-20260817-04` (`Result: PATH PROVEN`)
 - **Integrated IoT-to-5G experiment:** `iot-acceptance-20260817-06` (`Result: IOT-TO-5G PATH PROVEN`)
-- **Reference capacity calibration:** `calibration-20260817-02.json` (`67,253,028 bps` / ~67.25 Mbps over `tun_srsue1`)
-- **Controlled research baseline:** `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, `IOT-TO-5G PATH PROVEN`, 360/360 events across 10 sensors, 100% delivery, 0 gaps, 0 duplicates, 180 RTT probe samples with 0 timeouts, complete transport path sampling)
+- **Reference capacity calibration:** `calibration-20260817-02.json` (`67,253,028 bps`, about 67.25 Mbps over `tun_srsue1`)
+- **Controlled research baseline:** `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, 360/360 telemetry events, zero gaps or duplicates, 180 successful RTT samples, complete transport-path sampling)
+
+The historical `pilot-20260817-03-load50` run is **invalid evidence for a loaded-condition result**: the background load was not established and the underlying RFSIM/5G path collapsed. A fresh valid loaded run is still required before drawing scientific conclusions about load50, load80, or load95.
 
 | Capability | Status |
 |---|---|
-| Conda environment, immutable dependency metadata and privacy controls | Implemented and tested |
+| Conda environment, dependency metadata and privacy controls | Implemented and tested |
 | Pinned upstream dependency synchronization | Implemented and tested |
 | Open5GS + srsRAN + RFSIM inventory validation | Implemented and tested |
 | Explicit SLICES preparation and evidence-gated network deployment | Implemented and live accepted |
@@ -85,11 +88,42 @@ The canonical accepted evidence on SLICES includes:
 | Central MQTT collection and JSONL/Parquet derivation | Implemented and live accepted |
 | Integrated IoT-to-5G evidence and cleanup reproof | Implemented and live accepted (`IOT-TO-5G PATH PROVEN`) |
 | Reference capacity calibration over `tun_srsue1` | Implemented and live accepted |
-| Controlled research fixed-window measurement & RTT probing | Implemented and live accepted (`READY FOR CAMPAIGN ANALYSIS`) |
-| Deterministic blocked campaign scheduling and offline analysis | Implemented and tested |
+| Controlled baseline measurement and RTT/network sampling | Implemented and live accepted |
+| Loaded-condition validity gates, blocked campaign scheduling, and offline analysis | Implemented and offline tested; valid loaded campaign evidence still pending |
+| Persistent workspace, desired/observed state, reconciliation and operation control | Implemented and offline tested |
+| Session-first `prompt_toolkit` terminal | Implemented for state inspection and workflow planning |
+| Terminal-triggered provider/domain execution | Not connected yet; plans stop at `Execution: not started` |
 | A1/E2, RIC and generative intelligence | Deliberately deferred |
 
-The supported live controller is the Linux SLICES Webshell, or an SSH session to that documented management host, with the `synthran` Conda environment active. SynthRAN verifies but never changes the SLICES login, selected project, or existing experiment. Resource preparation, network deployment, and experiment execution remain separate operator actions; no experiment command reserves nodes or silently deploys the network.
+The supported live controller is the Linux SLICES Webshell, or an SSH session to its documented management host, with the `synthran` Conda environment active. SynthRAN verifies but does not perform SLICES login, change the selected project, or create the provider experiment. Resource preparation, base-network deployment, verification, and live experiment execution remain explicit operator actions.
+
+## Interface and safety model
+
+There is one product executable, `synthran`, with two interface paths:
+
+```text
+synthran
+  -> no arguments: interactive terminal workbench
+  -> explicit arguments: existing scriptable CLI
+```
+
+The interactive terminal uses the durable workspace, `ApplicationController`, reconciliation/workflow policy, and immutable operation engine. It does **not** invoke the scripted CLI behind the scenes.
+
+For terminal workflow commands, planning and provider execution are intentionally separate:
+
+```text
+slash command
+-> TerminalSession
+-> TerminalCommandRouter
+-> ApplicationController
+-> reconciliation or workflow policy
+-> immutable OperationPlan
+-> approval / drift / ownership gates
+-> ExecutionPermit
+-> provider/domain executor   # not connected for terminal workflows yet
+```
+
+A terminal operation plan therefore proves what may be done, but does not by itself reserve, deploy, start, stop, collect, read remote logs, or tear down live provider resources.
 
 ## Quick start
 
@@ -102,88 +136,66 @@ python -c "import os; assert os.environ.get('CONDA_DEFAULT_ENV') == 'synthran'"
 python -m unittest discover -s tests -v
 ```
 
-### Interactive Terminal Workbench
+### Interactive terminal workbench
 
-Launch the prompt-toolkit terminal workbench (no arguments on an interactive TTY):
+Launch the workbench with no arguments:
 
 ```sh
 synthran
 ```
 
-On first launch in a new project root, the terminal automatically guides you through verified controller profile and workspace initialization. Within the workbench, use slash-commands to inspect state, reconcile infrastructure, and run experiments:
+On first launch in an uninitialized checkout, the terminal performs the verified local initialization flow and can adopt compatible existing `.synthran` research artifacts without moving or deleting them. If the workspace has no active SynthRAN experiment, it can create the durable requested experiment state locally. Provider resources are not mutated by initialization or experiment creation.
+
+The authoritative terminal vocabulary is:
 
 ```text
-/status      Render live workspace and experiment status
-/inspect     Inspect detailed desired, observed, and resource state
-/plan        Generate an immutable reconciliation or experiment plan
-/up          Execute the next immediate reconciliation step (requires /mode operate)
-/run         Execute the active experiment
-/stop        Stop running experiment services
-/collect     Collect run artifacts and derived Parquet datasets
-/logs        Display recent operation or service logs
-/down        Safely tear down deployed resources (requires confirmation)
-/mode        Switch between OBSERVE (read-only) and OPERATE (mutating) modes
-/quit        Exit the terminal session
+/status
+/inspect resources|network
+/reserve
+/up
+/verify
+/recover
+/down
+/run baseline|congestion
+/stop
+/collect
+/logs network|open5gs|ue
+/config resources|experiment
+/mode observe|operate
+/help
+/clear
+/quit
 ```
 
-### Scriptable CLI Workflows
+`/status`, `/inspect`, `/config`, `/help`, `/clear`, `/quit`, and mode handling are terminal/application functions. Workflow commands such as `/reserve`, `/up`, `/verify`, `/run`, `/collect`, and `/down` create state-sensitive immutable operation plans or fail closed. They currently do **not** execute the corresponding provider/domain action from the terminal.
 
-Initialize a workspace explicitly from the CLI:
+See [terminal shell and execution boundary](docs/terminal-shell.md) and [terminal command contract](docs/terminal-commands.md).
 
-```sh
-python -m synthran init --project PROJECT --profile default
-```
+### Scriptable live workflows
 
-Preview immutable dependency synchronization:
+The existing explicit CLI remains the current operator path for live provider execution. For example:
 
 ```sh
 python -m synthran deps sync --dry-run
+python -m synthran doctor --offline --inventory /path/to/hosts.ini
+python -m synthran slices doctor --slices-project PROJECT --slices-experiment EXPERIMENT
+python -m synthran network deploy --dry-run --inventory /path/to/hosts.ini
 ```
 
-Validate a golden-path inventory without contacting SLICES:
+The operator establishes SLICES authentication/project/experiment context outside SynthRAN. There is currently **no top-level `synthran init` scripted command**; persistent workspace initialization is performed by the no-argument terminal startup flow.
 
-```sh
-python -m synthran doctor \
-  --offline --inventory /path/to/hosts.ini
-```
-
-Generate the non-executing network deployment plan:
-
-```sh
-python -m synthran network deploy \
-  --dry-run --inventory /path/to/hosts.ini
-```
-
-On the SLICES controller, verify the active CLI context without changing it:
-
-```sh
-python -m synthran slices doctor \
-  --slices-project PROJECT \
-  --slices-experiment EXPERIMENT
-```
-
-The operator performs `slices auth login`, `slices project use PROJECT`, and experiment creation when needed. SynthRAN only performs read-only `show` checks.
-
-Once a network run is `path-proven`, preview the deterministic IoT scenario without changing live state:
+Once a network run is `path-proven`, preview and execute the deterministic IoT scenario explicitly:
 
 ```sh
 synthran experiment plan \
   --network-run-id NETWORK_RUN_ID \
   --run-id EXPERIMENT_RUN_ID
-```
 
-Execute the integrated experiment explicitly:
-
-```sh
 synthran experiment run \
   --inventory .synthran/preparations/NETWORK_RUN_ID/hosts.ini \
   --network-run-id NETWORK_RUN_ID \
   --run-id EXPERIMENT_RUN_ID
-```
 
-Render the persisted experiment evidence without modifying live state:
-
-```sh
 synthran experiment verify --run-id EXPERIMENT_RUN_ID
 ```
 
@@ -220,29 +232,9 @@ python -m synthran experiment research run \
   --duration-seconds 180
 ```
 
-Plan, execute, and analyze a randomized blocked campaign:
+Plan and analyze a deterministic blocked campaign with the dedicated research commands. Do not interpret a loaded condition scientifically unless its own validity gates report it ready for campaign analysis.
 
-```sh
-python -m synthran experiment research campaign-plan \
-  --campaign-id campaign-01 \
-  --network-run-id NETWORK_RUN_ID \
-  --seeds 424242,424243,424244 \
-  --conditions baseline,load50:0.5,load80:0.8 \
-  --campaign-seed 12345 \
-  --out .synthran/campaigns/campaign-01.json
-
-python -m synthran experiment research campaign-run \
-  --campaign .synthran/campaigns/campaign-01.json \
-  --inventory .synthran/preparations/NETWORK_RUN_ID/hosts.ini \
-  --target CORE_IP \
-  --reference-capacity-bps 67253028
-
-python -m synthran experiment research analyze \
-  --campaign .synthran/campaigns/campaign-01.json \
-  --out .synthran/reports/campaign-01-analysis.json
-```
-
-Read the exact safety and acceptance boundary in the [integrated IoT-to-5G experiment guide](docs/experiment.md) and [operator guide](docs/operator-guide.md). The test fixture is not a real deployment inventory.
+Read the exact live safety and acceptance boundary in the [integrated experiment guide](docs/experiment.md) and [operator guide](docs/operator-guide.md). Test fixtures are not deployment inventories.
 
 ## Planned experiment output
 
@@ -258,57 +250,60 @@ Every accepted integrated experiment produces a run-scoped evidence bundle conta
 - a final `experiment-evidence.json` report.
 
 Controlled research runs additionally persist:
+
 - `experiment-spec.json`: immutable research run specification;
 - `measurement-window.json`: exact UTC start and end bounds of the measurement window;
-- `probe.jsonl` and `probe.parquet`: continuous RTT probe samples and timeout flags;
+- `probe.jsonl` and `probe.parquet`: RTT samples and timeout flags;
 - `network-samples.jsonl` and `network-samples.parquet`: synchronized Ingress, UE `tun_srsue1`, and UPF `ogstun` counter deltas;
-- `load.jsonl` and `load.parquet`: background load throughput records (for loaded conditions);
-- `research-summary.json`: consolidated research metrics, validity flags, and SHA-256 digests of all source artifacts (`synthran/research-summary/v1alpha1`).
+- `load.jsonl` and `load.parquet`: background-load throughput records for loaded conditions;
+- `research-summary.json`: consolidated research metrics, validity flags, and SHA-256 artifact digests.
 
 ## Repository map
 
 ```text
-synthran/                 CLI, terminal, app controller, operations, resources, workspace, and research runtime
+synthran/                 CLI, terminal, application, operations, resources, workspace, network and research runtime
 contracts/                Versioned preparation, network, telemetry, research, and evidence schemas
 deploy/                   SynthRAN-owned network overlays and out-of-tree IoT source
 tests/                    Offline unit tests and sanitized fixtures
-docs/                     Architecture, state management, operations, terminal, and operator guides
+docs/                     Architecture, state, operations, terminal, experiment and operator guides
 dependencies.lock.yml     Immutable upstream and direct dependency record
-environment.yml           Complete Linux Conda environment, including Ansible
+environment.yml           Complete Linux Conda environment
 THIRD_PARTY.md            License and provenance record
 AGENTS.md                 Durable repository working contract
 ```
 
-Upstream source remains outside this tree. Generated experiments, dependency checkouts and live evidence remain below ignored local storage.
+Upstream source remains outside this tree. Generated experiments, dependency checkouts, authority files, and live evidence remain below ignored local storage.
 
 ## Roadmap
 
-| Version | Outcome |
+The table below is a capability roadmap, not a statement of published package versions. `pyproject.toml` remains the authoritative package version.
+
+| Capability target | Outcome |
 |---|---|
 | `v0.0.1` | Repository foundation, dependency lock, privacy controls and CI |
 | `v0.0.2` | SLICES/`5g_ansible` adapter and live-accepted srsUE/UPF path |
 | `v0.0.3` | Integrated deterministic Cooja -> MQTT -> 5G -> JSONL/Parquet acceptance |
-| `v0.0.4` | Controlled research measurement, capacity calibration, and blocked campaign execution |
-| `v0.1.0` | Hardened reproducible experiment lifecycle and release documentation |
+| `v0.0.4` | Controlled research measurement, capacity calibration, and campaign machinery |
+| `v0.1.0` | Hardened shared lifecycle, concrete terminal/provider execution adapters, release documentation |
 | `v0.2+` | Multi-UE/slice experiments, impairments, synthesis and later RIC adapters |
 
-Formal O-RAN A1/E2 control and generative models are not shortcuts around the baseline. They remain deferred until the integrated measured data path is independently accepted.
+Formal O-RAN A1/E2 control and generative models remain deferred until the measured baseline and controlled loaded experiments are independently accepted.
 
 ## Documentation
 
-### Architecture & State Management
+### Architecture and state
 - [Architecture and responsibility boundaries](docs/architecture.md)
 - [Workspace state, profiles, and durability](docs/workspace-state.md)
 - [Experiment desired-state specification](docs/experiment-desired-state.md)
 - [Observed testbed state and truth ranking](docs/observed-state.md)
 - [First-use controller initialization](docs/initialization.md)
 
-### Interactive Terminal Workbench
+### Interactive terminal
 - [Terminal shell and interactive UX](docs/terminal-shell.md)
 - [Slash-command reference and risk classification](docs/terminal-commands.md)
 - [Terminal session management and mode gating](docs/terminal-session.md)
 
-### Operations & Resource Engine
+### Operations and resources
 - [Application controller and status projection](docs/application-controller.md)
 - [Operation control plane and approval gating](docs/operation-control.md)
 - [Structured operation events and stage journaling](docs/operation-events.md)
@@ -316,7 +311,7 @@ Formal O-RAN A1/E2 control and generative models are not shortcuts around the ba
 - [Resource-bound operation planning](docs/resource-operation-binding.md)
 - [Composite multi-provider transactions and rollback](docs/resource-transaction.md)
 
-### Experimentation & Operations
+### Experimentation and repository operation
 - [Operator guide and safety gates](docs/operator-guide.md)
 - [Integrated IoT-to-5G experiment and controlled research](docs/experiment.md)
 - [Development environment and tests](docs/development.md)

@@ -1,26 +1,67 @@
 # Persistent workspace and identity model
 
-SynthRAN separates durable identity, research-workspace configuration, temporary provider authority, experiment configuration, observed live state, and measurement evidence. These records have different lifetimes and must not be collapsed into one configuration file.
+SynthRAN separates durable controller identity, workspace configuration, experiment identity, requested state, observed provider/runtime facts, operation records, and measurement evidence. These records have different lifetimes and authority and must not be collapsed into one configuration file.
 
-## Truth by information type
+## Current on-disk model
 
-| Information | Durable location | Authority |
+```text
+~/.config/synthran/
+└── profiles/
+    └── <profile>.toml
+
+<repository>/.synthran/
+├── workspace.toml
+├── registry.sqlite3
+├── active.json                         # present when an active experiment is selected
+├── access/
+│   ├── slices.json                     # cache only
+│   └── r2lab.json                      # cache only when configured
+├── experiments/
+│   └── sran-YYYYMMDD-NNN/
+│       ├── experiment.toml             # durable experiment identity/binding record
+│       ├── desired.json                # detailed requested experiment state
+│       ├── observed.json               # reconciled observation cache, when collected
+│       ├── status.json                 # legacy WorkspaceSession/provider-summary cache when used
+│       └── runs/
+│           └── run-NNN[-label]/
+│               └── run.json            # durable run identity record
+├── operations/
+│   ├── active-mutation.json            # only while mutation authority is held/recovery required
+│   └── op-NNNNNN/
+│       ├── operation.json
+│       ├── plan.json
+│       ├── state.json
+│       ├── approval.json               # only when approval exists
+│       └── events.jsonl
+└── sessions/
+    └── events.jsonl                    # created by the operation journal as needed
+```
+
+Legacy accepted `.synthran/preparations/`, `.synthran/runs/`, and historical experiment directories may coexist with this persistent model. First-launch adoption preserves those paths rather than migrating or renaming accepted evidence.
+
+## Authority by information type
+
+| Information | Durable/current location | Authority |
 |---|---|---|
 | Controller identity references | `~/.config/synthran/profiles/<name>.toml` | SynthRAN profile |
 | Selected SLICES project and workspace policy | `.synthran/workspace.toml` | workspace configuration |
-| Cached project or gateway access | `.synthran/access/*.json` | cache only; live provider wins |
-| Requested experiment configuration | `.synthran/experiments/<experiment-id>/experiment.toml` | experiment folder |
-| Current reservation, allocation, lease, pods, interfaces, PDU address | provider queries | live provider |
-| Last observed experiment state | `.synthran/experiments/<experiment-id>/status.json` | observation cache only |
-| Operation history | `.synthran/operations/<operation-id>/` | persisted operation evidence |
-| Measurement runs and datasets | experiment `runs/`, `evidence/`, and `datasets/` | persisted research artifacts |
-| Counters and lookup index | `.synthran/registry.sqlite3` | atomic allocator and rebuildable index |
+| Cached project/gateway access | `.synthran/access/*.json` | cache only; live provider verification wins |
+| Active SynthRAN experiment pointer | `.synthran/active.json` | local selection only |
+| Experiment identity and provider binding | `experiment.toml` | durable experiment record |
+| Detailed requested experiment state | `desired.json` | desired-state authority |
+| Current reconciled observation snapshot | `observed.json` | observation cache; source/freshness remain authoritative |
+| Legacy provider-session summary | `status.json` | compatibility/summary cache only |
+| Current reservation/allocation/lease/runtime facts | provider/direct observations | live truth when fresh |
+| Operation identity/plan/status/approval/events | `.synthran/operations/<operation-id>/` | operation-control records |
+| Run identity | experiment `runs/<run-id>/run.json` | durable run record |
+| Legacy/live measurement evidence | existing run/evidence artifact locations | persisted research evidence |
+| Counters and lookup index | `.synthran/registry.sqlite3` | atomic allocator/rebuildable index |
 
-A cache is never authority for a mutation. Any resource-changing operation must refresh the provider facts required by its safety policy.
+A cache never authorizes mutation by itself. Provider-facing policy must use the required fresh facts.
 
 ## Controller profile
 
-A profile records information that is expected to remain stable for months or years:
+A profile stores stable controller identity references such as:
 
 ```toml
 schema = "synthran/profile/v1alpha1"
@@ -32,20 +73,18 @@ updated_at_utc = "2026-08-17T19:00:00Z"
 username = "operator"
 
 [r2lab]
-slice = "slice_name"
+slice = "slice-name"
 
 [r2lab.ssh]
 identity = "~/.ssh/id_r2lab"
 fingerprint = "SHA256:..."
 ```
 
-The profile stores only an SSH identity reference and its public-key fingerprint. Private key bytes are never copied into the profile, workspace, experiment folder, logs, or evidence.
-
-Profiles live outside the research repository so moving or sharing a workspace does not copy personal credentials.
+The private key is never copied. The profile stores the identity reference and public-key fingerprint. Profiles live outside the research repository so sharing/moving the workspace does not copy private key material.
 
 ## Workspace configuration
 
-A workspace binds one profile to one SLICES project and stable operator defaults:
+`workspace.toml` binds one profile to one SLICES project and stable workspace defaults:
 
 ```toml
 schema = "synthran/workspace/v1alpha1"
@@ -61,150 +100,141 @@ placement = "automatic"
 ownership = "strict"
 ```
 
-The project is not part of personal identity. The same profile may be used in another workspace for another project.
+Environment variables may provide defaults at setup/invocation boundaries, but an initialized workspace is the durable identity/configuration authority. Conflicting runtime authority must fail closed rather than silently retargeting the workspace.
 
-## Access freshness
+## Access records
 
-Slow-changing authorization is cached with both a verification timestamp and an explicit refresh boundary. Provider expiry is stored when available.
+Slow-changing controller/gateway access can be cached with an explicit refresh boundary. These records accelerate startup but do not grant resource mutation authority.
 
-```json
-{
-  "schema": "synthran/access/v1alpha1",
-  "provider": "slices",
-  "subject": "operator",
-  "scope": "research-project",
-  "verified_at_utc": "2026-08-17T19:00:00Z",
-  "refresh_after_utc": "2026-08-18T07:00:00Z",
-  "access_until_utc": "2026-10-22T23:59:00Z",
-  "detail": "authenticated project membership verified"
-}
-```
+SLICES access records retain subject/project verification metadata and provider expiry when available. R2Lab gateway evidence is additionally bound to the SSH identity fingerprint that was verified.
 
-The default refresh interval is 12 hours. The refresh boundary is clipped to provider expiry. Access may still be revoked before a published expiry, so the expiry is never treated as permission to skip periodic verification indefinitely.
+An active R2Lab lease is not treated as slow-changing cached mutation authority. It must be verified at the physical-resource boundary.
 
-R2Lab gateway authentication follows the same 12-hour cache policy. Its cached access record is bound to the SSH public-key fingerprint that was actually verified. A changed identity forces another gateway authentication check even when the old cache has not reached its time refresh boundary. An active R2Lab lease is not cached as mutation authority; it is checked live before every R2Lab resource mutation.
+Provider experiment state is also short-lived enough to require current verification when a live operation depends on it.
 
-Provider experiments are temporary and are checked when an experiment is resumed or before any operation that depends on them.
+## Experiment identity and desired state
 
-## Experiment identity
-
-Experiment IDs use UTC dates and a monotonically increasing daily ordinal:
+Experiment IDs use UTC date plus a daily non-reusable ordinal:
 
 ```text
 sran-YYYYMMDD-NNN
 ```
 
-Examples:
+Issuance creates a durable experiment folder/record. The local `experiment.toml` contains identity, profile/project association, coarse network intent/radio mode, label when present, and optional binding to an existing provider experiment.
+
+Detailed current requested state is stored separately in:
 
 ```text
-sran-20260817-001
-sran-20260817-002
-sran-20260818-001
+desired.json
 ```
 
-Once issued, an ID is consumed. Failed initialization leaves its directory or registry entry as evidence and the ID is never recycled.
+That separation is intentional. `experiment.toml` is the durable issued identity/binding record; `desired.json` is the validated detailed requested state consumed by application policy.
 
-The experiment folder is self-describing:
+Runtime-assigned values such as PDU addresses, pod names, reservations, allocations, and leases do not become desired state merely because they were observed once.
+
+Provider experiment creation remains an operator action. A stored provider binding names an already-existing provider experiment and does not create one.
+
+## Observed and status caches
+
+The current application reconciliation cache is:
 
 ```text
-.synthran/experiments/sran-20260818-001/
-├── experiment.toml
-├── status.json
-├── providers/
-├── operations/
-├── runs/
-├── evidence/
-└── datasets/
+observed.json
 ```
 
-`experiment.toml` describes requested configuration. Runtime-assigned values such as pod IPs, service IPs, interface names, UE PDU addresses, reservations, allocations, and leases do not become desired configuration merely because they were observed once.
+It stores the best selected observation for each collected dimension, including source, state, timestamp/freshness, ownership, resource ID when available, and bounded facts/detail.
 
-A SLICES experiment binding may be recorded in `experiment.toml`, but SynthRAN does not create the provider experiment under the current controller contract. The binding refers to an existing operator-created provider experiment and must be reverified when used.
+A separate older `WorkspaceSession` helper can persist a compact provider-experiment summary in:
+
+```text
+status.json
+```
+
+`status.json` is not the `ApplicationController` observed-state model and must not be confused with `observed.json`. Both are local cache/evidence surfaces; neither overrides current provider truth.
+
+Persisting `observed.json` does not promote it above its underlying source authority. The current truth order remains:
+
+```text
+provider
+> observation
+> evidence
+> manifest
+> cache
+```
+
+A previously persisted provider observation becomes stale after its freshness boundary and can no longer authorize mutation.
+
+## Active experiment
+
+`.synthran/active.json` points to the current local SynthRAN experiment. Changing this pointer changes which local desired/observed state the application loads; it does not change the selected SLICES project or mutate the provider experiment.
+
+An initialized workspace with no active experiment is represented as lifecycle `EMPTY` by `ApplicationController.snapshot()`.
+
+The interactive first-launch flow can create/activate a local experiment record and detailed desired state. That action is local only.
 
 ## Run identity
 
-Runs are measurements within one experiment and have an experiment-local ordinal:
+Runs are experiment-local and use:
 
 ```text
 run-NNN
 run-NNN-label
 ```
 
-Examples:
+A run directory is created under:
 
 ```text
-run-001-baseline
-run-002-load025
-run-003-load050
+.synthran/experiments/<experiment-id>/runs/<run-id>/
 ```
 
-Each issued run directory contains a small `run.json` identity record. The directory name itself is sufficient to preserve the consumed ordinal if a failure occurs before `run.json` can be written. Run IDs are therefore never reused after registry recovery.
+`run.json` is the durable run identity record. A valid issued run directory still consumes its ordinal even if interruption occurs before all records/artifacts are completed.
+
+Historical pre-workspace acceptance/research runs may use older directory locations/names. They remain preserved evidence and are not retroactively renamed into the new ID scheme.
 
 ## Operation identity
 
-Operations are workspace-wide control actions and use a monotonically increasing ordinal:
+Operations are workspace-wide and use:
 
 ```text
 op-NNNNNN
 ```
 
-Examples:
+Operation directories live directly under `.synthran/operations/`, not inside an experiment directory.
 
-```text
-op-000041
-op-000042
-```
-
-Each issued operation directory contains `operation.json`. As with runs, an incomplete but valid operation directory still consumes its ordinal. An operation may be associated with an experiment, but infrastructure inspection and other workspace actions may exist without one.
+Each normal operation may contain durable identity, immutable plan, mutable state, optional approval, and append-only event records. A valid issued operation directory consumes its ID even if creation is interrupted.
 
 ## Registry behavior
 
-`.synthran/registry.sqlite3` provides atomic ID allocation, concurrency control, and fast lookup. It is not the only copy of research identity or experiment configuration.
+`.synthran/registry.sqlite3` provides atomic ID allocation, concurrency control, and lookup. It is not the only copy of issued identity.
 
-The filesystem preserves every issued identifier. Registry recovery scans:
+Recovery inspects durable filesystem records/directories so counters cannot move backward after SQLite loss. Incomplete but syntactically valid issued directories still consume their ordinals.
 
-- experiment directory names and `experiment.toml` / `status.json`;
-- run directory names and `run.json`;
-- operation directory names and `operation.json`.
-
-A valid directory without its record is treated as an interrupted issuance and still consumes the identifier. This prevents experiment, run, or operation ID reuse after SQLite loss.
-
-The registry maintains independent counters for:
+Current counters are independent for:
 
 - experiment IDs per UTC date;
 - run IDs per experiment;
 - operation IDs per workspace.
 
-The index rows can be rebuilt where durable records exist, while the highest observed valid directory ordinal restores each non-reuse counter even for interrupted records.
+SQLite connections are explicitly closed after use; WAL mode is an implementation detail of the allocator, not a replacement for durable filesystem provenance.
 
-## Startup behavior
+## First launch and existing evidence
 
-A normal terminal startup should perform local checks first:
+The no-argument interactive terminal discovers the nearest existing SynthRAN/Git project root. In an uninitialized checkout it runs read-only controller verification before persisting local workspace/profile/access state.
 
-1. discover the workspace;
-2. load the selected profile;
-3. validate local profile structure and SSH identity fingerprint;
-4. read cached access records;
-5. refresh only access records whose refresh boundary has passed or whose identity binding changed;
-6. load the active experiment pointer;
-7. check the provider experiment because provider experiments are short-lived;
-8. reconcile live reservation, allocation, lease, Kubernetes, core, RAN, UE, PDU, and experiment state only when required by the selected operation or status view.
+An existing `.synthran` directory containing legacy accepted run evidence is adoptable. Initialization does not move, rename, rewrite, or recursively delete those artifacts.
 
-This keeps startup fast without allowing stale authorization to control physical or remote resources.
+Initialization fails closed when `.synthran` contains ambiguous partial new-format state without `workspace.toml`, such as registry/active/access records, `sran-*` experiment folders, or `op-*` operation folders.
 
-## Container boundary
+There is currently no top-level scripted `synthran init` command. The persistent initialization UX is the no-argument terminal startup flow.
 
-Profiles and workspaces remain on the host and are mounted into the disposable SynthRAN runtime. The future launcher may map an identity into the container or forward an SSH agent, but the container image never contains user credentials.
+## Startup and reconciliation
 
-The persistent boundary is therefore:
+The production interactive shell constructs `ApplicationController`, which resolves durable workspace/profile/active-experiment authority. Status may use persisted `observed.json` for rendering; provider-facing operation policy requires the fresh facts dictated by the relevant policy.
 
-```text
-host
-├── ~/.config/synthran/profiles/
-└── research-project/.synthran/
+The repository also contains `open_workspace_session()` as a lower-level helper that can refresh cached SLICES/R2Lab access and recheck a bound provider experiment, persisting its compact `status.json` summary. The production terminal shell does not currently use that helper as its primary application startup path.
 
-container
-└── SynthRAN application and pinned toolchain
-```
+Neither path treats cached access/observed/status records as permission to mutate remote resources indefinitely. Freshness and ownership are rechecked at the appropriate boundary, and concrete executors must still perform final live provider checks.
 
-A new container version can be used without losing experiment identity, operation history, or research artifacts.
+## Credential boundary
+
+Profiles/workspaces contain only reviewed references/fingerprints and non-secret control metadata. Never store private key bytes, subscriber credentials, tokens, kubeconfigs, or raw authority payloads in tracked source, public docs, or operation event attributes.

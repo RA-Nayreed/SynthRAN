@@ -2,195 +2,328 @@
 
 ## Responsibility boundary
 
-SynthRAN is the experiment-control layer above existing systems:
+SynthRAN is the experiment-control and evidence layer above existing systems. It composes rather than reimplements the underlying 5G, IoT, messaging, and load-generation stacks.
 
 ```text
 Operator
   |
-  v
-SynthRAN CLI and contracts
-  |-- dependency lock and detached checkouts
-  |-- 5g_ansible adapter ------------------> Open5GS + srsRAN + srsUE
-  |-- Contiki adapter ----------------------> Cooja + tunslip6 + tun0
-  |-- counted ingress ----------------------> UE-side Mosquitto bridge
-  |-- central MQTT -------------------------> run-owned core broker
-  |-- collector and validator -------------> JSONL + Parquet + report
-  |-- research instrumentation ------------> iperf3 load + RTT probe + network sampler
-  |-- campaign scheduler and analyzer ------> blocked schedules + paired difference analysis
-  `-- run-scoped cleanup and evidence
+  +--> synthran                     interactive terminal
+  |      |
+  |      v
+  |    TerminalSession
+  |      |
+  |      v
+  |    TerminalCommandRouter
+  |      |
+  |      v
+  |    ApplicationController
+  |      |-- persistent workspace / desired state
+  |      |-- observed-state reconciliation
+  |      |-- application workflow policy
+  |      |-- resource decision binding
+  |      `-- OperationController
+  |             |
+  |             v
+  |        ExecutionPermit
+  |             |
+  |             v
+  |        provider/domain executor boundary
+  |        (not yet connected for terminal workflows)
+  |
+  `--> synthran <explicit args>      existing scripted CLI
+         |-- SLICES/POS preparation adapters
+         |-- 5g_ansible deployment/verification
+         |-- R2Lab provider-specific control
+         |-- IoT experiment runtime
+         `-- controlled research runtime
 ```
 
-SynthRAN owns the interfaces between these systems. Upstream repositories own their internal deployment, radio, simulation, and broker implementations.
+The interactive and scripted interfaces currently share repository models and domain code in several areas, but they are **not yet one identical execution pipeline**. The interactive terminal goes through the persistent application/operation control plane. The existing scripted CLI still invokes established network, experiment, research, and R2Lab executors directly.
 
-Linux is the supported SynthRAN host platform. Development, repository hooks, GitHub Actions, and the network controller use the named Conda environment `synthran`. `environment.yml` is the complete environment definition and includes Ansible tooling; `pyproject.toml` remains package metadata.
+The architectural direction is convergence below the interface boundary. The terminal must not invoke the scripted CLI secretly as a shortcut.
+
+Linux is the supported live SynthRAN host platform. Development, repository hooks, GitHub Actions, and live control use the named Conda environment `synthran`. `environment.yml` is the complete supported Linux environment definition; `pyproject.toml` remains package/build metadata and declares the `synthran` executable.
+
+## Product entrypoint
+
+There is one product executable:
+
+```text
+synthran
+```
+
+The launcher behavior is intentionally simple:
+
+```text
+no arguments       -> prompt_toolkit interactive terminal
+explicit arguments -> existing scriptable CLI parser
+```
+
+The terminal command registry is explicit and accepts only the documented slash commands. It has no natural-language lifecycle fallback and no arbitrary provider/resource override syntax.
+
+See `docs/terminal-commands.md`, `docs/terminal-session.md`, and `docs/terminal-shell.md`.
+
+## Persistent workspace model
+
+The interactive control plane separates long-lived identity, requested experiment state, current observations, and operation records.
+
+```text
+~/.config/synthran/profiles/<name>.toml
+.synthran/workspace.toml
+.synthran/registry.sqlite3
+.synthran/active.json
+.synthran/experiments/<experiment-id>/desired.json
+.synthran/experiments/<experiment-id>/observed.json
+.synthran/operations/<operation-id>/...
+.synthran/sessions/events.jsonl
+```
+
+The registry allocates non-reusable experiment, run, and operation IDs. Filesystem records remain durable provenance and can reconstruct registry counters without reusing issued IDs.
+
+Legacy accepted run/evidence directories may coexist with the new workspace. First-launch adoption preserves those artifacts exactly and fails closed on ambiguous partial new-workspace state.
+
+Initialization is performed by the no-argument terminal when needed. It verifies controller access before local persistence and never reserves, allocates, deploys, powers, or starts an experiment. There is currently no separate top-level scripted `synthran init` command.
+
+## Desired and observed state
+
+Requested intent and discovered facts are separate models.
+
+`ExperimentDesiredState` contains requested choices such as intent, core/RAN/UE family, radio mode, topology, slices, DNNs, QoS/AMBR constraints, placement policy, and optional physical-radio requirements.
+
+Runtime discoveries do not belong in desired state. Provider-assigned resource IDs, PDU addresses, pod names, current lease state, and similar values are observed facts.
+
+The observed-state truth ranking is:
+
+```text
+provider
+> observation
+> evidence
+> manifest
+> cache
+```
+
+Fresh live provider/direct observations can drive current policy. Evidence and manifests preserve historical truth but cannot become current mutation authority after their freshness boundary is gone.
+
+Current lifecycle values are derived from desired plus observed state:
+
+```text
+CONFIGURED
+RESERVED
+ALLOCATED
+PREPARED
+NETWORK_READY
+PATH_PROVEN
+EXPERIMENT_RUNNING
+RECOVERY_REQUIRED
+BLOCKED
+```
+
+See `docs/experiment-desired-state.md` and `docs/observed-state.md`.
+
+## Reconciliation
+
+`plan_reconciliation()` is pure. It produces only the next safe network boundary and never performs a provider command.
+
+A representative progression is:
+
+```text
+inspect controller/project/provider experiment
+-> inspect reservation
+-> reserve if absent
+-> inspect allocation
+-> allocate if absent
+-> verify R2Lab lease when physical radio is requested
+-> inspect preparation
+-> prepare if absent
+-> inspect network runtime
+-> up if required network components are absent
+-> verify-path if the network is ready but the path is not currently proven
+```
+
+The planner stops at the first unresolved authority or dependency boundary. Stale, unknown, foreign, failed, or ambiguous state cannot be skipped merely because older evidence exists.
+
+## Application workflow policy
+
+Experiment, evidence, log, and teardown operations are not network reconciliation steps. `synthran.app.workflows` defines state-sensitive policy for:
+
+```text
+run-baseline
+run-congestion
+stop
+collect
+logs-network
+logs-open5gs
+logs-ue
+down
+```
+
+These actions still flow into the same `OperationController` after policy evaluation.
+
+Key rules include:
+
+- provider-facing workflow plans require current controller, project-access, and provider-experiment observations;
+- experiment start requires a current `PATH_PROVEN` path;
+- stop requires a current running experiment;
+- collect/log workflows are non-mutating R1 plans;
+- teardown is R3, refuses a running experiment, requires current non-foreign ownership, and binds exact resource IDs.
+
+Authorization recomputes workflow policy and exact target scope so plan approval cannot survive relevant state drift.
+
+## Operation control plane
+
+One operation is represented by an immutable `OperationPlan` plus mutable status and append-only events.
+
+Plans bind:
+
+- experiment identity;
+- operation kind and risk;
+- desired-state digest;
+- observed-state digest;
+- reconciliation/workflow-policy digest;
+- exact targets when applicable;
+- bound input digests such as a `ResourceDecision`;
+- the overall plan digest.
+
+R2 operations require standard approval. R3 operations require destructive approval. Approval is bound to the exact plan.
+
+Authorization rechecks current policy/inputs and, for mutation, acquires the workspace-wide exclusive mutation claim. Failed/interrupted mutations retain that claim unless clean rollback is proven.
+
+`ExecutionPermit` is the handoff to a concrete executor. It does not override live provider checks.
+
+See `docs/operation-control.md`.
+
+## Structured operation events
+
+Operation progress uses validated events rather than parsing provider output:
+
+```text
+operation.started
+plan.created
+approval.requested
+approval.granted
+operation.authorized
+stage.started
+stage.progress
+stage.completed
+stage.failed
+state.changed
+operation.completed
+operation.failed
+operation.interrupted
+recovery.required
+```
+
+`TerminalSession.operation_updates()` obtains the validated stream through `ApplicationController.operation_events()`. Raw SSH/POS/Kubernetes/Ansible output is never interpreted by the terminal as trusted operation state.
+
+The event plumbing is implemented. Provider/domain execution still has to be connected for a terminal plan to emit real live stage progress.
+
+See `docs/operation-events.md`.
+
+## Resource selection and transactions
+
+Resource selection is deterministic and capability-based.
+
+`select_resources()` consumes:
+
+- reviewed `ResourceDescriptor` objects;
+- fresh complete provider snapshots;
+- desired-state-derived requirements.
+
+It returns a `ResourceSelection`. `ResourceDecision` binds the selection and exact targets into an immutable operation input so placement drift invalidates authorization.
+
+The generic transaction layer coordinates acquisitions through `ResourceProviderAdapter`:
+
+```text
+ExecutionPermit
++ ResourceDecision
++ provider adapters
+-> execute_resource_transaction()
+```
+
+Provider acquisition receipts distinguish requested resources from resources actually created by the operation. Only exact `created_ids` are generic rollback authority. Rollback runs in reverse provider order. Adapter exceptions or incomplete rollback yield recovery-required state instead of guessed cleanup.
+
+The generic transaction engine is implemented; concrete transaction adapters for every SLICES/R2Lab path are not yet connected to the terminal control plane. Provider-specific scripted executors elsewhere in the repository do not automatically satisfy this boundary.
+
+See `docs/resource-selection.md`, `docs/resource-operation-binding.md`, and `docs/resource-transaction.md`.
 
 ## Why complete pinned checkouts are reused
 
-`5g_ansible` behavior is distributed across its inventory variables, playbooks, roles, templates, Helm integration, and shell entry points. Extracting only a few files would silently inherit dependencies on the rest of the tree and make SynthRAN responsible for reconstructing upstream behavior.
+`5g_ansible` behavior is distributed across inventory variables, playbooks, roles, templates, Helm integration, and shell entry points. Extracting only selected files would silently inherit dependencies on the rest of the tree and make SynthRAN responsible for reconstructing upstream behavior.
 
-A complete detached checkout preserves those relationships. SynthRAN executes only the Open5GS + srsRAN + RFSIM path through a narrow adapter. Contiki-NG follows the same rule: the upstream checkout remains complete and pinned while the SynthRAN sensor application stays out of tree under `deploy/iot/sensor/`.
+A complete detached checkout preserves those relationships. SynthRAN executes only the reviewed Open5GS + srsRAN + RFSIM path through a narrow adapter. Contiki-NG follows the same rule: the checkout remains complete and pinned while the SynthRAN sensor application stays out of tree under `deploy/iot/sensor/`.
 
-This is composition, not a Git merge. `.deps/` is local and ignored. No upstream history or copied source tree is added to the SynthRAN repository.
+This is composition, not a Git merge. `.deps/` is local and ignored. No upstream history or copied source tree is added to SynthRAN.
 
-## Golden-path data flow
+## Accepted golden-path data flow
 
-1. Ten deterministic Cooja sensors join one RPL/6LoWPAN network on Duckburg.
-2. A Cooja border router exposes its serial link through a deterministic Serial Socket on Duckburg (`127.0.0.1:60001`).
-3. A strict loopback-only reverse SSH tunnel forwards Duckburg port 60001 to the root core node's `127.0.0.1:60001`.
-4. Pinned Contiki-NG `tunslip6`, built remotely on the root core node (`inventory.core_node`), creates `tun0` with `fd00::1/64` as root without requiring controller `sudo`.
-5. Sensors publish run-scoped MQTT telemetry toward `fd00::1:1883`.
-6. A counted TCP ingress running on the core node forwards the MQTT byte stream through a kubectl port-forward to a temporary Mosquitto sidecar in the run-owned srsUE pod.
-7. That Mosquitto sidecar shares the srsUE network namespace containing `tun_srsue1`. Its bridge binds to the dynamically discovered live UE PDU address and targets a literal core-node address.
-8. SynthRAN installs a run-specific `/32` route for the central broker through `tun_srsue1` before the bridge connection is accepted.
-9. The srsRAN/Open5GS user plane transports the bridge traffic to a run-owned host-network Mosquitto broker on the core node.
-10. A central collector subscribes only to the current run topic, validates events, and appends canonical JSONL.
-11. PyArrow derives deterministic Parquet from the accepted JSONL record.
-12. Route proof, `tun_srsue1` counters, broker receipt, message integrity, the accepted UPF route, and post-cleanup network reproof form the default path evidence.
+The current accepted virtual path is:
 
-The TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE network namespace because that is where `tun_srsue1` and the live PDU address exist. Controller `sudo` is never required: privileged TUN creation is strictly isolated to the root core node.
+1. Ten deterministic Cooja sensors join one RPL/6LoWPAN network.
+2. A Cooja border router exposes its serial link through a deterministic loopback Serial Socket.
+3. A strict loopback-only reverse SSH tunnel forwards the socket to the root core node.
+4. Pinned Contiki-NG `tunslip6` creates run-scoped `tun0` on the core node.
+5. Sensors publish run-scoped MQTT telemetry toward the border-router endpoint.
+6. A counted TCP ingress forwards the MQTT byte stream toward a temporary Mosquitto sidecar in the run-owned srsUE pod.
+7. The sidecar shares the srsUE network namespace containing `tun_srsue1` and binds to the dynamically discovered live PDU address.
+8. A run-specific route sends central-broker traffic through `tun_srsue1`.
+9. srsRAN/Open5GS carry the traffic to a run-owned central Mosquitto broker.
+10. A central collector validates run-scoped telemetry and appends canonical JSONL.
+11. PyArrow derives deterministic Parquet from accepted JSONL.
+12. Route/interface/broker/message evidence plus accepted UPF proof and cleanup reproof establish acceptance.
 
-## Control boundaries
-
-Dependency synchronization, privacy scanning, schema validation, scenario rendering, and offline tests are local repository operations. Resource preparation and base-network deployment are separate explicit operator operations. Experiment execution assumes a valid operator-managed reservation and an existing `path-proven` supported network.
-
-The Linux environment definition pins direct package versions and channels but still allows Conda to select platform-specific transitive builds. Reproducibility claims at the environment-artifact level require a reviewed Linux artifact lock in a later hardening step.
-
-The experiment run command never reserves nodes, allocates nodes, images nodes, or deploys Open5GS/srsRAN. Its manifest records `reservation_action=none` and `network_deployment_action=none`.
+The counted TCP ingress is an integration adapter, not the cellular proof boundary. The cellular bridge starts inside the srsUE namespace because that is where the UE tunnel and live PDU exist.
 
 ## Accepted network boundary
 
-The golden-path inventory contract accepts only Open5GS + srsRAN + RFSIM with monitoring disabled. Live execution narrows this further to separate core/RAN nodes, one srsUE, the default profile, and one slice.
+The current live-accepted network configuration is intentionally narrow: Open5GS + srsRAN + one srsUE + RFSIM + one slice.
 
-The SLICES controller boundary requires the Linux Webshell or a documented SSH session to its management host. A read-only doctor verifies the active `synthran` Conda environment, exact locked Python and Ansible versions, POS 2.5.35, SLICES authentication, the selected project, and an existing experiment. SynthRAN never establishes authentication, changes projects, or creates experiments.
+The supported Linux controller verifies SLICES authentication/project/experiment context but does not log in, change projects, or create the provider experiment.
 
-The explicit resource-preparation boundary uses reviewed node mappings from the locked upstream tree, rejects conflicting allocations, allocates both nodes together, syntax-checks the isolated patched worktree before POS mutation, and stops before 5G deployment. Provider identifiers are persisted in a mode-`0600` ignored authority file; public manifests and logs contain only fingerprints and sanitized output.
+The explicit scripted preparation path can create/verify a reservation, jointly allocate the reviewed compute pair, image/reset nodes, build Kubernetes, and install pinned direct tooling. It stops before 5G deployment.
 
-The deployment gate revalidates fresh live evidence before creating `.synthran/runs/<run-id>/`, creates a detached worktree at the locked `5g_ansible` commit, records the SynthRAN overlay hash, and applies a reviewed boundary patch. The wrapper calls only the supported Open5GS and srsRAN roles and never invokes interactive `deploy.sh`.
+The explicit deployment path revalidates fresh preflight evidence, uses the locked `5g_ansible` checkout plus reviewed SynthRAN overlays, passes immutable transitive commits, pins selected runtime images, and ends at `deployed-unverified`.
 
-The wrapper passes immutable transitive Git commits, uses the exact locked Ansible collections, removes mutable image transforms, pins selected application/helper images by digest, validates generated srsUE Helm YAML before deployment, and labels runtime resources with the network run ID. Deployment ends in `deployed-unverified`.
-
-A separate read-only verifier discovers exactly one run-owned gNB, srsUE, and slice-one UPF, checks digest-locked running containers, requires gNB cell activation, validates `tun_srsue1` and its PDU address/route, and verifies the UPF `ogstun` route. Only that proof changes the network manifest to `path-proven`. The accepted network is the prerequisite for the integrated IoT workflow.
+A separate read-only network verifier proves the run-owned gNB, srsUE, selected UPF, gNB cell activation, `tun_srsue1`, current PDU/route, and UPF `ogstun` path. Only that proof marks the network `path-proven`.
 
 ## Experiment mutation boundary
 
-The experiment makes only narrow, reversible changes on top of the accepted network:
+The accepted IoT experiment makes narrow run-scoped changes on top of the accepted base network, including run-labeled MQTT configuration/deployment, a temporary sidecar/route, local Cooja, strict SSH forwarding, remote `tunslip6`, counted ingress, and run-owned broker/collector processes.
 
-- create two run-labeled Mosquitto ConfigMaps;
-- create one run-labeled central Mosquitto Deployment on the selected core node;
-- strategic-patch the existing run-owned srsUE Deployment with one digest-pinned Mosquitto sidecar and one run-owned config volume;
-- add one temporary route inside the srsUE pod network namespace;
-- run local Cooja and strict SSH reverse/forward tunnel processes on Duckburg, and execute `tunslip6`, `tun0`, `CountedTcpIngress`, and remote edge port-forward in an isolated run workspace on the root core node.
+Cleanup is exact and fail-closed. It reaps run-owned process groups, removes run-created `tun0` and remote workspaces, removes run-labeled Kubernetes objects/sidecar configuration, verifies absence postconditions, lets srsUE recover, reconciles RFSIM when necessary, and reproves the accepted base network.
 
-Before live mutation, SynthRAN automatically scans `/proc` on the core node to reclaim provably orphaned SynthRAN background processes (`18883:1883`, `18885:18884`, `ingress.py`, `tunslip6`) and verifies reserved ports `60001`, `18883`, and `18885` are free, while foreign or active processes fail closed.
-
-The sidecar patch does not replace the UE container, its image, credentials, or radio configuration. After the route is installed the edge sidecar is restarted so its bridge reconnects against the proven route.
-
-Cleanup is fail-closed and run-scoped. Local and remote process groups are terminated, exact run-scoped remote processes are reaped, run-created/partially-created `tun0` and the isolated run workspace are removed on the core node with verified absence postconditions, host postconditions (ports free, tun0 absent, workspace absent) are verified, the sidecar and volume are removed by exact strategic patch, run-labeled Kubernetes objects are deleted by the exact experiment run label, the srsUE rollout is allowed to recover, RFSIM runtime is reconciled, and the accepted network verifier is run again. A cleanup, host postcondition, or network-reproof failure prevents `iot-to-5g-path-proven` status.
+Experiment cleanup does not mean base-network teardown.
 
 ## Controlled research architecture
 
-Controlled research builds upon the deterministic experiment lifecycle by wrapping execution in a fixed measurement window with active load generation and multi-layer instrumentation:
+Controlled research wraps the deterministic experiment in a fixed measurement window with:
 
-```text
-+--------------------------------------------------------------------------------+
-| srsUE Pod (open5gs namespace)                                                  |
-|  - tun_srsue1 [Live PDU] ---------------------------------------------------+  |
-|  - synthran-edge-mqtt (sidecar)                                             |  |
-|  - RTT probe: ping -D -I tun_srsue1 <core-target>                           |  |
-|  - Background load client: iperf3 -u -b <rate> -B <PDU> <core-target>       |  |
-+-----------------------------------------------------------------------------|--+
-                                                                              |
-                                                              5G RFSIM / UPF Path
-                                                                              |
-+-----------------------------------------------------------------------------|--+
-| Root Core Node                                                              v  |
-|  - Ingress: /tmp/synthran/<run-id>/ingress-snapshot.json                       |
-|  - Background load server: iperf3 -s -1 -p <port> -I <pidfile> <------------+  |
-|  - Central Mosquitto broker                                                    |
-|  - Synchronized Sampler: Ingress snapshot + UE tun_srsue1 + UPF ogstun counters|
-+--------------------------------------------------------------------------------+
-```
+- continuous RTT probing bound to `tun_srsue1`;
+- optional controlled UDP iperf3 load;
+- synchronized Ingress, UE `tun_srsue1`, and UPF `ogstun` counter sampling;
+- immutable experiment specification and measurement-window records;
+- JSONL/Parquet instrumentation artifacts;
+- a consolidated validity-aware research summary.
 
-### 1. Reconciled PDU state handoff
+The accepted calibration records about 67.25 Mbps over `tun_srsue1`. The accepted baseline run has complete telemetry and successful RTT/network instrumentation.
 
-The base experiment runtime performs RFSIM reconciliation once, discovers the live PDU address, updates scenario inputs, and proves the network path. That exact reconciled state (`ue_pod`, `gnb_pod`, `pdu_address`) is handed directly to the research collector. The research collector reuses the handed-off state and does not execute a second RFSIM reconciliation, preventing redundant gNB/srsUE restarts and subsequent PDU drift.
+The historical load50 pilot is invalid evidence for a loaded-condition scientific result because the load was not established and the underlying RFSIM/5G path collapsed. Loaded-condition campaign conclusions remain pending fresh valid runs.
 
-### 2. Controlled sidecar readiness barrier
-
-When the edge MQTT bridge configuration is rewritten with the discovered live PDU address, the sidecar container must restart cleanly. To eliminate race conditions where pod verification executes during container recreation:
-- the wrapper records the container's pre-restart `restartCount`;
-- sends `kill -TERM 1` to the sidecar;
-- polls until `restartCount` increments;
-- verifies the sidecar container reaches `Running=True` and `Ready=True`;
-- verifies the overall srsUE pod reaches `Ready=True` within a bounded timeout.
-
-### 3. Temporary target route lifecycle
-
-When background load or RTT probes target a core IP address outside the default subnet, the destination must resolve through `tun_srsue1`:
-- the runtime queries `ip route get <target> from <pdu_address>`;
-- if already resolving via `dev tun_srsue1`, the route is reused without claiming ownership;
-- otherwise, an exact target `/32` route is added (`ip route add <target>/32 dev tun_srsue1`) and ownership is claimed;
-- after measurement completes, only the owned route is removed, and prior routing table state is verified restored;
-- conflicting or unexpected routes fail closed.
-
-### 4. Owned iperf3 server lifecycle
-
-The core-node `iperf3` server lifecycle is strictly managed:
-- allocated an isolated workspace `/tmp/synthran-research/<run-id>/` and pidfile `iperf3-<port>.pid`;
-- pre-run recovery reclaims only provably orphaned (PPID 1) matching processes;
-- started in single-client mode (`-1`);
-- stop explicitly terminates the local SSH wrapper, reaps the remote PID, removes the pidfile, and verifies absence of the workspace directory.
-
-### 5. Synchronized network sampling
-
-The network sampler runs in a dedicated background thread during the measurement window. Each sample captures:
-- `IngressSnapshot` (accepted connections, upstream bytes, downstream bytes);
-- UE interface statistics (`rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_dropped`, `tx_dropped` on `tun_srsue1`);
-- UPF interface statistics (corresponding counters on `ogstun`).
-
-Because each sampling iteration performs sequential remote SSH queries before sleeping `sample_interval_seconds`, the effective cadence reflects remote query latency plus the sleep interval. Throughput rates are computed from boundary counter deltas divided by actual elapsed time `(last_counter - first_counter) / elapsed_seconds`.
-
-### 6. Research artifact provenance and verification
-
-Controlled research runs persist structured evidence with SHA-256 artifact hashing:
-- `experiment-spec.json`: immutable run specification;
-- `measurement-window.json`: exact UTC start and end bounds of the active measurement window;
-- `probe.jsonl` / `probe.parquet`: sequence-aligned RTT samples, timestamps, and timeout flags;
-- `network-samples.jsonl` / `network-samples.parquet`: synchronized interface and ingress counter samples;
-- `load.jsonl` / `load.parquet`: background load throughput records;
-- `research-summary.json`: consolidated research metrics, validity flags, and SHA-256 digests of all source artifacts (`synthran/research-summary/v1alpha1`).
-
-Base 5G path acceptance (`path_acceptance_ready`) and research analysis readiness (`ready_for_campaign_analysis`) remain distinct validation concepts.
-
-### 7. Base network resilience and process-level RFSIM recovery
-
-The accepted 5G network baseline is decoupled from experiment and research execution lifecycles. If an experiment or research measurement encounters radio-layer stalls or interface drops (such as RFSIM sample stream stalls where processes and TCP connections remain alive but sample progress stops), SynthRAN restores the network via process-level RFSIM reconciliation:
-- terminates stale `srsue` and GNU Radio broker processes;
-- restarts the run-owned gNB pod while the broker is absent;
-- waits for fresh gNB cell activation;
-- restarts the GNU Radio broker and `srsue`;
-- awaits `tun_srsue1` tunnel creation;
-- rediscovers the live PDU address and restores required pod routes;
-- verifies the accepted network path (`[PASS] ue-tunnel`, `Result: PATH PROVEN`).
-
-This recovery restores the operational baseline without requiring destructive teardown or full redeployment of Open5GS or Kubernetes.
+Campaign generation and offline analysis are implemented/tested, including blocked-by-seed scheduling and paired differences against baseline with bootstrap confidence intervals.
 
 ## Data boundary
 
-The telemetry contract is `synthran/telemetry/v1alpha1`. The initial topology accepts only `sensor-01` through `sensor-10`. Every event carries the run ID, sensor ID, positive sequence, sensor time, and deterministic integer measurement.
+The telemetry contract accepts the ten deterministic sensor identities. Valid records are appended to canonical JSONL. Malformed messages never enter the accepted dataset. Parquet is a deterministic derivative of JSONL, not a second source of truth.
 
-Valid records are appended to JSONL in canonical JSON form. Malformed messages never enter the accepted dataset. Rejection records contain validation reason and topic but intentionally do not copy the raw payload. Parquet is a deterministic derivative of the JSONL record and is not a second source of truth.
-
-The default acceptance window requires all ten sensor identities plus a contiguous, duplicate-free sequence window for each sensor. Missing sensors, gaps, duplicates, malformed data, missing tunnel growth, broker-delivery failure, cleanup failure, or an invalid accepted-network reproof prevents the final ready state.
+Sequence acceptance detects missing sensors, gaps, and duplicates. Research validity additionally requires its independent load/path/probe/instrumentation conditions.
 
 ## Privacy boundary
 
 Protection is layered:
 
-1. Ignore rules prevent dependency trees, generated experiments and credential-bearing paths from entering normal Git status.
-2. A local pre-push hook scans every outgoing commit before transport.
-3. GitHub push protection can block supported credentials at the server boundary.
-4. CI scans the complete checkout with SynthRAN privacy rules and Gitleaks.
-5. Generated public text is produced through the deterministic redactor; raw sensitive artifacts remain local.
+1. ignore rules keep dependency trees, generated experiments, and credential-bearing paths out of normal Git status;
+2. a tracked pre-push hook scans outgoing commits;
+3. repository protections may reject supported credential patterns;
+4. CI scans tracked source and Git history;
+5. public derivatives use deterministic redaction while raw sensitive artifacts remain local.
 
-Checks fail closed. They report a rule and location without copying the detected value into terminal or Actions logs. The default integrated acceptance does not require a packet capture: route proof, interface counters, broker receipt and the accepted UPF path provide evidence without introducing raw-capture privacy risk.
+Checks fail closed and report rule/location without copying detected values into logs. The default acceptance path does not require packet capture; route proof, counters, broker receipt, and UPF evidence provide a lower-risk proof surface.

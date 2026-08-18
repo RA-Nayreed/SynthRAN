@@ -12,7 +12,7 @@ Durable experiment, operation, approval, observed-state, and provider authority 
 
 ## Local commands
 
-The session resolves commands that can be answered safely from application state or UI state:
+The session resolves commands that can be answered safely from application or UI state:
 
 ```text
 /status
@@ -44,13 +44,35 @@ Commands that require an application workflow are returned as a structured `Comm
 /config resources|experiment
 ```
 
-`TerminalCommandRouter` is the single interactive dispatch boundary. It maps commands only through application-layer workflows; it does not call the scripted CLI as a hidden mutation shortcut.
+`TerminalCommandRouter` is the single interactive dispatch boundary. It maps commands only through application-layer state and policy; it does not call the scripted CLI as a hidden executor.
 
-Current application-modeled routing covers `/reserve`, `/up`, `/verify`, `/recover`, and both `/config` views. Resource-bound planning requires a fresh provider inventory adapter and fails closed when one is unavailable.
+Current routing covers every registered workflow command:
 
-`/down`, `/run`, `/stop`, `/collect`, and `/logs` remain registered but cannot execute interactively until dedicated application/domain executors are connected. The router reports that boundary explicitly and performs no provider action.
+- `/reserve` plans the exact current `reserve` reconciliation step and requires fresh provider inventory because it is resource-bound;
+- `/up` plans exactly one current progression step among `reserve`, `allocate`, `prepare`, or `up`; it never turns `verify-path` into a mutation;
+- `/verify` plans the current R1 `verify-path` operation;
+- `/recover` plans one explicit `recover-*` reconciliation step when exactly one is exposed;
+- `/run baseline|congestion` uses application workflow policy and requires current control authority plus `PATH_PROVEN` state;
+- `/stop` requires a currently running experiment;
+- `/collect` and `/logs ...` produce R1 read-only workflow plans subject to current-state prerequisites;
+- `/down` produces an R3 destructive plan only after the experiment is stopped and exact current teardown targets are known;
+- `/config resources|experiment` renders durable workspace/application configuration without mutation.
 
 In OBSERVE mode, mutating requests are rejected before they can become dispatch requests.
+
+## Planning versus execution
+
+A successful routed workflow currently creates an immutable `OperationPlan` and renders its ID, kind, risk, approval requirement, and:
+
+```text
+Execution: not started
+```
+
+That is intentional. The terminal has first-class application policy for every registered workflow command, but the corresponding provider/domain executor boundary is not yet connected for terminal workflows.
+
+A terminal plan therefore does not itself reserve, allocate, deploy, verify the live network, start or stop a research run, collect remote artifacts, read remote logs, or tear down provider resources.
+
+The current explicit scripted CLI remains the operator path for live provider execution. The terminal must not invoke that CLI secretly because doing so would bypass the shared immutable plan, approval, drift, ownership, and provider-adapter architecture.
 
 ## Inline transcript
 
@@ -90,9 +112,9 @@ Every dimension line includes freshness, source, and ownership from the reconcil
 
 ## Operation updates
 
-`TerminalSession.operation_updates()` reads the validated operation event stream through the application service and renders only events after a supplied sequence cursor.
+`TerminalSession.operation_updates()` reads the validated operation event stream through `ApplicationController.operation_events()` and renders only events after a supplied sequence cursor.
 
-This supports streaming terminal output such as:
+This supports terminal output such as:
 
 ```text
 [path-check] running
@@ -107,4 +129,6 @@ The session never parses raw provider stdout/stderr to create these lines. It re
 
 The production shell is implemented with `prompt_toolkit` and calls `TerminalSession.submit()` plus `TerminalCommandRouter.dispatch()`. It provides registry-backed completion, in-memory history, OBSERVE/OPERATE prompts, and a bottom toolbar derived from `ApplicationSnapshot`.
 
-Running `synthran` with no arguments opens this shell. Supplying any explicit arguments delegates unchanged to the existing scripted CLI. See `docs/terminal-shell.md` for the launcher and provider-execution boundary.
+Running `synthran` with no arguments opens this shell. Supplying any explicit arguments delegates to the existing scripted CLI. On first launch in an uninitialized checkout, the shell runs the verified local workspace initialization flow; there is currently no separate top-level scripted `synthran init` command.
+
+See `docs/terminal-shell.md` for first-launch adoption, experiment setup, and the provider-execution boundary.
