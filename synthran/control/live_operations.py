@@ -33,6 +33,7 @@ from synthran.network.runtime import (
     save_network_evidence,
     verify_network_path,
 )
+from synthran.network_runtime import run_command
 from synthran.operations import load_plan, load_state
 from synthran.resources.catalog import reviewed_resource_descriptors
 from synthran.resources.model import (
@@ -888,6 +889,15 @@ def _execute_allocate(
         raise
 
 
+def _reuse_only_preparation_runner(command, cwd, environment, timeout_seconds):
+    command_tuple = tuple(str(part) for part in command)
+    if command_tuple[:3] == ("pos", "allocations", "allocate"):
+        raise RuntimeError("Prepare cannot create a replacement allocation")
+    if command_tuple[:3] == ("pos", "calendar", "create"):
+        raise RuntimeError("Prepare cannot create a replacement reservation")
+    return run_command(command, cwd, environment, timeout_seconds)
+
+
 def _execute_prepare(
     controller: ApplicationController,
     operation_id: str,
@@ -945,6 +955,7 @@ def _execute_prepare(
             reservation_id=str(reservation.resource_id),
             run_root=controller.root / ".synthran" / "preparations",
             repository_root=controller.root,
+            runner=_reuse_only_preparation_runner,
             now=now,
         )
         _merge_observations(
@@ -1307,11 +1318,13 @@ def _delete_run_owned_namespace(
             network_inventory.core_node,
             "sh",
             "-c",
-            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get namespace open5gs -o json",
+            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get namespace open5gs -o json --ignore-not-found",
         ),
         POS_TIMEOUT_SECONDS,
     )
     if query.returncode != 0:
+        raise LiveOperationError("Open5GS namespace ownership query failed")
+    if not query.stdout.strip():
         return
     namespace = _json_object(query.stdout, "Open5GS namespace ownership query")
     metadata = namespace.get("metadata")
