@@ -4,7 +4,7 @@ channels:
   - nodefaults
 dependencies:
   - python=3.12.13
-  - nodejs=22
+  - nodejs=22.21.1
   - git=2.51.0
   - setuptools=83.0.0
   - paho-mqtt=2.1.0
