@@ -128,14 +128,14 @@ Receiving a permit does not allow an executor to skip live gates. For example:
 
 The permit proves that local desired state, observed state, policy, approval, target scope, and concurrency policy agreed at authorization time. Live provider truth remains authoritative at the actual provider boundary.
 
-## Current terminal boundary
+## Interactive workbench boundary
 
-The interactive terminal can create operation plans for all registered workflow commands, including `/run`, `/stop`, `/collect`, `/logs`, and `/down`. It does not yet have concrete provider/domain executors connected for those terminal plans.
+The Ink workbench exposes state-sensitive review for Reserve, Bring up, Verify, Recover, and Tear down from the Resources and Network views. Review itself is read-only and does not allocate an operation ID. It reports the selected action, its safety class in plain language, the policy reason, exact targets when known, and any missing input that prevents safe planning.
 
-A successful terminal plan therefore renders:
+When every immutable input is available, the workbench can create the same durable operation record used by the application controller. Controlled changes require standard approval. Tear down requires a distinct destructive approval. A prepared or approved action may be cancelled before provider execution begins. The workbench reads the durable operation event stream to render approval, progress, failure, interruption, and recovery information without copying arbitrary provider output into the interface.
 
-```text
-Execution: not started
-```
+Resource-changing reconciliation steps remain fail-closed unless a fresh `ResourceDecision` can be bound to exact current provider inventory. The control service does not manufacture placeholder targets and does not fall back to the scripted CLI. The v5 handshake therefore continues to advertise `provider_mutation: false`.
 
-Do not document plan creation as live execution. The existing explicit scripted CLI remains the current operator path for live network/experiment/research actions until the shared executor layer is connected.
+Concrete provider/domain execution is not connected through this workbench boundary yet. Preparing or approving an action is not evidence that a reservation, allocation, deployment, recovery, verification, or teardown happened on the testbed. The existing explicit scripted CLI remains the current operator path for live network, experiment, and research actions until shared executors are attached below the application boundary.
+
+The older `prompt_toolkit` shell still uses the same application planning model and likewise must not be described as live execution when it only creates a plan.
