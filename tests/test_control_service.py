@@ -9,7 +9,12 @@ import unittest
 
 from synthran.control import ControlService, serve
 from synthran.workspace.model import AccessRecord, Profile, format_utc
-from synthran.workspace.store import initialize_workspace, save_access_record, save_profile
+from synthran.workspace.store import (
+    initialize_workspace,
+    save_access_record,
+    save_profile,
+    workspace_directory,
+)
 
 
 UTC = timezone.utc
@@ -39,18 +44,19 @@ class ControlServiceTests(unittest.TestCase):
         )
         return root, ControlService(start=root, environment=environment)
 
-    def test_handshake_is_read_only_and_does_not_require_workspace(self) -> None:
+    def test_handshake_declares_local_writes_without_provider_mutation(self) -> None:
         service = ControlService(start=Path("/missing"), environment={})
         response = service.handle(
-            {"v": 1, "id": "req-1", "method": "system.handshake", "params": {}}
+            {"v": 2, "id": "req-1", "method": "system.handshake", "params": {}}
         )
         self.assertTrue(response["ok"])
         result = response["result"]
-        self.assertTrue(result["read_only"])
-        self.assertEqual(result["protocol"], 1)
+        self.assertTrue(result["local_writes"])
+        self.assertFalse(result["provider_mutation"])
+        self.assertEqual(result["protocol"], 2)
         self.assertEqual(
             result["methods"],
-            ["system.handshake", "workspace.snapshot"],
+            ["experiment.create", "system.handshake", "workspace.snapshot"],
         )
 
     def test_workspace_snapshot_exposes_sanitized_local_state(self) -> None:
@@ -78,19 +84,107 @@ class ControlServiceTests(unittest.TestCase):
             self.assertNotIn(str(root), rendered)
             self.assertNotIn("fingerprint", rendered.lower())
 
+    def test_create_experiment_persists_new_active_local_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary))
+            response = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-create",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                    },
+                }
+            )
+            self.assertTrue(response["ok"])
+            experiment_id = response["result"]["experiment_id"]
+            snapshot = service.workspace_snapshot(now=NOW)
+            self.assertEqual(snapshot["experiment"]["id"], experiment_id)
+            self.assertEqual(snapshot["experiment"]["intent"], "iot-to-5g")
+            self.assertEqual(snapshot["experiment"]["radio_mode"], "virtual")
+            self.assertIsNone(snapshot["experiment"]["provider_experiment"])
+            self.assertEqual(snapshot["experiment"]["lifecycle"], "CONFIGURED")
+            self.assertTrue(
+                (workspace_directory(root) / "experiments" / experiment_id / "desired.json").is_file()
+            )
+
+    def test_invalid_create_params_fail_before_experiment_is_issued(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary))
+            response = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-create",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "virtual-5g",
+                        "radio_mode": "physical",
+                    },
+                }
+            )
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "invalid_params")
+            experiment_root = workspace_directory(root) / "experiments"
+            self.assertEqual(list(experiment_root.iterdir()), [])
+
+    def test_invalid_label_fails_before_experiment_id_is_consumed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary))
+            response = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-label",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                        "label": "   ",
+                    },
+                }
+            )
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "invalid_params")
+            experiment_root = workspace_directory(root) / "experiments"
+            self.assertEqual(list(experiment_root.iterdir()), [])
+
+            valid = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-valid",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                    },
+                }
+            )
+            self.assertTrue(valid["ok"])
+            self.assertTrue(str(valid["result"]["experiment_id"]).endswith("-001"))
+
     def test_unknown_method_fails_closed(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 1, "id": "req-2", "method": "resource.reserve", "params": {}}
+            {"v": 2, "id": "req-2", "method": "resource.reserve", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "method_not_found")
+
+    def test_old_protocol_is_rejected(self) -> None:
+        service = ControlService(environment={})
+        response = service.handle(
+            {"v": 1, "id": "req-old", "method": "system.handshake", "params": {}}
+        )
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"]["code"], "workspace_error")
+        self.assertIn("protocol version is unsupported", response["error"]["message"])
 
     def test_stream_returns_one_bounded_response_per_input_line(self) -> None:
         service = ControlService(environment={})
         source = StringIO(
             "not-json\n"
-            '{"v":1,"id":"req-3","method":"system.handshake","params":{}}\n'
+            '{"v":2,"id":"req-3","method":"system.handshake","params":{}}\n'
         )
         target = StringIO()
         serve(service, input_stream=source, output_stream=target)

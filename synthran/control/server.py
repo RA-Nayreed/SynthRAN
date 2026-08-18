@@ -1,8 +1,9 @@
-"""Line-delimited JSON service exposing local SynthRAN state without mutation."""
+"""Line-delimited JSON service for local SynthRAN control without provider mutation."""
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -13,13 +14,19 @@ from typing import Mapping, TextIO
 from synthran.app import ApplicationController
 from synthran.control.protocol import (
     CONTROL_VERSION,
-    READ_ONLY_METHODS,
+    LOCAL_WRITE_METHODS,
+    SUPPORTED_METHODS,
     error_response,
     parse_request,
     success_response,
 )
+from synthran.workspace.desired import ExperimentDesiredState, RadioDesiredState
 from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now
 from synthran.workspace.store import load_access_record
+
+
+class ControlInputError(ValueError):
+    """Validated client input that cannot be applied to local state."""
 
 
 def _access_summary(record: AccessRecord | None, *, now: datetime) -> dict[str, object]:
@@ -40,8 +47,44 @@ def _access_summary(record: AccessRecord | None, *, now: datetime) -> dict[str, 
     }
 
 
+def _desired_experiment(params: Mapping[str, object]) -> tuple[ExperimentDesiredState, str | None]:
+    allowed = {"intent", "radio_mode", "label"}
+    if set(params) - allowed:
+        raise ControlInputError("experiment.create contains unsupported fields")
+
+    intent = params.get("intent", "iot-to-5g")
+    radio_mode = params.get("radio_mode", "virtual")
+    label = params.get("label")
+    if not isinstance(intent, str):
+        raise ControlInputError("experiment intent must be text")
+    if not isinstance(radio_mode, str):
+        raise ControlInputError("experiment radio mode must be text")
+    if label is not None:
+        if not isinstance(label, str):
+            raise ControlInputError("experiment label must be text or null")
+        if not label.strip() or len(label) > 120:
+            raise ControlInputError(
+                "experiment label must contain 1-120 visible characters"
+            )
+
+    radios = {
+        "automatic": RadioDesiredState(),
+        "virtual": RadioDesiredState(mode="virtual", backend="rfsim"),
+        "physical": RadioDesiredState(mode="physical", backend="r2lab"),
+    }
+    radio = radios.get(radio_mode)
+    if radio is None:
+        raise ControlInputError("experiment radio mode is unsupported")
+
+    try:
+        desired = replace(ExperimentDesiredState.recommended(intent=intent), radio=radio)
+    except WorkspaceError as exc:
+        raise ControlInputError(str(exc)) from exc
+    return desired, label
+
+
 class ControlService:
-    """Serve read-only local state through a small versioned method set."""
+    """Serve validated local state and local configuration through a versioned method set."""
 
     def __init__(
         self,
@@ -56,8 +99,9 @@ class ControlService:
         return {
             "service": "synthran-control",
             "protocol": CONTROL_VERSION,
-            "read_only": True,
-            "methods": sorted(READ_ONLY_METHODS),
+            "local_writes": bool(LOCAL_WRITE_METHODS),
+            "provider_mutation": False,
+            "methods": sorted(SUPPORTED_METHODS),
         }
 
     def workspace_snapshot(self, *, now: datetime | None = None) -> dict[str, object]:
@@ -106,20 +150,58 @@ class ControlService:
             "blocks": list(snapshot.blocks),
         }
 
+    def create_experiment(
+        self,
+        params: Mapping[str, object],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        desired, label = _desired_experiment(params)
+        controller = ApplicationController(start=self.start, environment=self.environment)
+        record = controller.create_experiment(
+            desired=desired,
+            label=label,
+            slices_experiment=None,
+            activate=True,
+            now=now,
+        )
+        return {
+            "experiment_id": record.experiment_id,
+            "intent": record.network_intent,
+            "radio_mode": record.radio_mode,
+            "provider_experiment": None,
+        }
+
     def handle(self, value: object) -> dict[str, object]:
         request_id: str | None = None
         try:
             request_id, method, params = parse_request(value)
-            if params:
-                return error_response(
-                    request_id,
-                    code="invalid_params",
-                    message="this read-only method does not accept params",
-                )
             if method == "system.handshake":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="system.handshake does not accept params",
+                    )
                 return success_response(request_id, self.handshake())
             if method == "workspace.snapshot":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="workspace.snapshot does not accept params",
+                    )
                 return success_response(request_id, self.workspace_snapshot())
+            if method == "experiment.create":
+                try:
+                    result = self.create_experiment(params)
+                except ControlInputError as exc:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message=str(exc),
+                    )
+                return success_response(request_id, result)
             return error_response(
                 request_id,
                 code="method_not_found",

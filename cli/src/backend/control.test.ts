@@ -46,18 +46,19 @@ const snapshot = {
 
 const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 1,
+    v: 2,
     id: 'handshake',
     ok: true,
     result: {
       service: 'synthran-control',
-      protocol: 1,
-      read_only: true,
-      methods: ['system.handshake', 'workspace.snapshot'],
+      protocol: 2,
+      local_writes: true,
+      provider_mutation: false,
+      methods: ['experiment.create', 'system.handshake', 'workspace.snapshot'],
       ...handshakeOverrides,
     },
   }),
-  JSON.stringify({v: 1, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 2, id: 'snapshot', ok: true, result: snapshot}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -88,19 +89,23 @@ test('valid framed responses return the sanitized snapshot', () => {
   assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove the expected read-only protocol', () => {
+test('handshake must prove local writes without provider mutation', () => {
   assert.throws(
-    () => parseControlOutput(responseLines({read_only: false}).join('\n')),
+    () => parseControlOutput(responseLines({provider_mutation: true}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 2}).join('\n')),
+    () => parseControlOutput(responseLines({local_writes: false}).join('\n')),
+    /handshake is incompatible/,
+  );
+  assert.throws(
+    () => parseControlOutput(responseLines({protocol: 3}).join('\n')),
     /handshake is incompatible/,
   );
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 1, id: 'extra', ok: true, result: {}})];
+  const lines = [...responseLines(), JSON.stringify({v: 2, id: 'extra', ok: true, result: {}})];
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /unexpected response set/,
@@ -110,7 +115,7 @@ test('extra stdout records are rejected instead of ignored', () => {
 test('malformed snapshots fail closed', () => {
   const lines = responseLines();
   lines[1] = JSON.stringify({
-    v: 1,
+    v: 2,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
