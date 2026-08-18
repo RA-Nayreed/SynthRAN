@@ -46,19 +46,26 @@ const snapshot = {
 
 const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 2,
+    v: 3,
     id: 'handshake',
     ok: true,
     result: {
       service: 'synthran-control',
-      protocol: 2,
+      protocol: 3,
       local_writes: true,
+      provider_reads: true,
       provider_mutation: false,
-      methods: ['experiment.create', 'system.handshake', 'workspace.snapshot'],
+      methods: [
+        'experiment.bind_provider',
+        'experiment.create',
+        'provider.experiments',
+        'system.handshake',
+        'workspace.snapshot',
+      ],
       ...handshakeOverrides,
     },
   }),
-  JSON.stringify({v: 2, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 3, id: 'snapshot', ok: true, result: snapshot}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -89,9 +96,13 @@ test('valid framed responses return the sanitized snapshot', () => {
   assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove local writes without provider mutation', () => {
+test('handshake must prove provider reads and deny provider mutation', () => {
   assert.throws(
     () => parseControlOutput(responseLines({provider_mutation: true}).join('\n')),
+    /handshake is incompatible/,
+  );
+  assert.throws(
+    () => parseControlOutput(responseLines({provider_reads: false}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
@@ -99,13 +110,13 @@ test('handshake must prove local writes without provider mutation', () => {
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 3}).join('\n')),
+    () => parseControlOutput(responseLines({protocol: 4}).join('\n')),
     /handshake is incompatible/,
   );
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 2, id: 'extra', ok: true, result: {}})];
+  const lines = [...responseLines(), JSON.stringify({v: 3, id: 'extra', ok: true, result: {}})];
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /unexpected response set/,
@@ -115,7 +126,7 @@ test('extra stdout records are rejected instead of ignored', () => {
 test('malformed snapshots fail closed', () => {
   const lines = responseLines();
   lines[1] = JSON.stringify({
-    v: 2,
+    v: 3,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
@@ -131,6 +142,6 @@ test('already cancelled reads fail before starting the control service', async (
   controller.abort();
   await assert.rejects(
     readLocalSnapshot(controller.signal),
-    /local state request was cancelled/,
+    /control request was cancelled/,
   );
 });
