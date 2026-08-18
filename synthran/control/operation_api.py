@@ -1,4 +1,4 @@
-"""Safe workbench access to immutable operation plans and approvals."""
+"""Safe workbench access to immutable operation plans, approvals, and execution."""
 
 from __future__ import annotations
 
@@ -6,10 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from synthran.app.controller import ApplicationController, RESOURCE_BOUND_MUTATIONS
-from synthran.app.workflows import plan_workflow, workflow_spec, workflow_targets
+from synthran.app.controller import (
+    ApplicationController,
+    RESOURCE_BOUND_MUTATIONS,
+    RESOURCE_DECISION_INPUT,
+)
+from synthran.app.workflows import plan_workflow, workflow_targets
+from synthran.control.live_operations import execute_live_operation
 from synthran.operations import load_approval, load_plan, load_state, select_reconciliation_step
 from synthran.operations.model import OperationPlan
+from synthran.resources.model import ResourceInventory
 from synthran.workspace.desired_store import load_desired_state
 from synthran.workspace.model import WorkspaceError, utc_now, validate_operation_id
 from synthran.workspace.observed import ObservedState
@@ -18,6 +24,7 @@ from synthran.workspace.reconciliation import ReconciliationStep, plan_reconcili
 
 
 WORKBENCH_ACTIONS = frozenset({"reserve", "up", "verify", "recover", "down"})
+RESOURCE_ACTIONS = RESOURCE_BOUND_MUTATIONS | frozenset({"recover-allocation"})
 
 
 class OperationInputError(ValueError):
@@ -33,7 +40,11 @@ def _action(params: Mapping[str, object]) -> str:
     return value
 
 
-def _operation_id(params: Mapping[str, object], *, allow_mode: bool = False) -> tuple[str, str | None]:
+def _operation_id(
+    params: Mapping[str, object],
+    *,
+    allow_mode: bool = False,
+) -> tuple[str, str | None]:
     allowed = {"operation_id", "mode"} if allow_mode else {"operation_id"}
     if set(params) != allowed:
         raise OperationInputError("operation request contains unsupported fields")
@@ -92,7 +103,9 @@ def _selected_step(
         step_name = "verify-path"
     elif action == "recover":
         candidates = tuple(
-            step.name for step in reconciliation.steps if step.name.startswith("recover-")
+            step.name
+            for step in reconciliation.steps
+            if step.name.startswith("recover-")
         )
         if len(candidates) != 1:
             raise WorkspaceError(
@@ -108,7 +121,9 @@ def _selected_step(
             )
         step_name = reconciliation.steps[0].name
         if step_name == "verify-path":
-            raise WorkspaceError("network is ready; choose Verify to prove the end-to-end path")
+            raise WorkspaceError(
+                "network is ready; choose Verify to prove the end-to-end path"
+            )
         if step_name not in {"reserve", "allocate", "prepare", "up"}:
             raise WorkspaceError(
                 f"bring-up cannot perform current action {step_name}; inspect current state first"
@@ -118,12 +133,40 @@ def _selected_step(
     return step, ()
 
 
+def _resource_decision_view(
+    controller: ApplicationController,
+    step: ReconciliationStep,
+    inventory: ResourceInventory | None,
+    *,
+    now: datetime,
+) -> tuple[tuple[str, ...], str | None]:
+    if step.name not in RESOURCE_ACTIONS:
+        return (), None
+    if inventory is None:
+        return (), "Fresh provider inventory is required before this action can be prepared."
+    try:
+        decision = controller.resource_decision(inventory, now=now)
+    except WorkspaceError as exc:
+        return (), str(exc)
+    return decision.targets, None
+
+
 def _step_view(
+    controller: ApplicationController,
     action: str,
     step: ReconciliationStep,
     targets: tuple[str, ...],
+    inventory: ResourceInventory | None,
+    *,
+    now: datetime,
 ) -> dict[str, object]:
-    exact_inputs_ready = step.name not in RESOURCE_BOUND_MUTATIONS
+    resource_targets, resource_block = _resource_decision_view(
+        controller,
+        step,
+        inventory,
+        now=now,
+    )
+    effective_targets = targets or resource_targets
     return {
         "action": action,
         "kind": step.name,
@@ -131,14 +174,16 @@ def _step_view(
         "mutates": step.mutates,
         "reason": step.reason,
         "approval_required": step.risk in {"R2", "R3"},
-        "approval_mode": "destructive" if step.risk == "R3" else "standard" if step.risk == "R2" else None,
-        "targets": list(targets),
-        "can_plan": exact_inputs_ready,
-        "plan_block": (
-            None
-            if exact_inputs_ready
-            else "Fresh provider inventory must be bound before this resource action can be approved."
+        "approval_mode": (
+            "destructive"
+            if step.risk == "R3"
+            else "standard"
+            if step.risk == "R2"
+            else None
         ),
+        "targets": list(effective_targets),
+        "can_plan": resource_block is None,
+        "plan_block": resource_block,
     }
 
 
@@ -147,6 +192,7 @@ def inspect_operation_action(
     start: Path | None,
     environment: Mapping[str, str],
     params: Mapping[str, object],
+    inventory: ResourceInventory | None = None,
     now: datetime | None = None,
 ) -> dict[str, object]:
     """Describe the exact current action without writing operation state."""
@@ -155,7 +201,14 @@ def inspect_operation_action(
     current = (now or utc_now()).astimezone(timezone.utc)
     controller = ApplicationController(start=start, environment=environment)
     step, targets = _selected_step(controller, action, now=current)
-    return _step_view(action, step, targets)
+    return _step_view(
+        controller,
+        action,
+        step,
+        targets,
+        inventory,
+        now=current,
+    )
 
 
 def _plan_view(plan: OperationPlan) -> dict[str, object]:
@@ -167,7 +220,13 @@ def _plan_view(plan: OperationPlan) -> dict[str, object]:
         "mutates": plan.mutates,
         "reason": plan.reason,
         "approval_required": plan.approval_required,
-        "approval_mode": "destructive" if plan.risk == "R3" else "standard" if plan.approval_required else None,
+        "approval_mode": (
+            "destructive"
+            if plan.risk == "R3"
+            else "standard"
+            if plan.approval_required
+            else None
+        ),
         "targets": list(plan.targets),
         "created_at_utc": plan.created_at_utc,
     }
@@ -193,11 +252,37 @@ def read_operation(
     }
 
 
+def _begin_recovery_operation(
+    controller: ApplicationController,
+    *,
+    step: ReconciliationStep,
+    inventory: ResourceInventory,
+    now: datetime,
+) -> OperationPlan:
+    record, desired, observed = _active_state(controller, now=now)
+    if getattr(record, "slices_experiment", None) is None:
+        raise WorkspaceError(
+            "active experiment has no provider experiment binding; bind one before live control"
+        )
+    decision = controller.resource_decision(inventory, now=now)
+    reconciliation = plan_reconciliation(desired, observed, now=now)
+    return controller.operations.begin(
+        desired=desired,
+        observed=observed,
+        step_name=step.name,
+        targets=decision.targets,
+        bound_inputs={RESOURCE_DECISION_INPUT: decision.to_dict()},
+        policy_report=reconciliation,
+        now=now,
+    )
+
+
 def plan_operation(
     *,
     start: Path | None,
     environment: Mapping[str, str],
     params: Mapping[str, object],
+    inventory: ResourceInventory | None = None,
     now: datetime | None = None,
 ) -> dict[str, object]:
     """Persist one exact plan only when all immutable inputs are available."""
@@ -206,14 +291,27 @@ def plan_operation(
     current = (now or utc_now()).astimezone(timezone.utc)
     controller = ApplicationController(start=start, environment=environment)
     step, _ = _selected_step(controller, action, now=current)
-    if step.name in RESOURCE_BOUND_MUTATIONS:
+
+    if step.name in RESOURCE_ACTIONS and inventory is None:
         raise WorkspaceError(
             "fresh provider inventory is required before this resource action can be planned"
         )
     if action == "down":
         plan = controller.begin_workflow_operation("down", now=current)
+    elif step.name == "recover-allocation":
+        assert inventory is not None
+        plan = _begin_recovery_operation(
+            controller,
+            step=step,
+            inventory=inventory,
+            now=current,
+        )
     else:
-        plan = controller.begin_operation(step_name=step.name, now=current)
+        plan = controller.begin_operation(
+            step_name=step.name,
+            inventory=inventory,
+            now=current,
+        )
     return read_operation(
         start=start,
         environment=environment,
@@ -240,6 +338,29 @@ def approve_operation(
     controller.approve_operation(
         operation_id,
         destructive=mode == "destructive",
+        now=now,
+    )
+    return read_operation(
+        start=start,
+        environment=environment,
+        params={"operation_id": operation_id},
+    )
+
+
+def execute_operation(
+    *,
+    start: Path | None,
+    environment: Mapping[str, str],
+    params: Mapping[str, object],
+    runner,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    operation_id, _ = _operation_id(params)
+    execute_live_operation(
+        start=start,
+        environment=environment,
+        operation_id=operation_id,
+        runner=runner,
         now=now,
     )
     return read_operation(
