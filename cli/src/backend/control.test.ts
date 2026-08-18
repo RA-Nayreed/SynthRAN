@@ -96,7 +96,7 @@ test('valid framed responses return the sanitized snapshot', () => {
   assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove provider reads and deny provider mutation', () => {
+test('handshake must prove exact provider-read capabilities and deny provider mutation', () => {
   assert.throws(
     () => parseControlOutput(responseLines({provider_mutation: true}).join('\n')),
     /handshake is incompatible/,
@@ -111,6 +111,22 @@ test('handshake must prove provider reads and deny provider mutation', () => {
   );
   assert.throws(
     () => parseControlOutput(responseLines({protocol: 4}).join('\n')),
+    /handshake is incompatible/,
+  );
+  assert.throws(
+    () =>
+      parseControlOutput(
+        responseLines({
+          methods: [
+            'experiment.bind_provider',
+            'experiment.create',
+            'provider.experiments',
+            'system.handshake',
+            'workspace.snapshot',
+            'resource.reserve',
+          ],
+        }).join('\n'),
+      ),
     /handshake is incompatible/,
   );
 });
