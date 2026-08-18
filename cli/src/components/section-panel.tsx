@@ -22,7 +22,7 @@ export const SectionPanel = ({section, state}: SectionPanelProps) => {
       <Box flexDirection="column" paddingX={1} paddingY={1}>
         <Text bold color={theme.bodyStrong}>Access</Text>
         <Box height={1} />
-        <Row label="SLICES identity" value="✓ rnayreed (mock)" />
+        <Row label="SLICES identity" value="✓ authenticated (mock)" />
         <Row label="SLICES project" value={`✓ ${state.slicesProject} (mock)`} />
         <Row label="R2Lab slice" value={`✓ ${state.r2labSlice} (mock)`} />
         <Row label="SSH identity" value={`✓ ${state.sshIdentity} (mock)`} />
