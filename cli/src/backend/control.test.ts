@@ -20,6 +20,7 @@ const methods = [
   'system.handshake',
   'workspace.initialize',
   'workspace.snapshot',
+  'workspace.switch_profile',
   'workspace.update_defaults',
 ];
 
@@ -30,11 +31,23 @@ const snapshot = {
     reservation_minutes: 120,
     placement: 'automatic',
   },
+  profiles: [
+    {
+      name: 'default',
+      slices_username: 'operator',
+      r2lab_slice: null,
+      identity_name: null,
+    },
+  ],
+  compute_nodes: ['sopnode-f1', 'sopnode-f2', 'sopnode-f3', 'sopnode-w3'],
   experiment: {
     id: null,
     provider_experiment: null,
     intent: null,
     radio_mode: null,
+    placement_mode: null,
+    core_node: null,
+    ran_node: null,
     lifecycle: 'EMPTY',
   },
   access: {
@@ -63,12 +76,12 @@ const snapshot = {
 
 const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 6,
+    v: 7,
     id: 'handshake',
     ok: true,
     result: {
       service: 'synthran-control',
-      protocol: 6,
+      protocol: 7,
       local_writes: true,
       provider_reads: true,
       provider_mutation: true,
@@ -76,7 +89,7 @@ const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
       ...handshakeOverrides,
     },
   }),
-  JSON.stringify({v: 6, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 7, id: 'snapshot', ok: true, result: snapshot}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -133,7 +146,7 @@ test('handshake must prove the exact live operation surface', () => {
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 5}).join('\n')),
+    () => parseControlOutput(responseLines({protocol: 6}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
@@ -143,7 +156,7 @@ test('handshake must prove the exact live operation surface', () => {
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 6, id: 'extra', ok: true, result: {}})];
+  const lines = [...responseLines(), JSON.stringify({v: 7, id: 'extra', ok: true, result: {}})];
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /unexpected response set/,
@@ -153,11 +166,21 @@ test('extra stdout records are rejected instead of ignored', () => {
 test('malformed snapshots fail closed', () => {
   const lines = responseLines();
   lines[1] = JSON.stringify({
-    v: 6,
+    v: 7,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
   });
+  assert.throws(
+    () => parseControlOutput(lines.join('\n')),
+    /usable local snapshot/,
+  );
+});
+
+test('snapshot requires profile and reviewed compute choices', () => {
+  const lines = responseLines();
+  const {compute_nodes: _ignored, ...malformed} = snapshot;
+  lines[1] = JSON.stringify({v: 7, id: 'snapshot', ok: true, result: malformed});
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /usable local snapshot/,
