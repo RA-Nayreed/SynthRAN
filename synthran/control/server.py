@@ -59,8 +59,13 @@ def _desired_experiment(params: Mapping[str, object]) -> tuple[ExperimentDesired
         raise ControlInputError("experiment intent must be text")
     if not isinstance(radio_mode, str):
         raise ControlInputError("experiment radio mode must be text")
-    if label is not None and not isinstance(label, str):
-        raise ControlInputError("experiment label must be text or null")
+    if label is not None:
+        if not isinstance(label, str):
+            raise ControlInputError("experiment label must be text or null")
+        if not label.strip() or len(label) > 120:
+            raise ControlInputError(
+                "experiment label must contain 1-120 visible characters"
+            )
 
     radios = {
         "automatic": RadioDesiredState(),
