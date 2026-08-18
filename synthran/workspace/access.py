@@ -21,9 +21,10 @@ from synthran.workspace.store import (
 DEFAULT_ACCESS_REFRESH = timedelta(hours=12)
 SLICES_EXPIRY_RE = re.compile(
     r"expires\s+on\s+(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})\s+"
-    r"(?P<time>[0-9]{2}:[0-9]{2})(?::[0-9]{2})?\s+UTC",
+    r"(?P<time>[0-9]{2}:[0-9]{2})(?::[0-9]{2})?\s+(?P<zone>UTC|CET|CEST)\b",
     flags=re.IGNORECASE,
 )
+SLICES_TIMEZONE_OFFSETS = {"UTC": 0, "CET": 1, "CEST": 2}
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,18 @@ class ProbeResult:
 
 
 Runner = Callable[[Sequence[str], int], ProbeResult]
+
+
+def _probe_label(command: Sequence[str]) -> str:
+    if not command:
+        return "provider access"
+    executable = Path(str(command[0])).name
+    if executable == "slices":
+        action = " ".join(str(part) for part in command[1:3]).strip()
+        return f"SLICES {action}" if action else "SLICES"
+    if executable == "ssh":
+        return "R2Lab SSH gateway"
+    return executable
 
 
 def subprocess_runner(command: Sequence[str], timeout_seconds: int) -> ProbeResult:
@@ -49,7 +62,9 @@ def subprocess_runner(command: Sequence[str], timeout_seconds: int) -> ProbeResu
     except FileNotFoundError as exc:
         raise WorkspaceError(f"required command '{command[0]}' was not found") from exc
     except subprocess.TimeoutExpired as exc:
-        raise WorkspaceError("provider access probe timed out") from exc
+        raise WorkspaceError(
+            f"{_probe_label(command)} probe timed out after {timeout_seconds}s"
+        ) from exc
     return ProbeResult(completed.returncode, completed.stdout or "", completed.stderr or "")
 
 
@@ -57,9 +72,13 @@ def _parse_slices_expiry(output: str) -> datetime | None:
     match = SLICES_EXPIRY_RE.search(output)
     if match is None:
         return None
-    return datetime.strptime(
+    source_zone = timezone(
+        timedelta(hours=SLICES_TIMEZONE_OFFSETS[match.group("zone").upper()])
+    )
+    parsed = datetime.strptime(
         f"{match.group('date')} {match.group('time')}", "%Y-%m-%d %H:%M"
-    ).replace(tzinfo=timezone.utc)
+    ).replace(tzinfo=source_zone)
+    return parsed.astimezone(timezone.utc)
 
 
 def _refresh_boundary(now: datetime, access_until: datetime | None) -> datetime:
@@ -183,6 +202,23 @@ def ensure_slices_project_access(
     )
 
 
+def _safe_ssh_failure(stderr: str) -> str | None:
+    lower = stderr.lower()
+    if "permission denied" in lower:
+        return "permission denied"
+    if "host key verification failed" in lower:
+        return "host key verification failed"
+    if "could not resolve hostname" in lower or "name or service not known" in lower:
+        return "hostname could not be resolved"
+    if "connection timed out" in lower or "operation timed out" in lower:
+        return "connection timed out"
+    if "connection refused" in lower:
+        return "connection refused"
+    if "no route to host" in lower or "network is unreachable" in lower:
+        return "gateway is unreachable"
+    return None
+
+
 def probe_r2lab_gateway_access(
     *,
     slice_name: str,
@@ -203,6 +239,8 @@ def probe_r2lab_gateway_access(
         "-o",
         "ConnectTimeout=10",
         "-o",
+        "ConnectionAttempts=1",
+        "-o",
         "StrictHostKeyChecking=yes",
         "-o",
         "IdentitiesOnly=yes",
@@ -214,7 +252,11 @@ def probe_r2lab_gateway_access(
     )
     result = runner(command, timeout_seconds)
     if result.returncode != 0:
-        raise WorkspaceError("R2Lab Faraday public-key access could not be verified")
+        reason = _safe_ssh_failure(result.stderr)
+        suffix = f": {reason}" if reason is not None else ""
+        raise WorkspaceError(
+            f"R2Lab Faraday public-key access could not be verified{suffix}"
+        )
     return AccessRecord(
         provider="r2lab",
         subject=slice_name,

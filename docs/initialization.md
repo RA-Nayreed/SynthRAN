@@ -23,8 +23,12 @@ A new controller profile requires:
 - profile name;
 - SLICES username;
 - SLICES project for the workspace;
-- optional R2Lab slice plus an exact SSH private-key path;
+- optional R2Lab slice plus a selected SSH private identity;
 - stable workspace defaults such as reservation duration and automatic/manual placement.
+
+When R2Lab is enabled, the terminal discovers recognizable private-key files directly below `~/.ssh`, displays them as numbered choices, and prioritizes names containing `r2lab` as the default choice. The operator may still choose `m` and enter another path when the desired identity lives elsewhere.
+
+Discovery reads only the small private-key header needed to recognize a candidate. Public keys, `known_hosts`, SSH config, and unrelated files are not offered as private identities.
 
 The private key is never copied. SynthRAN stores only its normalized path reference and public-key SHA-256 fingerprint.
 
@@ -44,6 +48,8 @@ Before creating persistent workspace state, initialization:
 8. checks that the accepted R2Lab identity fingerprint matches the profile request.
 
 These checks are read-only with respect to external resources. They do not create reservations, allocations, leases, provider experiments, deployments, or experiment workloads.
+
+Provider-probe failures identify the failing boundary instead of collapsing into one generic timeout. For example, a timeout is reported as `SLICES auth show`, `SLICES project show`, or `R2Lab SSH gateway`. R2Lab SSH failures expose only a bounded safe reason such as permission denied, host-key verification failure, connection timeout/refusal, or unreachable gateway rather than copying raw SSH stderr into terminal output.
 
 Only after verification succeeds does initialization persist local state:
 

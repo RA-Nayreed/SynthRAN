@@ -7,8 +7,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from synthran.terminal.initialize import initialization_root, initialize_from_terminal
+from synthran.terminal.initialize import (
+    discover_ssh_identities,
+    initialization_root,
+    initialize_from_terminal,
+)
 from synthran.workspace.model import WorkspaceConfig
+
+
+def private_key_fixture(kind: str = "OPENSSH") -> str:
+    return "-----" + "BEGIN " + kind + " PRIVATE " + "KEY-----\nfixture\n"
 
 
 class FakePrompt:
@@ -69,6 +77,70 @@ class TerminalInitializationTests(unittest.TestCase):
             self.assertFalse(request.reuse_profile)
             self.assertIsNone(request.r2lab_slice)
             self.assertIn("Verifying provider access read-only", output.getvalue())
+
+    def test_discovers_private_keys_and_prioritizes_r2lab_named_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            ssh = home / ".ssh"
+            ssh.mkdir()
+            ordinary = ssh / "id_ed25519"
+            r2lab = ssh / "id_rsa_r2lab_duckburg"
+            public = ssh / "id_rsa_r2lab_duckburg.pub"
+            known_hosts = ssh / "known_hosts"
+            ordinary.write_text(private_key_fixture(), encoding="utf-8")
+            r2lab.write_text(private_key_fixture("RSA"), encoding="utf-8")
+            public.write_text("ssh-rsa fixture", encoding="utf-8")
+            known_hosts.write_text("gateway fixture", encoding="utf-8")
+
+            self.assertEqual(
+                discover_ssh_identities({"HOME": str(home)}),
+                (r2lab.resolve(), ordinary.resolve()),
+            )
+
+    def test_r2lab_identity_can_be_selected_from_discovered_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "repo"
+            root.mkdir()
+            home = base / "home"
+            ssh = home / ".ssh"
+            ssh.mkdir(parents=True)
+            r2lab = ssh / "id_rsa_r2lab_duckburg"
+            other = ssh / "id_ed25519"
+            r2lab.write_text(private_key_fixture(), encoding="utf-8")
+            other.write_text(private_key_fixture(), encoding="utf-8")
+            prompt = FakePrompt(
+                ["", "post5g-beta", "operator", "y", "slice_user", ""]
+            )
+            output = StringIO()
+            workspace = WorkspaceConfig(
+                profile="default",
+                project="post5g-beta",
+                created_at_utc="2026-08-18T00:00:00Z",
+            )
+            expected = SimpleNamespace(workspace=workspace)
+
+            with patch(
+                "synthran.terminal.initialize.initialize_controller_workspace",
+                return_value=expected,
+            ) as initialize:
+                initialize_from_terminal(
+                    root=root,
+                    prompt=prompt,
+                    output=output,
+                    environment={
+                        "HOME": str(home),
+                        "SYNTHRAN_CONFIG_HOME": str(base / "config"),
+                    },
+                )
+
+            request = initialize.call_args.args[0]
+            self.assertEqual(request.r2lab_slice, "slice_user")
+            self.assertEqual(request.r2lab_identity, r2lab.resolve())
+            rendered = output.getvalue()
+            self.assertIn("Available SSH identities", rendered)
+            self.assertIn("~/.ssh/id_rsa_r2lab_duckburg", rendered)
+            self.assertIn("~/.ssh/id_ed25519", rendered)
 
     def test_existing_profile_is_reused_without_reentering_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
