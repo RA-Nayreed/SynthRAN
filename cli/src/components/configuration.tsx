@@ -47,7 +47,7 @@ const providerValue = (
   providerCandidate: string | null,
 ) => {
   if (state.providerExperiment) return `${state.providerExperiment} · bound`;
-  if (!state.experiment) return 'Create local configuration first';
+  if (!state.hasActiveExperiment) return 'Create local configuration first';
   if (providerBusy === 'loading') return 'Reading SLICES experiments…';
   if (providerExperiments === null) return 'Enter to load';
   if (providerExperiments.length === 0) return 'No experiments available';
@@ -60,7 +60,7 @@ const bindValue = (
   providerCandidate: string | null,
 ) => {
   if (state.providerExperiment) return 'Already bound';
-  if (!state.experiment) return 'Unavailable';
+  if (!state.hasActiveExperiment) return 'Unavailable';
   if (providerBusy === 'binding') return 'Verifying and binding…';
   return providerCandidate ? 'Enter' : 'Select provider experiment first';
 };
