@@ -77,8 +77,10 @@ class PreparationRunner:
             return CommandResult(0, json.dumps(self.allocation_records))
         if argv[:3] == ("pos", "calendar", "create"):
             self.reservation_created = True
-            return CommandResult(0, "7000000001\n")
+            return CommandResult(0, "Reservation created successfully\n")
         if argv[:3] == ("pos", "allocations", "allocate"):
+            return CommandResult(0, "")
+        if argv[:3] == ("pos", "allocations", "free"):
             return CommandResult(0, "")
         if argv == (
             "pos",
@@ -170,17 +172,21 @@ class ResourcePreparationTests(unittest.TestCase):
                 source=Path("hosts.ini"),
             )
 
-    def test_plan_uses_one_shared_allocation_and_never_deploy_sh(self) -> None:
+    def test_plan_discovers_reservation_and_recovers_nodes_individually(self) -> None:
         rendered = self.plan.render()
         self.assertEqual("ready", self.plan.bootstrap_status)
+        self.assertEqual("discover-or-create", self.plan.reservation_action)
+        self.assertIn("pos calendar list --filter owner='<operator>' --json", rendered)
+        self.assertIn("pos calendar create -d 120 -s now", rendered)
+        self.assertIn("pos allocations free -k sopnode-f2", rendered)
+        self.assertIn("pos allocations free -k sopnode-f3", rendered)
         self.assertIn(
             "pos allocations allocate sopnode-f2 sopnode-f3",
             rendered,
         )
-        self.assertIn("pos calendar create -d 120 -s now", rendered)
+        self.assertIn("prepare-network.yml", rendered)
         self.assertIn("apply SynthRAN upstream preparation overlay", rendered)
         self.assertNotIn("git apply", rendered)
-        self.assertNotIn("allocations free", rendered)
         self.assertNotIn("deploy.sh", rendered)
         self.assertIn("stops before Open5GS or srsRAN deployment", rendered)
 
@@ -232,6 +238,7 @@ class ResourcePreparationTests(unittest.TestCase):
             self.assertEqual(PREPARATION_SCHEMA, manifest["schema"])
             self.assertEqual("prepared", manifest["status"])
             self.assertEqual("create", manifest["allocation_action"])
+            self.assertEqual("create", manifest["reservation_action"])
             self.assertEqual(
                 self.controller.dependency_lock_sha256,
                 manifest["dependency_lock_sha256"],
@@ -270,7 +277,7 @@ class ResourcePreparationTests(unittest.TestCase):
                 ],
                 allocate_calls,
             )
-            self.assertFalse(any("free" in call for call in runner.calls))
+            self.assertFalse(any(call[:3] == ("pos", "allocations", "free") for call in runner.calls))
             collection_calls = [
                 call
                 for call in runner.calls
@@ -294,6 +301,9 @@ class ResourcePreparationTests(unittest.TestCase):
                 any("synthran_prepare_only=true" in call for call in live_playbooks)
             )
             self.assertTrue(
+                any(any(part.endswith("prepare-network.yml") for part in call) for call in live_playbooks)
+            )
+            self.assertTrue(
                 any(
                     environment is not None
                     and environment["ANSIBLE_HOST_KEY_CHECKING"] == "True"
@@ -304,29 +314,16 @@ class ResourcePreparationTests(unittest.TestCase):
                 )
             )
 
-    def test_conflicting_allocation_fails_before_pos_mutation(self) -> None:
-        runner = PreparationRunner(
-            allocation_records=[
-                {
-                    "id": "foreign",
-                    "owner": "someone-else",
-                    "nodes": ["sopnode-f2", "sopnode-f3"],
-                }
-            ]
-        )
+    def test_existing_active_reservation_is_reused_without_create(self) -> None:
+        runner = PreparationRunner()
+        runner.reservation_created = True
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkout = root / "checkout"
             checkout.mkdir()
             first, second, third, fourth = self._runtime_patches(checkout)
-            with (
-                first,
-                second,
-                third,
-                fourth,
-                self.assertRaisesRegex(ResourcePreparationError, "another operator"),
-            ):
-                execute_resource_preparation(
+            with first, second, third, fourth:
+                result = execute_resource_preparation(
                     plan=self.ready_plan,
                     lock=self.lock,
                     dependency_root=root / "deps",
@@ -338,16 +335,88 @@ class ResourcePreparationTests(unittest.TestCase):
                     runner=runner,
                     now=NOW,
                 )
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual("reuse-discovered", manifest["reservation_action"])
             self.assertFalse(
-                any(
-                    call[:3] == ("pos", "calendar", "create")
-                    or call[:3] == ("pos", "allocations", "allocate")
-                    for call in runner.calls
+                any(call[:3] == ("pos", "calendar", "create") for call in runner.calls)
+            )
+            authority = result.authority_path.read_text(encoding="utf-8")
+            self.assertIn("export SYNTHRAN_RESERVATION_ID=7000000001", authority)
+
+    def test_conflicting_allocations_are_reclaimed_per_node(self) -> None:
+        runner = PreparationRunner(
+            allocation_records=[
+                {
+                    "id": "foreign-f2",
+                    "owner": "someone-else",
+                    "nodes": ["sopnode-f2"],
+                },
+                {
+                    "id": "foreign-f3",
+                    "owner": "someone-else",
+                    "nodes": ["sopnode-f3"],
+                },
+            ]
+        )
+        runner.reservation_created = True
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            first, second, third, fourth = self._runtime_patches(checkout)
+            with first, second, third, fourth:
+                result = execute_resource_preparation(
+                    plan=self.ready_plan,
+                    lock=self.lock,
+                    dependency_root=root / "deps",
+                    owner="operator",
+                    slices_project="project-test",
+                    slices_experiment="experiment-test",
+                    run_root=root / "preparations",
+                    repository_root=REPOSITORY_ROOT,
+                    runner=runner,
+                    now=NOW,
                 )
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual("reuse-discovered", manifest["reservation_action"])
+            self.assertEqual("reclaim-and-create", manifest["allocation_action"])
+            free_calls = [
+                call
+                for call in runner.calls
+                if call[:3] == ("pos", "allocations", "free")
+            ]
+            self.assertEqual(
+                [
+                    ("pos", "allocations", "free", "-k", "sopnode-f2"),
+                    ("pos", "allocations", "free", "-k", "sopnode-f3"),
+                ],
+                free_calls,
+            )
+            allocate_calls = [
+                call
+                for call in runner.calls
+                if call[:3] == ("pos", "allocations", "allocate")
+            ]
+            self.assertEqual(
+                [("pos", "allocations", "allocate", "sopnode-f2", "sopnode-f3")],
+                allocate_calls,
             )
 
     def test_reservation_failure_is_terminal_and_keeps_artifacts(self) -> None:
         runner = PreparationRunner(reservation_records=[])
+        explicit_plan = build_resource_preparation_plan(
+            lock=self.lock,
+            core_node="sopnode-f2",
+            ran_node="sopnode-f3",
+            duration_minutes=120,
+            run_id="prepare-001",
+            reservation_id="7000000001",
+        )
+        explicit_ready_plan = replace(
+            explicit_plan,
+            bootstrap_status="ready",
+            bootstrap_reason="test-only reviewed bootstrap",
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkout = root / "checkout"
@@ -364,12 +433,13 @@ class ResourcePreparationTests(unittest.TestCase):
                 ),
             ):
                 execute_resource_preparation(
-                    plan=self.ready_plan,
+                    plan=explicit_ready_plan,
                     lock=self.lock,
                     dependency_root=root / "deps",
                     owner="operator",
                     slices_project="project-test",
                     slices_experiment="experiment-test",
+                    reservation_id="7000000001",
                     run_root=root / "preparations",
                     repository_root=REPOSITORY_ROOT,
                     runner=runner,
@@ -426,6 +496,8 @@ class ResourcePreparationTests(unittest.TestCase):
             self.assertIn("isolated-worktree: OK", text)
             self.assertIn("upstream-overlay: running...", text)
             self.assertIn("upstream-overlay: OK", text)
+            self.assertIn("network-foundation-reconciliation: running...", text)
+            self.assertIn("network-foundation-reconciliation: OK", text)
             self.assertIn("resource preparation: COMPLETE", text)
 
 
