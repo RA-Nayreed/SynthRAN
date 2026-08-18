@@ -10,9 +10,18 @@ export interface ObservationView {
   detail: string;
 }
 
+export interface ProfileView {
+  name: string;
+  slicesUsername: string | null;
+  r2labSlice: string | null;
+  identityName: string | null;
+}
+
 export interface WorkbenchState {
   project: string;
   profile: string;
+  profiles: ProfileView[];
+  computeNodes: string[];
   experiment: string;
   hasActiveExperiment: boolean;
   completedSections: SectionLabel[];
@@ -28,6 +37,9 @@ export interface WorkbenchState {
   sshIdentity: string;
   reservationMinutes: number;
   placement: string;
+  experimentPlacement: string | null;
+  coreNode: string | null;
+  ranNode: string | null;
   lifecycle: string;
   observations: ObservationView[];
   nextSteps: string[];
