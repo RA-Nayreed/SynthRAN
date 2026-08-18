@@ -1,8 +1,9 @@
-"""Line-delimited JSON service exposing local SynthRAN state without mutation."""
+"""Line-delimited JSON service for bounded local SynthRAN control."""
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -12,11 +13,18 @@ from typing import Mapping, TextIO
 
 from synthran.app import ApplicationController
 from synthran.control.protocol import (
+    CONTROL_METHODS,
     CONTROL_VERSION,
-    READ_ONLY_METHODS,
+    LOCAL_WRITE_METHODS,
     error_response,
     parse_request,
     success_response,
+)
+from synthran.workspace.desired import (
+    EXPERIMENT_INTENTS,
+    RADIO_MODES,
+    ExperimentDesiredState,
+    RadioDesiredState,
 )
 from synthran.workspace.model import AccessRecord, WorkspaceError, utc_now
 from synthran.workspace.store import load_access_record
@@ -40,8 +48,31 @@ def _access_summary(record: AccessRecord | None, *, now: datetime) -> dict[str, 
     }
 
 
+def _experiment_create_params(params: Mapping[str, object]) -> tuple[str, str]:
+    allowed = {"intent", "radio_mode"}
+    unknown = set(params) - allowed
+    if unknown:
+        raise WorkspaceError("experiment create request contains unsupported fields")
+
+    intent = params.get("intent")
+    radio_mode = params.get("radio_mode")
+    if not isinstance(intent, str) or intent not in EXPERIMENT_INTENTS:
+        raise WorkspaceError("experiment create intent is unsupported")
+    if not isinstance(radio_mode, str) or radio_mode not in RADIO_MODES:
+        raise WorkspaceError("experiment create radio mode is unsupported")
+    return intent, radio_mode
+
+
+def _radio_for_mode(mode: str) -> RadioDesiredState:
+    if mode == "virtual":
+        return RadioDesiredState(mode="virtual", backend="rfsim")
+    if mode == "physical":
+        return RadioDesiredState(mode="physical", backend="r2lab")
+    return RadioDesiredState(mode="automatic", backend="automatic")
+
+
 class ControlService:
-    """Serve read-only local state through a small versioned method set."""
+    """Serve sanitized local state and explicitly bounded local writes."""
 
     def __init__(
         self,
@@ -56,8 +87,9 @@ class ControlService:
         return {
             "service": "synthran-control",
             "protocol": CONTROL_VERSION,
-            "read_only": True,
-            "methods": sorted(READ_ONLY_METHODS),
+            "provider_mutation": False,
+            "methods": sorted(CONTROL_METHODS),
+            "local_write_methods": sorted(LOCAL_WRITE_METHODS),
         }
 
     def workspace_snapshot(self, *, now: datetime | None = None) -> dict[str, object]:
@@ -106,20 +138,52 @@ class ControlService:
             "blocks": list(snapshot.blocks),
         }
 
+    def create_experiment(
+        self,
+        params: Mapping[str, object],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        current = (now or utc_now()).astimezone(timezone.utc)
+        intent, radio_mode = _experiment_create_params(params)
+        controller = ApplicationController(start=self.start, environment=self.environment)
+        if controller.authority.active_experiment is not None:
+            raise WorkspaceError("workspace already has an active experiment")
+
+        desired = ExperimentDesiredState.recommended(intent=intent)
+        desired = replace(desired, radio=_radio_for_mode(radio_mode))
+        record = controller.create_experiment(
+            desired=desired,
+            activate=True,
+            now=current,
+        )
+        return {
+            "experiment_id": record.experiment_id,
+            "snapshot": self.workspace_snapshot(now=current),
+        }
+
     def handle(self, value: object) -> dict[str, object]:
         request_id: str | None = None
         try:
             request_id, method, params = parse_request(value)
-            if params:
-                return error_response(
-                    request_id,
-                    code="invalid_params",
-                    message="this read-only method does not accept params",
-                )
             if method == "system.handshake":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="system handshake does not accept params",
+                    )
                 return success_response(request_id, self.handshake())
             if method == "workspace.snapshot":
+                if params:
+                    return error_response(
+                        request_id,
+                        code="invalid_params",
+                        message="workspace snapshot does not accept params",
+                    )
                 return success_response(request_id, self.workspace_snapshot())
+            if method == "experiment.create":
+                return success_response(request_id, self.create_experiment(params))
             return error_response(
                 request_id,
                 code="method_not_found",
