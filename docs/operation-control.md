@@ -130,12 +130,21 @@ The permit proves that local desired state, observed state, policy, approval, ta
 
 ## Interactive workbench boundary
 
-The Ink workbench exposes state-sensitive review for Reserve, Bring up, Verify, Recover, and Tear down from the Resources and Network views. Review itself is read-only and does not allocate an operation ID. It reports the selected action, its safety class in plain language, the policy reason, exact targets when known, and any missing input that prevents safe planning.
+The Ink workbench exposes state-sensitive review for Reserve, Bring up, Verify, Recover, and Tear down from the Resources and Network views. Review itself is read-only. It refreshes the verified virtual SLICES resource view, reports the selected action and safety class, and shows the exact target set that will be bound if a plan is created.
 
-When every immutable input is available, the workbench can create the same durable operation record used by the application controller. Controlled changes require standard approval. Tear down requires a distinct destructive approval. A prepared or approved action may be cancelled before provider execution begins. The workbench reads the durable operation event stream to render approval, progress, failure, interruption, and recovery information without copying arbitrary provider output into the interface.
+Preparing an action creates one immutable operation. Controlled changes require standard approval. Tear down requires distinct destructive approval. Execution remains a separate explicit action after approval. Read-only verification can execute from its prepared state without approval. A prepared or approved action can be cancelled before live execution starts; cancellation of a running provider action is not exposed until executor-specific interruption can prove a safe postcondition.
 
-Resource-changing reconciliation steps remain fail-closed unless a fresh `ResourceDecision` can be bound to exact current provider inventory. The control service does not manufacture placeholder targets and does not fall back to the scripted CLI. The v5 handshake therefore continues to advertise `provider_mutation: false`.
+The v6 control handshake exposes provider mutation only through `operation.execute`. The workbench does not call the scripted CLI behind the scenes and does not manufacture provider targets.
 
-Concrete provider/domain execution is not connected through this workbench boundary yet. Preparing or approving an action is not evidence that a reservation, allocation, deployment, recovery, verification, or teardown happened on the testbed. The existing explicit scripted CLI remains the current operator path for live network, experiment, and research actions until shared executors are attached below the application boundary.
+The connected live executor is intentionally limited to the accepted virtual RFSIM path. One execution performs only the action represented by its immutable plan:
 
-The older `prompt_toolkit` shell still uses the same application planning model and likewise must not be described as live execution when it only creates a plan.
+- Reserve creates and verifies one POS reservation for the selected compute pair.
+- Bring up advances the current reconciliation action one step at a time: allocation, guarded preparation, then network deployment each require their own plan and approval.
+- Prepare may reuse the approved reservation and allocation but is explicitly prevented from creating replacements if either disappears during the operation.
+- Verify proves the current run-owned RFSIM path and stores the accepted network evidence.
+- Recover currently handles an incomplete SynthRAN-owned allocation. Other recovery conditions remain blocked until an exact recovery executor exists.
+- Tear down removes only the exact run-owned network state and SynthRAN-owned allocation. It preserves the active reservation rather than inventing an undocumented reservation-cancellation operation.
+
+Every mutating executor rechecks provider authority and exact ownership at the live boundary. Drift causes execution to fail closed. Unknown mutation outcome retains the workspace mutation claim and requires recovery.
+
+Physical R2Lab execution, experiment runs, research collection, and evidence workflows are not connected through this live workbench executor yet. The older scripted paths remain available for those capabilities until they are migrated beneath the same application boundary.
