@@ -84,10 +84,11 @@ export const SetupPanel = ({
       <Row label="R2Lab slice" value={slice} focused={focusedIndex === 5} />
       <Row label="SSH identity" value={identity} focused={focusedIndex === 6} />
       <Row label="Reservation" value={`${draft.reservationMinutes} minutes`} focused={focusedIndex === 7} />
+      <Row label="Node selection" value={draft.placement === 'manual' ? 'Manual' : 'Automatic'} focused={focusedIndex === 8} />
       <Row
         label="Initialize"
         value={busy ? 'Verifying access…' : 'Enter'}
-        focused={focusedIndex === 8}
+        focused={focusedIndex === 9}
       />
 
       <Box height={1} />
@@ -95,7 +96,7 @@ export const SetupPanel = ({
 
       {notice ? (
         <Box marginTop={1}>
-          <Text color={theme.muted}>{notice}</Text>
+          <Text color={notice.toLowerCase().includes('could not') || notice.toLowerCase().includes('failed') ? theme.error : theme.muted}>{notice}</Text>
         </Box>
       ) : null}
     </Box>
