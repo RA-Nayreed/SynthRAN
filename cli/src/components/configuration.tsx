@@ -2,11 +2,12 @@ import React from 'react';
 import {Box, Text} from 'ink';
 
 import type {ExperimentIntent} from '../backend/control.js';
-import type {RadioMode, WorkbenchState} from '../model.js';
+import type {RadioMode, WorkbenchMode, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface ConfigurationPanelProps {
   state: WorkbenchState;
+  mode: WorkbenchMode;
   draftIntent: ExperimentIntent;
   draftRadio: RadioMode;
   focusedIndex: number;
@@ -56,17 +57,20 @@ const providerValue = (
 
 const bindValue = (
   state: WorkbenchState,
+  mode: WorkbenchMode,
   providerBusy: 'loading' | 'binding' | null,
   providerCandidate: string | null,
 ) => {
   if (state.providerExperiment) return 'Already bound';
   if (!state.hasActiveExperiment) return 'Unavailable';
   if (providerBusy === 'binding') return 'Verifying and binding…';
-  return providerCandidate ? 'Enter' : 'Select provider experiment first';
+  if (!providerCandidate) return 'Select provider experiment first';
+  return mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE';
 };
 
 export const ConfigurationPanel = ({
   state,
+  mode,
   draftIntent,
   draftRadio,
   focusedIndex,
@@ -78,20 +82,23 @@ export const ConfigurationPanel = ({
 }: ConfigurationPanelProps) => (
   <Box flexDirection="column" paddingX={1} paddingY={1}>
     <Text bold color={theme.bodyStrong}>Configuration</Text>
-    <Text color={theme.muted}>Local configuration is durable. Provider discovery is read-only.</Text>
+    <Text color={theme.muted}>Provider discovery is read-only. Local writes require OPERATE.</Text>
     <Box height={1} />
 
     <Row label="Intent" focused={focusedIndex === 0}>{intentLabel(draftIntent)}</Row>
     <Row label="Radio" focused={focusedIndex === 1}>{radioLabel(draftRadio)}</Row>
-    <Row label="Create configuration" focused={focusedIndex === 2}>{saving ? 'Saving…' : 'Enter'}</Row>
+    <Row label="Create configuration" focused={focusedIndex === 2}>
+      {saving ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
+    </Row>
     <Row label="Provider experiment" focused={focusedIndex === 3}>
       {providerValue(state, providerBusy, providerExperiments, providerCandidate)}
     </Row>
     <Row label="Bind provider" focused={focusedIndex === 4}>
-      {bindValue(state, providerBusy, providerCandidate)}
+      {bindValue(state, mode, providerBusy, providerCandidate)}
     </Row>
 
     <Box height={1} />
+    <Row label="Mode">{mode}</Row>
     <Row label="Active experiment">{state.experiment}</Row>
     <Row label="SLICES project">{state.slicesProject}</Row>
     <Row label="R2Lab slice">{state.r2labSlice}</Row>
