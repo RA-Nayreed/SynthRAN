@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 import re
 import time
 
 from synthran.experiment import ExperimentError, validate_run_id
 import synthran.experiment_runtime as base_runtime
-from synthran.fiveg_ansible import NetworkInventory
+from synthran.fiveg_ansible import InventoryHost, NetworkInventory
 from synthran.live_preflight import ssh_command
 
 
@@ -19,25 +19,27 @@ import sys
 
 pidfile = sys.argv[1]
 port = int(sys.argv[2])
-try:
-    raw_pid = open(pidfile, encoding="utf-8", errors="strict").read().strip()
-    pid = int(raw_pid)
-except Exception:
-    raise SystemExit(2)
-if pid <= 1 or not os.path.isdir(f"/proc/{pid}"):
-    raise SystemExit(3)
-try:
-    argv = [
-        item.decode("utf-8", "replace")
-        for item in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
-        if item
-    ]
-except OSError:
-    raise SystemExit(4)
 required = ("-s", "-1", "-p", str(port), "-I", pidfile)
-for token in required:
-    if token not in argv:
-        raise SystemExit(5)
+matches = []
+for entry in os.listdir("/proc"):
+    if not entry.isdigit():
+        continue
+    pid = int(entry)
+    if pid <= 1:
+        continue
+    try:
+        argv = [
+            item.decode("utf-8", "replace")
+            for item in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+            if item
+        ]
+    except OSError:
+        continue
+    if all(token in argv for token in required):
+        matches.append(pid)
+if len(matches) != 1:
+    raise SystemExit(2)
+pid = matches[0]
 owned = set()
 try:
     for name in os.listdir(f"/proc/{pid}/fd"):
@@ -48,7 +50,7 @@ try:
         if target.startswith("socket:[") and target.endswith("]"):
             owned.add(target[8:-1])
 except OSError:
-    raise SystemExit(6)
+    raise SystemExit(3)
 port_hex = f"{port:04X}"
 for table in ("/proc/net/tcp", "/proc/net/tcp6"):
     try:
@@ -64,13 +66,15 @@ for table in ("/proc/net/tcp", "/proc/net/tcp6"):
         if local.rsplit(":", 1)[-1].upper() == port_hex and inode in owned:
             print(pid)
             raise SystemExit(0)
-raise SystemExit(7)
+raise SystemExit(4)
 '''
 
 
 @dataclass(frozen=True)
 class OwnedIperfServer:
     owner_id: str
+    server_node: str
+    target: str
     port: int
     workspace: str
     pidfile: str
@@ -90,16 +94,76 @@ def _pattern(pidfile: str, port: int) -> str:
     return re.escape(f"iperf3 -s -1 -p {port} -J -I {pidfile}")
 
 
+def _measurement_host(
+    inventory: NetworkInventory,
+    server_node: str,
+) -> InventoryHost:
+    hosts = {
+        inventory.core_node.name: inventory.core_node,
+        inventory.ran_node.name: inventory.ran_node,
+    }
+    host = hosts.get(server_node)
+    if host is None:
+        raise ExperimentError(
+            "research measurement server must be one of the prepared inventory nodes"
+        )
+    if host.name == inventory.core_node.name:
+        raise ExperimentError(
+            "research measurement server must be distinct from the 5G core node"
+        )
+    return host
+
+
+def _server_inventory(
+    inventory: NetworkInventory,
+    server_node: str,
+) -> NetworkInventory:
+    return replace(inventory, core_node=_measurement_host(inventory, server_node))
+
+
+def prove_measurement_peer(
+    inventory: NetworkInventory,
+    *,
+    server_node: str,
+    target: str,
+) -> None:
+    server_inventory = _server_inventory(inventory, server_node)
+    output = base_runtime._remote(
+        server_inventory,
+        "ip",
+        "-4",
+        "-o",
+        "addr",
+        "show",
+        label="research measurement peer address proof",
+        timeout_seconds=10,
+    )
+    addresses: set[str] = set()
+    for line in output.splitlines():
+        fields = line.split()
+        try:
+            index = fields.index("inet")
+        except ValueError:
+            continue
+        if index + 1 < len(fields):
+            addresses.add(fields[index + 1].split("/", 1)[0])
+    if target not in addresses:
+        raise ExperimentError(
+            f"research target {target} is not assigned to measurement server {server_node}"
+        )
+
+
 def _reap(
     inventory: NetworkInventory,
     *,
+    server_node: str,
     pidfile: str,
     port: int,
     orphan_only: bool,
     label: str,
 ) -> None:
     base_runtime._remote_process_reap(
-        inventory,
+        _server_inventory(inventory, server_node),
         patterns=(_pattern(pidfile, port),),
         orphan_only=orphan_only,
         label=label,
@@ -109,12 +173,13 @@ def _reap(
 def _listener_ready(
     inventory: NetworkInventory,
     *,
+    server_node: str,
     pidfile: str,
     port: int,
 ) -> bool:
     try:
         base_runtime._remote(
-            inventory,
+            _server_inventory(inventory, server_node),
             "python3",
             "-c",
             _LISTENER_PROBE,
@@ -131,11 +196,13 @@ def _listener_ready(
 def _cleanup_failed_start(
     inventory: NetworkInventory,
     *,
+    server_node: str,
     process: base_runtime.ManagedProcess,
     workspace: str,
     pidfile: str,
     port: int,
 ) -> None:
+    server_inventory = _server_inventory(inventory, server_node)
     errors: list[str] = []
     try:
         process.stop()
@@ -144,6 +211,7 @@ def _cleanup_failed_start(
     try:
         _reap(
             inventory,
+            server_node=server_node,
             pidfile=pidfile,
             port=port,
             orphan_only=False,
@@ -153,7 +221,7 @@ def _cleanup_failed_start(
         errors.append(f"remote iperf3 process: {exc}")
     try:
         base_runtime._remote(
-            inventory,
+            server_inventory,
             "rm",
             "-f",
             pidfile,
@@ -161,7 +229,7 @@ def _cleanup_failed_start(
             timeout_seconds=10,
         )
         base_runtime._remote(
-            inventory,
+            server_inventory,
             "rmdir",
             workspace,
             label="failed research iperf3 workspace cleanup",
@@ -179,21 +247,30 @@ def _cleanup_failed_start(
 def start_owned_iperf_server(
     *,
     inventory: NetworkInventory,
+    server_node: str,
+    target: str,
     owner_id: str,
     port: int,
     repository_root,
     log_path,
 ) -> OwnedIperfServer:
+    prove_measurement_peer(
+        inventory,
+        server_node=server_node,
+        target=target,
+    )
+    server_inventory = _server_inventory(inventory, server_node)
     workspace, pidfile = _paths(owner_id, port)
     _reap(
         inventory,
+        server_node=server_node,
         pidfile=pidfile,
         port=port,
         orphan_only=True,
         label="stale research iperf3 recovery",
     )
     base_runtime._remote(
-        inventory,
+        server_inventory,
         "mkdir",
         "-p",
         workspace,
@@ -201,7 +278,7 @@ def start_owned_iperf_server(
         timeout_seconds=10,
     )
     base_runtime._remote(
-        inventory,
+        server_inventory,
         "rm",
         "-f",
         pidfile,
@@ -209,7 +286,7 @@ def start_owned_iperf_server(
         timeout_seconds=10,
     )
     command = ssh_command(
-        inventory.core_node,
+        _measurement_host(inventory, server_node),
         "iperf3",
         "-s",
         "-1",
@@ -235,12 +312,13 @@ def start_owned_iperf_server(
                 )
             if not published:
                 published = base_runtime._remote_path_exists(
-                    inventory,
+                    server_inventory,
                     pidfile,
                     timeout_seconds=3,
                 )
             if published and _listener_ready(
                 inventory,
+                server_node=server_node,
                 pidfile=pidfile,
                 port=port,
             ):
@@ -258,6 +336,7 @@ def start_owned_iperf_server(
         try:
             _cleanup_failed_start(
                 inventory,
+                server_node=server_node,
                 process=process,
                 workspace=workspace,
                 pidfile=pidfile,
@@ -268,13 +347,22 @@ def start_owned_iperf_server(
                 f"research iperf3 startup failed and cleanup failed closed: {exc}; {cleanup_exc}"
             ) from exc
         raise
-    return OwnedIperfServer(owner_id, port, workspace, pidfile, process)
+    return OwnedIperfServer(
+        owner_id,
+        server_node,
+        target,
+        port,
+        workspace,
+        pidfile,
+        process,
+    )
 
 
 def stop_owned_iperf_server(
     inventory: NetworkInventory,
     server: OwnedIperfServer,
 ) -> None:
+    server_inventory = _server_inventory(inventory, server.server_node)
     errors: list[str] = []
     try:
         server.process.stop()
@@ -283,6 +371,7 @@ def stop_owned_iperf_server(
     try:
         _reap(
             inventory,
+            server_node=server.server_node,
             pidfile=server.pidfile,
             port=server.port,
             orphan_only=False,
@@ -292,7 +381,7 @@ def stop_owned_iperf_server(
         errors.append(f"remote iperf3 process: {exc}")
     try:
         base_runtime._remote(
-            inventory,
+            server_inventory,
             "rm",
             "-f",
             server.pidfile,
@@ -300,7 +389,7 @@ def stop_owned_iperf_server(
             timeout_seconds=10,
         )
         base_runtime._remote(
-            inventory,
+            server_inventory,
             "rmdir",
             server.workspace,
             label="research iperf3 workspace cleanup",
