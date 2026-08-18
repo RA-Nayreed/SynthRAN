@@ -19,7 +19,10 @@ export const primaryOperatorAction = (state: WorkbenchState): OperatorActionView
   }
   if (state.lifecycle === 'BLOCKED' || state.lifecycle === 'EMPTY') return null;
 
-  if (state.lifecycle === 'CONFIGURED') return action('reserve', 'Reserve resources');
+  // The internal `up` action reconciles exactly one current step. Keeping the
+  // operator label concrete lets a fresh provider read safely adapt if state
+  // changed after the last local snapshot.
+  if (state.lifecycle === 'CONFIGURED') return action('up', 'Reserve resources');
   if (state.lifecycle === 'RESERVED') return action('up', 'Allocate nodes');
   if (state.lifecycle === 'ALLOCATED') return action('up', 'Prepare nodes');
   if (state.lifecycle === 'PREPARED') return action('up', 'Deploy 5G network');
@@ -45,7 +48,6 @@ export const operationKindLabel = (kind: string, fallback: string): string => {
     up: 'Deploy 5G network',
     'verify-path': 'Verify 5G path',
     'recover-allocation': 'Recover allocation',
-    down: 'Stop network and release allocation',
   };
   return labels[kind] ?? fallback;
 };
