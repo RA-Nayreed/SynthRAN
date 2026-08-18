@@ -55,9 +55,9 @@ Operation risk categories are:
 
 Approval records are bound to the exact operation ID, plan digest, and risk class. R3 cannot use a standard R2 approval.
 
-Approval is a local operator-consent record, not a replacement for provider authentication or authorization. Terminal OPERATE mode is also not approval; it only allows mutating requests to reach application policy.
+Approval is a local operator-consent record, not a replacement for provider authentication or authorization. The legacy scripted terminal's OPERATE mode is also not approval; it only allows mutating requests to reach application policy. The Ink workbench does not expose a global OBSERVE/OPERATE switch.
 
-The legacy scripted CLI does not yet route every live action through this operation controller. Do not describe the current scripted and interactive execution paths as identical. New shared execution work should converge beneath the interface boundary instead of making the terminal call the CLI secretly.
+The legacy scripted CLI does not yet route every live action through this operation controller. Do not describe the current scripted and interactive execution paths as identical. New shared execution work should converge beneath the interface boundary instead of making the workbench call the CLI secretly.
 
 ## Authorization and drift
 
@@ -130,20 +130,20 @@ The permit proves that local desired state, observed state, policy, approval, ta
 
 ## Interactive workbench boundary
 
-The Ink workbench exposes state-sensitive review for Reserve, Bring up, Verify, Recover, and Tear down from the Resources and Network views. Review itself is read-only. It refreshes the verified virtual SLICES resource view, reports the selected action and safety class, and shows the exact target set that will be bound if a plan is created.
+The Ink workbench derives the operator action from current lifecycle state instead of exposing a permanent generic command strip. The current labels are concrete: Reserve resources, Allocate nodes, Prepare nodes, Deploy 5G network, Verify 5G path, Recover allocation, Release allocation, and Stop network and release allocation. Review itself is read-only. It refreshes the verified virtual SLICES resource view, reports the selected action and safety class, and shows the exact target set that will be bound if a plan is created.
 
-Preparing an action creates one immutable operation. Controlled changes require standard approval. Tear down requires distinct destructive approval. Execution remains a separate explicit action after approval. Read-only verification can execute from its prepared state without approval. A prepared or approved action can be cancelled before live execution starts; cancellation of a running provider action is not exposed until executor-specific interruption can prove a safe postcondition.
+Preparing an action creates one immutable operation. Controlled changes require standard approval. Stop/release of deployed network state requires distinct destructive approval. Execution remains a separate explicit action after approval. Read-only verification can execute from its prepared state without approval. A prepared or approved action can be cancelled before live execution starts; cancellation of a running provider action is not exposed until executor-specific interruption can prove a safe postcondition.
 
-The v6 control handshake exposes provider mutation only through `operation.execute`. The workbench does not call the scripted CLI behind the scenes and does not manufacture provider targets.
+The v7 control handshake exposes provider mutation only through `operation.execute`. It also exposes read-only-verified controller profile switching and exact manual core/RAN placement for newly created desired state. The earlier v6 contract remains frozen for the already-reviewed virtual execution surface. The workbench does not call the scripted CLI behind the scenes and does not manufacture provider targets.
 
 The connected live executor is intentionally limited to the accepted virtual RFSIM path. One execution performs only the action represented by its immutable plan:
 
 - Reserve creates and verifies one POS reservation for the selected compute pair.
-- Bring up advances the current reconciliation action one step at a time: allocation, guarded preparation, then network deployment each require their own plan and approval.
+- Bring-up reconciliation advances one step at a time: allocation, guarded preparation, then network deployment each require their own plan and approval.
 - Prepare may reuse the approved reservation and allocation but is explicitly prevented from creating replacements if either disappears during the operation.
 - Verify proves the current run-owned RFSIM path and stores the accepted network evidence.
 - Recover currently handles an incomplete SynthRAN-owned allocation. Other recovery conditions remain blocked until an exact recovery executor exists.
-- Tear down removes only the exact run-owned network state and SynthRAN-owned allocation. It preserves the active reservation rather than inventing an undocumented reservation-cancellation operation.
+- Stop/release removes only the exact run-owned network state and SynthRAN-owned allocation. It preserves the active reservation rather than inventing an undocumented reservation-cancellation operation.
 
 Every mutating executor rechecks provider authority and exact ownership at the live boundary. Drift causes execution to fail closed. Unknown mutation outcome retains the workspace mutation claim and requires recovery.
 
