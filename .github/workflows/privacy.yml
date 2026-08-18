@@ -53,6 +53,7 @@ jobs:
           npm install --prefix cli --ignore-scripts
           npm --prefix cli run typecheck
           npm --prefix cli run build
+          npm --prefix cli test
 
       - name: Scan tracked source for private context
         run: conda run --no-capture-output -n synthran python -m synthran privacy scan --worktree

@@ -1,20 +1,22 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {Box, Spacer, Text, useApp, useInput} from 'ink';
 
+import {readLocalSnapshot} from './backend/control.js';
+import {initialSection, toWorkbenchState} from './backend/workbench.js';
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
 import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
-import {mockWorkbenchState, sectionLabels, type SectionLabel} from './mock.js';
+import {sectionLabels, type SectionLabel, type WorkbenchState} from './model.js';
 import {theme} from './theme.js';
 
 const actions: PaletteAction[] = [
   {label: 'Review access', section: 'Access'},
-  {label: 'Configure experiment', section: 'Configure'},
+  {label: 'Review configuration', section: 'Configure'},
   {label: 'Inspect resources', section: 'Resources'},
   {label: 'Inspect network', section: 'Network'},
-  {label: 'Open run controls', section: 'Run'},
+  {label: 'Open run view', section: 'Run'},
   {label: 'Review evidence', section: 'Evidence'},
 ];
 
@@ -22,17 +24,38 @@ const wrap = (value: number, length: number) => (value + length) % length;
 
 export const App = () => {
   const {exit} = useApp();
-  const [activeSection, setActiveSection] = useState<SectionLabel>('Configure');
-  const [state, setState] = useState(mockWorkbenchState);
+  const [activeSection, setActiveSection] = useState<SectionLabel>('Access');
+  const [state, setState] = useState<WorkbenchState | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
-  const [configFocus, setConfigFocus] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const requestController = new AbortController();
+    let cancelled = false;
+    setState(null);
+    setLoadError(null);
+    readLocalSnapshot(requestController.signal)
+      .then(snapshot => {
+        if (cancelled) return;
+        setState(toWorkbenchState(snapshot));
+        setActiveSection(initialSection(snapshot));
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setState(null);
+        setLoadError(error instanceof Error ? error.message : 'SynthRAN local state could not be loaded');
+      });
+    return () => {
+      cancelled = true;
+      requestController.abort();
+    };
+  }, [reloadToken]);
 
   const moveSection = (delta: number) => {
     const current = sectionLabels.indexOf(activeSection);
     setActiveSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
-    setNotice(null);
   };
 
   useInput((input, key) => {
@@ -40,6 +63,14 @@ export const App = () => {
       exit();
       return;
     }
+
+    if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
+      setPaletteOpen(false);
+      setReloadToken(value => value + 1);
+      return;
+    }
+
+    if (state === null) return;
 
     if (paletteOpen) {
       if (key.escape) {
@@ -57,7 +88,6 @@ export const App = () => {
       if (key.return) {
         setActiveSection(actions[paletteIndex].section);
         setPaletteOpen(false);
-        setNotice(null);
       }
       return;
     }
@@ -68,73 +98,18 @@ export const App = () => {
       return;
     }
 
-    if (input === 'm') {
-      setState(current => ({...current, mode: current.mode === 'OBSERVE' ? 'OPERATE' : 'OBSERVE'}));
-      setNotice(null);
-      return;
-    }
-
     if (/^[1-6]$/.test(input)) {
       setActiveSection(sectionLabels[Number(input) - 1]);
-      setNotice(null);
       return;
     }
 
     if (key.tab) {
       moveSection(key.shift ? -1 : 1);
-      return;
-    }
-
-    if (activeSection !== 'Configure') return;
-
-    if (key.upArrow) {
-      setConfigFocus(index => wrap(index - 1, 5));
-      setNotice(null);
-      return;
-    }
-    if (key.downArrow) {
-      setConfigFocus(index => wrap(index + 1, 5));
-      setNotice(null);
-      return;
-    }
-
-    if (configFocus === 0 && (key.leftArrow || key.rightArrow || key.return)) {
-      setState(current => ({...current, radio: current.radio === 'physical' ? 'virtual' : 'physical'}));
-      setNotice(null);
-      return;
-    }
-
-    if (configFocus === 1 && key.return) {
-      setState(current => ({
-        ...current,
-        providerExperiment: current.providerExperiment === null ? 'example-provider' : null,
-      }));
-      setNotice(null);
-      return;
-    }
-
-    if (configFocus === 2 && key.return) {
-      setState(current => ({
-        ...current,
-        sshIdentity: current.sshIdentity === 'id_r2lab' ? 'id_ed25519' : 'id_r2lab',
-      }));
-      setNotice(null);
-      return;
-    }
-
-    if (configFocus === 3 && (key.leftArrow || key.rightArrow)) {
-      setState(current => ({
-        ...current,
-        reservationMinutes: Math.min(360, Math.max(30, current.reservationMinutes + (key.rightArrow ? 30 : -30))),
-      }));
-      setNotice(null);
-      return;
-    }
-
-    if (configFocus === 4 && key.return) {
-      setNotice('Mock configuration saved in memory');
     }
   });
+
+  const headerProject = state?.project ?? 'local workspace';
+  const headerExperiment = state?.experiment ?? 'reading state';
 
   return (
     <Box flexDirection="column" width="100%">
@@ -142,20 +117,33 @@ export const App = () => {
         <Box>
           <Text bold color={theme.bodyStrong}>SynthRAN</Text>
           <Spacer />
-          <Text color={theme.muted}>{state.project}</Text>
+          <Text color={theme.muted}>{headerProject}</Text>
           <Text color={theme.hairline}> · </Text>
-          <Text color={theme.muted}>{state.experiment}</Text>
+          <Text color={theme.muted}>{headerExperiment}</Text>
           <Text>   </Text>
-          <Text inverse>{` ${state.mode} `}</Text>
+          <Text inverse> OBSERVE </Text>
         </Box>
 
-        <SectionStrip sections={sectionLabels} selected={activeSection} completed={state.completedSections} />
+        {state ? (
+          <SectionStrip sections={sectionLabels} selected={activeSection} completed={state.completedSections} />
+        ) : null}
 
         <Box borderTop borderStyle="single" borderColor={theme.hairline}>
-          {paletteOpen ? (
+          {loadError ? (
+            <Box flexDirection="column" paddingX={1} paddingY={1}>
+              <Text bold color={theme.error}>Local state unavailable</Text>
+              <Text color={theme.muted}>{loadError}</Text>
+              <Box height={1} />
+              <Text color={theme.bodyStrong}>Press r to retry or q to quit.</Text>
+            </Box>
+          ) : state === null ? (
+            <Box paddingX={1} paddingY={1}>
+              <Text color={theme.muted}>Reading local SynthRAN state…</Text>
+            </Box>
+          ) : paletteOpen ? (
             <ActionPalette actions={actions} selectedIndex={paletteIndex} />
           ) : activeSection === 'Configure' ? (
-            <ConfigurationPanel state={state} focusedIndex={configFocus} notice={notice} />
+            <ConfigurationPanel state={state} />
           ) : (
             <SectionPanel section={activeSection} state={state} />
           )}
@@ -165,7 +153,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>Prototype · mock state · no provider or backend operations</Text>
+        <Text color={theme.muted}>Read-only local state · no provider operations</Text>
       </Box>
     </Box>
   );
