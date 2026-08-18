@@ -153,7 +153,7 @@ class WorkbenchConfigurationTests(unittest.TestCase):
             )
             response = service.handle(
                 {
-                    "v": 4,
+                    "v": 5,
                     "id": "initialize",
                     "method": "workspace.initialize",
                     "params": {
@@ -205,7 +205,7 @@ class WorkbenchConfigurationTests(unittest.TestCase):
             )
             response = service.handle(
                 {
-                    "v": 4,
+                    "v": 5,
                     "id": "defaults",
                     "method": "workspace.update_defaults",
                     "params": {
