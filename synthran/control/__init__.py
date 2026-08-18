@@ -1,4 +1,4 @@
-"""Versioned read-only control interface for external SynthRAN clients."""
+"""Versioned control interface for external SynthRAN clients."""
 
 from synthran.control.server import ControlService, serve
 
