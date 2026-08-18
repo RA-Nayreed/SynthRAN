@@ -1,5 +1,7 @@
 export type SectionLabel = 'Access' | 'Configure' | 'Resources' | 'Network' | 'Run' | 'Evidence';
 export type RadioMode = 'automatic' | 'virtual' | 'physical';
+export type ExperimentIntent = 'virtual-5g' | 'physical-5g' | 'open-ran' | 'iot-to-5g';
+export type WorkbenchMode = 'OBSERVE' | 'OPERATE';
 
 export interface ObservationView {
   name: string;
@@ -12,6 +14,7 @@ export interface ObservationView {
 
 export interface WorkbenchState {
   project: string;
+  experimentId: string | null;
   experiment: string;
   completedSections: SectionLabel[];
   intent: string;
@@ -40,3 +43,12 @@ export const sectionLabels: SectionLabel[] = [
   'Run',
   'Evidence',
 ];
+
+export const experimentIntents: ExperimentIntent[] = [
+  'virtual-5g',
+  'physical-5g',
+  'open-ran',
+  'iot-to-5g',
+];
+
+export const radioModes: RadioMode[] = ['automatic', 'virtual', 'physical'];
