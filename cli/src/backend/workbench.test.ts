@@ -43,16 +43,17 @@ const snapshot = (overrides: Partial<ControlSnapshot> = {}): ControlSnapshot => 
   ...overrides,
 });
 
-test('fresh access with no experiment opens configuration', () => {
+test('fresh access with no experiment opens setup', () => {
   const value = snapshot();
-  assert.equal(initialSection(value), 'Configure');
+  assert.equal(initialSection(value), 'Setup');
   const state = toWorkbenchState(value);
-  assert.deepEqual(state.completedSections, ['Access']);
+  assert.deepEqual(state.completedSections, []);
+  assert.equal(state.profile, 'operator');
   assert.equal(state.experiment, 'No active experiment');
   assert.equal(state.hasActiveExperiment, false);
 });
 
-test('configured experiment is represented explicitly as active', () => {
+test('configured experiment completes setup and opens resources', () => {
   const value = snapshot({
     experiment: {
       id: 'sran-20260818-001',
@@ -63,11 +64,13 @@ test('configured experiment is represented explicitly as active', () => {
     },
   });
   const state = toWorkbenchState(value);
+  assert.equal(initialSection(value), 'Resources');
   assert.equal(state.hasActiveExperiment, true);
   assert.equal(state.experiment, 'sran-20260818-001');
+  assert.deepEqual(state.completedSections, ['Setup']);
 });
 
-test('stale SLICES access keeps access incomplete and selected', () => {
+test('stale SLICES access keeps setup incomplete and selected', () => {
   const base = snapshot();
   const value = snapshot({
     access: {
@@ -75,7 +78,7 @@ test('stale SLICES access keeps access incomplete and selected', () => {
       slices: {...base.access.slices, fresh: false},
     },
   });
-  assert.equal(initialSection(value), 'Access');
+  assert.equal(initialSection(value), 'Setup');
   assert.deepEqual(toWorkbenchState(value).completedSections, []);
 });
 
@@ -85,17 +88,17 @@ test('physical radio requires fresh configured R2Lab access', () => {
     experiment: {
       id: 'sran-20260818-001',
       provider_experiment: 'provider-exp',
-      intent: 'physical-5g',
+      intent: 'iot-to-5g',
       radio_mode: 'physical',
       lifecycle: 'CONFIGURED',
     },
     access: base.access,
   });
-  assert.equal(initialSection(value), 'Access');
-  assert.deepEqual(toWorkbenchState(value).completedSections, ['Configure']);
+  assert.equal(initialSection(value), 'Setup');
+  assert.deepEqual(toWorkbenchState(value).completedSections, []);
 });
 
-test('path proven state marks only verified earlier work complete', () => {
+test('path proven state opens experiment and marks verified earlier work complete', () => {
   const base = snapshot();
   const value = snapshot({
     experiment: {
@@ -107,14 +110,14 @@ test('path proven state marks only verified earlier work complete', () => {
     },
     access: base.access,
   });
-  assert.equal(initialSection(value), 'Run');
+  assert.equal(initialSection(value), 'Experiment');
   assert.deepEqual(
     toWorkbenchState(value).completedSections,
-    ['Access', 'Configure', 'Resources', 'Network'],
+    ['Setup', 'Resources', 'Network'],
   );
 });
 
-test('navigation completion never marks run or evidence from lifecycle alone', () => {
+test('navigation completion never marks experiment or data from lifecycle alone', () => {
   const base = snapshot();
   const value = snapshot({
     experiment: {
@@ -128,6 +131,6 @@ test('navigation completion never marks run or evidence from lifecycle alone', (
   });
   assert.deepEqual(
     toWorkbenchState(value).completedSections,
-    ['Access', 'Configure', 'Resources', 'Network'],
+    ['Setup', 'Resources', 'Network'],
   );
 });
