@@ -38,15 +38,15 @@ export const sectionsFor = (activeSection: SectionLabel): Section[] => {
 };
 
 export const mockWorkbenchState: WorkbenchState = {
-  project: 'post5g-beta',
+  project: 'example-project',
   experiment: 'sran-20260818-001',
   mode: 'OBSERVE',
   sections: sectionsFor('Configure'),
   intent: 'IoT → 5G',
   radio: 'physical',
-  slicesProject: 'post5g-beta',
+  slicesProject: 'example-project',
   providerExperiment: null,
-  r2labSlice: 'oulu_rnayreed',
-  sshIdentity: 'id_rsa_r2lab_duckburg',
+  r2labSlice: 'example_slice',
+  sshIdentity: 'id_r2lab',
   reservationMinutes: 120,
 };
