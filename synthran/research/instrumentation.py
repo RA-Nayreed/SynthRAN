@@ -31,7 +31,10 @@ _PING_TIME_RE = re.compile(r"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms")
 _PING_SEQ_RE = re.compile(r"icmp_seq[= ]([0-9]+)")
 _PING_EPOCH_RE = re.compile(r"^\[([0-9]+(?:\.[0-9]+)?)\]")
 _PING_SUMMARY_RE = re.compile(r"(\d+)\s+packets transmitted")
-_IPERF_CONNECT_TIMEOUT_MS = 5000
+# RFSIM reconciliation can hand off a fresh PDU before the external user plane
+# has fully converged. Keep this strictly pre-window and bounded, but allow more
+# than the previous 5 seconds for the iperf3 TCP control handshake to establish.
+_IPERF_CONNECT_TIMEOUT_MS = 15000
 
 _PROBE_SCRIPT = r'''
 import datetime, json, re, subprocess, sys, time
@@ -476,7 +479,7 @@ def _wait_load_client_connected(
     target: str,
     port: int,
     process: base_runtime.ManagedProcess,
-    timeout_seconds: float = 8.0,
+    timeout_seconds: float = 20.0,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
