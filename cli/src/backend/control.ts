@@ -62,6 +62,7 @@ interface HandshakeResult {
   service: string;
   protocol: number;
   local_writes: boolean;
+  provider_reads: boolean;
   provider_mutation: boolean;
   methods: string[];
 }
@@ -80,10 +81,23 @@ interface ControlRequest {
   params: Record<string, unknown>;
 }
 
-const CONTROL_VERSION = 2;
+interface RunOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+const CONTROL_VERSION = 3;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const RESPONSE_TIMEOUT_MS = 10_000;
-const REQUIRED_METHODS = ['system.handshake', 'workspace.snapshot', 'experiment.create'];
+const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
+const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
+const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const REQUIRED_METHODS = [
+  'system.handshake',
+  'workspace.snapshot',
+  'experiment.create',
+  'provider.experiments',
+  'experiment.bind_provider',
+];
 
 const requestLine = ({id, method, params}: ControlRequest) =>
   JSON.stringify({v: CONTROL_VERSION, id, method, params});
@@ -135,6 +149,7 @@ const isHandshake = (value: unknown): value is HandshakeResult => {
     value.service === 'synthran-control' &&
     value.protocol === CONTROL_VERSION &&
     value.local_writes === true &&
+    value.provider_reads === true &&
     value.provider_mutation === false &&
     REQUIRED_METHODS.every(method => methods.includes(method))
   );
@@ -238,11 +253,12 @@ export const parseControlOutput = (output: string): ControlSnapshot => {
 
 const runControl = async (
   requests: ControlRequest[],
-  signal?: AbortSignal,
+  options: RunOptions = {},
 ): Promise<ControlResponse<unknown>[]> =>
   new Promise((resolveResponses, reject) => {
+    const {signal, timeoutMs = LOCAL_RESPONSE_TIMEOUT_MS} = options;
     if (signal?.aborted) {
-      reject(new Error('SynthRAN local state request was cancelled'));
+      reject(new Error('SynthRAN control request was cancelled'));
       return;
     }
 
@@ -279,7 +295,7 @@ const runControl = async (
       resolveResponses(responses);
     };
 
-    const onAbort = () => finishError('SynthRAN local state request was cancelled');
+    const onAbort = () => finishError('SynthRAN control request was cancelled');
     signal?.addEventListener('abort', onAbort, {once: true});
     if (signal?.aborted) {
       onAbort();
@@ -287,8 +303,8 @@ const runControl = async (
     }
 
     timer = setTimeout(
-      () => finishError('SynthRAN control service did not return local state'),
-      RESPONSE_TIMEOUT_MS,
+      () => finishError('SynthRAN control service did not return in time'),
+      timeoutMs,
     );
 
     child.stdout.setEncoding('utf8');
@@ -303,7 +319,7 @@ const runControl = async (
     child.on('close', (code: number | null) => {
       if (settled) return;
       if (code !== 0) {
-        finishError('SynthRAN control service exited before returning local state');
+        finishError('SynthRAN control service exited before returning a response');
         return;
       }
 
@@ -327,7 +343,7 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
       {id: 'handshake', method: 'system.handshake', params: {}},
       {id: 'snapshot', method: 'workspace.snapshot', params: {}},
     ],
-    signal,
+    {signal},
   );
   requireHandshake(responses);
   return requireSnapshot(responses);
@@ -349,12 +365,63 @@ export const createLocalExperiment = async (
       {id: 'create', method: 'experiment.create', params},
       {id: 'snapshot', method: 'workspace.snapshot', params: {}},
     ],
-    signal,
+    {signal},
   );
   requireHandshake(responses);
   const create = responses.find(item => item.id === 'create');
   if (!create?.ok) {
     throw new Error(controlError(create, 'SynthRAN local configuration could not be created'));
+  }
+  return requireSnapshot(responses);
+};
+
+export const listProviderExperiments = async (signal?: AbortSignal): Promise<string[]> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'providers', method: 'provider.experiments', params: {}},
+    ],
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  const providerResponse = responses.find(item => item.id === 'providers');
+  if (!providerResponse?.ok || !isRecord(providerResponse.result)) {
+    throw new Error(controlError(providerResponse, 'SLICES experiments could not be loaded'));
+  }
+  const experiments = providerResponse.result.experiments;
+  if (
+    !isStringArray(experiments) ||
+    experiments.some(name => !PROVIDER_NAME_RE.test(name)) ||
+    new Set(experiments).size !== experiments.length
+  ) {
+    throw new Error('SLICES experiment list was malformed');
+  }
+  return experiments;
+};
+
+export const bindProviderExperiment = async (
+  providerExperiment: string,
+  signal?: AbortSignal,
+): Promise<ControlSnapshot> => {
+  if (!PROVIDER_NAME_RE.test(providerExperiment)) {
+    throw new Error('SLICES experiment name is invalid');
+  }
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {
+        id: 'bind',
+        method: 'experiment.bind_provider',
+        params: {provider_experiment: providerExperiment},
+      },
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  const bind = responses.find(item => item.id === 'bind');
+  if (!bind?.ok) {
+    throw new Error(controlError(bind, 'SLICES experiment could not be bound'));
   }
   return requireSnapshot(responses);
 };
