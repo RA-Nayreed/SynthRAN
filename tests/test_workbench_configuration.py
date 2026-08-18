@@ -10,6 +10,7 @@ from synthran.workspace.configuration import (
     discover_ssh_identity_references,
     first_use_snapshot,
     resolve_ssh_identity_reference,
+    switch_workspace_profile,
     update_workspace_defaults,
 )
 from synthran.workspace.model import Profile, WorkspaceError, format_utc, utc_now
@@ -108,6 +109,26 @@ class WorkbenchConfigurationTests(unittest.TestCase):
             self.assertEqual(updated.placement, "manual")
             self.assertEqual(load_workspace(root), updated)
 
+    def test_profile_switch_preserves_project_and_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = initialize_workspace(
+                root=root,
+                profile="default",
+                project="research-project",
+                reservation_minutes=180,
+                placement="manual",
+            )
+
+            updated = switch_workspace_profile(root, profile_name="second")
+
+            self.assertEqual(updated.profile, "second")
+            self.assertEqual(updated.project, original.project)
+            self.assertEqual(updated.created_at_utc, original.created_at_utc)
+            self.assertEqual(updated.reservation_minutes, 180)
+            self.assertEqual(updated.placement, "manual")
+            self.assertEqual(load_workspace(root), updated)
+
     def test_invalid_workspace_defaults_do_not_replace_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -153,7 +174,7 @@ class WorkbenchConfigurationTests(unittest.TestCase):
             )
             response = service.handle(
                 {
-                    "v": 6,
+                    "v": 7,
                     "id": "initialize",
                     "method": "workspace.initialize",
                     "params": {
@@ -205,7 +226,7 @@ class WorkbenchConfigurationTests(unittest.TestCase):
             )
             response = service.handle(
                 {
-                    "v": 6,
+                    "v": 7,
                     "id": "defaults",
                     "method": "workspace.update_defaults",
                     "params": {
