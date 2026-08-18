@@ -129,13 +129,14 @@ const isAccessEntry = (value: unknown): value is ControlAccessEntry => {
 
 const isHandshake = (value: unknown): value is HandshakeResult => {
   if (!isRecord(value)) return false;
+  const methods = value.methods;
+  if (!isStringArray(methods)) return false;
   return (
     value.service === 'synthran-control' &&
     value.protocol === CONTROL_VERSION &&
     value.local_writes === true &&
     value.provider_mutation === false &&
-    isStringArray(value.methods) &&
-    REQUIRED_METHODS.every(method => value.methods.includes(method))
+    REQUIRED_METHODS.every(method => methods.includes(method))
   );
 };
 
