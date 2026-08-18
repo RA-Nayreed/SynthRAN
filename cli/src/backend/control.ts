@@ -192,10 +192,11 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const CONTROL_VERSION = 5;
+const CONTROL_VERSION = 6;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
 const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
+const LIVE_OPERATION_TIMEOUT_MS = 4_500_000;
 const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const OPERATION_ID_RE = /^op-[0-9]{6,}$/;
 const REQUIRED_METHODS = [
@@ -211,6 +212,7 @@ const REQUIRED_METHODS = [
   'operation.plan',
   'operation.read',
   'operation.approve',
+  'operation.execute',
   'operation.cancel',
 ];
 
@@ -271,7 +273,7 @@ const isHandshake = (value: unknown): value is HandshakeResult => {
     value.protocol === CONTROL_VERSION &&
     value.local_writes === true &&
     value.provider_reads === true &&
-    value.provider_mutation === false &&
+    value.provider_mutation === true &&
     methods.length === REQUIRED_METHODS.length &&
     REQUIRED_METHODS.every(method => methods.includes(method))
   );
@@ -746,7 +748,7 @@ export const inspectOperation = async (
       {id: 'handshake', method: 'system.handshake', params: {}},
       {id: 'operation', method: 'operation.inspect', params: {action}},
     ],
-    {signal},
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
   );
   requireHandshake(responses);
   const response = responses.find(item => item.id === 'operation');
@@ -777,17 +779,23 @@ export const planOperation = async (
       {id: 'handshake', method: 'system.handshake', params: {}},
       {id: 'operation', method: 'operation.plan', params: {action}},
     ],
-    {signal},
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
   );
   requireHandshake(responses);
-  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation plan could not be created');
+  return requireOperationSnapshot(
+    responses,
+    'operation',
+    'SynthRAN operation plan could not be created',
+  );
 };
 
 export const readOperation = async (
   operationId: string,
   signal?: AbortSignal,
 ): Promise<OperationSnapshot> => {
-  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  if (!OPERATION_ID_RE.test(operationId)) {
+    throw new Error('SynthRAN operation ID is invalid');
+  }
   const responses = await runControl(
     [
       {id: 'handshake', method: 'system.handshake', params: {}},
@@ -796,7 +804,11 @@ export const readOperation = async (
     {signal},
   );
   requireHandshake(responses);
-  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation could not be read');
+  return requireOperationSnapshot(
+    responses,
+    'operation',
+    'SynthRAN operation could not be read',
+  );
 };
 
 export const approveOperation = async (
@@ -804,7 +816,9 @@ export const approveOperation = async (
   mode: ApprovalMode,
   signal?: AbortSignal,
 ): Promise<OperationSnapshot> => {
-  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  if (!OPERATION_ID_RE.test(operationId)) {
+    throw new Error('SynthRAN operation ID is invalid');
+  }
   const responses = await runControl(
     [
       {id: 'handshake', method: 'system.handshake', params: {}},
@@ -817,14 +831,42 @@ export const approveOperation = async (
     {signal},
   );
   requireHandshake(responses);
-  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation approval could not be recorded');
+  return requireOperationSnapshot(
+    responses,
+    'operation',
+    'SynthRAN operation approval could not be recorded',
+  );
+};
+
+export const executeOperation = async (
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<OperationSnapshot> => {
+  if (!OPERATION_ID_RE.test(operationId)) {
+    throw new Error('SynthRAN operation ID is invalid');
+  }
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'operation', method: 'operation.execute', params: {operation_id: operationId}},
+    ],
+    {signal, timeoutMs: LIVE_OPERATION_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  return requireOperationSnapshot(
+    responses,
+    'operation',
+    'SynthRAN live operation did not complete',
+  );
 };
 
 export const cancelOperation = async (
   operationId: string,
   signal?: AbortSignal,
 ): Promise<OperationSnapshot> => {
-  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  if (!OPERATION_ID_RE.test(operationId)) {
+    throw new Error('SynthRAN operation ID is invalid');
+  }
   const responses = await runControl(
     [
       {id: 'handshake', method: 'system.handshake', params: {}},
@@ -833,5 +875,9 @@ export const cancelOperation = async (
     {signal},
   );
   requireHandshake(responses);
-  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation could not be cancelled');
+  return requireOperationSnapshot(
+    responses,
+    'operation',
+    'SynthRAN operation could not be cancelled',
+  );
 };

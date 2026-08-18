@@ -21,7 +21,6 @@ CONTROL_DIMENSIONS = (
     ("provider_experiment", "provider experiment"),
 )
 TEARDOWN_DIMENSIONS = (
-    "reservation",
     "allocation",
     "preparation",
     "kubernetes",
@@ -89,7 +88,7 @@ WORKFLOW_SPECS: dict[str, WorkflowSpec] = {
         "down",
         "R3",
         True,
-        "tear down only explicitly owned experiment resources after destructive approval",
+        "tear down only explicitly owned runtime and allocation resources while preserving the reservation",
     ),
 }
 
@@ -168,7 +167,7 @@ def _teardown_target_block(observed: ObservedState, now: datetime) -> str | None
         if item.resource_id is None:
             return f"current {dimension} has no exact resource ID for teardown"
     if not found:
-        return "no exact live resource targets are currently known for teardown"
+        return "no exact allocated or runtime targets are currently known for teardown"
     return None
 
 
@@ -259,4 +258,4 @@ def plan_workflow(
             return _block(lifecycle, target_block)
         return _step(lifecycle, spec)
 
-    raise AssertionError("unreachable application workflow")
+    raise AssertionError("unreachable workflow policy")

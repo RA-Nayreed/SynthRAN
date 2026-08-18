@@ -18,14 +18,15 @@ The current implementation provides:
 - virtual, physical, and automatic radio selection with compatible experiment intent choices;
 - read-only discovery of SLICES experiments in the verified workspace project;
 - explicit one-time binding of a selected, reverified SLICES experiment to the active local experiment;
-- OBSERVE by default, with OPERATE used only for explicit local changes;
-- Resources and Network views that review Reserve, Bring up, Verify, Recover, and Tear down against current durable state;
-- immutable action records, standard approval for controlled changes, separate destructive approval for teardown, cancellation before execution, and recent event rendering;
-- fail-closed handling when a resource-changing action does not yet have fresh provider inventory bound to exact targets;
+- OBSERVE by default, with OPERATE used only for explicit local or live changes;
+- Resources and Network views that review Reserve, Bring up, Verify, Recover, and Tear down against current provider-backed state;
+- immutable action records, standard approval for controlled changes, separate destructive approval for teardown, explicit execution, pre-execution cancellation, and recent event rendering;
+- exact provider inventory binding for resource-changing plans;
+- virtual RFSIM execution for reservation, allocation, guarded resource preparation, network deployment, path verification, partial-allocation recovery, and exact owned teardown;
 - completion markers derived from durable state rather than the selected screen;
-- bounded startup, response-size, exact capability, protocol, provider-read, and cancellation handling;
+- bounded startup, response-size, exact capability, protocol, provider-read, live-execution, and cancellation handling;
 - `r` to reload local state;
-- `q` or Ctrl+C to quit.
+- `q` or Ctrl+C to quit when no live provider action is running.
 
 The terminal styling is intentionally restrained. Neutral text, modest emphasis, thin separators, whitespace, and semantic success/error color carry the hierarchy. Saturated accent colors, decorative terminal gradients, and neon dashboard styling are not used.
 
@@ -47,17 +48,25 @@ Provider discovery is available in OBSERVE because it is read-only. First-use in
 
 ## Resources and Network
 
-Resources and Network share the same state-sensitive action review surface. Use ←/→ to choose Reserve, Bring up, Verify, Recover, or Tear down, then Enter to review what the current state permits.
+Resources and Network share the same state-sensitive action surface. Use ←/→ to choose Reserve, Bring up, Verify, Recover, or Tear down, then Enter to refresh provider state and review what the current state permits.
 
-Review is read-only. It shows the current action, safety class in plain language, rationale, known exact targets, and anything still required before an immutable action record can be created.
+Review is read-only. It shows the current action, safety class, rationale, exact resource targets, and anything still required before an immutable action record can be created.
 
-`p` prepares the selected action when its immutable inputs are available. Resource-changing actions require OPERATE and fail closed when current provider inventory has not been bound to exact targets. Verify is read-only and does not require approval. Controlled changes require standard approval with `a`. Tear down requires the separate destructive approval key `d`. `x` can cancel a prepared or approved action before execution begins.
+`p` prepares the selected action. Resource-changing plans require fresh provider inventory and bind the exact resource decision into the immutable plan. Verify is read-only and does not require approval. Controlled changes require standard approval with `a`. Tear down requires separate destructive approval with `d`.
 
-The workbench displays the durable event history for prepared actions, including approval requests, approval grants, progress records, interruptions, failures, and recovery requirements when those events exist.
+Execution is deliberately separate from approval. Press `e` only after the operation is prepared and, when required, approved. Mutating execution requires OPERATE. The workbench rechecks current controller authority, provider state, resource ownership, and plan-bound inputs immediately before mutation.
 
-Provider execution is still disabled at this boundary. The workbench does not call the scripted CLI behind the scenes and does not claim that Reserve, Bring up, Recover, or Tear down changed the testbed merely because an action was reviewed or approved. A resource-changing action that lacks a connected exact provider executor remains blocked rather than silently falling back to another path.
+Bring up advances only the single reconciliation action currently required. Allocation, resource preparation, and network deployment therefore remain separate approved actions rather than one hidden multi-step mutation. Preparation is prevented from creating a replacement reservation or allocation if either disappears after approval.
 
-The control protocol is version 5. Its handshake declares the exact supported local-write and provider-read methods while declaring provider mutation unavailable. The client requires the exact expected method set and fails closed if additional capabilities are advertised. Earlier contract versions remain frozen in `contracts/`.
+Recover currently handles an incomplete SynthRAN-owned allocation. Other recovery conditions remain blocked until a dedicated exact recovery executor exists.
+
+Tear down removes only exact run-owned network state and the SynthRAN-owned allocation. It preserves the current reservation. `x` can cancel a prepared or approved action before live execution starts. Running provider work cannot currently be interrupted from the workbench because safe executor-specific cancellation is not yet connected.
+
+The workbench displays durable operation events including approval, authorization, progress, failure, interruption, completion, and recovery requirements. Raw provider output is not copied into the interface.
+
+The control protocol is version 6. Its handshake declares provider mutation only through the explicit `operation.execute` method. The client requires the exact expected method set and fails closed if extra capabilities are advertised. Earlier contract versions remain frozen in `contracts/`.
+
+Live execution in this surface currently supports only the accepted virtual RFSIM path. Physical R2Lab execution, research runs, data collection, and evidence workflows remain outside this executor for now.
 
 The npm package is marked `private` in `package.json` to prevent accidental publication while the interface is not yet released.
 
@@ -96,11 +105,12 @@ After initialization, Configure supports:
 On Resources or Network:
 
 - ←/→ chooses the action;
-- Enter reviews the action without writing state;
+- Enter refreshes provider state and reviews the action without mutation;
 - `m` switches between OBSERVE and OPERATE;
 - `p` creates an immutable action record when all required inputs are available;
 - `a` records standard approval for a controlled change;
 - `d` records destructive approval for teardown only;
+- `e` executes the prepared action when its current state permits execution;
 - `x` cancels prepared or approved local action state before provider execution.
 
 Set `SYNTHRAN_PYTHON` when the desired Python executable is not available as `python` in the current environment.

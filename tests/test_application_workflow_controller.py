@@ -138,7 +138,7 @@ class ApplicationWorkflowControllerTests(unittest.TestCase):
             self.assertEqual(plan.risk, "R3")
             self.assertEqual(
                 plan.targets,
-                ("allocation-42", "core-node-f2", "ran-node-f3", "reservation-17"),
+                ("allocation-42", "core-node-f2", "ran-node-f3"),
             )
             controller.approve_operation(
                 plan.operation_id,

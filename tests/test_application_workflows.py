@@ -189,7 +189,7 @@ class ApplicationWorkflowPolicyTests(unittest.TestCase):
         self.assertTrue(safe.steps[0].mutates)
         self.assertEqual(
             workflow_targets(current, "down", now=NOW),
-            ("allocation-resource", "core-resource", "reservation-resource"),
+            ("allocation-resource", "core-resource"),
         )
 
     def test_down_fails_closed_on_foreign_stale_or_unidentified_resources(self) -> None:

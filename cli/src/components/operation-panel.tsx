@@ -62,6 +62,7 @@ const eventText = (event: OperationSnapshot['events'][number]) => {
   if (event.event_type === 'stage.failed') return `${event.attributes.stage ?? 'work'} failed`;
   if (event.event_type === 'approval.requested') return 'Approval requested';
   if (event.event_type === 'approval.granted') return 'Approval recorded';
+  if (event.event_type === 'operation.authorized') return 'Execution authorized';
   if (event.event_type === 'operation.interrupted') return 'Action cancelled';
   if (event.event_type === 'recovery.required') return 'Recovery required';
   if (event.event_type === 'operation.completed') return 'Action complete';
@@ -94,7 +95,7 @@ export const OperationPanel = ({
   const isResources = section === 'Resources';
   const currentRisk = operation?.plan.risk ?? inspection?.risk ?? null;
   const currentReason = operation?.plan.reason ?? inspection?.reason ?? null;
-  const lastEvents = operation?.events.slice(-5) ?? [];
+  const lastEvents = operation?.events.slice(-6) ?? [];
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
@@ -102,7 +103,7 @@ export const OperationPanel = ({
       <Text color={theme.muted}>
         {isResources
           ? 'Reservation, allocation and preparation state.'
-          : '5G runtime and end-to-end path state.'}
+          : 'Virtual RFSIM runtime and end-to-end path state.'}
       </Text>
       <Box height={1} />
 
@@ -133,6 +134,7 @@ export const OperationPanel = ({
           <>
             <Row label="Change" value={riskLabel(inspection.risk)} />
             <Row label="Why" value={inspection.reason} />
+            {inspection.targets.length > 0 ? <Row label="Targets" value={inspection.targets.join(', ')} /> : null}
             {inspection.plan_block ? <Row label="Needs" value={inspection.plan_block} /> : null}
           </>
         ) : null}
@@ -162,18 +164,18 @@ export const OperationPanel = ({
           <Text color={theme.muted}>
             {busy
               ? 'Working…'
-              : '←→ Choose   Enter Review   p Prepare   a Approve   d Approve teardown   x Cancel'}
+              : '←→ Choose   Enter Review   p Prepare   a Approve   d Teardown approval   e Execute   x Cancel'}
           </Text>
         </Box>
         <Text color={theme.muted}>
           {mode === 'OPERATE'
-            ? 'OPERATE permits local action records. Provider execution remains disabled.'
-            : 'OBSERVE reviews current state without provider mutation.'}
+            ? 'OPERATE permits approved virtual RFSIM changes. Execute remains a separate action.'
+            : 'OBSERVE reviews live provider state without mutation.'}
         </Text>
 
         {notice ? (
           <Box marginTop={1}>
-            <Text color={notice.toLowerCase().includes('could not') || notice.toLowerCase().includes('required') ? theme.error : theme.bodyStrong}>
+            <Text color={notice.toLowerCase().includes('could not') || notice.toLowerCase().includes('required') || notice.toLowerCase().includes('failed') ? theme.error : theme.bodyStrong}>
               {notice}
             </Text>
           </Box>
