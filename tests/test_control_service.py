@@ -9,6 +9,7 @@ import unittest
 
 from synthran.control import ControlService, serve
 from synthran.workspace.access import ProbeResult
+from synthran.workspace.desired_store import load_desired_state
 from synthran.workspace.model import AccessRecord, Profile, format_utc
 from synthran.workspace.store import (
     bind_slices_experiment,
@@ -58,17 +59,17 @@ class ControlServiceTests(unittest.TestCase):
             options["provider_runner"] = provider_runner
         return root, ControlService(**options)
 
-    def test_handshake_declares_provider_reads_without_provider_mutation(self) -> None:
+    def test_handshake_declares_local_writes_and_provider_reads_without_mutation(self) -> None:
         service = ControlService(start=Path("/missing"), environment={})
         response = service.handle(
-            {"v": 3, "id": "req-1", "method": "system.handshake", "params": {}}
+            {"v": 4, "id": "req-1", "method": "system.handshake", "params": {}}
         )
         self.assertTrue(response["ok"])
         result = response["result"]
         self.assertTrue(result["local_writes"])
         self.assertTrue(result["provider_reads"])
         self.assertFalse(result["provider_mutation"])
-        self.assertEqual(result["protocol"], 3)
+        self.assertEqual(result["protocol"], 4)
         self.assertEqual(
             result["methods"],
             [
@@ -76,11 +77,12 @@ class ControlServiceTests(unittest.TestCase):
                 "experiment.create",
                 "provider.experiments",
                 "system.handshake",
+                "workspace.configure",
                 "workspace.snapshot",
             ],
         )
 
-    def test_workspace_snapshot_exposes_sanitized_local_state(self) -> None:
+    def test_workspace_snapshot_exposes_sanitized_configuration_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, service = self._service(Path(temporary))
             save_access_record(
@@ -97,7 +99,18 @@ class ControlServiceTests(unittest.TestCase):
 
             result = service.workspace_snapshot(now=NOW)
             self.assertEqual(result["workspace"]["project"], "research-project")
+            self.assertEqual(result["workspace"]["reservation_minutes"], 120)
+            self.assertEqual(result["workspace"]["placement"], "automatic")
             self.assertEqual(result["experiment"]["lifecycle"], "EMPTY")
+            self.assertIsNone(result["experiment"]["placement"])
+            self.assertEqual(
+                result["configuration"]["slices_compute"],
+                ["sopnode-f1", "sopnode-f2", "sopnode-f3", "sopnode-w3"],
+            )
+            self.assertEqual(result["configuration"]["recommended_core"], "sopnode-f2")
+            self.assertEqual(result["configuration"]["recommended_ran"], "sopnode-f3")
+            self.assertEqual(result["configuration"]["reservation_min"], 10)
+            self.assertEqual(result["configuration"]["reservation_max"], 1440)
             self.assertTrue(result["access"]["slices"]["fresh"])
             self.assertFalse(result["access"]["r2lab"]["configured"])
             self.assertNotIn("workspace_root", result)
@@ -105,12 +118,12 @@ class ControlServiceTests(unittest.TestCase):
             self.assertNotIn(str(root), rendered)
             self.assertNotIn("fingerprint", rendered.lower())
 
-    def test_create_experiment_persists_new_active_local_configuration(self) -> None:
+    def test_create_experiment_uses_automatic_placement_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "req-create",
                     "method": "experiment.create",
                     "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
@@ -118,22 +131,90 @@ class ControlServiceTests(unittest.TestCase):
             )
             self.assertTrue(response["ok"])
             experiment_id = response["result"]["experiment_id"]
+            desired = load_desired_state(root, experiment_id)
+            self.assertEqual(desired.placement.mode, "automatic")
             snapshot = service.workspace_snapshot(now=NOW)
             self.assertEqual(snapshot["experiment"]["id"], experiment_id)
-            self.assertEqual(snapshot["experiment"]["intent"], "iot-to-5g")
-            self.assertEqual(snapshot["experiment"]["radio_mode"], "virtual")
-            self.assertIsNone(snapshot["experiment"]["provider_experiment"])
-            self.assertEqual(snapshot["experiment"]["lifecycle"], "CONFIGURED")
+            self.assertEqual(snapshot["experiment"]["placement"]["mode"], "automatic")
+            self.assertIsNone(snapshot["experiment"]["placement"]["core_node"])
+            self.assertIsNone(snapshot["experiment"]["placement"]["ran_node"])
             self.assertTrue(
                 (workspace_directory(root) / "experiments" / experiment_id / "desired.json").is_file()
             )
 
-    def test_invalid_create_params_fail_before_experiment_is_issued(self) -> None:
+    def test_create_experiment_persists_validated_manual_placement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
+                    "id": "req-manual",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                        "placement_mode": "manual",
+                        "core_node": "sopnode-f2",
+                        "ran_node": "sopnode-f3",
+                    },
+                }
+            )
+            self.assertTrue(response["ok"])
+            experiment_id = response["result"]["experiment_id"]
+            desired = load_desired_state(root, experiment_id)
+            self.assertEqual(desired.placement.mode, "manual")
+            self.assertEqual(desired.placement.manual["core"], ("sopnode-f2",))
+            self.assertEqual(desired.placement.manual["ran"], ("sopnode-f3",))
+            snapshot = service.workspace_snapshot(now=NOW)
+            self.assertEqual(snapshot["experiment"]["placement"]["core_node"], "sopnode-f2")
+            self.assertEqual(snapshot["experiment"]["placement"]["ran_node"], "sopnode-f3")
+
+    def test_invalid_manual_placement_fails_before_experiment_is_issued(self) -> None:
+        cases = (
+            {
+                "intent": "iot-to-5g",
+                "radio_mode": "virtual",
+                "placement_mode": "manual",
+                "core_node": "sopnode-f2",
+                "ran_node": "sopnode-f2",
+            },
+            {
+                "intent": "iot-to-5g",
+                "radio_mode": "virtual",
+                "placement_mode": "manual",
+                "core_node": "unknown-node",
+                "ran_node": "sopnode-f3",
+            },
+            {
+                "intent": "iot-to-5g",
+                "radio_mode": "virtual",
+                "placement_mode": "automatic",
+                "core_node": "sopnode-f2",
+                "ran_node": "sopnode-f3",
+            },
+        )
+        for params in cases:
+            with self.subTest(params=params), tempfile.TemporaryDirectory() as temporary:
+                root, service = self._service(Path(temporary))
+                response = service.handle(
+                    {
+                        "v": 4,
+                        "id": "req-invalid",
+                        "method": "experiment.create",
+                        "params": params,
+                    }
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["error"]["code"], "invalid_params")
+                experiment_root = workspace_directory(root) / "experiments"
+                self.assertEqual(list(experiment_root.iterdir()), [])
+
+    def test_invalid_intent_radio_pair_fails_before_experiment_is_issued(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary))
+            response = service.handle(
+                {
+                    "v": 4,
                     "id": "req-create",
                     "method": "experiment.create",
                     "params": {"intent": "virtual-5g", "radio_mode": "physical"},
@@ -149,7 +230,7 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "req-label",
                     "method": "experiment.create",
                     "params": {
@@ -165,7 +246,7 @@ class ControlServiceTests(unittest.TestCase):
 
             valid = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "req-valid",
                     "method": "experiment.create",
                     "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
@@ -194,7 +275,7 @@ class ControlServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             _, service = self._service(Path(temporary), provider_runner=runner)
             response = service.handle(
-                {"v": 3, "id": "providers", "method": "provider.experiments", "params": {}}
+                {"v": 4, "id": "providers", "method": "provider.experiments", "params": {}}
             )
 
         self.assertTrue(response["ok"])
@@ -229,7 +310,7 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary), provider_runner=runner)
             created = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "create",
                     "method": "experiment.create",
                     "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
@@ -238,7 +319,7 @@ class ControlServiceTests(unittest.TestCase):
             experiment_id = created["result"]["experiment_id"]
             response = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "bind",
                     "method": "experiment.bind_provider",
                     "params": {"provider_experiment": "provider-a"},
@@ -272,7 +353,7 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary), provider_runner=runner)
             created = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "create",
                     "method": "experiment.create",
                     "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
@@ -282,7 +363,7 @@ class ControlServiceTests(unittest.TestCase):
             bind_slices_experiment(root, experiment_id, "provider-a")
             response = service.handle(
                 {
-                    "v": 3,
+                    "v": 4,
                     "id": "bind",
                     "method": "experiment.bind_provider",
                     "params": {"provider_experiment": "provider-b"},
@@ -296,7 +377,7 @@ class ControlServiceTests(unittest.TestCase):
     def test_unknown_method_fails_closed(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 3, "id": "req-2", "method": "resource.reserve", "params": {}}
+            {"v": 4, "id": "req-2", "method": "resource.reserve", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "method_not_found")
@@ -304,7 +385,7 @@ class ControlServiceTests(unittest.TestCase):
     def test_old_protocol_is_rejected(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 2, "id": "req-old", "method": "system.handshake", "params": {}}
+            {"v": 3, "id": "req-old", "method": "system.handshake", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "workspace_error")
@@ -314,7 +395,7 @@ class ControlServiceTests(unittest.TestCase):
         service = ControlService(environment={})
         source = StringIO(
             "not-json\n"
-            '{"v":3,"id":"req-3","method":"system.handshake","params":{}}\n'
+            '{"v":4,"id":"req-3","method":"system.handshake","params":{}}\n'
         )
         target = StringIO()
         serve(service, input_stream=source, output_stream=target)
