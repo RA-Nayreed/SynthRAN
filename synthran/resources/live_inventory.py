@@ -27,6 +27,14 @@ def _allocation_records(text: str) -> tuple[Mapping[str, object], ...]:
     return tuple(value)
 
 
+def _first_text(record: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _allocation_nodes(record: Mapping[str, object]) -> tuple[str, ...]:
     value = record.get("nodes")
     if not isinstance(value, list):
@@ -37,26 +45,19 @@ def _allocation_nodes(record: Mapping[str, object]) -> tuple[str, ...]:
             nodes.append(item.strip())
             continue
         if isinstance(item, dict):
-            candidate = next(
-                (
-                    item.get(key)
-                    for key in ("id", "name", "node")
-                    if isinstance(item.get(key), str) and str(item.get(key)).strip()
-                ),
-                None,
-            )
-            if isinstance(candidate, str):
-                nodes.append(candidate.strip())
+            candidate = _first_text(item, ("name", "id", "node", "node_id"))
+            if candidate is not None:
+                nodes.append(candidate)
                 continue
         raise WorkspaceError("POS allocation inventory contains an invalid node")
     return tuple(nodes)
 
 
 def _allocation_owner(record: Mapping[str, object]) -> str:
-    value = record.get("owner")
-    if not isinstance(value, str) or not value.strip():
+    value = _first_text(record, ("owner", "owner_name", "user", "username"))
+    if value is None:
         raise WorkspaceError("POS allocation inventory record has no owner")
-    return value.strip()
+    return value
 
 
 def _slices_snapshot(
@@ -71,11 +72,7 @@ def _slices_snapshot(
         raise WorkspaceError("POS allocation inventory could not be read")
 
     catalog = reviewed_resource_catalog()
-    slices_ids = {
-        item.resource_id
-        for item in catalog
-        if item.provider == "slices"
-    }
+    slices_ids = {item.resource_id for item in catalog if item.provider == "slices"}
     states: dict[str, ResourceState] = {
         resource_id: ResourceState(resource_id, "unknown", "unknown")
         for resource_id in slices_ids
