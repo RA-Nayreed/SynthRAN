@@ -186,6 +186,11 @@
         "role": "runtime",
         "license": "PSF-2.0"
       },
+      "nodejs": {
+        "version": "22",
+        "role": "Ink workbench runtime and package tooling",
+        "license": "MIT"
+      },
       "git": {
         "version": "2.51.0",
         "role": "dependency synchronization and repository hooks",
