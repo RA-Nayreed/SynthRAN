@@ -2,6 +2,20 @@ import {spawn} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {basename, dirname, join, resolve} from 'node:path';
 
+export type ExperimentIntent =
+  | 'unspecified'
+  | 'virtual-5g'
+  | 'physical-5g'
+  | 'open-ran'
+  | 'iot-to-5g';
+export type ExperimentRadioMode = 'automatic' | 'virtual' | 'physical';
+
+export interface ExperimentCreateInput {
+  intent: ExperimentIntent;
+  radioMode: ExperimentRadioMode;
+  label?: string | null;
+}
+
 export interface ControlAccessEntry {
   configured: boolean;
   fresh: boolean;
@@ -47,7 +61,8 @@ export interface ControlSnapshot {
 interface HandshakeResult {
   service: string;
   protocol: number;
-  read_only: boolean;
+  local_writes: boolean;
+  provider_mutation: boolean;
   methods: string[];
 }
 
@@ -59,12 +74,19 @@ interface ControlResponse<T> {
   error?: {code: string; message: string};
 }
 
-const CONTROL_VERSION = 1;
+interface ControlRequest {
+  id: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+const CONTROL_VERSION = 2;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RESPONSE_TIMEOUT_MS = 10_000;
+const REQUIRED_METHODS = ['system.handshake', 'workspace.snapshot', 'experiment.create'];
 
-const request = (id: string, method: string) =>
-  JSON.stringify({v: CONTROL_VERSION, id, method, params: {}});
+const requestLine = ({id, method, params}: ControlRequest) =>
+  JSON.stringify({v: CONTROL_VERSION, id, method, params});
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isStringArray = (value: unknown): value is string[] =>
@@ -110,10 +132,10 @@ const isHandshake = (value: unknown): value is HandshakeResult => {
   return (
     value.service === 'synthran-control' &&
     value.protocol === CONTROL_VERSION &&
-    value.read_only === true &&
+    value.local_writes === true &&
+    value.provider_mutation === false &&
     isStringArray(value.methods) &&
-    value.methods.includes('system.handshake') &&
-    value.methods.includes('workspace.snapshot')
+    REQUIRED_METHODS.every(method => value.methods.includes(method))
   );
 };
 
@@ -168,30 +190,56 @@ const parseResponse = (line: string): ControlResponse<unknown> => {
   return value as unknown as ControlResponse<unknown>;
 };
 
-export const parseControlOutput = (output: string): ControlSnapshot => {
+const parseResponses = (output: string, expectedIds: readonly string[]) => {
   const responses = output
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean)
     .map(parseResponse);
 
-  if (responses.length !== 2) {
+  if (responses.length !== expectedIds.length) {
     throw new Error('SynthRAN control service returned an unexpected response set');
   }
+  for (const id of expectedIds) {
+    if (responses.filter(item => item.id === id).length !== 1) {
+      throw new Error('SynthRAN control service returned an unexpected response set');
+    }
+  }
+  return responses;
+};
 
+const requireHandshake = (responses: ControlResponse<unknown>[]) => {
   const handshake = responses.find(item => item.id === 'handshake');
-  const snapshot = responses.find(item => item.id === 'snapshot');
   if (!handshake?.ok || !isHandshake(handshake.result)) {
     throw new Error('SynthRAN control handshake is incompatible');
   }
+};
+
+const requireSnapshot = (responses: ControlResponse<unknown>[]): ControlSnapshot => {
+  const snapshot = responses.find(item => item.id === 'snapshot');
   if (!snapshot?.ok || !isSnapshot(snapshot.result)) {
     throw new Error('SynthRAN control service did not provide a usable local snapshot');
   }
   return snapshot.result;
 };
 
-export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSnapshot> =>
-  new Promise((resolveSnapshot, reject) => {
+const controlError = (response: ControlResponse<unknown> | undefined, fallback: string) => {
+  if (!response || response.ok) return fallback;
+  const message = response.error?.message;
+  return typeof message === 'string' && message.length <= 512 ? message : fallback;
+};
+
+export const parseControlOutput = (output: string): ControlSnapshot => {
+  const responses = parseResponses(output, ['handshake', 'snapshot']);
+  requireHandshake(responses);
+  return requireSnapshot(responses);
+};
+
+const runControl = async (
+  requests: ControlRequest[],
+  signal?: AbortSignal,
+): Promise<ControlResponse<unknown>[]> =>
+  new Promise((resolveResponses, reject) => {
     if (signal?.aborted) {
       reject(new Error('SynthRAN local state request was cancelled'));
       return;
@@ -222,12 +270,12 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
       reject(new Error(message));
     };
 
-    const finishSuccess = (snapshot: ControlSnapshot) => {
+    const finishSuccess = (responses: ControlResponse<unknown>[]) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       removeAbortListener();
-      resolveSnapshot(snapshot);
+      resolveResponses(responses);
     };
 
     const onAbort = () => finishError('SynthRAN local state request was cancelled');
@@ -259,7 +307,7 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
       }
 
       try {
-        finishSuccess(parseControlOutput(output));
+        finishSuccess(parseResponses(output, requests.map(item => item.id)));
       } catch (error) {
         finishError(
           error instanceof Error
@@ -269,7 +317,43 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
       }
     });
 
-    child.stdin.end(
-      `${request('handshake', 'system.handshake')}\n${request('snapshot', 'workspace.snapshot')}\n`,
-    );
+    child.stdin.end(`${requests.map(requestLine).join('\n')}\n`);
   });
+
+export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    signal,
+  );
+  requireHandshake(responses);
+  return requireSnapshot(responses);
+};
+
+export const createLocalExperiment = async (
+  input: ExperimentCreateInput,
+  signal?: AbortSignal,
+): Promise<ControlSnapshot> => {
+  const params: Record<string, unknown> = {
+    intent: input.intent,
+    radio_mode: input.radioMode,
+  };
+  if (input.label !== undefined) params.label = input.label;
+
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'create', method: 'experiment.create', params},
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    signal,
+  );
+  requireHandshake(responses);
+  const create = responses.find(item => item.id === 'create');
+  if (!create?.ok) {
+    throw new Error(controlError(create, 'SynthRAN local configuration could not be created'));
+  }
+  return requireSnapshot(responses);
+};
