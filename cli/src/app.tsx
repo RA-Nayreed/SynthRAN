@@ -6,6 +6,7 @@ import {
   bindProviderExperiment,
   cancelOperation,
   createLocalExperiment,
+  executeOperation,
   initializeWorkspace,
   inspectOperation,
   inspectSetup,
@@ -161,7 +162,7 @@ export const App = () => {
   const [operationActionIndex, setOperationActionIndex] = useState(1);
   const [operationInspection, setOperationInspection] = useState<OperationInspection | null>(null);
   const [operationSnapshot, setOperationSnapshot] = useState<OperationSnapshot | null>(null);
-  const [operationBusy, setOperationBusy] = useState<'review' | 'prepare' | 'approve' | 'cancel' | null>(null);
+  const [operationBusy, setOperationBusy] = useState<'review' | 'prepare' | 'approve' | 'execute' | 'cancel' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
 
@@ -638,6 +639,53 @@ export const App = () => {
       });
   };
 
+  const executePreparedOperation = () => {
+    if (busy || !operationSnapshot) {
+      if (!operationSnapshot) setNotice('Prepare an action before executing it.');
+      return;
+    }
+    const readyStatus = operationSnapshot.plan.approval_required ? 'approved' : 'planned';
+    if (operationSnapshot.state.status !== readyStatus) {
+      setNotice(
+        operationSnapshot.plan.approval_required
+          ? 'Record the required approval before execution.'
+          : 'Prepare a fresh action before execution.',
+      );
+      return;
+    }
+    if (operationSnapshot.plan.mutates && mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before executing the approved change.');
+      return;
+    }
+
+    const requestController = new AbortController();
+    actionRequest.current?.abort();
+    actionRequest.current = requestController;
+    setOperationBusy('execute');
+    setNotice(null);
+    executeOperation(operationSnapshot.plan.operation_id, requestController.signal)
+      .then(async operation => {
+        if (requestController.signal.aborted) return;
+        const snapshot = await readLocalSnapshot(requestController.signal);
+        if (requestController.signal.aborted) return;
+        applySnapshot(snapshot, false);
+        setOperationSnapshot(operation);
+        setOperationInspection(null);
+        setMode('OBSERVE');
+        setNotice(`Completed ${operation.plan.operation_id}.`);
+      })
+      .catch(error => {
+        if (requestController.signal.aborted) return;
+        setNotice(error instanceof Error ? error.message : 'Live action did not complete');
+      })
+      .finally(() => {
+        if (actionRequest.current === requestController) {
+          actionRequest.current = null;
+          setOperationBusy(null);
+        }
+      });
+  };
+
   const cancelPreparedOperation = () => {
     if (busy || !operationSnapshot) {
       if (!operationSnapshot) setNotice('Prepare an action before cancelling it.');
@@ -678,11 +726,19 @@ export const App = () => {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
+      if (operationBusy === 'execute') {
+        setNotice('A live action is running; interruption is disabled at this boundary.');
+        return;
+      }
       actionRequest.current?.abort();
       exit();
       return;
     }
     if (!setupTextFocused && input.toLowerCase() === 'q') {
+      if (operationBusy === 'execute') {
+        setNotice('A live action is running; interruption is disabled at this boundary.');
+        return;
+      }
       actionRequest.current?.abort();
       exit();
       return;
@@ -826,6 +882,10 @@ export const App = () => {
         approvePreparedOperation(true);
         return;
       }
+      if (input.toLowerCase() === 'e') {
+        executePreparedOperation();
+        return;
+      }
       if (input.toLowerCase() === 'x') {
         cancelPreparedOperation();
         return;
@@ -967,7 +1027,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>OBSERVE by default · OPERATE records local changes · provider execution remains disabled</Text>
+        <Text color={theme.muted}>OBSERVE by default · OPERATE gates live changes · virtual RFSIM execution enabled</Text>
       </Box>
     </Box>
   );
