@@ -32,10 +32,11 @@ export const App = () => {
   const [paletteIndex, setPaletteIndex] = useState(0);
 
   useEffect(() => {
+    const requestController = new AbortController();
     let cancelled = false;
     setState(null);
     setLoadError(null);
-    readLocalSnapshot()
+    readLocalSnapshot(requestController.signal)
       .then(snapshot => {
         if (cancelled) return;
         setState(toWorkbenchState(snapshot));
@@ -48,6 +49,7 @@ export const App = () => {
       });
     return () => {
       cancelled = true;
+      requestController.abort();
     };
   }, [reloadToken]);
 
@@ -62,7 +64,7 @@ export const App = () => {
       return;
     }
 
-    if (input.toLowerCase() === 'r') {
+    if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
       setReloadToken(value => value + 1);
       return;
