@@ -8,9 +8,12 @@ import tempfile
 import unittest
 
 from synthran.control import ControlService, serve
+from synthran.workspace.access import ProbeResult
 from synthran.workspace.model import AccessRecord, Profile, format_utc
 from synthran.workspace.store import (
+    bind_slices_experiment,
     initialize_workspace,
+    load_experiment_record,
     save_access_record,
     save_profile,
     workspace_directory,
@@ -22,7 +25,12 @@ NOW = datetime(2026, 8, 18, 1, 0, tzinfo=UTC)
 
 
 class ControlServiceTests(unittest.TestCase):
-    def _service(self, base: Path) -> tuple[Path, ControlService]:
+    def _service(
+        self,
+        base: Path,
+        *,
+        provider_runner=None,
+    ) -> tuple[Path, ControlService]:
         root = base / "repo"
         root.mkdir()
         config_home = base / "config"
@@ -42,21 +50,34 @@ class ControlServiceTests(unittest.TestCase):
             project="research-project",
             now=NOW,
         )
-        return root, ControlService(start=root, environment=environment)
+        options = {
+            "start": root,
+            "environment": environment,
+        }
+        if provider_runner is not None:
+            options["provider_runner"] = provider_runner
+        return root, ControlService(**options)
 
-    def test_handshake_declares_local_writes_without_provider_mutation(self) -> None:
+    def test_handshake_declares_provider_reads_without_provider_mutation(self) -> None:
         service = ControlService(start=Path("/missing"), environment={})
         response = service.handle(
-            {"v": 2, "id": "req-1", "method": "system.handshake", "params": {}}
+            {"v": 3, "id": "req-1", "method": "system.handshake", "params": {}}
         )
         self.assertTrue(response["ok"])
         result = response["result"]
         self.assertTrue(result["local_writes"])
+        self.assertTrue(result["provider_reads"])
         self.assertFalse(result["provider_mutation"])
-        self.assertEqual(result["protocol"], 2)
+        self.assertEqual(result["protocol"], 3)
         self.assertEqual(
             result["methods"],
-            ["experiment.create", "system.handshake", "workspace.snapshot"],
+            [
+                "experiment.bind_provider",
+                "experiment.create",
+                "provider.experiments",
+                "system.handshake",
+                "workspace.snapshot",
+            ],
         )
 
     def test_workspace_snapshot_exposes_sanitized_local_state(self) -> None:
@@ -89,13 +110,10 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 2,
+                    "v": 3,
                     "id": "req-create",
                     "method": "experiment.create",
-                    "params": {
-                        "intent": "iot-to-5g",
-                        "radio_mode": "virtual",
-                    },
+                    "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
                 }
             )
             self.assertTrue(response["ok"])
@@ -115,13 +133,10 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 2,
+                    "v": 3,
                     "id": "req-create",
                     "method": "experiment.create",
-                    "params": {
-                        "intent": "virtual-5g",
-                        "radio_mode": "physical",
-                    },
+                    "params": {"intent": "virtual-5g", "radio_mode": "physical"},
                 }
             )
             self.assertFalse(response["ok"])
@@ -134,7 +149,7 @@ class ControlServiceTests(unittest.TestCase):
             root, service = self._service(Path(temporary))
             response = service.handle(
                 {
-                    "v": 2,
+                    "v": 3,
                     "id": "req-label",
                     "method": "experiment.create",
                     "params": {
@@ -145,28 +160,143 @@ class ControlServiceTests(unittest.TestCase):
                 }
             )
             self.assertFalse(response["ok"])
-            self.assertEqual(response["error"]["code"], "invalid_params")
             experiment_root = workspace_directory(root) / "experiments"
             self.assertEqual(list(experiment_root.iterdir()), [])
 
             valid = service.handle(
                 {
-                    "v": 2,
+                    "v": 3,
                     "id": "req-valid",
                     "method": "experiment.create",
-                    "params": {
-                        "intent": "iot-to-5g",
-                        "radio_mode": "virtual",
-                    },
+                    "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
                 }
             )
             self.assertTrue(valid["ok"])
             self.assertTrue(str(valid["result"]["experiment_id"]).endswith("-001"))
 
+    def test_provider_discovery_verifies_project_then_lists(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def runner(command, timeout):
+            command = tuple(command)
+            calls.append(command)
+            if command == ("slices", "auth", "show"):
+                return ProbeResult(0, "Logged in as operator")
+            if command == ("slices", "project", "show"):
+                return ProbeResult(
+                    0,
+                    "The current project is research-project. You are a member. It expires on 2026-10-22 23:59 UTC.",
+                )
+            if command == ("slices", "experiment", "list"):
+                return ProbeResult(0, "│ provider-a │ active │\n│ provider-b │ active │")
+            raise AssertionError(command)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            _, service = self._service(Path(temporary), provider_runner=runner)
+            response = service.handle(
+                {"v": 3, "id": "providers", "method": "provider.experiments", "params": {}}
+            )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["result"]["experiments"], ["provider-a", "provider-b"])
+        self.assertEqual(
+            calls,
+            [
+                ("slices", "auth", "show"),
+                ("slices", "project", "show"),
+                ("slices", "experiment", "list"),
+            ],
+        )
+
+    def test_provider_binding_rechecks_project_and_exact_experiment(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def runner(command, timeout):
+            command = tuple(command)
+            calls.append(command)
+            if command == ("slices", "auth", "show"):
+                return ProbeResult(0, "Logged in as operator")
+            if command == ("slices", "project", "show"):
+                return ProbeResult(
+                    0,
+                    "The current project is research-project. You are a member. It expires on 2026-10-22 23:59 UTC.",
+                )
+            if command == ("slices", "experiment", "show", "provider-a"):
+                return ProbeResult(0, "Experiment provider-a is active")
+            raise AssertionError(command)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary), provider_runner=runner)
+            created = service.handle(
+                {
+                    "v": 3,
+                    "id": "create",
+                    "method": "experiment.create",
+                    "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
+                }
+            )
+            experiment_id = created["result"]["experiment_id"]
+            response = service.handle(
+                {
+                    "v": 3,
+                    "id": "bind",
+                    "method": "experiment.bind_provider",
+                    "params": {"provider_experiment": "provider-a"},
+                }
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["result"]["provider_experiment"], "provider-a")
+            self.assertEqual(
+                load_experiment_record(root, experiment_id).slices_experiment,
+                "provider-a",
+            )
+        self.assertEqual(
+            calls,
+            [
+                ("slices", "auth", "show"),
+                ("slices", "project", "show"),
+                ("slices", "experiment", "show", "provider-a"),
+            ],
+        )
+
+    def test_different_existing_binding_is_refused_before_provider_call(self) -> None:
+        provider_called = False
+
+        def runner(command, timeout):
+            nonlocal provider_called
+            provider_called = True
+            raise AssertionError(command)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary), provider_runner=runner)
+            created = service.handle(
+                {
+                    "v": 3,
+                    "id": "create",
+                    "method": "experiment.create",
+                    "params": {"intent": "iot-to-5g", "radio_mode": "virtual"},
+                }
+            )
+            experiment_id = created["result"]["experiment_id"]
+            bind_slices_experiment(root, experiment_id, "provider-a")
+            response = service.handle(
+                {
+                    "v": 3,
+                    "id": "bind",
+                    "method": "experiment.bind_provider",
+                    "params": {"provider_experiment": "provider-b"},
+                }
+            )
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"]["code"], "invalid_params")
+        self.assertFalse(provider_called)
+
     def test_unknown_method_fails_closed(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 2, "id": "req-2", "method": "resource.reserve", "params": {}}
+            {"v": 3, "id": "req-2", "method": "resource.reserve", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "method_not_found")
@@ -174,7 +304,7 @@ class ControlServiceTests(unittest.TestCase):
     def test_old_protocol_is_rejected(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
-            {"v": 1, "id": "req-old", "method": "system.handshake", "params": {}}
+            {"v": 2, "id": "req-old", "method": "system.handshake", "params": {}}
         )
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"]["code"], "workspace_error")
@@ -184,7 +314,7 @@ class ControlServiceTests(unittest.TestCase):
         service = ControlService(environment={})
         source = StringIO(
             "not-json\n"
-            '{"v":2,"id":"req-3","method":"system.handshake","params":{}}\n'
+            '{"v":3,"id":"req-3","method":"system.handshake","params":{}}\n'
         )
         target = StringIO()
         serve(service, input_stream=source, output_stream=target)
