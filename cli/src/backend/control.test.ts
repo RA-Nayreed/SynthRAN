@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 
-import {findWorkspaceStart, parseControlOutput} from './control.js';
+import {findWorkspaceStart, parseControlOutput, readLocalSnapshot} from './control.js';
 
 const snapshot = {
   workspace: {
@@ -118,5 +118,14 @@ test('malformed snapshots fail closed', () => {
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /usable local snapshot/,
+  );
+});
+
+test('already cancelled reads fail before starting the control service', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    readLocalSnapshot(controller.signal),
+    /local state request was cancelled/,
   );
 });
