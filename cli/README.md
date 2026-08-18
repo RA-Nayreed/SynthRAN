@@ -12,14 +12,15 @@ The current implementation provides:
 - durable experiment configuration, lifecycle, observations, next action, and block reasons;
 - creation of a new immutable local experiment from the Configure view;
 - virtual, physical, and automatic radio selection with compatible experiment intent choices;
+- OBSERVE by default, with OPERATE available only on Configure for an explicit local write;
 - completion markers derived from durable state rather than the selected screen;
-- bounded startup, response-size, protocol, and cancellation handling;
+- bounded startup, response-size, exact capability, protocol, and cancellation handling;
 - `r` to reload local state;
 - `q` or Ctrl+C to quit.
 
 Creating a configuration writes only SynthRAN's local workspace. It creates a new active experiment record and preserves older experiments as history. Provider experiment binding remains empty, and the workbench does not create reservations, allocate resources, change provider state, deploy networks, start experiments, collect evidence, or tear resources down.
 
-The control protocol is version 2. Its handshake explicitly allows validated local configuration writes while declaring provider mutation unavailable.
+The control protocol is version 2. Its handshake explicitly allows the validated local configuration method while declaring provider mutation unavailable. The client requires the exact expected method set and fails closed if additional capabilities are advertised.
 
 The npm package is marked `private` in `package.json` to prevent accidental publication while the interface is not yet released.
 
@@ -36,6 +37,6 @@ npm test
 npm start
 ```
 
-In Configure, use ↑/↓ to move focus, ←/→ to change intent or radio, and Enter on `Create configuration` to persist a new local experiment.
+In Configure, use ↑/↓ to move focus and ←/→ to change intent or radio. Press `m` to switch from OBSERVE to OPERATE, then Enter on `Create configuration` to persist a new local experiment. Leaving Configure, reloading, or completing a write returns the workbench to OBSERVE.
 
 Set `SYNTHRAN_PYTHON` when the desired Python executable is not available as `python` in the current environment.

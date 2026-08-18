@@ -13,7 +13,13 @@ import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
-import {sectionLabels, type RadioMode, type SectionLabel, type WorkbenchState} from './model.js';
+import {
+  sectionLabels,
+  type RadioMode,
+  type SectionLabel,
+  type WorkbenchMode,
+  type WorkbenchState,
+} from './model.js';
 import {theme} from './theme.js';
 
 const actions: PaletteAction[] = [
@@ -61,6 +67,7 @@ export const App = () => {
   const {exit} = useApp();
   const [activeSection, setActiveSection] = useState<SectionLabel>('Access');
   const [state, setState] = useState<WorkbenchState | null>(null);
+  const [mode, setMode] = useState<WorkbenchMode>('OBSERVE');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -85,6 +92,7 @@ export const App = () => {
     const requestController = new AbortController();
     let cancelled = false;
     setState(null);
+    setMode('OBSERVE');
     setLoadError(null);
     setNotice(null);
     readLocalSnapshot(requestController.signal)
@@ -110,10 +118,15 @@ export const App = () => {
     [],
   );
 
+  const selectSection = (section: SectionLabel) => {
+    setActiveSection(section);
+    setMode('OBSERVE');
+    setNotice(null);
+  };
+
   const moveSection = (delta: number) => {
     const current = sectionLabels.indexOf(activeSection);
-    setActiveSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
-    setNotice(null);
+    selectSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
   };
 
   const changeIntent = (delta: number) => {
@@ -132,6 +145,11 @@ export const App = () => {
 
   const saveConfiguration = () => {
     if (saving) return;
+    if (mode !== 'OPERATE') {
+      setNotice('Switch to OPERATE with m before creating local configuration.');
+      return;
+    }
+
     const requestController = new AbortController();
     saveRequest.current?.abort();
     saveRequest.current = requestController;
@@ -146,6 +164,7 @@ export const App = () => {
         if (requestController.signal.aborted) return;
         applySnapshot(snapshot, false);
         setActiveSection('Configure');
+        setMode('OBSERVE');
         setNotice(
           snapshot.experiment.id
             ? `Created ${snapshot.experiment.id}. Provider experiment is not bound.`
@@ -179,6 +198,7 @@ export const App = () => {
 
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
+      setMode('OBSERVE');
       setReloadToken(value => value + 1);
       return;
     }
@@ -199,10 +219,15 @@ export const App = () => {
         return;
       }
       if (key.return) {
-        setActiveSection(actions[paletteIndex].section);
+        selectSection(actions[paletteIndex].section);
         setPaletteOpen(false);
-        setNotice(null);
       }
+      return;
+    }
+
+    if (input.toLowerCase() === 'm' && activeSection === 'Configure') {
+      setMode(current => (current === 'OBSERVE' ? 'OPERATE' : 'OBSERVE'));
+      setNotice(null);
       return;
     }
 
@@ -213,8 +238,7 @@ export const App = () => {
     }
 
     if (/^[1-6]$/.test(input)) {
-      setActiveSection(sectionLabels[Number(input) - 1]);
-      setNotice(null);
+      selectSection(sectionLabels[Number(input) - 1]);
       return;
     }
 
@@ -259,7 +283,7 @@ export const App = () => {
           <Text color={theme.hairline}> · </Text>
           <Text color={theme.muted}>{headerExperiment}</Text>
           <Text>   </Text>
-          <Text inverse> OBSERVE </Text>
+          <Text inverse>{` ${mode} `}</Text>
         </Box>
 
         {state ? (
@@ -283,6 +307,7 @@ export const App = () => {
           ) : activeSection === 'Configure' ? (
             <ConfigurationPanel
               state={state}
+              mode={mode}
               draftIntent={draftIntent}
               draftRadio={draftRadio}
               focusedIndex={configFocus}
