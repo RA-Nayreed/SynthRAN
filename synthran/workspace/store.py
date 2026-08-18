@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -30,6 +31,7 @@ from synthran.workspace.model import (
     utc_now,
     validate_experiment_id,
     validate_profile_name,
+    validate_safe_name,
 )
 
 
@@ -436,6 +438,36 @@ def load_experiment_record(root: Path, experiment_id: str) -> ExperimentRecord:
         network_intent=str(network.get("intent", "unspecified")),
         radio_mode=str(network.get("radio", "automatic")),
     )
+
+
+def bind_slices_experiment(
+    root: Path,
+    experiment_id: str,
+    slices_experiment: str,
+) -> ExperimentRecord:
+    """Bind one verified SLICES experiment exactly once to a local experiment."""
+
+    validate_experiment_id(experiment_id)
+    validate_safe_name(slices_experiment, "SLICES experiment")
+    directory = experiment_directory(root, experiment_id)
+    lock_path = directory / ".experiment.lock"
+    try:
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            record = load_experiment_record(root, experiment_id)
+            if record.slices_experiment == slices_experiment:
+                return record
+            if record.slices_experiment is not None:
+                raise WorkspaceError(
+                    "experiment already has a different SLICES provider binding"
+                )
+            bound = replace(record, slices_experiment=slices_experiment)
+            save_experiment_record(root, bound)
+            return bound
+    except FileNotFoundError as exc:
+        raise WorkspaceError(f"experiment {experiment_id} was not found") from exc
+    except OSError as exc:
+        raise WorkspaceError("experiment provider binding could not be persisted") from exc
 
 
 def active_path(root: Path) -> Path:
