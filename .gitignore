@@ -17,6 +17,10 @@ dist/
 .coverage
 htmlcov/
 
+# Node/Ink workbench dependencies and build output
+node_modules/
+cli/dist/
+
 # Local configuration and credentials
 .env
 .env.*
