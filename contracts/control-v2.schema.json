@@ -10,63 +10,54 @@
     {"$ref": "#/$defs/error"}
   ],
   "$defs": {
-    "requestBase": {
+    "handshakeRequest": {
       "type": "object",
       "required": ["v", "id", "method", "params"],
       "properties": {
         "v": {"const": 2},
-        "id": {"type": "string", "minLength": 1, "maxLength": 128}
-      }
-    },
-    "handshakeRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/requestBase"},
-        {
-          "properties": {
-            "method": {"const": "system.handshake"},
-            "params": {"type": "object", "maxProperties": 0}
-          },
-          "required": ["method", "params"],
-          "additionalProperties": false
-        }
-      ]
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "method": {"const": "system.handshake"},
+        "params": {"type": "object", "maxProperties": 0}
+      },
+      "additionalProperties": false
     },
     "snapshotRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/requestBase"},
-        {
-          "properties": {
-            "method": {"const": "workspace.snapshot"},
-            "params": {"type": "object", "maxProperties": 0}
-          },
-          "required": ["method", "params"],
-          "additionalProperties": false
-        }
-      ]
+      "type": "object",
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": {"const": 2},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "method": {"const": "workspace.snapshot"},
+        "params": {"type": "object", "maxProperties": 0}
+      },
+      "additionalProperties": false
     },
     "createExperimentRequest": {
-      "allOf": [
-        {"$ref": "#/$defs/requestBase"},
-        {
+      "type": "object",
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": {"const": 2},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "method": {"const": "experiment.create"},
+        "params": {
+          "type": "object",
+          "required": ["intent", "radio_mode"],
           "properties": {
-            "method": {"const": "experiment.create"},
-            "params": {
-              "type": "object",
-              "required": ["intent", "radio_mode"],
-              "properties": {
-                "intent": {
-                  "enum": ["unspecified", "virtual-5g", "physical-5g", "open-ran", "iot-to-5g"]
-                },
-                "radio_mode": {"enum": ["automatic", "virtual", "physical"]},
-                "label": {"type": ["string", "null"], "minLength": 1, "maxLength": 120}
-              },
-              "additionalProperties": false
+            "intent": {
+              "enum": ["unspecified", "virtual-5g", "physical-5g", "open-ran", "iot-to-5g"]
+            },
+            "radio_mode": {"enum": ["automatic", "virtual", "physical"]},
+            "label": {
+              "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 120, "pattern": ".*\\S.*"},
+                {"type": "null"}
+              ]
             }
           },
-          "required": ["method", "params"],
           "additionalProperties": false
         }
-      ]
+      },
+      "additionalProperties": false
     },
     "success": {
       "type": "object",
