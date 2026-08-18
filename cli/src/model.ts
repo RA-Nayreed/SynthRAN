@@ -1,5 +1,6 @@
 export type SectionLabel = 'Access' | 'Configure' | 'Resources' | 'Network' | 'Run' | 'Evidence';
 export type RadioMode = 'automatic' | 'virtual' | 'physical';
+export type WorkbenchMode = 'OBSERVE' | 'OPERATE';
 
 export interface ObservationView {
   name: string;
