@@ -12,7 +12,10 @@ from synthran.workspace.model import WorkspaceConfig, WorkspaceError, validate_p
 from synthran.workspace.store import (
     PROFILE_DIRECTORY,
     _atomic_text,
+    active_path,
     config_home,
+    load_active_experiment_id,
+    load_experiment_record,
     load_profile,
     load_workspace,
     workspace_directory,
@@ -125,7 +128,7 @@ def discover_ssh_identity_references(
 def available_profiles(
     environment: Mapping[str, str] | None = None,
 ) -> tuple[ProfileSummary, ...]:
-    """Return sanitized existing profile metadata suitable for first-use selection."""
+    """Return sanitized existing profile metadata suitable for workbench selection."""
 
     env = dict(os.environ if environment is None else environment)
     directory = config_home(env) / PROFILE_DIRECTORY
@@ -205,3 +208,39 @@ def update_workspace_defaults(
             return updated
     except OSError as exc:
         raise WorkspaceError("workspace defaults could not be persisted") from exc
+
+
+def switch_workspace_profile(root: Path, *, profile_name: str) -> WorkspaceConfig:
+    """Switch to an already verified profile while preserving prior experiment history.
+
+    The caller must verify provider access before this local write. An unbound local
+    experiment may be deactivated, but it is never deleted or rewritten.
+    """
+
+    validate_profile_name(profile_name)
+    directory = workspace_directory(root)
+    if not workspace_file(root).is_file():
+        raise WorkspaceError("SynthRAN workspace is not initialized")
+    lock_path = directory / ".workspace.lock"
+    try:
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            current = load_workspace(root)
+            if current.profile == profile_name:
+                return current
+
+            active_id = load_active_experiment_id(root)
+            if active_id is not None:
+                active = load_experiment_record(root, active_id)
+                if active.slices_experiment is not None:
+                    raise WorkspaceError(
+                        "cannot switch profile while the active configuration is bound to SLICES"
+                    )
+                # Remove only the active pointer. The experiment directory remains durable history.
+                active_path(root).unlink(missing_ok=True)
+
+            updated = replace(current, profile=profile_name)
+            _atomic_text(workspace_file(root), workspace_to_toml(updated), mode=0o600)
+            return updated
+    except OSError as exc:
+        raise WorkspaceError("workspace profile could not be persisted") from exc
