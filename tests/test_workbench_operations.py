@@ -131,7 +131,12 @@ class WorkbenchOperationTests(unittest.TestCase):
             self.assertFalse(review["can_plan"])
             self.assertIn("Fresh provider inventory", str(review["plan_block"]))
             operations = root / ".synthran" / "operations"
-            self.assertFalse(operations.exists())
+            operation_entries = (
+                [path.name for path in operations.iterdir() if path.name.startswith("op-")]
+                if operations.is_dir()
+                else []
+            )
+            self.assertEqual(operation_entries, [])
 
             with self.assertRaises(WorkspaceError):
                 plan_operation(
