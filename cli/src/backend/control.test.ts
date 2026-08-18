@@ -9,6 +9,11 @@ import {findWorkspaceStart, parseControlOutput, readLocalSnapshot} from './contr
 const methods = [
   'experiment.bind_provider',
   'experiment.create',
+  'operation.approve',
+  'operation.cancel',
+  'operation.inspect',
+  'operation.plan',
+  'operation.read',
   'provider.experiments',
   'setup.inspect',
   'system.handshake',
@@ -57,12 +62,12 @@ const snapshot = {
 
 const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 4,
+    v: 5,
     id: 'handshake',
     ok: true,
     result: {
       service: 'synthran-control',
-      protocol: 4,
+      protocol: 5,
       local_writes: true,
       provider_reads: true,
       provider_mutation: false,
@@ -70,7 +75,7 @@ const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
       ...handshakeOverrides,
     },
   }),
-  JSON.stringify({v: 4, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 5, id: 'snapshot', ok: true, result: snapshot}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -113,7 +118,7 @@ test('valid framed responses return the sanitized snapshot', () => {
   assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove exact configuration capabilities and deny provider mutation', () => {
+test('handshake must prove the exact operation surface and deny provider mutation', () => {
   assert.throws(
     () => parseControlOutput(responseLines({provider_mutation: true}).join('\n')),
     /handshake is incompatible/,
@@ -127,17 +132,17 @@ test('handshake must prove exact configuration capabilities and deny provider mu
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 3}).join('\n')),
+    () => parseControlOutput(responseLines({protocol: 4}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({methods: [...methods, 'resource.reserve']}).join('\n')),
+    () => parseControlOutput(responseLines({methods: [...methods, 'provider.execute']}).join('\n')),
     /handshake is incompatible/,
   );
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 4, id: 'extra', ok: true, result: {}})];
+  const lines = [...responseLines(), JSON.stringify({v: 5, id: 'extra', ok: true, result: {}})];
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /unexpected response set/,
@@ -147,7 +152,7 @@ test('extra stdout records are rejected instead of ignored', () => {
 test('malformed snapshots fail closed', () => {
   const lines = responseLines();
   lines[1] = JSON.stringify({
-    v: 4,
+    v: 5,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
