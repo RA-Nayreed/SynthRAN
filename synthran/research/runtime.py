@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import threading
-from typing import Any, Mapping, TextIO
+from typing import Any, Callable, Mapping, TextIO
 
 from synthran.dependencies import DependencyLock
 from synthran.experiment import runtime as base_runtime
@@ -157,6 +157,26 @@ def _require_network_ready(
             "controlled measurement UE PDU changed after runtime handoff"
         )
     return report
+
+
+def _prove_pre_window_target(
+    *,
+    spec: ResearchExperimentSpec,
+    prove_icmp: Callable[[], None],
+    prove_transport: Callable[[], None],
+) -> None:
+    """Prove target readiness using the transport that defines the condition.
+
+    Baseline runs have no load transport, so they retain the bounded ICMP
+    reachability proof. Loaded runs prove the actual iperf3 transport instead:
+    the run-owned server must be listening and the UE client's TCP control
+    connection must become established before the measurement window opens.
+    """
+
+    if spec.load.enabled:
+        prove_transport()
+        return
+    prove_icmp()
 
 
 def _write_measurement_path(
@@ -315,9 +335,53 @@ def execute_research_experiment(
                 errors=path_errors,
             )
 
+        def start_loaded_transport() -> None:
+            nonlocal load_server, load_process
+            target_bps = spec.load.resolved_target_bps
+            assert target_bps is not None
+            load_server = start_owned_iperf_server(
+                inventory=inventory,
+                owner_id=spec.run_id,
+                port=spec.load.server_port,
+                repository_root=repository_root,
+                log_path=load_server_log,
+            )
+            report(f"load server: ready on port {spec.load.server_port}")
+            per_stream_bps = max(1, target_bps // spec.load.parallel_flows)
+            load_process = _start_load_client(
+                inventory=inventory,
+                ue_pod=ue_pod,
+                pdu_address=runtime_pdu,
+                target=spec.probe_target or "",
+                port=spec.load.server_port,
+                target_bps=per_stream_bps,
+                protocol=spec.load.protocol,
+                parallel_flows=spec.load.parallel_flows,
+                duration_seconds=(
+                    spec.measurement.duration_seconds
+                    + _LOAD_RUNTIME_HEADROOM_SECONDS
+                ),
+                repository_root=repository_root,
+                log_path=load_client_log,
+            )
+            _wait_load_client_connected(
+                inventory=inventory,
+                ue_pod=ue_pod,
+                pdu_address=runtime_pdu,
+                target=spec.probe_target or "",
+                port=spec.load.server_port,
+                process=load_process,
+            )
+            report("load client: connected")
+            report(
+                "UDP load: target "
+                f"{target_bps / 1_000_000:.2f} Mbps, "
+                f"{spec.load.parallel_flows} flow(s)"
+            )
+
         def start_instrumentation() -> None:
-            nonlocal pre_report, pre_target_ready, load_server
-            nonlocal sampler, probe_process, load_process
+            nonlocal pre_report, pre_target_ready
+            nonlocal sampler, probe_process
             report("measurement path: verifying...")
             try:
                 pre_report = _require_network_ready(
@@ -333,10 +397,14 @@ def execute_research_experiment(
                     pdu_address=runtime_pdu,
                     target=spec.probe_target or "",
                 )
-                _prove_target_reachability(
-                    inventory,
-                    ue_pod,
-                    target=spec.probe_target or "",
+                _prove_pre_window_target(
+                    spec=spec,
+                    prove_icmp=lambda: _prove_target_reachability(
+                        inventory,
+                        ue_pod,
+                        target=spec.probe_target or "",
+                    ),
+                    prove_transport=start_loaded_transport,
                 )
                 pre_target_ready = True
             except Exception as exc:
@@ -346,49 +414,6 @@ def execute_research_experiment(
                 raise
             save_path_state()
             report("measurement path: ready")
-
-            if spec.load.enabled:
-                target_bps = spec.load.resolved_target_bps
-                assert target_bps is not None
-                load_server = start_owned_iperf_server(
-                    inventory=inventory,
-                    owner_id=spec.run_id,
-                    port=spec.load.server_port,
-                    repository_root=repository_root,
-                    log_path=load_server_log,
-                )
-                report(f"load server: ready on port {spec.load.server_port}")
-                per_stream_bps = max(1, target_bps // spec.load.parallel_flows)
-                load_process = _start_load_client(
-                    inventory=inventory,
-                    ue_pod=ue_pod,
-                    pdu_address=runtime_pdu,
-                    target=spec.probe_target or "",
-                    port=spec.load.server_port,
-                    target_bps=per_stream_bps,
-                    protocol=spec.load.protocol,
-                    parallel_flows=spec.load.parallel_flows,
-                    duration_seconds=(
-                        spec.measurement.duration_seconds
-                        + _LOAD_RUNTIME_HEADROOM_SECONDS
-                    ),
-                    repository_root=repository_root,
-                    log_path=load_client_log,
-                )
-                _wait_load_client_connected(
-                    inventory=inventory,
-                    ue_pod=ue_pod,
-                    pdu_address=runtime_pdu,
-                    target=spec.probe_target or "",
-                    port=spec.load.server_port,
-                    process=load_process,
-                )
-                report("load client: connected")
-                report(
-                    "UDP load: target "
-                    f"{target_bps / 1_000_000:.2f} Mbps, "
-                    f"{spec.load.parallel_flows} flow(s)"
-                )
 
             sampler = ResearchNetworkSampler(
                 inventory=inventory,

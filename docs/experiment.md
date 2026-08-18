@@ -65,7 +65,7 @@ A cleanup or base-network reproof failure prevents an `IOT-TO-5G PATH PROVEN` re
 
 ### Accepted integrated evidence
 
-- Base network: `network-acceptance-20260817-04` — `PATH PROVEN`
+- Current base network: `network-acceptance-20260818-04` — `PATH PROVEN`
 - Integrated experiment: `iot-acceptance-20260817-06` — `IOT-TO-5G PATH PROVEN`
 
 The accepted IoT run proved all ten sensors, 30 canonical records for the minimum acceptance window, dynamic PDU discovery, exact cleanup, removal of run-created `tun0`/workspace, and base-network reproof.
@@ -107,19 +107,40 @@ The intended conditions are:
 
 Research load is UDP. A loaded run is valid only when the measured load meets the configured target-ratio gate and all independent path/instrumentation gates remain healthy.
 
+### External measurement peer
+
+Capacity calibration and loaded research traffic terminate outside the 5G core host:
+
+```text
+UE PDU
+-> tun_srsue1
+-> srsRAN / 5G user plane
+-> Open5GS UPF
+-> core egress / NAT
+-> prepared RAN node
+```
+
+The core node is deliberately rejected as a research iperf3 server because a same-host endpoint can collapse into a Kubernetes/hairpin path rather than represent external user-plane egress.
+
+See `docs/research-measurement-peer.md` for the full lifecycle and ownership contract.
+
 ### Reference capacity
 
-Accepted calibration artifact:
+Current accepted calibration artifact:
 
 ```text
-.synthran/research/calibration-20260817-02.json
+.synthran/research/calibration-20260818-external-01.json
 ```
 
-Accepted reference capacity:
+Accepted reference capacity for `network-acceptance-20260818-04`:
 
 ```text
-67,253,028 bps
+66,687,096 bps
 ```
+
+The calibration targeted the prepared RAN node's provider-facing address, `172.28.2.95`, with the client bound to the live UE PDU and routed through `tun_srsue1`.
+
+Historical same-host capacity artifacts, including `calibration-20260817-02.json` (`67,253,028 bps`), are debugging evidence only and must not be reused for campaign fractions.
 
 The live PDU is discovered dynamically during calibration and is never treated as desired/static state.
 
@@ -128,8 +149,8 @@ Example calibration command:
 ```bash
 python -m synthran experiment research calibrate \
   --inventory "$INVENTORY" \
-  --network-run-id network-acceptance-20260817-04 \
-  --target "$CORE_TARGET" \
+  --network-run-id "$NETWORK_RUN_ID" \
+  --target "$MEASUREMENT_PEER_IP" \
   --duration-seconds 10 \
   --out .synthran/research/capacity.json
 ```
@@ -140,22 +161,25 @@ A controlled run uses the reconciled live UE/PDU handoff from base experiment se
 
 1. **Sidecar readiness barrier:** configuration refresh must produce the expected restart and Ready state.
 2. **Exact route lifecycle:** a temporary target `/32` route is reused if already correct or added/owned explicitly and later removed only if SynthRAN created it.
-3. **Owned iperf3 lifecycle:** server workspace/pidfile ownership is run-scoped; orphan recovery and postconditions are exact.
-4. **Continuous RTT probe:** every attempt is represented; all-timeout runs retain timeout records rather than fabricated RTT values.
-5. **Synchronized sampling:** Ingress, UE `tun_srsue1`, and UPF `ogstun` counters are sampled through the fixed measurement window.
-6. **Structured provenance:** measurement path and research artifacts record the exact run inputs/results used for validity decisions.
+3. **Owned external iperf3 lifecycle:** the server runs on the prepared RAN node; workspace/pidfile ownership is run-scoped; orphan recovery and postconditions are exact.
+4. **Transport-aware pre-window readiness:** baseline uses bounded ICMP reachability; loaded conditions require the actual iperf3 TCP control connection to become established before the window opens.
+5. **Continuous RTT probe:** every ICMP attempt is represented during measurement; all-timeout runs retain timeout records rather than fabricated RTT values.
+6. **Synchronized sampling:** Ingress, UE `tun_srsue1`, and UPF `ogstun` counters are sampled through the fixed measurement window.
+7. **Structured provenance:** measurement path and research artifacts record the exact run inputs/results used for validity decisions.
 
 ### Implemented validity gates
 
-The current runtime includes the hardening added after the invalid loaded pilot:
+The current runtime includes the hardening added after the invalid pilots:
 
 - reprove the accepted network path after warmup and after measurement;
 - require the current run-owned UE pod and dynamic PDU handoff to remain consistent;
-- require the exact route and bounded reachability before opening the measurement window;
-- represent every RTT attempt, including all-timeout outcomes;
+- require the exact target route through `tun_srsue1` before opening the measurement window;
+- for baseline, require bounded ICMP reachability before the window;
+- for loaded conditions, start the run-owned external iperf3 server and require the UE client's TCP control connection to become `ESTABLISHED` before the window;
+- never accept `CLOSE-WAIT` as loaded readiness;
+- represent every RTT attempt during measurement, including all-timeout outcomes;
 - prove the exact run-owned iperf3 listener without consuming the one-shot server;
 - use bounded iperf3 control connection timing;
-- require proof that the loaded client actually established its connection;
 - abort when required probe/load/sampler processes exit unexpectedly;
 - allow zero telemetry to represent a scientific outcome only when independent path, load, instrumentation, and cleanup validity remain healthy;
 - persist measurement-path provenance;
@@ -181,8 +205,7 @@ Configuration:
 - ten sensors;
 - sensor period: 5 s;
 - warmup: 30 s;
-- measurement: 180 s;
-- base network: `network-acceptance-20260817-04`.
+- measurement: 180 s.
 
 Result:
 
@@ -201,29 +224,23 @@ Key measurements:
 - UE and UPF counters both increased with zero recorded drops in the accepted window;
 - validity checks passed and instrumentation errors were empty.
 
-## 4. Invalid historical load50 pilot
+## 4. Invalid loaded diagnostics
 
-Run:
+Invalid runs remain immutable diagnostic evidence and must not be used as treatment observations.
 
-```text
-pilot-20260817-03-load50
-```
+### `pilot-20260817-03-load50`
 
-This run is **INVALID** and must not be used as scientific evidence that 50% background load caused telemetry failure or congestion.
+This historical run lost the underlying RFSIM/5G path before a valid loaded measurement existed. The background load did not become valid, telemetry was absent, RTT was lost, and UPF progression did not support a scientific congestion conclusion.
 
-What happened:
+### `pilot-20260818-01-load50`
 
-- target load was about 33.63 Mbps (50% of the accepted calibration);
-- the iperf3 client failed to establish its control connection;
-- background UDP load was therefore never established;
-- telemetry was 0/360;
-- RTT probes had 100% loss;
-- ingress/local UE counters moved while UPF `ogstun` counters did not;
-- the underlying RFSIM/5G transport path collapsed before a valid loaded measurement existed.
+This run exposed the same-host measurement topology bug. The UE was pointed back at the core host, the iperf3 control path did not become valid, and the measurement never established the intended external user-plane load.
 
-Process liveness and established ZMQ TCP sockets were not sufficient health proof: the gNB could remain stuck with zero RF sample progression while `tun_srsue1` was absent.
+### `smoke-20260818-01-udp1m`
 
-The base network was recovered through process-level RFSIM reconciliation without redeploying Open5GS/Kubernetes and was reproven afterward.
+This 1 Mbps production-path smoke run used the corrected external peer and a path-proven base network, but the measurement window never opened. The old runtime required three successful ICMP replies before it started iperf3. The external peer did not satisfy that ICMP gate even though the same path had already passed TCP calibration and a managed cross-host UDP diagnostic.
+
+The smoke run ended `INVALID`; cleanup reproved the base network. It established that loaded readiness must be based on the actual iperf3 transport rather than ICMP reachability.
 
 ## 5. Campaign model and analysis
 
@@ -240,7 +257,7 @@ Example plan:
 ```bash
 python -m synthran experiment research campaign-plan \
   --campaign-id campaign-01 \
-  --network-run-id network-acceptance-20260817-04 \
+  --network-run-id network-acceptance-20260818-04 \
   --seeds 424242,424243,424244 \
   --conditions baseline,load50:0.5,load80:0.8,load95:0.95 \
   --campaign-seed 12345 \
@@ -275,6 +292,7 @@ Keep these concepts distinct:
 
 - **base path acceptance:** the current network path is proven;
 - **IoT path acceptance:** the integrated telemetry path and cleanup/reproof passed;
+- **reference-capacity acceptance:** calibration used the intended external peer through the UE path;
 - **research validity:** the controlled measurement satisfied all required telemetry/probe/network/load/instrumentation/cleanup rules;
 - **campaign readiness:** the run is valid for the intended statistical comparison.
 
@@ -282,12 +300,13 @@ A historical successful path does not prove the path is currently healthy. A cur
 
 ## 8. Remaining work
 
-The major scientific work still outstanding is live evidence, not the basic validity-gate implementation:
+The major scientific work still outstanding is live loaded evidence:
 
-1. execute a **fresh valid load50** run under the current hardened gates;
-2. establish valid load80 and load95 runs;
-3. execute the intended multi-seed blocked campaign with never-reused run IDs;
-4. analyze valid paired results and report findings;
-5. consider network-sampling query batching/parallelization if the sequential remote-query cadence becomes a measurement limitation.
+1. execute a fresh low-rate UDP smoke run with transport-aware readiness;
+2. execute a **fresh valid load50** run using `66,687,096 bps` as the current accepted reference capacity;
+3. establish valid load80 and load95 runs;
+4. execute the intended multi-seed blocked campaign with never-reused run IDs;
+5. analyze valid paired results and report findings;
+6. consider network-sampling query batching/parallelization if the sequential remote-query cadence becomes a measurement limitation.
 
-Product-side work is separate: the interactive terminal has application operation plans for `/run`, `/stop`, `/collect`, `/logs`, and `/down`, but their concrete terminal provider/domain executors remain unconnected. Do not conflate that product integration gap with the scientific validity gates already implemented in the scripted research runtime.
+Product-side work is separate: the interactive terminal has application operation plans for `/run`, `/stop`, `/collect`, `/logs`, and `/down`, but their concrete terminal provider/domain executors remain unconnected. Do not conflate that product integration gap with the scientific validity gates implemented in the scripted research runtime.
