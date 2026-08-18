@@ -232,6 +232,10 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
 
     const onAbort = () => finishError('SynthRAN local state request was cancelled');
     signal?.addEventListener('abort', onAbort, {once: true});
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
 
     timer = setTimeout(
       () => finishError('SynthRAN control service did not return local state'),
