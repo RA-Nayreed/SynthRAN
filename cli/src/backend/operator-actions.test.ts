@@ -11,6 +11,15 @@ import {
 const state = (lifecycle: string): WorkbenchState => ({
   project: 'post5g-beta',
   profile: 'default',
+  profiles: [
+    {
+      name: 'default',
+      slicesUsername: 'rnayreed',
+      r2labSlice: null,
+      identityName: null,
+    },
+  ],
+  computeNodes: ['sopnode-f1', 'sopnode-f2', 'sopnode-f3', 'sopnode-w3'],
   experiment: 'sran-20260818-001',
   hasActiveExperiment: true,
   completedSections: [],
@@ -26,6 +35,9 @@ const state = (lifecycle: string): WorkbenchState => ({
   sshIdentity: 'Not configured',
   reservationMinutes: 120,
   placement: 'automatic',
+  experimentPlacement: 'automatic',
+  coreNode: null,
+  ranNode: null,
   lifecycle,
   observations: [],
   nextSteps: [],
