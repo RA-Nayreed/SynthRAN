@@ -128,7 +128,7 @@ class FoundationTests(unittest.TestCase):
             self.assertIn(f"docs/{name}", readme)
 
     def test_tracked_product_text_avoids_internal_milestone_language(self) -> None:
-        excluded_parts = {".git", ".deps", ".synthran", "__pycache__"}
+        excluded_parts = {".git", ".deps", ".synthran", "__pycache__", "node_modules"}
         forbidden = "pha" + "se"
         text_suffixes = {
             ".ini",
