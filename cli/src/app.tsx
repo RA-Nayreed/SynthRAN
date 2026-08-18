@@ -83,10 +83,15 @@ export const App = () => {
     [],
   );
 
+  const selectSection = (section: SectionLabel) => {
+    setActiveSection(section);
+    setMode('OBSERVE');
+    setConfigNotice(null);
+  };
+
   const moveSection = (delta: number) => {
     const current = sectionLabels.indexOf(activeSection);
-    setActiveSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
-    setConfigNotice(null);
+    selectSection(sectionLabels[wrap(current + delta, sectionLabels.length)]);
   };
 
   const submitLocalExperiment = () => {
@@ -154,14 +159,14 @@ export const App = () => {
         return;
       }
       if (key.return) {
-        setActiveSection(actions[paletteIndex].section);
+        selectSection(actions[paletteIndex].section);
         setPaletteOpen(false);
-        setConfigNotice(null);
       }
       return;
     }
 
-    if (input.toLowerCase() === 'm' && !configBusy) {
+    const creating = activeSection === 'Configure' && state.experimentId === null;
+    if (input.toLowerCase() === 'm' && creating && !configBusy) {
       setMode(current => (current === 'OBSERVE' ? 'OPERATE' : 'OBSERVE'));
       setConfigNotice(null);
       return;
@@ -174,12 +179,10 @@ export const App = () => {
     }
 
     if (/^[1-6]$/.test(input)) {
-      setActiveSection(sectionLabels[Number(input) - 1]);
-      setConfigNotice(null);
+      selectSection(sectionLabels[Number(input) - 1]);
       return;
     }
 
-    const creating = activeSection === 'Configure' && state.experimentId === null;
     if (creating && !configBusy) {
       if (key.upArrow) {
         setConfigFocus(index => wrap(index - 1, 3));
