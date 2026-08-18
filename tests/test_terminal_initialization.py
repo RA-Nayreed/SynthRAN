@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from synthran.terminal.initialize import (
+    INITIALIZATION_PROVIDER_TIMEOUT_SECONDS,
     discover_ssh_identities,
     initialization_root,
     initialize_from_terminal,
@@ -76,6 +77,11 @@ class TerminalInitializationTests(unittest.TestCase):
             self.assertEqual(request.slices_username, "operator")
             self.assertFalse(request.reuse_profile)
             self.assertIsNone(request.r2lab_slice)
+            self.assertEqual(
+                initialize.call_args.kwargs["timeout_seconds"],
+                INITIALIZATION_PROVIDER_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(INITIALIZATION_PROVIDER_TIMEOUT_SECONDS, 60)
             self.assertIn("Verifying provider access read-only", output.getvalue())
 
     def test_discovers_private_keys_and_prioritizes_r2lab_named_identity(self) -> None:
