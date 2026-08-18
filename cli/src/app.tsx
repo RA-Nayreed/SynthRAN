@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from 'react';
+import React, {useState} from 'react';
 import {Box, Spacer, Text, useApp, useInput} from 'ink';
 
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
@@ -6,7 +6,7 @@ import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
-import {mockWorkbenchState, sectionLabels, sectionsFor, type SectionLabel} from './mock.js';
+import {mockWorkbenchState, sectionLabels, type SectionLabel} from './mock.js';
 import {theme} from './theme.js';
 
 const actions: PaletteAction[] = [
@@ -28,11 +28,6 @@ export const App = () => {
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [configFocus, setConfigFocus] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const renderedState = useMemo(
-    () => ({...state, sections: sectionsFor(activeSection)}),
-    [activeSection, state],
-  );
 
   const moveSection = (delta: number) => {
     const current = sectionLabels.indexOf(activeSection);
@@ -147,22 +142,22 @@ export const App = () => {
         <Box>
           <Text bold color={theme.bodyStrong}>SynthRAN</Text>
           <Spacer />
-          <Text color={theme.muted}>{renderedState.project}</Text>
+          <Text color={theme.muted}>{state.project}</Text>
           <Text color={theme.hairline}> · </Text>
-          <Text color={theme.muted}>{renderedState.experiment}</Text>
+          <Text color={theme.muted}>{state.experiment}</Text>
           <Text>   </Text>
-          <Text inverse>{` ${renderedState.mode} `}</Text>
+          <Text inverse>{` ${state.mode} `}</Text>
         </Box>
 
-        <SectionStrip sections={renderedState.sections} />
+        <SectionStrip sections={sectionLabels} selected={activeSection} completed={state.completedSections} />
 
         <Box borderTop borderStyle="single" borderColor={theme.hairline}>
           {paletteOpen ? (
             <ActionPalette actions={actions} selectedIndex={paletteIndex} />
           ) : activeSection === 'Configure' ? (
-            <ConfigurationPanel state={renderedState} focusedIndex={configFocus} notice={notice} />
+            <ConfigurationPanel state={state} focusedIndex={configFocus} notice={notice} />
           ) : (
-            <SectionPanel section={activeSection} state={renderedState} />
+            <SectionPanel section={activeSection} state={state} />
           )}
         </Box>
       </Box>
