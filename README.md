@@ -48,7 +48,7 @@ flowchart LR
 
 The accepted experiment uses RFSIM rather than physical RF. One srsUE represents an IoT edge gateway serving ten constrained sensors. Sensor-to-edge MQTT uses QoS 0. The edge-to-core Mosquitto bridge runs inside the srsUE pod network namespace, binds to the dynamically discovered UE PDU address, and is explicitly routed through `tun_srsue1`.
 
-In controlled research workflows, the same deterministic workload runs alongside controlled UDP background load over `tun_srsue1` to evaluate sequence integrity, inter-arrival behavior, RTT, and interface throughput across fixed measurement windows.
+In controlled research workflows, the same deterministic workload runs alongside controlled UDP background load over `tun_srsue1` to an external measurement peer. In the supported two-node inventory, the prepared RAN node is that peer; the 5G core node is deliberately excluded so capacity and load measurements cannot collapse into a same-host Kubernetes/hairpin path. See [research measurement peer](docs/research-measurement-peer.md).
 
 ## What is reused
 
@@ -59,22 +59,23 @@ In controlled research workflows, the same deterministic workload runs alongside
 | srsRAN Helm deployment | gNB, srsUE and RFSIM integration | Transitive repository pinned to a commit passed into Ansible |
 | Contiki-NG and Cooja | RPL/6LoWPAN firmware and IoT simulation | Complete pinned checkout with an out-of-tree SynthRAN sensor application |
 | Eclipse Mosquitto | Edge and central MQTT brokers | Containers pinned by digest with run-scoped configuration |
-| iperf3 | Reference capacity calibration and controlled background load | Pinned container and host tools with run-scoped lifecycle |
+| iperf3 | Reference capacity calibration and controlled background load | Run-owned server on the external measurement peer plus UE-bound client traffic |
 
 These repositories are not merged into SynthRAN, copied selectively, or tracked as submodules. Local detached checkouts live under ignored `.deps/` storage. See [dependency reuse and provenance](docs/dependencies.md) and [third-party licenses](THIRD_PARTY.md).
 
 ## Current status
 
-The repository foundation, Open5GS + srsRAN + RFSIM base network, deterministic IoT-to-5G data path, capacity calibration, and one controlled baseline measurement are implemented and live accepted.
+The repository foundation, Open5GS + srsRAN + RFSIM base network, deterministic IoT-to-5G data path, and one controlled baseline measurement are implemented and live accepted. The external measurement-peer topology for capacity calibration and loaded conditions is implemented after a live cross-host diagnosis on 2026-08-18; a fresh accepted capacity calibration against that peer is still required before loaded campaign evidence is generated.
 
 Canonical accepted SLICES evidence includes:
 
 - **Base 5G network:** `network-acceptance-20260817-04` (`Result: PATH PROVEN`)
 - **Integrated IoT-to-5G experiment:** `iot-acceptance-20260817-06` (`Result: IOT-TO-5G PATH PROVEN`)
-- **Reference capacity calibration:** `calibration-20260817-02.json` (`67,253,028 bps`, about 67.25 Mbps over `tun_srsue1`)
 - **Controlled research baseline:** `pilot-20260817-03-baseline` (`READY FOR CAMPAIGN ANALYSIS`, 360/360 telemetry events, zero gaps or duplicates, 180 successful RTT samples, complete transport-path sampling)
 
-The historical `pilot-20260817-03-load50` run is **invalid evidence for a loaded-condition result**: the background load was not established and the underlying RFSIM/5G path collapsed. A fresh valid loaded run is still required before drawing scientific conclusions about load50, load80, or load95.
+The historical `calibration-20260817-02.json` (`67,253,028 bps`) and the later same-host calibration against the core-node provider address are retained only as debugging evidence. They terminated on the 5G core host and must not be reused as scientific reference capacity. A fresh calibration must target the prepared RAN node's provider-facing IPv4 address through `tun_srsue1`.
+
+The historical `pilot-20260817-03-load50` and `pilot-20260818-01-load50` runs are **invalid evidence for loaded-condition results**. The first lost the underlying path; the second exposed the same-host iperf topology bug before the measurement window. Fresh valid load50/load80/load95 runs are still required before scientific conclusions are drawn.
 
 | Capability | Status |
 |---|---|
@@ -87,7 +88,7 @@ The historical `pilot-20260817-03-load50` run is **invalid evidence for a loaded
 | `tunslip6/tun0` ingress and UE-side Mosquitto bridge | Implemented and live accepted |
 | Central MQTT collection and JSONL/Parquet derivation | Implemented and live accepted |
 | Integrated IoT-to-5G evidence and cleanup reproof | Implemented and live accepted (`IOT-TO-5G PATH PROVEN`) |
-| Reference capacity calibration over `tun_srsue1` | Implemented and live accepted |
+| External-peer reference capacity calibration over `tun_srsue1` | Implemented; fresh accepted calibration pending |
 | Controlled baseline measurement and RTT/network sampling | Implemented and live accepted |
 | Loaded-condition validity gates, blocked campaign scheduling, and offline analysis | Implemented and offline tested; valid loaded campaign evidence still pending |
 | Persistent workspace, desired/observed state, reconciliation and operation control | Implemented and offline tested |
@@ -201,13 +202,25 @@ synthran experiment verify --run-id EXPERIMENT_RUN_ID
 
 ### Controlled research experiments
 
-Calibrate reference UE-path capacity against a path-proven network:
+Before calibration, identify the provider-facing IPv4 address of the prepared RAN node. This is the external measurement peer. Do not use the core-node address or the Post5G NRF LoadBalancer address.
+
+```sh
+ansible -i "$INVENTORY" ran_node -m shell -a '
+hostname
+ip -4 -o addr show
+ip -4 route show default
+'
+
+MEASUREMENT_PEER_IP=<ran-node-provider-ip>
+```
+
+Calibrate reference UE-path capacity against the external peer:
 
 ```sh
 python -m synthran experiment research calibrate \
   --inventory .synthran/preparations/NETWORK_RUN_ID/hosts.ini \
   --network-run-id NETWORK_RUN_ID \
-  --target CORE_IP \
+  --target "$MEASUREMENT_PEER_IP" \
   --duration-seconds 10 \
   --out .synthran/research/capacity.json
 ```
@@ -228,13 +241,15 @@ python -m synthran experiment research run \
   --network-run-id NETWORK_RUN_ID \
   --run-id pilot-01-baseline \
   --condition baseline \
-  --probe-target CORE_IP \
+  --probe-target "$MEASUREMENT_PEER_IP" \
   --duration-seconds 180
 ```
 
+The run-owned iperf3 server for calibration and loaded conditions now runs on `inventory.ran_node`, while the client remains inside the UE pod and binds its PDU address. The lifecycle rejects the core node as the measurement server. Read [research measurement peer](docs/research-measurement-peer.md) before generating loaded campaign evidence.
+
 Plan and analyze a deterministic blocked campaign with the dedicated research commands. Do not interpret a loaded condition scientifically unless its own validity gates report it ready for campaign analysis.
 
-Read the exact live safety and acceptance boundary in the [integrated experiment guide](docs/experiment.md) and [operator guide](docs/operator-guide.md). Test fixtures are not deployment inventories.
+Read the exact live safety and acceptance boundary in the [integrated experiment guide](docs/experiment.md), [research measurement peer](docs/research-measurement-peer.md), and [operator guide](docs/operator-guide.md). Test fixtures are not deployment inventories.
 
 ## Planned experiment output
 
@@ -314,6 +329,7 @@ Formal O-RAN A1/E2 control and generative models remain deferred until the measu
 ### Experimentation and repository operation
 - [Operator guide and safety gates](docs/operator-guide.md)
 - [Integrated IoT-to-5G experiment and controlled research](docs/experiment.md)
+- [Research measurement peer and external load endpoint](docs/research-measurement-peer.md)
 - [Development environment and tests](docs/development.md)
 - [Dependency reuse and update policy](docs/dependencies.md)
 - [Security, privacy and artifact handling](docs/security.md)
