@@ -10,6 +10,8 @@ export type ExperimentIntent =
   | 'iot-to-5g';
 export type ExperimentRadioMode = 'automatic' | 'virtual' | 'physical';
 export type PlacementMode = 'automatic' | 'manual';
+export type OperationAction = 'reserve' | 'up' | 'verify' | 'recover' | 'down';
+export type ApprovalMode = 'standard' | 'destructive';
 
 export interface ExperimentCreateInput {
   intent: ExperimentIntent;
@@ -96,6 +98,72 @@ export interface ControlSnapshot {
   blocks: string[];
 }
 
+export interface OperationInspection {
+  action: OperationAction;
+  kind: string;
+  risk: string;
+  mutates: boolean;
+  reason: string;
+  approval_required: boolean;
+  approval_mode: ApprovalMode | null;
+  targets: string[];
+  can_plan: boolean;
+  plan_block: string | null;
+}
+
+export interface OperationPlanView {
+  operation_id: string;
+  experiment_id: string;
+  kind: string;
+  risk: string;
+  mutates: boolean;
+  reason: string;
+  approval_required: boolean;
+  approval_mode: ApprovalMode | null;
+  targets: string[];
+  created_at_utc: string;
+}
+
+export interface OperationStateView {
+  schema: string;
+  operation_id: string;
+  status: string;
+  risk: string;
+  mutates: boolean;
+  plan_sha256: string;
+  updated_at_utc: string;
+  claim_held: boolean;
+}
+
+export interface OperationApprovalView {
+  schema: string;
+  operation_id: string;
+  plan_sha256: string;
+  risk: string;
+  mode: ApprovalMode;
+  approved_at_utc: string;
+}
+
+export interface OperationEventView {
+  schema: string;
+  event_id: string;
+  operation_id: string;
+  sequence: number;
+  event_type: string;
+  occurred_at_utc: string;
+  risk: string;
+  mutates: boolean;
+  plan_sha256: string;
+  attributes: Record<string, string>;
+}
+
+export interface OperationSnapshot {
+  plan: OperationPlanView;
+  state: OperationStateView;
+  approval: OperationApprovalView | null;
+  events: OperationEventView[];
+}
+
 interface HandshakeResult {
   service: string;
   protocol: number;
@@ -124,11 +192,12 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const CONTROL_VERSION = 4;
+const CONTROL_VERSION = 5;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
 const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
 const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const OPERATION_ID_RE = /^op-[0-9]{6,}$/;
 const REQUIRED_METHODS = [
   'system.handshake',
   'setup.inspect',
@@ -138,6 +207,11 @@ const REQUIRED_METHODS = [
   'experiment.create',
   'provider.experiments',
   'experiment.bind_provider',
+  'operation.inspect',
+  'operation.plan',
+  'operation.read',
+  'operation.approve',
+  'operation.cancel',
 ];
 
 const requestLine = ({id, method, params}: ControlRequest) =>
@@ -148,6 +222,10 @@ const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string');
 const isNullableString = (value: unknown): value is string | null =>
   value === null || typeof value === 'string';
+const isApprovalMode = (value: unknown): value is ApprovalMode | null =>
+  value === null || value === 'standard' || value === 'destructive';
+const isOperationAction = (value: unknown): value is OperationAction =>
+  value === 'reserve' || value === 'up' || value === 'verify' || value === 'recover' || value === 'down';
 
 export const findWorkspaceStart = (
   start: string,
@@ -260,6 +338,93 @@ const isSnapshot = (value: unknown): value is ControlSnapshot => {
     value.observations.every(isObservation) &&
     isStringArray(value.next_steps) &&
     isStringArray(value.blocks)
+  );
+};
+
+const hasSafeStringMap = (value: unknown): value is Record<string, string> =>
+  isRecord(value) && Object.entries(value).every(([key, item]) => key.length > 0 && typeof item === 'string');
+
+const isOperationInspection = (value: unknown): value is OperationInspection => {
+  if (!isRecord(value)) return false;
+  return (
+    isOperationAction(value.action) &&
+    typeof value.kind === 'string' &&
+    typeof value.risk === 'string' &&
+    typeof value.mutates === 'boolean' &&
+    typeof value.reason === 'string' &&
+    typeof value.approval_required === 'boolean' &&
+    isApprovalMode(value.approval_mode) &&
+    isStringArray(value.targets) &&
+    typeof value.can_plan === 'boolean' &&
+    isNullableString(value.plan_block)
+  );
+};
+
+const isOperationPlan = (value: unknown): value is OperationPlanView => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.operation_id === 'string' && OPERATION_ID_RE.test(value.operation_id) &&
+    typeof value.experiment_id === 'string' &&
+    typeof value.kind === 'string' &&
+    typeof value.risk === 'string' &&
+    typeof value.mutates === 'boolean' &&
+    typeof value.reason === 'string' &&
+    typeof value.approval_required === 'boolean' &&
+    isApprovalMode(value.approval_mode) &&
+    isStringArray(value.targets) &&
+    typeof value.created_at_utc === 'string'
+  );
+};
+
+const isOperationState = (value: unknown): value is OperationStateView => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.schema === 'string' &&
+    typeof value.operation_id === 'string' && OPERATION_ID_RE.test(value.operation_id) &&
+    typeof value.status === 'string' &&
+    typeof value.risk === 'string' &&
+    typeof value.mutates === 'boolean' &&
+    typeof value.plan_sha256 === 'string' &&
+    typeof value.updated_at_utc === 'string' &&
+    typeof value.claim_held === 'boolean'
+  );
+};
+
+const isOperationApproval = (value: unknown): value is OperationApprovalView => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.schema === 'string' &&
+    typeof value.operation_id === 'string' && OPERATION_ID_RE.test(value.operation_id) &&
+    typeof value.plan_sha256 === 'string' &&
+    typeof value.risk === 'string' &&
+    (value.mode === 'standard' || value.mode === 'destructive') &&
+    typeof value.approved_at_utc === 'string'
+  );
+};
+
+const isOperationEvent = (value: unknown): value is OperationEventView => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.schema === 'string' &&
+    typeof value.event_id === 'string' &&
+    typeof value.operation_id === 'string' && OPERATION_ID_RE.test(value.operation_id) &&
+    Number.isInteger(value.sequence) &&
+    typeof value.event_type === 'string' &&
+    typeof value.occurred_at_utc === 'string' &&
+    typeof value.risk === 'string' &&
+    typeof value.mutates === 'boolean' &&
+    typeof value.plan_sha256 === 'string' &&
+    hasSafeStringMap(value.attributes)
+  );
+};
+
+const isOperationSnapshot = (value: unknown): value is OperationSnapshot => {
+  if (!isRecord(value)) return false;
+  return (
+    isOperationPlan(value.plan) &&
+    isOperationState(value.state) &&
+    (value.approval === null || isOperationApproval(value.approval)) &&
+    Array.isArray(value.events) && value.events.every(isOperationEvent)
   );
 };
 
@@ -570,4 +735,103 @@ export const bindProviderExperiment = async (
     throw new Error(controlError(bind, 'SLICES experiment could not be bound'));
   }
   return requireSnapshot(responses);
+};
+
+export const inspectOperation = async (
+  action: OperationAction,
+  signal?: AbortSignal,
+): Promise<OperationInspection> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'operation', method: 'operation.inspect', params: {action}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  const response = responses.find(item => item.id === 'operation');
+  if (!response?.ok || !isOperationInspection(response.result)) {
+    throw new Error(controlError(response, 'SynthRAN operation could not be inspected'));
+  }
+  return response.result;
+};
+
+const requireOperationSnapshot = (
+  responses: ControlResponse<unknown>[],
+  id: string,
+  fallback: string,
+): OperationSnapshot => {
+  const response = responses.find(item => item.id === id);
+  if (!response?.ok || !isOperationSnapshot(response.result)) {
+    throw new Error(controlError(response, fallback));
+  }
+  return response.result;
+};
+
+export const planOperation = async (
+  action: OperationAction,
+  signal?: AbortSignal,
+): Promise<OperationSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'operation', method: 'operation.plan', params: {action}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation plan could not be created');
+};
+
+export const readOperation = async (
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<OperationSnapshot> => {
+  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'operation', method: 'operation.read', params: {operation_id: operationId}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation could not be read');
+};
+
+export const approveOperation = async (
+  operationId: string,
+  mode: ApprovalMode,
+  signal?: AbortSignal,
+): Promise<OperationSnapshot> => {
+  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {
+        id: 'operation',
+        method: 'operation.approve',
+        params: {operation_id: operationId, mode},
+      },
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation approval could not be recorded');
+};
+
+export const cancelOperation = async (
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<OperationSnapshot> => {
+  if (!OPERATION_ID_RE.test(operationId)) throw new Error('SynthRAN operation ID is invalid');
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'operation', method: 'operation.cancel', params: {operation_id: operationId}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  return requireOperationSnapshot(responses, 'operation', 'SynthRAN operation could not be cancelled');
 };
