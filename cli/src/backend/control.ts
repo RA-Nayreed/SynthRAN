@@ -58,6 +58,28 @@ export interface ControlSnapshot {
   blocks: string[];
 }
 
+export interface ResourceProviderView {
+  provider: string;
+  fresh: boolean;
+  complete: boolean;
+  detail: string;
+}
+
+export interface ResourceView {
+  resource_id: string;
+  provider: string;
+  kind: string;
+  capabilities: string[];
+  availability: 'available' | 'allocated' | 'unavailable' | 'unknown';
+  ownership: 'synthran' | 'operator' | 'other' | 'unknown' | 'unowned';
+  selectable: boolean;
+}
+
+export interface ControlResourceSnapshot {
+  providers: ResourceProviderView[];
+  resources: ResourceView[];
+}
+
 interface HandshakeResult {
   service: string;
   protocol: number;
@@ -86,17 +108,20 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const CONTROL_VERSION = 3;
+const CONTROL_VERSION = 4;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
 const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
 const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const AVAILABILITY = new Set(['available', 'allocated', 'unavailable', 'unknown']);
+const OWNERSHIP = new Set(['synthran', 'operator', 'other', 'unknown', 'unowned']);
 const REQUIRED_METHODS = [
   'system.handshake',
   'workspace.snapshot',
   'experiment.create',
   'provider.experiments',
   'experiment.bind_provider',
+  'resources.snapshot',
 ];
 
 const requestLine = ({id, method, params}: ControlRequest) =>
@@ -193,6 +218,32 @@ const isSnapshot = (value: unknown): value is ControlSnapshot => {
     isStringArray(value.blocks)
   );
 };
+
+const isProviderView = (value: unknown): value is ResourceProviderView =>
+  isRecord(value) &&
+  typeof value.provider === 'string' &&
+  typeof value.fresh === 'boolean' &&
+  typeof value.complete === 'boolean' &&
+  typeof value.detail === 'string';
+
+const isResourceView = (value: unknown): value is ResourceView =>
+  isRecord(value) &&
+  typeof value.resource_id === 'string' &&
+  typeof value.provider === 'string' &&
+  typeof value.kind === 'string' &&
+  isStringArray(value.capabilities) &&
+  typeof value.availability === 'string' &&
+  AVAILABILITY.has(value.availability) &&
+  typeof value.ownership === 'string' &&
+  OWNERSHIP.has(value.ownership) &&
+  typeof value.selectable === 'boolean';
+
+const isResourceSnapshot = (value: unknown): value is ControlResourceSnapshot =>
+  isRecord(value) &&
+  Array.isArray(value.providers) &&
+  value.providers.every(isProviderView) &&
+  Array.isArray(value.resources) &&
+  value.resources.every(isResourceView);
 
 const parseResponse = (line: string): ControlResponse<unknown> => {
   const value: unknown = JSON.parse(line);
@@ -425,4 +476,22 @@ export const bindProviderExperiment = async (
     throw new Error(controlError(bind, 'SLICES experiment could not be bound'));
   }
   return requireSnapshot(responses);
+};
+
+export const readResourceSnapshot = async (
+  signal?: AbortSignal,
+): Promise<ControlResourceSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'resources', method: 'resources.snapshot', params: {}},
+    ],
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  const resourceResponse = responses.find(item => item.id === 'resources');
+  if (!resourceResponse?.ok || !isResourceSnapshot(resourceResponse.result)) {
+    throw new Error(controlError(resourceResponse, 'Resource inventory could not be loaded'));
+  }
+  return resourceResponse.result;
 };
