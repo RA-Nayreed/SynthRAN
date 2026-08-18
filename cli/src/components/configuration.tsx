@@ -1,7 +1,7 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
-import type {ExperimentIntent} from '../backend/control.js';
+import type {ExperimentIntent, PlacementMode} from '../backend/control.js';
 import type {RadioMode, WorkbenchMode, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
@@ -10,8 +10,10 @@ interface ConfigurationPanelProps {
   mode: WorkbenchMode;
   draftIntent: ExperimentIntent;
   draftRadio: RadioMode;
+  draftReservation: number;
+  draftPlacement: PlacementMode;
   focusedIndex: number;
-  saving: boolean;
+  localBusy: 'initializing' | 'defaults' | 'experiment' | null;
   providerBusy: 'loading' | 'binding' | null;
   providerExperiments: string[] | null;
   providerCandidate: string | null;
@@ -73,8 +75,10 @@ export const ConfigurationPanel = ({
   mode,
   draftIntent,
   draftRadio,
+  draftReservation,
+  draftPlacement,
   focusedIndex,
-  saving,
+  localBusy,
   providerBusy,
   providerExperiments,
   providerCandidate,
@@ -87,13 +91,18 @@ export const ConfigurationPanel = ({
 
     <Row label="Intent" focused={focusedIndex === 0}>{intentLabel(draftIntent)}</Row>
     <Row label="Radio" focused={focusedIndex === 1}>{radioLabel(draftRadio)}</Row>
-    <Row label="Create configuration" focused={focusedIndex === 2}>
-      {saving ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
+    <Row label="Reservation" focused={focusedIndex === 2}>{draftReservation} minutes</Row>
+    <Row label="Placement" focused={focusedIndex === 3}>{draftPlacement}</Row>
+    <Row label="Save workspace defaults" focused={focusedIndex === 4}>
+      {localBusy === 'defaults' ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
     </Row>
-    <Row label="Provider experiment" focused={focusedIndex === 3}>
+    <Row label="Create configuration" focused={focusedIndex === 5}>
+      {localBusy === 'experiment' ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
+    </Row>
+    <Row label="Provider experiment" focused={focusedIndex === 6}>
       {providerValue(state, providerBusy, providerExperiments, providerCandidate)}
     </Row>
-    <Row label="Bind provider" focused={focusedIndex === 4}>
+    <Row label="Bind provider" focused={focusedIndex === 7}>
       {bindValue(state, mode, providerBusy, providerCandidate)}
     </Row>
 
@@ -103,8 +112,6 @@ export const ConfigurationPanel = ({
     <Row label="SLICES project">{state.slicesProject}</Row>
     <Row label="R2Lab slice">{state.r2labSlice}</Row>
     <Row label="SSH identity">{state.sshIdentity}</Row>
-    <Row label="Reservation">{state.reservationMinutes} minutes</Row>
-    <Row label="Placement">{state.placement}</Row>
     <Row label="Lifecycle">{state.lifecycle}</Row>
 
     {notice ? (

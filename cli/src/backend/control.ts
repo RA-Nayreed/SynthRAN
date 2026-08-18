@@ -9,11 +9,49 @@ export type ExperimentIntent =
   | 'open-ran'
   | 'iot-to-5g';
 export type ExperimentRadioMode = 'automatic' | 'virtual' | 'physical';
+export type PlacementMode = 'automatic' | 'manual';
 
 export interface ExperimentCreateInput {
   intent: ExperimentIntent;
   radioMode: ExperimentRadioMode;
   label?: string | null;
+}
+
+export interface WorkspaceInitializeInput {
+  profileName: string;
+  project: string;
+  reuseProfile: boolean;
+  slicesUsername?: string | null;
+  r2labSlice?: string | null;
+  r2labIdentity?: string | null;
+  reservationMinutes: number;
+  placement: PlacementMode;
+}
+
+export interface WorkspaceDefaultsInput {
+  reservationMinutes: number;
+  placement: PlacementMode;
+}
+
+export interface SetupProfile {
+  name: string;
+  slices_username: string | null;
+  r2lab_slice: string | null;
+  identity_name: string | null;
+}
+
+export interface SetupSnapshot {
+  workspace_initialized: boolean;
+  profiles: SetupProfile[];
+  ssh_identities: string[];
+  defaults: {
+    profile: string;
+    project: string;
+    slices_username: string;
+    r2lab_slice: string;
+    reservation_minutes: number;
+    placement: PlacementMode;
+  };
 }
 
 export interface ControlAccessEntry {
@@ -86,14 +124,17 @@ interface RunOptions {
   timeoutMs?: number;
 }
 
-const CONTROL_VERSION = 3;
+const CONTROL_VERSION = 4;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOCAL_RESPONSE_TIMEOUT_MS = 10_000;
 const PROVIDER_RESPONSE_TIMEOUT_MS = 190_000;
 const PROVIDER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const REQUIRED_METHODS = [
   'system.handshake',
+  'setup.inspect',
+  'workspace.initialize',
   'workspace.snapshot',
+  'workspace.update_defaults',
   'experiment.create',
   'provider.experiments',
   'experiment.bind_provider',
@@ -118,10 +159,12 @@ export const findWorkspaceStart = (
   }
 
   let candidate = resolve(start);
+  let gitRoot: string | null = null;
   while (true) {
     if (existsSync(join(candidate, '.synthran', 'workspace.toml'))) return candidate;
+    if (gitRoot === null && existsSync(join(candidate, '.git'))) gitRoot = candidate;
     const parent = dirname(candidate);
-    if (parent === candidate) return resolve(start);
+    if (parent === candidate) return gitRoot ?? resolve(start);
     candidate = parent;
   }
 };
@@ -153,6 +196,32 @@ const isHandshake = (value: unknown): value is HandshakeResult => {
     value.provider_mutation === false &&
     methods.length === REQUIRED_METHODS.length &&
     REQUIRED_METHODS.every(method => methods.includes(method))
+  );
+};
+
+const isSetupProfile = (value: unknown): value is SetupProfile => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.name === 'string' &&
+    isNullableString(value.slices_username) &&
+    isNullableString(value.r2lab_slice) &&
+    isNullableString(value.identity_name)
+  );
+};
+
+const isSetupSnapshot = (value: unknown): value is SetupSnapshot => {
+  if (!isRecord(value) || !isRecord(value.defaults)) return false;
+  return (
+    typeof value.workspace_initialized === 'boolean' &&
+    Array.isArray(value.profiles) &&
+    value.profiles.every(isSetupProfile) &&
+    isStringArray(value.ssh_identities) &&
+    typeof value.defaults.profile === 'string' &&
+    typeof value.defaults.project === 'string' &&
+    typeof value.defaults.slices_username === 'string' &&
+    typeof value.defaults.r2lab_slice === 'string' &&
+    Number.isInteger(value.defaults.reservation_minutes) &&
+    (value.defaults.placement === 'automatic' || value.defaults.placement === 'manual')
   );
 };
 
@@ -338,6 +407,55 @@ const runControl = async (
     child.stdin.end(`${requests.map(requestLine).join('\n')}\n`);
   });
 
+export const inspectSetup = async (signal?: AbortSignal): Promise<SetupSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {id: 'setup', method: 'setup.inspect', params: {}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  const setup = responses.find(item => item.id === 'setup');
+  if (!setup?.ok || !isSetupSnapshot(setup.result)) {
+    throw new Error(controlError(setup, 'SynthRAN first-use configuration could not be inspected'));
+  }
+  return setup.result;
+};
+
+export const initializeWorkspace = async (
+  input: WorkspaceInitializeInput,
+  signal?: AbortSignal,
+): Promise<ControlSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {
+        id: 'initialize',
+        method: 'workspace.initialize',
+        params: {
+          profile_name: input.profileName,
+          project: input.project,
+          reuse_profile: input.reuseProfile,
+          slices_username: input.slicesUsername ?? null,
+          r2lab_slice: input.r2labSlice ?? null,
+          r2lab_identity: input.r2labIdentity ?? null,
+          reservation_minutes: input.reservationMinutes,
+          placement: input.placement,
+        },
+      },
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    {signal, timeoutMs: PROVIDER_RESPONSE_TIMEOUT_MS},
+  );
+  requireHandshake(responses);
+  const initialized = responses.find(item => item.id === 'initialize');
+  if (!initialized?.ok) {
+    throw new Error(controlError(initialized, 'SynthRAN workspace could not be initialized'));
+  }
+  return requireSnapshot(responses);
+};
+
 export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSnapshot> => {
   const responses = await runControl(
     [
@@ -347,6 +465,33 @@ export const readLocalSnapshot = async (signal?: AbortSignal): Promise<ControlSn
     {signal},
   );
   requireHandshake(responses);
+  return requireSnapshot(responses);
+};
+
+export const updateWorkspaceDefaults = async (
+  input: WorkspaceDefaultsInput,
+  signal?: AbortSignal,
+): Promise<ControlSnapshot> => {
+  const responses = await runControl(
+    [
+      {id: 'handshake', method: 'system.handshake', params: {}},
+      {
+        id: 'defaults',
+        method: 'workspace.update_defaults',
+        params: {
+          reservation_minutes: input.reservationMinutes,
+          placement: input.placement,
+        },
+      },
+      {id: 'snapshot', method: 'workspace.snapshot', params: {}},
+    ],
+    {signal},
+  );
+  requireHandshake(responses);
+  const defaults = responses.find(item => item.id === 'defaults');
+  if (!defaults?.ok) {
+    throw new Error(controlError(defaults, 'SynthRAN workspace defaults could not be updated'));
+  }
   return requireSnapshot(responses);
 };
 

@@ -6,6 +6,17 @@ import test from 'node:test';
 
 import {findWorkspaceStart, parseControlOutput, readLocalSnapshot} from './control.js';
 
+const methods = [
+  'experiment.bind_provider',
+  'experiment.create',
+  'provider.experiments',
+  'setup.inspect',
+  'system.handshake',
+  'workspace.initialize',
+  'workspace.snapshot',
+  'workspace.update_defaults',
+];
+
 const snapshot = {
   workspace: {
     profile: 'default',
@@ -46,26 +57,20 @@ const snapshot = {
 
 const responseLines = (handshakeOverrides: Record<string, unknown> = {}) => [
   JSON.stringify({
-    v: 3,
+    v: 4,
     id: 'handshake',
     ok: true,
     result: {
       service: 'synthran-control',
-      protocol: 3,
+      protocol: 4,
       local_writes: true,
       provider_reads: true,
       provider_mutation: false,
-      methods: [
-        'experiment.bind_provider',
-        'experiment.create',
-        'provider.experiments',
-        'system.handshake',
-        'workspace.snapshot',
-      ],
+      methods,
       ...handshakeOverrides,
     },
   }),
-  JSON.stringify({v: 3, id: 'snapshot', ok: true, result: snapshot}),
+  JSON.stringify({v: 4, id: 'snapshot', ok: true, result: snapshot}),
 ];
 
 test('workspace discovery climbs from nested directories', () => {
@@ -73,6 +78,18 @@ test('workspace discovery climbs from nested directories', () => {
   try {
     mkdirSync(join(root, '.synthran'));
     writeFileSync(join(root, '.synthran', 'workspace.toml'), 'schema = "test"\n');
+    const nested = join(root, 'cli', 'dist', 'backend');
+    mkdirSync(nested, {recursive: true});
+    assert.equal(findWorkspaceStart(nested, undefined), root);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('workspace discovery uses the Git root before initialization', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synthran-workspace-'));
+  try {
+    mkdirSync(join(root, '.git'));
     const nested = join(root, 'cli', 'dist', 'backend');
     mkdirSync(nested, {recursive: true});
     assert.equal(findWorkspaceStart(nested, undefined), root);
@@ -96,7 +113,7 @@ test('valid framed responses return the sanitized snapshot', () => {
   assert.deepEqual(parseControlOutput(`${responseLines().join('\n')}\n`), snapshot);
 });
 
-test('handshake must prove exact provider-read capabilities and deny provider mutation', () => {
+test('handshake must prove exact configuration capabilities and deny provider mutation', () => {
   assert.throws(
     () => parseControlOutput(responseLines({provider_mutation: true}).join('\n')),
     /handshake is incompatible/,
@@ -110,29 +127,17 @@ test('handshake must prove exact provider-read capabilities and deny provider mu
     /handshake is incompatible/,
   );
   assert.throws(
-    () => parseControlOutput(responseLines({protocol: 4}).join('\n')),
+    () => parseControlOutput(responseLines({protocol: 3}).join('\n')),
     /handshake is incompatible/,
   );
   assert.throws(
-    () =>
-      parseControlOutput(
-        responseLines({
-          methods: [
-            'experiment.bind_provider',
-            'experiment.create',
-            'provider.experiments',
-            'system.handshake',
-            'workspace.snapshot',
-            'resource.reserve',
-          ],
-        }).join('\n'),
-      ),
+    () => parseControlOutput(responseLines({methods: [...methods, 'resource.reserve']}).join('\n')),
     /handshake is incompatible/,
   );
 });
 
 test('extra stdout records are rejected instead of ignored', () => {
-  const lines = [...responseLines(), JSON.stringify({v: 3, id: 'extra', ok: true, result: {}})];
+  const lines = [...responseLines(), JSON.stringify({v: 4, id: 'extra', ok: true, result: {}})];
   assert.throws(
     () => parseControlOutput(lines.join('\n')),
     /unexpected response set/,
@@ -142,7 +147,7 @@ test('extra stdout records are rejected instead of ignored', () => {
 test('malformed snapshots fail closed', () => {
   const lines = responseLines();
   lines[1] = JSON.stringify({
-    v: 3,
+    v: 4,
     id: 'snapshot',
     ok: true,
     result: {...snapshot, observations: 'not-an-array'},
