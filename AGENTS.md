@@ -255,12 +255,43 @@ Accepted evidence currently proves:
 
 - base network `network-acceptance-20260817-04`: `PATH PROVEN`;
 - IoT-to-5G `iot-acceptance-20260817-06`: `IOT-TO-5G PATH PROVEN`;
-- capacity calibration `calibration-20260817-02.json`: 67,253,028 bps;
 - baseline research run `pilot-20260817-03-baseline`: ready for campaign analysis with complete telemetry and RTT evidence.
 
-`pilot-20260817-03-load50` is invalid loaded-condition evidence. The load did not establish successfully and the underlying RFSIM/5G path collapsed. Do not cite it as proof of congestion behavior. Fresh valid loaded runs are still required before scientific conclusions about load50/load80/load95.
+The historical `calibration-20260817-02.json` and later core-host calibrations are debugging evidence only. They terminated the measurement on the 5G core host and must not be reused as scientific reference capacity. A fresh external-peer calibration is required before fractional loaded conditions are accepted.
+
+`pilot-20260817-03-load50` and `pilot-20260818-01-load50` are invalid loaded-condition evidence. The earlier run lost the underlying path; the later run exposed the same-host iperf topology bug before the measurement window. Do not cite either as proof of congestion behavior. Fresh valid loaded runs are still required before scientific conclusions about load50/load80/load95.
 
 Physical radio acceptance, multiple UEs/slices, TCP research load, impairment campaigns, formal A1/E2, RIC integration, generative models, synthetic telemetry, and automated RAN-policy synthesis remain deferred unless current accepted evidence and a recorded decision change that status.
+
+## Research measurement peer invariant
+
+Capacity calibration and controlled UDP background load must terminate outside the 5G core host.
+
+For the supported two-node virtual inventory:
+
+```text
+UE PDU
+-> tun_srsue1
+-> 5G user plane
+-> Open5GS UPF
+-> core egress / NAT
+-> prepared RAN node
+```
+
+The prepared RAN node is the default research iperf3 server. `inventory.core_node` is explicitly rejected as a measurement server. Do not restore the old assumption that the research server belongs on the core host.
+
+The CLI target remains explicit and must be the provider-facing IPv4 address of the prepared RAN node. It is not the core-node address and is not the Post5G NRF LoadBalancer address.
+
+The run-owned iperf lifecycle must preserve all of these properties:
+
+- startup, ownership proof, stale recovery, and cleanup occur on the same selected measurement node;
+- the listener proof is based on the unique run-owned command signature plus the actual listening socket inode, not on trusting a PID file alone;
+- an explicitly supplied target must be proven assigned to the selected prepared node;
+- loaded-run readiness requires a live TCP control connection while UDP data is active;
+- `CLOSE-WAIT` is not readiness and must never be accepted as equivalent to `ESTABLISHED`;
+- same-host/core-target calibrations remain invalid as campaign reference capacity.
+
+See `docs/research-measurement-peer.md` for the operator workflow and the 2026-08-18 live diagnosis that established this invariant.
 
 ## Dependency boundary
 
