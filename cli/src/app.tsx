@@ -4,13 +4,16 @@ import {Box, Spacer, Text, useApp, useInput} from 'ink';
 import {
   createLocalExperiment,
   readLocalSnapshot,
+  readResourcePreview,
   type ControlSnapshot,
   type ExperimentIntent,
+  type ResourcePreview,
 } from './backend/control.js';
 import {initialSection, toWorkbenchState} from './backend/workbench.js';
 import {ActionPalette, type PaletteAction} from './components/action-palette.js';
 import {ConfigurationPanel} from './components/configuration.js';
 import {Footer} from './components/footer.js';
+import {ResourcesPanel} from './components/resources.js';
 import {SectionPanel} from './components/section-panel.js';
 import {SectionStrip} from './components/section-strip.js';
 import {
@@ -25,7 +28,7 @@ import {theme} from './theme.js';
 const actions: PaletteAction[] = [
   {label: 'Review access', section: 'Access'},
   {label: 'Review configuration', section: 'Configure'},
-  {label: 'Inspect resources', section: 'Resources'},
+  {label: 'Preview resources', section: 'Resources'},
   {label: 'Inspect network', section: 'Network'},
   {label: 'Open run view', section: 'Run'},
   {label: 'Review evidence', section: 'Evidence'},
@@ -77,7 +80,23 @@ export const App = () => {
   const [draftRadio, setDraftRadio] = useState<RadioMode>('virtual');
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [resourcePreview, setResourcePreview] = useState<ResourcePreview | null>(null);
+  const [resourceBusy, setResourceBusy] = useState(false);
+  const [resourceNotice, setResourceNotice] = useState<string | null>(null);
   const saveRequest = useRef<AbortController | null>(null);
+  const resourceRequest = useRef<AbortController | null>(null);
+
+  const cancelResourcePreview = () => {
+    resourceRequest.current?.abort();
+    resourceRequest.current = null;
+    setResourceBusy(false);
+  };
+
+  const clearResourcePreview = () => {
+    cancelResourcePreview();
+    setResourcePreview(null);
+    setResourceNotice(null);
+  };
 
   const applySnapshot = (snapshot: ControlSnapshot, chooseSection: boolean) => {
     const next = toWorkbenchState(snapshot);
@@ -85,6 +104,7 @@ export const App = () => {
     setState(next);
     setDraftIntent(draft.intent);
     setDraftRadio(draft.radio);
+    clearResourcePreview();
     if (chooseSection) setActiveSection(initialSection(snapshot));
   };
 
@@ -95,6 +115,7 @@ export const App = () => {
     setMode('OBSERVE');
     setLoadError(null);
     setNotice(null);
+    clearResourcePreview();
     readLocalSnapshot(requestController.signal)
       .then(snapshot => {
         if (cancelled) return;
@@ -114,11 +135,15 @@ export const App = () => {
   useEffect(
     () => () => {
       saveRequest.current?.abort();
+      resourceRequest.current?.abort();
     },
     [],
   );
 
   const selectSection = (section: SectionLabel) => {
+    if (activeSection === 'Resources' && section !== 'Resources') {
+      cancelResourcePreview();
+    }
     setActiveSection(section);
     setMode('OBSERVE');
     setNotice(null);
@@ -153,6 +178,7 @@ export const App = () => {
     const requestController = new AbortController();
     saveRequest.current?.abort();
     saveRequest.current = requestController;
+    clearResourcePreview();
     setSaving(true);
     setNotice(null);
 
@@ -187,9 +213,40 @@ export const App = () => {
       });
   };
 
+  const refreshResourcePreview = () => {
+    if (resourceBusy) return;
+    const requestController = new AbortController();
+    resourceRequest.current?.abort();
+    resourceRequest.current = requestController;
+    setResourceBusy(true);
+    setResourceNotice(null);
+
+    readResourcePreview(requestController.signal)
+      .then(preview => {
+        if (resourceRequest.current !== requestController || requestController.signal.aborted) return;
+        setResourcePreview(preview);
+      })
+      .catch(error => {
+        if (resourceRequest.current !== requestController || requestController.signal.aborted) return;
+        setResourcePreview(null);
+        setResourceNotice(
+          error instanceof Error
+            ? error.message
+            : 'SynthRAN resource preview is unavailable',
+        );
+      })
+      .finally(() => {
+        if (resourceRequest.current === requestController) {
+          resourceRequest.current = null;
+          setResourceBusy(false);
+        }
+      });
+  };
+
   useInput((input, key) => {
     if ((key.ctrl && input === 'c') || input.toLowerCase() === 'q') {
       saveRequest.current?.abort();
+      resourceRequest.current?.abort();
       exit();
       return;
     }
@@ -199,6 +256,7 @@ export const App = () => {
     if (input.toLowerCase() === 'r' && (state !== null || loadError !== null)) {
       setPaletteOpen(false);
       setMode('OBSERVE');
+      clearResourcePreview();
       setReloadToken(value => value + 1);
       return;
     }
@@ -239,6 +297,11 @@ export const App = () => {
 
     if (/^[1-6]$/.test(input)) {
       selectSection(sectionLabels[Number(input) - 1]);
+      return;
+    }
+
+    if (activeSection === 'Resources' && key.return) {
+      refreshResourcePreview();
       return;
     }
 
@@ -314,6 +377,13 @@ export const App = () => {
               saving={saving}
               notice={notice}
             />
+          ) : activeSection === 'Resources' ? (
+            <ResourcesPanel
+              state={state}
+              preview={resourcePreview}
+              busy={resourceBusy}
+              notice={resourceNotice}
+            />
           ) : (
             <SectionPanel section={activeSection} state={state} />
           )}
@@ -323,7 +393,7 @@ export const App = () => {
       <Footer />
 
       <Box paddingX={1} marginTop={1}>
-        <Text color={theme.muted}>Local configuration enabled · provider operations disabled</Text>
+        <Text color={theme.muted}>Local configuration + read-only provider preview · provider mutation disabled</Text>
       </Box>
     </Box>
   );
