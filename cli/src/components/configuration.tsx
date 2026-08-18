@@ -1,15 +1,20 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
+import type {PlacementMode} from '../backend/control.js';
 import type {RadioMode, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface ConfigurationPanelProps {
   state: WorkbenchState;
+  draftProfile: string;
   draftRadio: RadioMode;
+  draftPlacement: PlacementMode;
+  draftCoreNode: string | null;
+  draftRanNode: string | null;
   draftReservation: number;
   focusedIndex: number;
-  localBusy: 'initializing' | 'defaults' | 'experiment' | null;
+  localBusy: 'initializing' | 'profile' | 'defaults' | 'experiment' | null;
   providerBusy: 'loading' | 'binding' | null;
   providerExperiments: string[] | null;
   providerCandidate: string | null;
@@ -56,14 +61,13 @@ const bindValue = (
   return 'Enter';
 };
 
-const placementValue = (state: WorkbenchState) =>
-  state.placement === 'automatic'
-    ? 'Automatic · prefers sopnode-f2 / sopnode-f3'
-    : 'Manual';
-
 export const ConfigurationPanel = ({
   state,
+  draftProfile,
   draftRadio,
+  draftPlacement,
+  draftCoreNode,
+  draftRanNode,
   draftReservation,
   focusedIndex,
   localBusy,
@@ -73,21 +77,27 @@ export const ConfigurationPanel = ({
   notice,
 }: ConfigurationPanelProps) => {
   const physical = draftRadio === 'physical';
+  const selectedProfile = state.profiles.find(profile => profile.name === draftProfile);
+  const profileValue = localBusy === 'profile'
+    ? 'Verifying and switching…'
+    : draftProfile === state.profile
+      ? `${draftProfile} · active`
+      : `${draftProfile} · Enter to switch`;
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       <Text bold color={theme.bodyStrong}>Setup</Text>
-      <Text color={theme.muted}>Account, SLICES experiment, network stack and resource defaults.</Text>
+      <Text color={theme.muted}>Account, SLICES experiment, 5G stack and exact resource choices.</Text>
       <Box height={1} />
 
       <Text bold color={theme.bodyStrong}>Account</Text>
-      <Row label="Profile">{state.profile}</Row>
-      <Row label="SLICES user">{state.slicesIdentity ?? 'Not configured'}</Row>
+      <Row label="Profile" focused={focusedIndex === 0}>{profileValue}</Row>
+      <Row label="SLICES user">{selectedProfile?.slicesUsername ?? state.slicesIdentity ?? 'Not configured'}</Row>
       <Row label="SLICES project">{state.slicesProject}</Row>
-      <Row label="SLICES experiment" focused={focusedIndex === 4}>
+      <Row label="SLICES experiment" focused={focusedIndex === 8}>
         {providerValue(state, providerBusy, providerExperiments, providerCandidate)}
       </Row>
-      <Row label="Bind selection" focused={focusedIndex === 5}>
+      <Row label="Bind selection" focused={focusedIndex === 9}>
         {bindValue(state, providerBusy, providerCandidate)}
       </Row>
 
@@ -96,16 +106,24 @@ export const ConfigurationPanel = ({
       <Row label="Core">Open5GS</Row>
       <Row label="RAN">srsRAN</Row>
       <Row label="UE">srsUE</Row>
-      <Row label="Radio" focused={focusedIndex === 0}>{radioLabel(draftRadio)}</Row>
+      <Row label="Radio" focused={focusedIndex === 1}>{radioLabel(draftRadio)}</Row>
 
       <Box height={1} />
       <Text bold color={theme.bodyStrong}>Resources</Text>
-      <Row label="Node selection">{placementValue(state)}</Row>
-      <Row label="Reservation" focused={focusedIndex === 1}>{draftReservation} minutes</Row>
-      <Row label="Save defaults" focused={focusedIndex === 2}>
+      <Row label="Node selection" focused={focusedIndex === 2}>
+        {draftPlacement === 'manual' ? 'Manual' : 'Automatic'}
+      </Row>
+      <Row label="Core node" focused={focusedIndex === 3}>
+        {draftPlacement === 'manual' ? (draftCoreNode ?? 'No node') : 'Selected safely at plan time'}
+      </Row>
+      <Row label="RAN node" focused={focusedIndex === 4}>
+        {draftPlacement === 'manual' ? (draftRanNode ?? 'No node') : 'Selected safely at plan time'}
+      </Row>
+      <Row label="Reservation" focused={focusedIndex === 5}>{draftReservation} minutes</Row>
+      <Row label="Save defaults" focused={focusedIndex === 6}>
         {localBusy === 'defaults' ? 'Saving…' : 'Enter'}
       </Row>
-      <Row label="New network config" focused={focusedIndex === 3}>
+      <Row label="New network config" focused={focusedIndex === 7}>
         {localBusy === 'experiment' ? 'Creating…' : 'Enter'}
       </Row>
 
@@ -114,8 +132,8 @@ export const ConfigurationPanel = ({
           <Box height={1} />
           <Text bold color={theme.bodyStrong}>Physical radio</Text>
           <Row label="Testbed">R2Lab</Row>
-          <Row label="Slice">{state.r2labSlice}</Row>
-          <Row label="SSH identity">{state.sshIdentity}</Row>
+          <Row label="Slice">{selectedProfile?.r2labSlice ?? state.r2labSlice}</Row>
+          <Row label="SSH identity">{selectedProfile?.identityName ?? state.sshIdentity}</Row>
           <Text color={theme.muted}>Physical execution remains unavailable until the R2Lab executor is connected.</Text>
         </>
       ) : null}
@@ -126,7 +144,7 @@ export const ConfigurationPanel = ({
 
       {notice ? (
         <Box marginTop={1}>
-          <Text color={notice.toLowerCase().includes('could not') || notice.toLowerCase().includes('failed') ? theme.error : theme.muted}>
+          <Text color={notice.toLowerCase().includes('could not') || notice.toLowerCase().includes('failed') || notice.toLowerCase().includes('cannot') ? theme.error : theme.muted}>
             {notice}
           </Text>
         </Box>
