@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 import unittest
 
@@ -64,16 +66,27 @@ class WorkbenchLiveOperationGuardrailTests(unittest.TestCase):
             all_vars=variables,
         )
 
+    def _known_hosts(self):
+        temporary = tempfile.TemporaryDirectory()
+        path = Path(temporary.name) / "known_hosts"
+        path.write_text("fixture.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture\n", encoding="utf-8")
+        return temporary, path
+
     def test_teardown_namespace_query_fails_closed_on_transport_error(self) -> None:
         def runner(command, timeout):
             return ProbeResult(255, "", "transport failed")
 
-        with self.assertRaises(LiveOperationError):
-            _delete_run_owned_namespace(
-                runner=runner,
-                network_inventory=self._inventory(),
-                run_id="op-000123",
-            )
+        temporary, known_hosts = self._known_hosts()
+        try:
+            with patch.dict(os.environ, {"SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}):
+                with self.assertRaises(LiveOperationError):
+                    _delete_run_owned_namespace(
+                        runner=runner,
+                        network_inventory=self._inventory(),
+                        run_id="op-000123",
+                    )
+        finally:
+            temporary.cleanup()
 
     def test_teardown_accepts_absent_namespace_without_delete(self) -> None:
         calls: list[tuple[str, ...]] = []
@@ -82,11 +95,16 @@ class WorkbenchLiveOperationGuardrailTests(unittest.TestCase):
             calls.append(tuple(command))
             return ProbeResult(0, "")
 
-        _delete_run_owned_namespace(
-            runner=runner,
-            network_inventory=self._inventory(),
-            run_id="op-000123",
-        )
+        temporary, known_hosts = self._known_hosts()
+        try:
+            with patch.dict(os.environ, {"SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}):
+                _delete_run_owned_namespace(
+                    runner=runner,
+                    network_inventory=self._inventory(),
+                    run_id="op-000123",
+                )
+        finally:
+            temporary.cleanup()
         self.assertEqual(len(calls), 1)
         self.assertIn("--ignore-not-found", calls[0][-1])
 
@@ -102,12 +120,17 @@ class WorkbenchLiveOperationGuardrailTests(unittest.TestCase):
                 )
             raise AssertionError("delete must not run for foreign namespace")
 
-        with self.assertRaises(LiveOperationError):
-            _delete_run_owned_namespace(
-                runner=runner,
-                network_inventory=self._inventory(),
-                run_id="op-000123",
-            )
+        temporary, known_hosts = self._known_hosts()
+        try:
+            with patch.dict(os.environ, {"SYNTHRAN_KNOWN_HOSTS": str(known_hosts)}):
+                with self.assertRaises(LiveOperationError):
+                    _delete_run_owned_namespace(
+                        runner=runner,
+                        network_inventory=self._inventory(),
+                        run_id="op-000123",
+                    )
+        finally:
+            temporary.cleanup()
         self.assertEqual(len(calls), 1)
 
 
