@@ -2,11 +2,12 @@ import React from 'react';
 import {Box, Text} from 'ink';
 
 import type {ExperimentIntent} from '../backend/control.js';
-import type {RadioMode, WorkbenchState} from '../model.js';
+import type {RadioMode, WorkbenchMode, WorkbenchState} from '../model.js';
 import {theme} from '../theme.js';
 
 interface ConfigurationPanelProps {
   state: WorkbenchState;
+  mode: WorkbenchMode;
   draftIntent: ExperimentIntent;
   draftRadio: RadioMode;
   focusedIndex: number;
@@ -39,6 +40,7 @@ const intentLabel = (value: ExperimentIntent) => {
 
 export const ConfigurationPanel = ({
   state,
+  mode,
   draftIntent,
   draftRadio,
   focusedIndex,
@@ -52,9 +54,12 @@ export const ConfigurationPanel = ({
 
     <Row label="Intent" focused={focusedIndex === 0}>{intentLabel(draftIntent)}</Row>
     <Row label="Radio" focused={focusedIndex === 1}>{radioLabel(draftRadio)}</Row>
-    <Row label="Create configuration" focused={focusedIndex === 2}>{saving ? 'Saving…' : 'Enter'}</Row>
+    <Row label="Create configuration" focused={focusedIndex === 2}>
+      {saving ? 'Saving…' : mode === 'OPERATE' ? 'Enter' : 'Switch to OPERATE'}
+    </Row>
 
     <Box height={1} />
+    <Row label="Mode">{mode}</Row>
     <Row label="Active experiment">{state.experiment}</Row>
     <Row label="SLICES project">{state.slicesProject}</Row>
     <Row label="Provider experiment">{state.providerExperiment ?? 'Not bound'}</Row>
