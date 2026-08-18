@@ -60,6 +60,13 @@ from synthran.workspace.observed_store import (
     observed_state_path,
     save_observed_state,
 )
+from synthran.workspace.provider_experiments import (
+    PROVIDER_READ_TIMEOUT_SECONDS,
+    ProviderExperimentChoice,
+    discover_slices_experiments,
+    parse_slices_experiment_list,
+    verified_slices_experiment,
+)
 from synthran.workspace.reconciliation import (
     ReconciliationReport,
     ReconciliationStep,
@@ -83,6 +90,7 @@ from synthran.workspace.session import (
 from synthran.workspace.status import load_experiment_status, save_experiment_status
 from synthran.workspace.store import (
     DEFAULT_PROFILE_NAME,
+    bind_slices_experiment,
     create_or_update_profile,
     find_workspace_root,
     initialize_workspace,
@@ -114,9 +122,11 @@ __all__ = [
     "Observation",
     "ObservedState",
     "OperationRecord",
+    "PROVIDER_READ_TIMEOUT_SECONDS",
     "PlacementDesiredState",
     "PlmnDesiredState",
     "Profile",
+    "ProviderExperimentChoice",
     "ProviderExperimentObservation",
     "RadioDesiredState",
     "RanDesiredState",
@@ -131,10 +141,12 @@ __all__ = [
     "WorkspaceError",
     "WorkspaceRegistry",
     "WorkspaceSession",
+    "bind_slices_experiment",
     "create_desired_experiment",
     "create_or_update_profile",
     "derive_lifecycle",
     "desired_state_path",
+    "discover_slices_experiments",
     "ensure_r2lab_gateway_access",
     "ensure_slices_project_access",
     "find_workspace_root",
@@ -152,6 +164,7 @@ __all__ = [
     "load_workspace",
     "observed_state_path",
     "open_workspace_session",
+    "parse_slices_experiment_list",
     "persist_initialization",
     "plan_initialization",
     "plan_reconciliation",
@@ -168,6 +181,7 @@ __all__ = [
     "save_run_record",
     "select_authoritative_observation",
     "set_active_experiment",
+    "verified_slices_experiment",
     "verify_profile_identity",
     "verify_r2lab_gateway_access",
     "verify_slices_experiment_binding",
