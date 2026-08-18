@@ -74,7 +74,7 @@ raise SystemExit(4)
 class OwnedIperfServer:
     owner_id: str
     server_node: str
-    target: str
+    target: str | None
     port: int
     workspace: str
     pidfile: str
@@ -247,23 +247,26 @@ def _cleanup_failed_start(
 def start_owned_iperf_server(
     *,
     inventory: NetworkInventory,
-    server_node: str,
-    target: str,
     owner_id: str,
     port: int,
     repository_root,
     log_path,
+    server_node: str | None = None,
+    target: str | None = None,
 ) -> OwnedIperfServer:
-    prove_measurement_peer(
-        inventory,
-        server_node=server_node,
-        target=target,
-    )
-    server_inventory = _server_inventory(inventory, server_node)
+    selected_node = server_node or inventory.ran_node.name
+    _measurement_host(inventory, selected_node)
+    if target is not None:
+        prove_measurement_peer(
+            inventory,
+            server_node=selected_node,
+            target=target,
+        )
+    server_inventory = _server_inventory(inventory, selected_node)
     workspace, pidfile = _paths(owner_id, port)
     _reap(
         inventory,
-        server_node=server_node,
+        server_node=selected_node,
         pidfile=pidfile,
         port=port,
         orphan_only=True,
@@ -286,7 +289,7 @@ def start_owned_iperf_server(
         timeout_seconds=10,
     )
     command = ssh_command(
-        _measurement_host(inventory, server_node),
+        _measurement_host(inventory, selected_node),
         "iperf3",
         "-s",
         "-1",
@@ -318,7 +321,7 @@ def start_owned_iperf_server(
                 )
             if published and _listener_ready(
                 inventory,
-                server_node=server_node,
+                server_node=selected_node,
                 pidfile=pidfile,
                 port=port,
             ):
@@ -336,7 +339,7 @@ def start_owned_iperf_server(
         try:
             _cleanup_failed_start(
                 inventory,
-                server_node=server_node,
+                server_node=selected_node,
                 process=process,
                 workspace=workspace,
                 pidfile=pidfile,
@@ -349,7 +352,7 @@ def start_owned_iperf_server(
         raise
     return OwnedIperfServer(
         owner_id,
-        server_node,
+        selected_node,
         target,
         port,
         workspace,
