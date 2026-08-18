@@ -129,6 +129,40 @@ class ControlServiceTests(unittest.TestCase):
             experiment_root = workspace_directory(root) / "experiments"
             self.assertEqual(list(experiment_root.iterdir()), [])
 
+    def test_invalid_label_fails_before_experiment_id_is_consumed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, service = self._service(Path(temporary))
+            response = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-label",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                        "label": "   ",
+                    },
+                }
+            )
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "invalid_params")
+            experiment_root = workspace_directory(root) / "experiments"
+            self.assertEqual(list(experiment_root.iterdir()), [])
+
+            valid = service.handle(
+                {
+                    "v": 2,
+                    "id": "req-valid",
+                    "method": "experiment.create",
+                    "params": {
+                        "intent": "iot-to-5g",
+                        "radio_mode": "virtual",
+                    },
+                }
+            )
+            self.assertTrue(valid["ok"])
+            self.assertTrue(str(valid["result"]["experiment_id"]).endswith("-001"))
+
     def test_unknown_method_fails_closed(self) -> None:
         service = ControlService(environment={})
         response = service.handle(
