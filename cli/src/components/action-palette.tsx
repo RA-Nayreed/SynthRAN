@@ -1,7 +1,7 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
-import type {SectionLabel} from '../mock.js';
+import type {SectionLabel} from '../model.js';
 import {theme} from '../theme.js';
 
 export interface PaletteAction {

@@ -1,17 +1,35 @@
 export type SectionLabel = 'Access' | 'Configure' | 'Resources' | 'Network' | 'Run' | 'Evidence';
+export type RadioMode = 'automatic' | 'virtual' | 'physical';
+
+export interface ObservationView {
+  name: string;
+  state: string;
+  fresh: boolean;
+  source: string | null;
+  ownership: string | null;
+  detail: string;
+}
 
 export interface WorkbenchState {
   project: string;
   experiment: string;
-  mode: 'OBSERVE' | 'OPERATE';
   completedSections: SectionLabel[];
   intent: string;
-  radio: 'virtual' | 'physical';
+  radio: RadioMode;
   slicesProject: string;
   providerExperiment: string | null;
+  slicesIdentity: string | null;
+  slicesAccessFresh: boolean;
+  r2labConfigured: boolean;
+  r2labAccessFresh: boolean;
   r2labSlice: string;
   sshIdentity: string;
   reservationMinutes: number;
+  placement: string;
+  lifecycle: string;
+  observations: ObservationView[];
+  nextSteps: string[];
+  blocks: string[];
 }
 
 export const sectionLabels: SectionLabel[] = [
@@ -22,17 +40,3 @@ export const sectionLabels: SectionLabel[] = [
   'Run',
   'Evidence',
 ];
-
-export const mockWorkbenchState: WorkbenchState = {
-  project: 'example-project',
-  experiment: 'sran-20260818-001',
-  mode: 'OBSERVE',
-  completedSections: ['Access'],
-  intent: 'IoT → 5G',
-  radio: 'physical',
-  slicesProject: 'example-project',
-  providerExperiment: null,
-  r2labSlice: 'example_slice',
-  sshIdentity: 'id_r2lab',
-  reservationMinutes: 120,
-};
