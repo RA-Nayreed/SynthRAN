@@ -56,6 +56,28 @@ class PrivacyScannerTests(unittest.TestCase):
         )
         self.assertEqual([], findings)
 
+    def test_json_numeric_measurements_are_not_mistaken_for_imsi(self) -> None:
+        text = '{\n  "timestamp_ns": 123456789012345,\n  "counter": 663664020000000\n}\n'
+        findings = scan_text(
+            text,
+            path="results/campaign-analysis.json",
+            identifiers=(),
+        )
+        self.assertEqual([], findings)
+
+    def test_json_string_imsi_is_still_blocked(self) -> None:
+        text = '{\n  "imsi": "001010000000100"\n}\n'
+        findings = scan_text(text, path="fixture.json", identifiers=())
+        self.assertEqual(["imsi"], [item.rule for item in findings])
+
+    def test_plain_text_imsi_is_still_blocked(self) -> None:
+        findings = scan_text(
+            "subscriber 001010000000100",
+            path="fixture.txt",
+            identifiers=(),
+        )
+        self.assertEqual(["imsi"], [item.rule for item in findings])
+
     def test_report_omits_detected_content(self) -> None:
         output = StringIO()
         status = report_findings(
@@ -93,7 +115,6 @@ class TextRedactorTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         redact_file(SAFE_FIXTURE, destination, dry_run=True, output=StringIO())
         self.assertFalse(destination.exists())
-
 
 
 if __name__ == "__main__":
