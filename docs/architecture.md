@@ -148,27 +148,27 @@ SynthRAN reuses complete pinned upstream checkouts:
 
 Dependency trees live under ignored `.deps/` storage. SynthRAN-owned overlays and the IoT application remain in this repository. Runtime images and direct dependencies are pinned through repository-controlled provenance.
 
-## Accepted virtual data path
+## Accepted virtual golden path
 
 ```text
-Cooja sensors
--> RPL / 6LoWPAN
+10 deterministic Contiki-NG/Cooja sensors
+-> RPL/6LoWPAN border router
 -> Cooja Serial Socket
--> loopback-only reverse SSH
--> tunslip6 / tun0
--> counted ingress
--> edge Mosquitto in srsUE namespace
+-> loopback-only reverse SSH tunnel
+-> remote tunslip6/tun0
+-> counted TCP ingress
+-> Mosquitto bridge inside srsUE network namespace
 -> tun_srsue1
 -> srsRAN gNB
 -> Open5GS UPF
--> central broker / collector
--> JSONL
--> Parquet
+-> run-owned central Mosquitto
+-> canonical JSONL
+-> deterministic Parquet
 ```
 
-The edge bridge is placed in the srsUE namespace because the live PDU and `tun_srsue1` exist there. The PDU is rediscovered after RFSIM reconciliation and is not treated as static configuration.
+These are real integration boundaries, not decorative detail: the Cooja Serial Socket crosses the simulator boundary, the reverse SSH tunnel exposes that loopback-only socket safely to the remote experiment node, `tunslip6` creates the IPv6 edge interface, counted TCP ingress records the adapter boundary, and the Mosquitto bridge runs in the srsUE network namespace where the live PDU and `tun_srsue1` exist.
 
-Acceptance includes route/interface/broker/message evidence plus exact cleanup and base-network reproof.
+The PDU is rediscovered after RFSIM reconciliation and is not treated as static configuration. Acceptance includes route/interface/broker/message evidence plus exact cleanup and base-network reproof.
 
 ## Controlled research architecture
 
