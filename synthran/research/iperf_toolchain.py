@@ -76,7 +76,11 @@ work = Path(tempfile.mkdtemp(prefix=f".iperf-{version}-", dir=str(final_root.par
 try:
     archive = work / f"iperf-{version}.tar.gz"
     digest = hashlib.sha256()
-    with urllib.request.urlopen(url, timeout=60) as response, archive.open("wb") as handle:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "SynthRAN/iperf-source-fetch"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response, archive.open("wb") as handle:
         while True:
             chunk = response.read(1024 * 1024)
             if not chunk:
