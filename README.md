@@ -26,21 +26,46 @@ SynthRAN is that integration and evidence layer. It can:
 
 It does not reimplement Open5GS, srsRAN, Contiki-NG, Cooja, Mosquitto, iperf3, or SLICES provider services.
 
-## The experiment path
+## The accepted golden path
 
 ```mermaid
-flowchart LR
-    A[10 Cooja sensors] --> B[RPL / 6LoWPAN]
-    B --> C[tunslip6 / tun0]
-    C --> D[MQTT edge bridge]
-    D --> E[srsUE / tun_srsue1]
-    E --> F[srsRAN gNB]
-    F --> G[Open5GS UPF]
-    G --> H[Central collector]
-    H --> I[Raw evidence + Parquet]
+flowchart TB
+    A[10 deterministic Contiki-NG / Cooja sensors]
+    B[RPL / 6LoWPAN border router]
+    C[Cooja Serial Socket]
+    D[Loopback-only reverse SSH tunnel]
+    E[Remote tunslip6 / tun0]
+    F[Counted TCP ingress]
+    G[Mosquitto bridge inside srsUE namespace]
+    H[srsUE / tun_srsue1]
+    I[srsRAN gNB]
+    J[Open5GS UPF]
+    K[Run-owned central Mosquitto]
+    L[Canonical JSONL]
+    M[Deterministic Parquet]
 
-    J[Controlled UDP load] -. same UE path .-> E
-    K[RTT + UE/UPF counters] -. measure .-> E
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L --> M
+
+    N[Controlled UDP load] -. same UE path .-> H
+    O[RTT + UE/UPF counters] -. measure .-> H
+```
+
+In exact execution order:
+
+```text
+10 deterministic Contiki-NG/Cooja sensors
+-> RPL/6LoWPAN border router
+-> Cooja Serial Socket
+-> loopback-only reverse SSH tunnel
+-> remote tunslip6/tun0
+-> counted TCP ingress
+-> Mosquitto bridge inside srsUE network namespace
+-> tun_srsue1
+-> srsRAN gNB
+-> Open5GS UPF
+-> run-owned central Mosquitto
+-> canonical JSONL
+-> deterministic Parquet
 ```
 
 The accepted virtual configuration uses RFSIM, one srsUE as the IoT edge gateway, one SST-1 slice, and ten deterministic sensors. Research load terminates on a prepared external node rather than the 5G core host.
