@@ -145,7 +145,9 @@ Generic rollback authority comes only from exact resources proven to have been c
 
 Never use broad cleanup such as `pkill`, `killall`, wildcard resource deletion, or guessed reservation/allocation IDs when an exact run-owned target is required.
 
-Provider experiment creation remains an explicit operator action. SynthRAN may bind to an existing SLICES experiment but does not silently log in, switch projects, or create provider experiments.
+Provider experiment creation remains an explicit operator action. SynthRAN may bind to an existing SLICES experiment but does not silently log in, switch projects, create projects, create provider experiments, or allocate a Post5G prefix on the operator's behalf.
+
+The complete provider setup and live execution order belong in `README.md` (compact quick start) and `docs/operator-guide.md` (full procedure). They must agree on the required SLICES project, provider experiment, active Post5G prefix, resource preparation, path proof, calibration, campaign, analysis, preservation, and final prefix release.
 
 ## Live-accepted research boundary
 
@@ -204,9 +206,9 @@ The v1alpha1 telemetry summary contains a fixed nominal expected count computed 
 
 Campaign-06 contained zero sequence gaps and zero duplicates across all accepted runs. The detailed evidence and interpretation boundary are in `docs/results.md`.
 
-Network sampling has a separate timing contract. A requested interval is not proof that the sampler achieved that cadence. Persisted `sample_duration_seconds` and `schedule_lag_seconds` are measurement evidence. Future runs must fail closed when achieved counter-sampling cadence falls materially below the requested rate.
+Network sampling has a separate timing contract. A requested interval is not proof that the sampler achieved that cadence. Persisted `sample_duration_seconds` and `schedule_lag_seconds` are measurement evidence. The current sampler collects independent ingress/UE/UPF observations concurrently and research runs fail closed when achieved counter-sampling cadence falls materially below the requested rate.
 
-The campaign-06 counter sampler achieved approximately one sample every three seconds despite a one-second request; this limitation is public evidence and must not be rewritten as 1 Hz sampling. The run-level counter deltas remain valid for their measured interval.
+Campaign-06 predates that correction and achieved approximately one sample every three seconds despite a one-second request; this limitation is public evidence and must not be rewritten as 1 Hz sampling. The run-level counter deltas remain valid for their measured interval.
 
 ## Experiment validity
 
@@ -229,7 +231,9 @@ Failed and invalid runs remain immutable diagnostic evidence and must never be s
 
 Pinned upstream checkouts live below ignored `.deps/` storage. Do not vendor or partially copy upstream projects merely for convenience. Keep selected runtime images digest-pinned and preserve third-party license/provenance records.
 
-Research artifacts should preserve the immutable run specification, measurement window, telemetry, RTT probes, network counters, load records, validity summary, and artifact digests. Raw campaign evidence belongs in durable research/object storage; small derived public analyses may be tracked under `results/`.
+Research artifacts should preserve the immutable run specification, measurement window, telemetry, RTT probes, network counters, load records, validity summary, and artifact digests. The complete raw campaign bundle belongs in durable research/object storage. The unrounded campaign-level analysis JSON may be tracked under `results/` when the repository privacy scan passes; do not round or rewrite valid research measurements merely to avoid a scanner false positive.
+
+The privacy scanner must distinguish structured numeric JSON measurements from subscriber identifiers without exempting an entire results path. IMSI-like values in JSON strings remain sensitive; bare JSON numeric measurements are not subscriber identities solely because they contain 14–16 digits.
 
 Checksum manifests must never include an entry for the manifest file itself. The historical campaign-06 preservation archive contains that known self-reference bug; the archive-level S3 SHA-256 remains the canonical frozen integrity check and the object must not be rewritten.
 
@@ -246,7 +250,7 @@ Never commit:
 - generated live run directories;
 - dependency worktrees.
 
-Privacy protections are layered through ignore rules, repository scanning, pre-push checks, CI, and GitHub controls. Do not weaken a privacy rule merely to make a check pass.
+Privacy protections are layered through ignore rules, repository scanning, pre-push checks, CI, and GitHub controls. Do not weaken a privacy rule merely to make a check pass; correct false positives narrowly while preserving detection of the actual sensitive type.
 
 Prefer route proof, counters, broker receipt, and message-integrity evidence over packet capture when they prove the required boundary with lower privacy risk.
 
@@ -254,14 +258,14 @@ Prefer route proof, counters, broker receipt, and message-integrity evidence ove
 
 Public documentation has distinct jobs:
 
-- `README.md`: explain SynthRAN to a new reader;
+- `README.md`: explain SynthRAN to a new reader and provide the compact end-to-end quick start;
 - `docs/results.md`: canonical current live evidence and scientific interpretation boundary;
 - `docs/experiment.md`: experiment/research protocol and validity rules;
 - `docs/architecture.md`: durable system boundaries;
-- `docs/operator-guide.md`: commands an operator actually runs;
+- `docs/operator-guide.md`: full live procedure, provider prerequisites, recovery, and preservation;
 - historical result files: immutable engineering history, not current capability truth.
 
-Do not turn the README back into an operator manual or changelog. Link to detailed docs instead of copying large sections between files.
+Keep the README understandable and concise even though it contains the runnable golden-path skeleton. Put provider edge cases, failure recovery, preservation details, and scientific semantics in the focused docs instead of duplicating them everywhere.
 
 ## Validation before completion
 
