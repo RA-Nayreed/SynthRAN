@@ -15,6 +15,13 @@ from typing import Callable, Mapping, Sequence, TextIO
 
 from synthran.live_preflight import CommandResult
 from synthran.network.runtime import validate_run_id
+from synthran.workspace.model import WorkspaceError
+from synthran.workspace.store import (
+    DEFAULT_PROFILE_NAME,
+    load_profile,
+    resolve_identity_reference,
+    verify_profile_identity,
+)
 
 
 R2LAB_GATEWAY = "faraday.inria.fr"
@@ -116,6 +123,30 @@ def _validate_run(value: str) -> str:
     return run_id
 
 
+def _configured_identity(slice_name: str) -> Path | None:
+    """Resolve private R2Lab SSH identity without exposing it in public evidence."""
+
+    override = os.environ.get("SYNTHRAN_R2LAB_IDENTITY")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    try:
+        profile = load_profile(DEFAULT_PROFILE_NAME)
+    except WorkspaceError:
+        return None
+    if profile.r2lab_identity is None:
+        return None
+    if profile.r2lab_slice is not None and profile.r2lab_slice != slice_name:
+        raise R2LabResourceError(
+            "configured R2Lab SSH identity belongs to a different profile slice"
+        )
+    try:
+        verify_profile_identity(profile)
+    except WorkspaceError as exc:
+        raise R2LabResourceError("configured R2Lab SSH identity could not be verified") from exc
+    return resolve_identity_reference(profile.r2lab_identity)
+
+
 def subprocess_runner(command: Sequence[str], timeout_seconds: int) -> CommandResult:
     """Execute one argv-only local command and capture its result."""
 
@@ -139,6 +170,15 @@ def gateway_command(slice_name: str, *remote: str) -> tuple[str, ...]:
     """Build the strict public-key SSH boundary used for all gateway actions."""
 
     slice_name = _validate_slice(slice_name)
+    identity = _configured_identity(slice_name)
+    identity_options: tuple[str, ...] = ()
+    if identity is not None:
+        identity_options = (
+            "-o",
+            "IdentitiesOnly=yes",
+            "-i",
+            str(identity),
+        )
     return (
         "ssh",
         "-o",
@@ -147,6 +187,7 @@ def gateway_command(slice_name: str, *remote: str) -> tuple[str, ...]:
         "ConnectTimeout=10",
         "-o",
         "StrictHostKeyChecking=yes",
+        *identity_options,
         "--",
         f"{slice_name}@{R2LAB_GATEWAY}",
         *remote,
