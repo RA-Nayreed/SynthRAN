@@ -23,7 +23,7 @@ from synthran.live_preflight import ssh_command
 
 
 LOCK_KEY = "iperf3_linux_amd64_source"
-CONTROL_KEEPALIVE = "30/10/3"
+CONTROL_KEEPALIVE = "60/10/3"
 CONTROL_KEEPALIVE_ARG = f"--cntl-ka={CONTROL_KEEPALIVE}"
 UE_IPERF_PATH = "/usr/local/bin/iperf3"
 _VERSION_RE = re.compile(r"^iperf\s+([0-9]+(?:\.[0-9]+){1,2})\b", re.MULTILINE)
