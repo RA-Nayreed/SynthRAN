@@ -11,6 +11,10 @@ from synthran.experiment import ExperimentError, validate_run_id
 import synthran.experiment_runtime as base_runtime
 from synthran.fiveg_ansible import InventoryHost, NetworkInventory
 from synthran.live_preflight import ssh_command
+from synthran.research.iperf_toolchain import (
+    CONTROL_KEEPALIVE_ARG,
+    prepare_locked_iperf_server,
+)
 
 
 _LISTENER_PROBE = r'''
@@ -267,6 +271,11 @@ def start_owned_iperf_server(
             server_node=selected_node,
             target=target,
         )
+    iperf_binary = prepare_locked_iperf_server(
+        inventory,
+        server_node=selected_node,
+        repository_root=repository_root,
+    )
     server_inventory = _server_inventory(inventory, selected_node)
     workspace, pidfile = _paths(owner_id, port)
     _reap(
@@ -295,7 +304,7 @@ def start_owned_iperf_server(
     )
     command = ssh_command(
         _measurement_host(inventory, selected_node),
-        "iperf3",
+        iperf_binary,
         "-s",
         "-1",
         "-p",
@@ -303,6 +312,7 @@ def start_owned_iperf_server(
         "-J",
         "-I",
         pidfile,
+        CONTROL_KEEPALIVE_ARG,
     )
     process = base_runtime._start_process(
         "research load server",
