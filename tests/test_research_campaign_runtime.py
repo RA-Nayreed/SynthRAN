@@ -194,7 +194,7 @@ class CampaignRuntimeIdentityTests(unittest.TestCase):
                 network_run_id="network-test-01",
             )
 
-    def test_pre_window_loaded_gate_requires_icmp_then_transport(self) -> None:
+    def test_pre_window_loaded_gate_uses_transport_not_icmp(self) -> None:
         calls: list[str] = []
         spec = SimpleNamespace(load=SimpleNamespace(enabled=True))
         CampaignRuntimeSession._prove_pre_window_target(
@@ -202,7 +202,7 @@ class CampaignRuntimeIdentityTests(unittest.TestCase):
             prove_icmp=lambda: calls.append("icmp"),
             prove_transport=lambda: calls.append("transport"),
         )
-        self.assertEqual(calls, ["icmp", "transport"])
+        self.assertEqual(calls, ["transport"])
 
     def test_pre_window_baseline_gate_requires_icmp_only(self) -> None:
         calls: list[str] = []
