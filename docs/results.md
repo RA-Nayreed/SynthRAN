@@ -59,7 +59,7 @@ sequence gaps:      0
 duplicate sequences: 0
 ```
 
-A 180-second observation window and a 5-second periodic source have boundary-phase ambiguity: depending on where the sensor cycle falls relative to the exact window edges, 35 or 36 records may lie inside the window even when the observed sequence is continuous.
+A 180-second observation window and a 5-second periodic source have boundary-timing ambiguity: depending on where the sensor cycle falls relative to the exact window edges, 35 or 36 records may lie inside the window even when the observed sequence is continuous.
 
 Therefore the current `delivery_ratio` field in the v1alpha1 summary should be read as **nominal window occupancy**, not as an end-to-end packet-loss estimator. Scientific reporting for this campaign uses sequence gaps/duplicates for observed telemetry integrity.
 
@@ -128,7 +128,7 @@ Campaign-06 requested a 1-second network-counter interval, but the raw `network-
 
 This does **not** invalidate the run-level counter deltas, throughput totals, path completeness, or drop-counter observations. It does mean campaign-06 must not be described as having 1 Hz network-counter resolution.
 
-The sampler is being hardened so independent read-only counter queries run concurrently and future runs fail closed when achieved cadence falls materially below the requested cadence.
+The sampler now collects independent read-only counter queries concurrently and future runs fail closed when achieved cadence falls materially below the requested cadence.
 
 RTT probing is separate from this limitation: every campaign-06 run contains 180 RTT attempts over its 180-second window.
 
@@ -164,7 +164,7 @@ Analysis SHA-256:
 c96a3c402088420400c8727606376c86b08b0f6658a32220466be866d89aafa3
 ```
 
-A copy of that derived JSON is tracked under [`results/`](../results/) for public inspection. Raw run evidence remains outside Git because it includes the complete immutable experiment bundle.
+The unrounded campaign analysis JSON is intentionally tracked under [`results/`](../results/) for direct inspection. The complete immutable raw run bundle remains in SLICES object storage, where its archive checksum was verified byte-for-byte.
 
 ### Preservation-manifest note
 
@@ -182,7 +182,7 @@ It does **not** yet establish physical-RF behavior, multi-UE scaling, a general 
 
 ## Next scientific work
 
-1. Harden and verify requested network-counter cadence before another long campaign.
+1. Verify the hardened network-counter sampler with a fresh short run before another long campaign.
 2. Treat fixed-count telemetry coverage as window occupancy and use sequence continuity for observed loss/integrity claims.
 3. Produce publication figures directly from the raw campaign-06 traces: RTT distributions/time series, paired block effects, telemetry inter-arrival behavior, and UE/UPF transport agreement.
 4. Run a targeted active-versus-idle replication with more independent blocks.
