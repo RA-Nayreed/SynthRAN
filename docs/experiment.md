@@ -9,6 +9,14 @@ Both consume an already path-proven Open5GS + srsRAN + RFSIM base network. Exper
 
 Current live results are summarized in [`results.md`](results.md).
 
+Before running the commands in this guide, use the locked environment:
+
+```bash
+conda activate synthran
+```
+
+The complete provider setup — SLICES account/project, provider experiment, Post5G prefix, resource preparation, deployment, calibration, campaign execution, and preservation — is documented end to end in [`operator-guide.md`](operator-guide.md).
+
 ## 1. End-to-end path
 
 ```text
@@ -144,7 +152,7 @@ RTT probing is independent and did achieve 180 attempts in each 180-second campa
 
 ## 8. Telemetry count semantics
 
-A periodic source and a hard observation window do not guarantee exactly `duration / period` records inside the window. The first transmission can occur at an arbitrary phase relative to the window boundary.
+A periodic source and a hard observation window do not guarantee exactly `duration / period` records inside the window. The first transmission can occur at an arbitrary timing offset relative to the window boundary.
 
 For the current v1alpha1 summaries:
 
