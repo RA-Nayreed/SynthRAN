@@ -1,9 +1,9 @@
 """Pinned iperf3 toolchain provisioning for research measurements.
 
 The golden-path srsUE image and measurement host currently ship different,
-older iperf3 versions.  Research runs therefore build one source-locked,
+older iperf3 versions. Research runs therefore build one source-locked,
 static iperf3 binary on each prepared host and copy the same version into the
-UE container.  This keeps calibration, background-load generation, and the
+UE container. This keeps calibration, background-load generation, and the
 external measurement server on one reproducible iperf3 release.
 """
 
@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 import re
 import shlex
-from typing import Any, Mapping
+from typing import Mapping
 
 from synthran.dependencies import DependencyError, load_lock
 import synthran.experiment_runtime as base_runtime
@@ -30,7 +30,6 @@ _VERSION_RE = re.compile(r"^iperf\s+([0-9]+(?:\.[0-9]+){1,2})\b", re.MULTILINE)
 
 _BUILD_SCRIPT = r'''
 import hashlib
-import os
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -276,7 +275,28 @@ def _ue_tool_ready(
         )
         if result.returncode != 0 or marker not in (result.stdout + result.stderr):
             return False
-    return True
+
+    # Calibration still invokes `iperf3` by command name. Prove that the live
+    # UE PATH resolves that name to the exact pinned binary before allowing any
+    # measurement to proceed, so calibration and campaign cannot silently use
+    # different iperf3 versions.
+    resolved = base_runtime._run(
+        _ue_exec_command(inventory, ue_pod, "sh", "-c", "command -v iperf3"),
+        timeout_seconds=10,
+    )
+    if resolved.returncode != 0 or resolved.stdout.strip() != UE_IPERF_PATH:
+        return False
+    bare_version = base_runtime._run(
+        _ue_exec_command(inventory, ue_pod, "iperf3", "--version"),
+        timeout_seconds=10,
+    )
+    return (
+        bare_version.returncode == 0
+        and _version_matches(
+            bare_version.stdout + bare_version.stderr,
+            spec.version,
+        )
+    )
 
 
 def prepare_locked_iperf_client(
@@ -323,7 +343,9 @@ def prepare_locked_iperf_client(
     if result.returncode != 0:
         raise ExperimentError("locked iperf3 UE chmod failed")
     if not _ue_tool_ready(inventory, ue_pod, spec):
-        raise ExperimentError("locked iperf3 UE verification failed after installation")
+        raise ExperimentError(
+            "locked iperf3 UE verification failed after installation or PATH resolution did not select the pinned binary"
+        )
     return UE_IPERF_PATH
 
 
