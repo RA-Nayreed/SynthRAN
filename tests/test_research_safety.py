@@ -16,6 +16,7 @@ from synthran.research_iperf import (
     start_owned_iperf_server,
     stop_owned_iperf_server,
 )
+from synthran.research.iperf_toolchain import CONTROL_KEEPALIVE_ARG
 
 
 class OwnedIperfLifecycleTests(unittest.TestCase):
@@ -32,9 +33,14 @@ class OwnedIperfLifecycleTests(unittest.TestCase):
         inventory = self._inventory()
         managed = MagicMock()
         managed.process.poll.return_value = None
+        locked_binary = "/tmp/synthran-tools/iperf-3.21/bin/iperf3"
         with (
             patch("synthran.research_iperf._reap") as reap,
             patch("synthran.research_iperf.base_runtime._remote"),
+            patch(
+                "synthran.research_iperf.prepare_locked_iperf_server",
+                return_value=locked_binary,
+            ) as prepare,
             patch(
                 "synthran.research_iperf.base_runtime._start_process",
                 return_value=managed,
@@ -60,6 +66,11 @@ class OwnedIperfLifecycleTests(unittest.TestCase):
             server.pidfile,
             "/tmp/synthran-research/campaign-c01-b01-high/iperf3-5201.pid",
         )
+        prepare.assert_called_once_with(
+            inventory,
+            server_node="sopnode-f3",
+            repository_root=Path("."),
+        )
         reap.assert_called_once_with(
             inventory,
             server_node="sopnode-f3",
@@ -69,6 +80,8 @@ class OwnedIperfLifecycleTests(unittest.TestCase):
             label="stale research iperf3 recovery",
         )
         self.assertEqual(ssh.call_args.args[0].name, "sopnode-f3")
+        self.assertIn(locked_binary, ssh.call_args.args)
+        self.assertIn(CONTROL_KEEPALIVE_ARG, ssh.call_args.args)
         start.assert_called_once()
 
     def test_core_node_cannot_be_selected_as_measurement_server(self) -> None:
