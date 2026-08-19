@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 from pathlib import Path
 import unittest
 
@@ -56,6 +57,35 @@ class PrivacyScannerTests(unittest.TestCase):
         )
         self.assertEqual([], findings)
 
+    def test_json_numeric_measurements_are_not_mistaken_for_imsi(self) -> None:
+        timestamp = int("1234567" + "89012345")
+        counter = int("6636640" + "20000000")
+        text = json.dumps(
+            {"timestamp_ns": timestamp, "counter": counter},
+            indent=2,
+        ) + "\n"
+        findings = scan_text(
+            text,
+            path="results/campaign-analysis.json",
+            identifiers=(),
+        )
+        self.assertEqual([], findings)
+
+    def test_json_string_imsi_is_still_blocked(self) -> None:
+        imsi = "0010100" + "00000100"
+        text = json.dumps({"imsi": imsi}, indent=2) + "\n"
+        findings = scan_text(text, path="fixture.json", identifiers=())
+        self.assertEqual(["imsi"], [item.rule for item in findings])
+
+    def test_plain_text_imsi_is_still_blocked(self) -> None:
+        imsi = "0010100" + "00000100"
+        findings = scan_text(
+            f"subscriber {imsi}",
+            path="fixture.txt",
+            identifiers=(),
+        )
+        self.assertEqual(["imsi"], [item.rule for item in findings])
+
     def test_report_omits_detected_content(self) -> None:
         output = StringIO()
         status = report_findings(
@@ -93,7 +123,6 @@ class TextRedactorTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         redact_file(SAFE_FIXTURE, destination, dry_run=True, output=StringIO())
         self.assertFalse(destination.exists())
-
 
 
 if __name__ == "__main__":
