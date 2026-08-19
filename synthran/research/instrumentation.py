@@ -25,6 +25,11 @@ from synthran.research import (
     ResearchExperimentSpec,
     append_jsonl,
 )
+from synthran.research.iperf_toolchain import (
+    CONTROL_KEEPALIVE_ARG,
+    UE_IPERF_PATH,
+    prepare_locked_iperf_client,
+)
 
 DEFAULT_RESEARCH_RUN_ROOT = Path(".synthran/experiments")
 _PING_TIME_RE = re.compile(r"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms")
@@ -198,7 +203,7 @@ def _kubectl_exec_command(inventory: NetworkInventory, ue_pod: str, *command: st
 
 
 def _check_research_tools(inventory: NetworkInventory, ue_pod: str, *, load_enabled: bool) -> None:
-    tools = ["ip", "ping", "python3"] + (["iperf3"] if load_enabled else [])
+    tools = ["ip", "ping", "python3"]
     script = "for x in " + " ".join(tools) + '; do command -v "$x" >/dev/null || exit 7; done'
     result = base_runtime._run(
         _kubectl_exec_command(inventory, ue_pod, "sh", "-c", script),
@@ -208,20 +213,23 @@ def _check_research_tools(inventory: NetworkInventory, ue_pod: str, *, load_enab
         raise ResearchError("UE container is missing required research measurement tools")
     if not load_enabled:
         return
+    try:
+        prepare_locked_iperf_client(inventory, ue_pod)
+    except Exception as exc:
+        raise ResearchError(f"locked research iperf3 preparation failed: {exc}") from exc
     help_result = base_runtime._run(
-        _kubectl_exec_command(inventory, ue_pod, "iperf3", "--help"),
+        _kubectl_exec_command(inventory, ue_pod, UE_IPERF_PATH, "--help"),
         timeout_seconds=10,
     )
-    if help_result.returncode != 0 or "--connect-timeout" not in (help_result.stdout + help_result.stderr):
-        raise ResearchError("UE iperf3 does not support the required bounded connection timeout")
-    base_runtime._remote(
-        inventory,
-        "sh",
-        "-c",
-        "command -v iperf3 >/dev/null",
-        label="research load server tool probe",
-        timeout_seconds=10,
-    )
+    help_text = help_result.stdout + help_result.stderr
+    if (
+        help_result.returncode != 0
+        or "--connect-timeout" not in help_text
+        or "--cntl-ka" not in help_text
+    ):
+        raise ResearchError(
+            "locked UE iperf3 does not support required connection timeout/keepalive options"
+        )
 
 
 def _target_prefix(target: str) -> str:
@@ -457,9 +465,10 @@ def _start_load_client(
     log_path: Path,
 ) -> base_runtime.ManagedProcess:
     arguments = [
-        "iperf3", "-c", target, "-B", pdu_address, "-p", str(port),
-        "--connect-timeout", str(_IPERF_CONNECT_TIMEOUT_MS), "-t", str(duration_seconds),
-        "-P", str(parallel_flows), "-J",
+        UE_IPERF_PATH, "-c", target, "-B", pdu_address, "-p", str(port),
+        "--connect-timeout", str(_IPERF_CONNECT_TIMEOUT_MS),
+        CONTROL_KEEPALIVE_ARG,
+        "-t", str(duration_seconds), "-P", str(parallel_flows), "-J",
     ]
     if protocol == "udp":
         arguments.extend(("-u", "-b", str(target_bps)))
@@ -499,11 +508,21 @@ def _wait_load_client_connected(
     raise ResearchError("research background load control connection did not become ready")
 
 
-def _extract_iperf_bps(value: Mapping[str, Any]) -> float | None:
+def _extract_iperf_bps(
+    value: Mapping[str, Any],
+    *,
+    protocol: str | None = None,
+) -> float | None:
     end = value.get("end")
     if not isinstance(end, Mapping):
         return None
-    for candidate in (end.get("sum_received"), end.get("sum_sent"), end.get("sum")):
+    order = (
+        ("sum_sent", "sum_received", "sum")
+        if protocol == "udp"
+        else ("sum_received", "sum_sent", "sum")
+    )
+    for name in order:
+        candidate = end.get(name)
         if isinstance(candidate, Mapping):
             bps = candidate.get("bits_per_second")
             if isinstance(bps, (int, float)) and not isinstance(bps, bool):
@@ -515,7 +534,10 @@ def _extract_iperf_bps(value: Mapping[str, Any]) -> float | None:
             if not isinstance(stream, Mapping):
                 continue
             receiver, sender = stream.get("receiver"), stream.get("sender")
-            candidate = receiver if isinstance(receiver, Mapping) else sender
+            if protocol == "udp":
+                candidate = sender if isinstance(sender, Mapping) else receiver
+            else:
+                candidate = receiver if isinstance(receiver, Mapping) else sender
             if isinstance(candidate, Mapping):
                 bps = candidate.get("bits_per_second")
                 if isinstance(bps, (int, float)) and not isinstance(bps, bool):
@@ -537,9 +559,12 @@ def _parse_load_log(path: Path, destination: Path, *, target_bps: int, protocol:
         raise ResearchError("background load produced invalid iperf3 JSON") from exc
     if not isinstance(value, Mapping):
         raise ResearchError("background load result is malformed")
-    bps = _extract_iperf_bps(value)
-    if bps is None:
-        raise ResearchError("background load result does not contain measured goodput")
+    error = value.get("error")
+    if isinstance(error, str) and error.strip():
+        raise ResearchError(f"background load iperf3 failed: {error.strip()}")
+    bps = _extract_iperf_bps(value, protocol=protocol)
+    if bps is None or bps <= 0:
+        raise ResearchError("background load result does not contain positive measured throughput")
     append_jsonl(destination, {
         "schema": LOAD_RESULT_SCHEMA,
         "protocol": protocol,
