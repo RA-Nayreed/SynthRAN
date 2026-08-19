@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from synthran.research import ResearchError
 from synthran.research.instrumentation import _parse_load_log, _start_load_client
 from synthran.research.iperf_toolchain import (
+    CONTROL_KEEPALIVE,
     CONTROL_KEEPALIVE_ARG,
     LOCK_KEY,
     UE_IPERF_PATH,
@@ -32,6 +33,11 @@ class IperfToolchainLockTests(unittest.TestCase):
         )
         self.assertIn("iperf-3.21", spec.path)
         self.assertEqual(LOCK_KEY, "iperf3_linux_amd64_source")
+
+    def test_control_keepalive_period_exceeds_retry_window(self) -> None:
+        keepidle, keepintvl, keepcnt = (int(value) for value in CONTROL_KEEPALIVE.split("/"))
+        self.assertGreater(keepidle, keepintvl * keepcnt)
+        self.assertEqual(CONTROL_KEEPALIVE_ARG, f"--cntl-ka={CONTROL_KEEPALIVE}")
 
     def test_ue_tool_requires_bare_iperf_to_resolve_to_pinned_binary(self) -> None:
         spec = _locked_spec(Path("."))
