@@ -83,7 +83,9 @@ class R2LabSmokeGateTests(unittest.TestCase):
         self.assertFalse(payload["safety"]["global_power_off"])
         self.assertNotIn("oulu_user", rendered)
         self.assertNotIn("all-off", rendered)
-        self.assertNotIn("password", rendered.lower())
+        planned_commands = "\n".join(payload["commands"]).lower()
+        self.assertNotIn("password", planned_commands)
+        self.assertNotIn(" -p ", f" {planned_commands} ")
 
         runner.commands.clear()
         with tempfile.TemporaryDirectory() as directory:
