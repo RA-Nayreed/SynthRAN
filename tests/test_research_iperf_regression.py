@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,7 @@ from synthran.research.iperf_toolchain import (
     LOCK_KEY,
     UE_IPERF_PATH,
     _locked_spec,
+    _ue_tool_ready,
 )
 
 
@@ -30,6 +32,53 @@ class IperfToolchainLockTests(unittest.TestCase):
         )
         self.assertIn("iperf-3.21", spec.path)
         self.assertEqual(LOCK_KEY, "iperf3_linux_amd64_source")
+
+    def test_ue_tool_requires_bare_iperf_to_resolve_to_pinned_binary(self) -> None:
+        spec = _locked_spec(Path("."))
+        result = lambda stdout="": SimpleNamespace(
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        with (
+            patch(
+                "synthran.research.iperf_toolchain._ue_exec_command",
+                return_value=("ssh", "probe"),
+            ),
+            patch(
+                "synthran.research.iperf_toolchain.base_runtime._run",
+                side_effect=(
+                    result("iperf 3.21\n"),
+                    result("--cntl-ka[=#/#/#]\n"),
+                    result("/usr/bin/iperf3\n"),
+                ),
+            ),
+        ):
+            self.assertFalse(_ue_tool_ready(object(), "ue-pod", spec))
+
+    def test_ue_tool_accepts_matching_pinned_path_and_bare_version(self) -> None:
+        spec = _locked_spec(Path("."))
+        result = lambda stdout="": SimpleNamespace(
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        with (
+            patch(
+                "synthran.research.iperf_toolchain._ue_exec_command",
+                return_value=("ssh", "probe"),
+            ),
+            patch(
+                "synthran.research.iperf_toolchain.base_runtime._run",
+                side_effect=(
+                    result("iperf 3.21\n"),
+                    result("--cntl-ka[=#/#/#]\n"),
+                    result(UE_IPERF_PATH + "\n"),
+                    result("iperf 3.21\n"),
+                ),
+            ),
+        ):
+            self.assertTrue(_ue_tool_ready(object(), "ue-pod", spec))
 
 
 class LongUdpRegressionTests(unittest.TestCase):
