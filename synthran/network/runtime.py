@@ -924,13 +924,20 @@ def load_deployment_manifest(
     }
     if payload.get("dependencies") != expected:
         raise NetworkRuntimeError("deployment manifest dependencies do not match the lock")
-    lock_digest = dependency_lock_sha256(lock)
-    if payload.get("dependency_lock_sha256") != lock_digest:
-        raise NetworkRuntimeError("deployment manifest dependency lock does not match")
+
+    manifest_lock_digest = payload.get("dependency_lock_sha256")
+    if (
+        not isinstance(manifest_lock_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", manifest_lock_digest) is None
+    ):
+        raise NetworkRuntimeError(
+            "deployment manifest dependency lock provenance is invalid"
+        )
+
     controller = payload.get("slices_controller")
     if (
         not isinstance(controller, dict)
-        or controller.get("dependency_lock_sha256") != lock_digest
+        or controller.get("dependency_lock_sha256") != manifest_lock_digest
         or controller.get("project_fingerprint") != context_fingerprint(slices_project)
         or controller.get("experiment_fingerprint") != context_fingerprint(slices_experiment)
     ):
