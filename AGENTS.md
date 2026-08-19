@@ -4,18 +4,20 @@
 
 SynthRAN is a reproducible experiment-control platform joining deterministic IoT emulation, an open 5G user plane, and research-grade evidence.
 
-The accepted virtual path is:
+The accepted virtual golden path is:
 
 ```text
-10 Contiki-NG/Cooja sensors
--> RPL / 6LoWPAN
--> tunslip6 / tun0
--> counted MQTT ingress
--> Mosquitto bridge in the srsUE network namespace
+10 deterministic Contiki-NG/Cooja sensors
+-> RPL/6LoWPAN border router
+-> Cooja Serial Socket
+-> loopback-only reverse SSH tunnel
+-> remote tunslip6/tun0
+-> counted TCP ingress
+-> Mosquitto bridge inside srsUE network namespace
 -> tun_srsue1
 -> srsRAN gNB
 -> Open5GS UPF
--> run-owned central broker / collector
+-> run-owned central Mosquitto
 -> canonical JSONL
 -> deterministic Parquet
 ```
