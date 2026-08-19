@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import getpass
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,8 @@ from typing import Iterable, Iterator, Sequence, TextIO
 
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 ZERO_SHA = "0" * 40
+IMSI_RE = re.compile(r"(?<![0-9])(?:[0-9]{14,16})(?![0-9])")
+JSON_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 
 
 class PrivacyError(RuntimeError):
@@ -56,10 +59,7 @@ STATIC_RULES = (
         "subscriber-secret",
         re.compile(r"(?i)\b(?:opc|full_key|auth(?:entication)?_key)\s*[:=]\s*['\"]?[0-9a-f]{32}\b"),
     ),
-    Rule(
-        "imsi",
-        re.compile(r"(?<![0-9])(?:[0-9]{14,16})(?![0-9])"),
-    ),
+    Rule("imsi", IMSI_RE),
     Rule(
         "windows-absolute-path",
         re.compile(r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/](?![<>])[^\r\n`'\"]+)"),
@@ -105,6 +105,29 @@ def _is_placeholder(value: str) -> bool:
     return normalized.startswith(placeholder_markers)
 
 
+def _is_valid_json_document(text: str, path: str) -> bool:
+    if not path.lower().endswith(".json"):
+        return False
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _json_line_contains_imsi_string(line: str) -> bool:
+    """Detect subscriber identifiers only inside JSON strings, not numeric measurements."""
+
+    for match in JSON_STRING_RE.finditer(line):
+        try:
+            value = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, str) and IMSI_RE.search(value):
+            return True
+    return False
+
+
 def local_identifiers() -> tuple[str, ...]:
     candidates = {
         getpass.getuser(),
@@ -134,10 +157,16 @@ def scan_text(
 ) -> list[Finding]:
     findings: list[Finding] = []
     names = tuple(local_identifiers() if identifiers is None else identifiers)
+    is_json_document = _is_valid_json_document(text, path)
     for line_number, line in enumerate(text.splitlines(), start=1):
         for rule in STATIC_RULES:
+            if rule.name == "imsi" and is_json_document:
+                continue
             if rule.pattern.search(line):
                 findings.append(Finding(rule.name, path, line_number, commit))
+
+        if is_json_document and _json_line_contains_imsi_string(line):
+            findings.append(Finding("imsi", path, line_number, commit))
 
         assignment = ASSIGNMENT_RE.search(line)
         if assignment and not _is_placeholder(assignment.group(2)):
