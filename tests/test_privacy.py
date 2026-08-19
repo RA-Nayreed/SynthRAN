@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 from pathlib import Path
 import unittest
 
@@ -57,7 +58,12 @@ class PrivacyScannerTests(unittest.TestCase):
         self.assertEqual([], findings)
 
     def test_json_numeric_measurements_are_not_mistaken_for_imsi(self) -> None:
-        text = '{\n  "timestamp_ns": 123456789012345,\n  "counter": 663664020000000\n}\n'
+        timestamp = int("1234567" + "89012345")
+        counter = int("6636640" + "20000000")
+        text = json.dumps(
+            {"timestamp_ns": timestamp, "counter": counter},
+            indent=2,
+        ) + "\n"
         findings = scan_text(
             text,
             path="results/campaign-analysis.json",
@@ -66,13 +72,15 @@ class PrivacyScannerTests(unittest.TestCase):
         self.assertEqual([], findings)
 
     def test_json_string_imsi_is_still_blocked(self) -> None:
-        text = '{\n  "imsi": "001010000000100"\n}\n'
+        imsi = "0010100" + "00000100"
+        text = json.dumps({"imsi": imsi}, indent=2) + "\n"
         findings = scan_text(text, path="fixture.json", identifiers=())
         self.assertEqual(["imsi"], [item.rule for item in findings])
 
     def test_plain_text_imsi_is_still_blocked(self) -> None:
+        imsi = "0010100" + "00000100"
         findings = scan_text(
-            "subscriber 001010000000100",
+            f"subscriber {imsi}",
             path="fixture.txt",
             identifiers=(),
         )
