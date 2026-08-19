@@ -40,12 +40,18 @@ class IperfToolchainLockTests(unittest.TestCase):
             stdout=stdout,
             stderr="",
         )
-        with patch(
-            "synthran.research.iperf_toolchain.base_runtime._run",
-            side_effect=(
-                result("iperf 3.21\n"),
-                result("--cntl-ka[=#/#/#]\n"),
-                result("/usr/bin/iperf3\n"),
+        with (
+            patch(
+                "synthran.research.iperf_toolchain._ue_exec_command",
+                return_value=("ssh", "probe"),
+            ),
+            patch(
+                "synthran.research.iperf_toolchain.base_runtime._run",
+                side_effect=(
+                    result("iperf 3.21\n"),
+                    result("--cntl-ka[=#/#/#]\n"),
+                    result("/usr/bin/iperf3\n"),
+                ),
             ),
         ):
             self.assertFalse(_ue_tool_ready(object(), "ue-pod", spec))
@@ -57,13 +63,19 @@ class IperfToolchainLockTests(unittest.TestCase):
             stdout=stdout,
             stderr="",
         )
-        with patch(
-            "synthran.research.iperf_toolchain.base_runtime._run",
-            side_effect=(
-                result("iperf 3.21\n"),
-                result("--cntl-ka[=#/#/#]\n"),
-                result(UE_IPERF_PATH + "\n"),
-                result("iperf 3.21\n"),
+        with (
+            patch(
+                "synthran.research.iperf_toolchain._ue_exec_command",
+                return_value=("ssh", "probe"),
+            ),
+            patch(
+                "synthran.research.iperf_toolchain.base_runtime._run",
+                side_effect=(
+                    result("iperf 3.21\n"),
+                    result("--cntl-ka[=#/#/#]\n"),
+                    result(UE_IPERF_PATH + "\n"),
+                    result("iperf 3.21\n"),
+                ),
             ),
         ):
             self.assertTrue(_ue_tool_ready(object(), "ue-pod", spec))
