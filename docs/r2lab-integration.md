@@ -56,7 +56,7 @@ The operator must already have:
 - no unresolved SynthRAN R2Lab resource claim in the workspace;
 - a reviewed resource pair. The first integration target is `n300 + qhat01`.
 
-SynthRAN does not store an R2Lab password and the smoke gate does not book a lease automatically.
+SynthRAN does not store an R2Lab password and the smoke gate does not book a lease automatically. Live R2Lab SSH uses the identity stored in the default SynthRAN profile when available. An operator may explicitly override that identity for the current process with `SYNTHRAN_R2LAB_IDENTITY`. The private identity path is used only in the live SSH argv and is not written to plans, manifests, logs, or public summaries.
 
 ### Operator smoke sequence
 
@@ -65,6 +65,12 @@ Set the R2Lab slice without committing it to repository files:
 ```bash
 export SYNTHRAN_R2LAB_SLICE=YOUR_R2LAB_SLICE
 export R2LAB_SMOKE_RUN=r2lab-smoke-001
+```
+
+If no verified R2Lab identity exists in the default SynthRAN profile, set an explicit private-key reference for the shell:
+
+```bash
+export SYNTHRAN_R2LAB_IDENTITY=~/.ssh/YOUR_R2LAB_PRIVATE_KEY
 ```
 
 Run the read-only checks first:
@@ -103,16 +109,17 @@ python -m synthran r2lab release \
 The checkpoint passes only when all of the following are true:
 
 1. `doctor` proves strict public-key SSH to Faraday and an active lease without mutation.
-2. `plan` is non-executing, redacts the slice name, reuses the active lease, and never contains a password, `all-off`, or broad R2Lab cleanup.
-3. `prepare` rechecks the active lease before every physical mutation.
-4. `prepare` powers only the selected radio and selected UE.
-5. The selected UE becomes management-reachable.
-6. The run manifest reaches `ready` while the exact local resource claim is held.
-7. `release` requires the matching run manifest and local claim.
-8. `release` powers off only the exact selected UE and radio.
-9. A successful release removes the active claim and persists manifest status `released` with `resource_claim` set to `released`.
-10. A failed release retains the claim for explicit recovery rather than widening cleanup scope.
-11. The complete existing RFSIM test suite remains green.
+2. A configured R2Lab identity is bound with `IdentitiesOnly=yes`; its private path never appears in rendered or persisted evidence.
+3. `plan` is non-executing, redacts the slice name, reuses the active lease, and never contains a password, `all-off`, or broad R2Lab cleanup.
+4. `prepare` rechecks the active lease before every physical mutation.
+5. `prepare` powers only the selected radio and selected UE.
+6. The selected UE becomes management-reachable.
+7. The run manifest reaches `ready` while the exact local resource claim is held.
+8. `release` requires the matching run manifest and local claim.
+9. `release` powers off only the exact selected UE and radio.
+10. A successful release removes the active claim and persists manifest status `released` with `resource_claim` set to `released`.
+11. A failed release retains the claim for explicit recovery rather than widening cleanup scope.
+12. The complete existing RFSIM test suite remains green.
 
 ## Failure rules
 
@@ -142,7 +149,7 @@ The workspace-level active claim is:
 .synthran/r2lab/active.json
 ```
 
-These files are local execution evidence and must not contain the plain R2Lab slice name. Generated live state remains untracked.
+These files are local execution evidence and must not contain the plain R2Lab slice name or the private SSH identity path. Generated live state remains untracked.
 
 ## Next checkpoint
 
