@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -79,6 +80,16 @@ class UpfOwnershipTests(unittest.TestCase):
 
 
 class SynchronizedSamplerTests(unittest.TestCase):
+    def _counters(self, base: int) -> dict[str, int]:
+        return {
+            "rx_bytes": base + 1,
+            "tx_bytes": base + 2,
+            "rx_packets": base + 3,
+            "tx_packets": base + 4,
+            "rx_dropped": 0,
+            "tx_dropped": 0,
+        }
+
     def test_sample_combines_ue_upf_and_ingress_evidence(self) -> None:
         ue = {
             "rx_bytes": 100,
@@ -145,6 +156,98 @@ class SynchronizedSamplerTests(unittest.TestCase):
         self.assertEqual(record["ingress_upstream_bytes"], 500)
         self.assertEqual(record["ue_interface"], "tun_srsue1")
         self.assertEqual(record["upf_interface"], "ogstun")
+
+    def test_independent_remote_sources_are_collected_concurrently(self) -> None:
+        barrier = threading.Barrier(3)
+        ingress = MagicMock()
+        ingress.accepted_connections = 1
+        ingress.upstream_bytes = 2
+        ingress.downstream_bytes = 3
+
+        def ingress_sample(_inventory, _run_id):
+            barrier.wait(timeout=2)
+            return ingress
+
+        def counters(_inventory, *, pod, interface, container=None):
+            barrier.wait(timeout=2)
+            return self._counters(100 if pod == "ue-pod" else 200)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "network-samples.jsonl"
+            with (
+                patch(
+                    "synthran.research_sampling._active_run_owned_upf",
+                    return_value="upf-pod",
+                ),
+                patch(
+                    "synthran.research_sampling._interface_counters",
+                    side_effect=counters,
+                ),
+                patch(
+                    "synthran.research_sampling._ingress_snapshot",
+                    side_effect=ingress_sample,
+                ),
+            ):
+                sampler = ResearchNetworkSampler(
+                    inventory=MagicMock(),
+                    network_run_id="network-accepted",
+                    experiment_run_id="research-run",
+                    ue_pod="ue-pod",
+                    interval_seconds=1.0,
+                    destination=destination,
+                )
+                sampler._started = 1.0
+                sampler._sample()
+
+            records = load_jsonl(destination, schema=NETWORK_SAMPLE_SCHEMA)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["ue_tx_bytes"], 102)
+        self.assertEqual(records[0]["upf_tx_bytes"], 202)
+
+    def test_stop_rejects_materially_missed_requested_cadence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch(
+                "synthran.research_sampling._active_run_owned_upf",
+                return_value="upf-pod",
+            ):
+                sampler = ResearchNetworkSampler(
+                    inventory=MagicMock(),
+                    network_run_id="network-accepted",
+                    experiment_run_id="research-run",
+                    ue_pod="ue-pod",
+                    interval_seconds=1.0,
+                    destination=Path(temporary) / "network-samples.jsonl",
+                )
+            sampler._started = 0.0
+            sampler._sample_count = 3
+            with patch(
+                "synthran.research_sampling.time.monotonic",
+                return_value=10.0,
+            ):
+                with self.assertRaisesRegex(ResearchError, "cadence"):
+                    sampler.stop()
+
+    def test_stop_accepts_at_least_eighty_percent_cadence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch(
+                "synthran.research_sampling._active_run_owned_upf",
+                return_value="upf-pod",
+            ):
+                sampler = ResearchNetworkSampler(
+                    inventory=MagicMock(),
+                    network_run_id="network-accepted",
+                    experiment_run_id="research-run",
+                    ue_pod="ue-pod",
+                    interval_seconds=1.0,
+                    destination=Path(temporary) / "network-samples.jsonl",
+                )
+            sampler._started = 0.0
+            sampler._sample_count = 8
+            with patch(
+                "synthran.research_sampling.time.monotonic",
+                return_value=10.0,
+            ):
+                sampler.stop()
 
 
 class TransportMetricTests(unittest.TestCase):

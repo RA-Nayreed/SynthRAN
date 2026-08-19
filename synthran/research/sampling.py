@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -28,6 +29,8 @@ _COUNTERS = (
     "rx_dropped",
     "tx_dropped",
 )
+_MINIMUM_CADENCE_RATIO = 0.80
+_MINIMUM_CADENCE_WINDOW_MULTIPLIER = 5.0
 
 
 def _ready(status: Mapping[str, Any]) -> bool:
@@ -182,6 +185,50 @@ def _future_deadline(deadline: float, interval: float, now: float) -> float:
     return deadline + missed * interval
 
 
+def _collect_sample_inputs(
+    inventory: NetworkInventory,
+    *,
+    experiment_run_id: str,
+    ue_pod: str,
+    upf_pod: str,
+) -> tuple[IngressSnapshot, dict[str, int], dict[str, int]]:
+    """Collect independent read-only counter sources concurrently.
+
+    The campaign-06 audit showed that the three previous sequential remote
+    queries required about 2.6 seconds, turning a requested 1 Hz cadence into
+    roughly 0.33 Hz. These observations are independent and safe to collect in
+    parallel. The resulting record is still timestamped only after all three
+    inputs have completed.
+    """
+
+    with ThreadPoolExecutor(
+        max_workers=3,
+        thread_name_prefix="synthran-network-sample",
+    ) as executor:
+        ingress_future = executor.submit(
+            _ingress_snapshot,
+            inventory,
+            experiment_run_id,
+        )
+        ue_future = executor.submit(
+            _interface_counters,
+            inventory,
+            pod=ue_pod,
+            interface="tun_srsue1",
+            container="ue",
+        )
+        upf_future = executor.submit(
+            _interface_counters,
+            inventory,
+            pod=upf_pod,
+            interface="ogstun",
+        )
+        ingress = ingress_future.result()
+        ue = ue_future.result()
+        upf = upf_future.result()
+    return ingress, ue, upf
+
+
 class ResearchNetworkSampler:
     def __init__(
         self,
@@ -211,22 +258,17 @@ class ResearchNetworkSampler:
         self._error: BaseException | None = None
         self._started = 0.0
         self._next_deadline = 0.0
+        self._sample_count = 0
 
     def _sample(self, *, scheduled_at: float | None = None) -> None:
         sample_started = time.monotonic()
         if scheduled_at is None:
             scheduled_at = sample_started
-        ingress = _ingress_snapshot(self.inventory, self.experiment_run_id)
-        ue = _interface_counters(
+        ingress, ue, upf = _collect_sample_inputs(
             self.inventory,
-            pod=self.ue_pod,
-            interface="tun_srsue1",
-            container="ue",
-        )
-        upf = _interface_counters(
-            self.inventory,
-            pod=self.upf_pod,
-            interface="ogstun",
+            experiment_run_id=self.experiment_run_id,
+            ue_pod=self.ue_pod,
+            upf_pod=self.upf_pod,
         )
         sample_ended = time.monotonic()
         record: dict[str, Any] = {
@@ -247,6 +289,7 @@ class ResearchNetworkSampler:
             record[f"ue_{counter}"] = ue[counter]
             record[f"upf_{counter}"] = upf[counter]
         append_jsonl(self.destination, record)
+        self._sample_count += 1
 
     def _run(self) -> None:
         try:
@@ -288,8 +331,29 @@ class ResearchNetworkSampler:
             raise ResearchError(
                 "research network sampler failed during measurement"
             ) from self._error
-        if self._thread is not None and not self._thread.is_alive() and not self._stop.is_set():
+        if (
+            self._thread is not None
+            and not self._thread.is_alive()
+            and not self._stop.is_set()
+        ):
             raise ResearchError("research network sampler stopped unexpectedly")
+
+    def _verify_cadence(self, *, stopped_at: float) -> None:
+        elapsed = max(0.0, stopped_at - self._started)
+        minimum_window = max(
+            5.0,
+            self.interval_seconds * _MINIMUM_CADENCE_WINDOW_MULTIPLIER,
+        )
+        if elapsed < minimum_window:
+            return
+        expected = max(1, int(elapsed / self.interval_seconds))
+        ratio = self._sample_count / expected
+        if ratio < _MINIMUM_CADENCE_RATIO:
+            raise ResearchError(
+                "research network sampler cadence fell below the accepted "
+                f"{_MINIMUM_CADENCE_RATIO:.0%} coverage of the requested rate "
+                f"({self._sample_count}/{expected} samples, ratio={ratio:.3f})"
+            )
 
     def stop(self) -> None:
         self._stop.set()
@@ -303,3 +367,4 @@ class ResearchNetworkSampler:
             raise ResearchError(
                 "research network sampler failed during measurement"
             ) from self._error
+        self._verify_cadence(stopped_at=time.monotonic())
