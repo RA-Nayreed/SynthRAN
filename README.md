@@ -26,28 +26,35 @@ SynthRAN is that integration and evidence layer. It can:
 
 It does not reimplement Open5GS, srsRAN, Contiki-NG, Cooja, Mosquitto, iperf3, or SLICES provider services.
 
-## The accepted golden path
+## Golden Path
 
 ```mermaid
-flowchart TB
-    A[10 deterministic Contiki-NG / Cooja sensors]
-    B[RPL / 6LoWPAN border router]
-    C[Cooja Serial Socket]
-    D[Loopback-only reverse SSH tunnel]
-    E[Remote tunslip6 / tun0]
-    F[Counted TCP ingress]
-    G[Mosquitto bridge inside srsUE namespace]
-    H[srsUE / tun_srsue1]
-    I[srsRAN gNB]
-    J[Open5GS UPF]
-    K[Run-owned central Mosquitto]
-    L[Canonical JSONL]
-    M[Deterministic Parquet]
+flowchart LR
+    subgraph IoT["Emulated IoT network"]
+        S["10 deterministic Cooja sensors"] --> R["RPL / 6LoWPAN border router"]
+    end
 
-    A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L --> M
+    R --> SS["Cooja Serial Socket"]
+    SS --> SSH["Loopback-only reverse SSH tunnel"]
+    SSH --> T["Remote tunslip6 / tun0"]
+    T --> E["Counted TCP ingress"]
+    E --> M["Mosquitto bridge in srsUE namespace"]
+    M --> U["srsUE / tun_srsue1"]
+    U --> G["srsRAN gNB"]
+    G --> C["Open5GS UPF"]
+    C --> B["Run-owned central Mosquitto"]
+    B --> D["Canonical JSONL"]
+    D --> P["Deterministic Parquet"]
 
-    N[Controlled UDP load] -. same UE path .-> H
-    O[RTT + UE/UPF counters] -. measure .-> H
+    L["Controlled UDP background load"] -. same UE path .-> U
+    Q["RTT + UE / UPF counters"] -. measures .-> U
+
+    O["SynthRAN control and evidence"]
+    O -. orchestrates .-> S
+    O -. validates ingress .-> E
+    O -. pins / deploys .-> G
+    O -. proves user-plane path .-> C
+    O -. validates records .-> D
 ```
 
 In exact execution order:
