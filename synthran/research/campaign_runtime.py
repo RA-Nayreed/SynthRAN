@@ -10,6 +10,8 @@ This module scopes that instrumentation to the whole ``campaign-run`` command:
 * install the MQTT sidecar once and keep its pod template stable;
 * reconcile RFSIM once, then require the exact UE/gNB/PDU identity to remain
   unchanged for every later treatment;
+* reload the campaign MQTT bridge configuration in place between treatments,
+  without terminating the sidecar container or accumulating restart backoff;
 * preserve the established readiness contract: loaded treatments prove the
   real iperf3 TCP control transport, while baseline treatments use ICMP;
 * keep per-run central MQTT/Cooja/measurement resources run-scoped;
@@ -29,6 +31,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import shlex
+import time
 from typing import Any, Mapping, Sequence
 
 from synthran.dependencies import DependencyLock, load_lock
@@ -46,6 +50,7 @@ from synthran.rfsim_runtime import (
     _discover_pod,
 )
 import synthran.experiment.runtime as base_runtime
+import synthran.research.instrumentation as research_instrumentation
 import synthran.research.runtime as research_runtime
 
 
@@ -105,6 +110,9 @@ class CampaignRuntimeSession:
     _original_experiment_objects: Any = field(default=None, init=False, repr=False)
     _original_reconcile: Any = field(default=None, init=False, repr=False)
     _original_pre_window_target: Any = field(default=None, init=False, repr=False)
+    _original_restart_edge_sidecar: Any = field(default=None, init=False, repr=False)
+    _original_sidecar_barrier: Any = field(default=None, init=False, repr=False)
+    _original_render_edge_config: Any = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_cli_arguments(cls, arguments: Sequence[str]) -> "CampaignRuntimeSession":
@@ -126,11 +134,21 @@ class CampaignRuntimeSession:
         self._original_experiment_objects = base_runtime.render_experiment_objects
         self._original_reconcile = base_runtime.reconcile_rfsim_runtime
         self._original_pre_window_target = research_runtime._prove_pre_window_target
+        self._original_restart_edge_sidecar = base_runtime._restart_edge_sidecar
+        self._original_sidecar_barrier = (
+            research_instrumentation._restart_edge_sidecar_and_wait
+        )
+        self._original_render_edge_config = base_runtime.render_edge_mosquitto_config
 
         base_runtime.render_edge_patch = self._render_edge_patch
         base_runtime.render_edge_cleanup_patch = self._render_edge_cleanup_patch
         base_runtime.render_experiment_objects = self._render_experiment_objects
         base_runtime.reconcile_rfsim_runtime = self._reconcile_runtime
+        base_runtime._restart_edge_sidecar = self._reload_edge_sidecar
+        base_runtime.render_edge_mosquitto_config = self._render_edge_mosquitto_config
+        research_instrumentation._restart_edge_sidecar_and_wait = (
+            self._reload_edge_sidecar_and_wait
+        )
         research_runtime._prove_pre_window_target = self._prove_pre_window_target
         return self
 
@@ -149,6 +167,11 @@ class CampaignRuntimeSession:
             base_runtime.render_edge_cleanup_patch = self._original_edge_cleanup_patch
             base_runtime.render_experiment_objects = self._original_experiment_objects
             base_runtime.reconcile_rfsim_runtime = self._original_reconcile
+            base_runtime._restart_edge_sidecar = self._original_restart_edge_sidecar
+            base_runtime.render_edge_mosquitto_config = self._original_render_edge_config
+            research_instrumentation._restart_edge_sidecar_and_wait = (
+                self._original_sidecar_barrier
+            )
             research_runtime._prove_pre_window_target = self._original_pre_window_target
         return False
 
@@ -269,6 +292,87 @@ class CampaignRuntimeSession:
             raise ResearchError("campaign runtime edge ConfigMap is malformed") from exc
         objects[0] = edge
         return tuple(objects)
+
+    def _render_edge_mosquitto_config(
+        self,
+        scenario: Any,
+        *,
+        central_broker_address: str,
+        central_broker_port: int = 1883,
+    ) -> str:
+        config = self._original_render_edge_config(
+            scenario,
+            central_broker_address=central_broker_address,
+            central_broker_port=central_broker_port,
+        )
+        if "bridge_reload_type immediate" in config:
+            return config
+        marker = "restart_timeout 5"
+        if marker not in config:
+            raise ResearchError(
+                "campaign MQTT config is missing the bridge restart marker"
+            )
+        return config.replace(
+            marker,
+            "bridge_reload_type immediate\n" + marker,
+            1,
+        )
+
+    @staticmethod
+    def _reload_edge_sidecar(inventory: NetworkInventory, pod: str) -> None:
+        base_runtime._remote(
+            inventory,
+            "sh",
+            "-c",
+            "KUBECONFIG=/etc/kubernetes/admin.conf kubectl exec "
+            f"-n {base_runtime.KUBERNETES_NAMESPACE} {shlex.quote(pod)} "
+            f"-c {base_runtime.EDGE_CONTAINER} -- sh -c 'kill -HUP 1'",
+            label="edge MQTT sidecar reload",
+        )
+
+    @staticmethod
+    def _reload_edge_sidecar_and_wait(
+        inventory: NetworkInventory,
+        pod: str,
+        *,
+        restart: Any,
+        timeout_seconds: int = 60,
+    ) -> None:
+        before, container_ready, pod_ready, running = (
+            research_instrumentation._edge_sidecar_status(inventory, pod)
+        )
+        if not (container_ready and pod_ready and running):
+            raise ResearchError(
+                "edge MQTT sidecar is not Ready before in-place config reload"
+            )
+        restart(inventory, pod)
+        time.sleep(1)
+        deadline = time.monotonic() + timeout_seconds
+        latest = "reload readiness not yet observed"
+        while time.monotonic() < deadline:
+            try:
+                count, container_ready, pod_ready, running = (
+                    research_instrumentation._edge_sidecar_status(inventory, pod)
+                )
+            except Exception as exc:
+                latest = str(exc)
+            else:
+                latest = (
+                    f"restartCount={count}, containerReady={container_ready}, "
+                    f"podReady={pod_ready}, running={running}"
+                )
+                if count != before:
+                    raise ResearchError(
+                        "edge MQTT sidecar restarted during in-place config reload "
+                        f"(restartCount {before} -> {count})"
+                    )
+                if container_ready and pod_ready and running:
+                    return
+            time.sleep(1)
+        raise ResearchError(
+            "edge MQTT sidecar reload did not return Ready without a container "
+            f"restart within {timeout_seconds}s ({latest})"
+        )
 
     def _reconcile_runtime(
         self,
