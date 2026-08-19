@@ -10,8 +10,8 @@ This module scopes that instrumentation to the whole ``campaign-run`` command:
 * install the MQTT sidecar once and keep its pod template stable;
 * reconcile RFSIM once, then require the exact UE/gNB/PDU identity to remain
   unchanged for every later treatment;
-* prove ICMP reachability before every treatment and, for loaded treatments,
-  additionally require the real iperf3 TCP control connection;
+* preserve the established readiness contract: loaded treatments prove the
+  real iperf3 TCP control transport, while baseline treatments use ICMP;
 * keep per-run central MQTT/Cooja/measurement resources run-scoped;
 * restore the original srsUE Deployment and reprove the accepted network once
   when the campaign command exits, including invalid/aborted campaigns.
@@ -325,12 +325,14 @@ class CampaignRuntimeSession:
         prove_icmp: Any,
         prove_transport: Any,
     ) -> None:
-        # Always prove actual end-to-end user-plane reachability.  Loaded runs then
-        # additionally prove the exact iperf3 TCP control transport that defines the
-        # condition before the measurement window is allowed to open.
-        prove_icmp()
+        # Match the established research-runtime contract exactly. Loaded runs are
+        # gated by the actual iperf3 transport that defines the treatment; ICMP is
+        # not a prerequisite for that transport. Baseline has no load transport,
+        # so it retains the bounded ICMP readiness proof.
         if spec.load.enabled:
             prove_transport()
+            return
+        prove_icmp()
 
     def _restore_base_runtime(self) -> None:
         if not self.sidecar_patch_requested:
