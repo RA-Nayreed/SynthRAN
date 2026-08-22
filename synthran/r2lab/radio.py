@@ -354,3 +354,21 @@ class QfitRuntimeEvidence:
             "pdu_session_established": self.pdu_session_established,
             "user_plane": "requires-separate-traffic-probe",
         }
+
+
+def classify_qfit_runtime(
+    *,
+    qnwinfo_output: str,
+    c5greg_output: str,
+    packet_service_output: str,
+    ipv4_output: str,
+    interface_present: bool = True,
+) -> QfitRuntimeEvidence:
+    """Reduce raw modem/network probes to sanitized states suitable for persistence."""
+
+    return QfitRuntimeEvidence(
+        cell=parse_qnwinfo(qnwinfo_output),
+        registration=parse_c5greg(c5greg_output),
+        packet_service=parse_packet_service(packet_service_output),
+        ipv4=parse_ipv4_state(ipv4_output, interface_present=interface_present),
+    )
