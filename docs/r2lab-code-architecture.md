@@ -33,22 +33,25 @@ synthran/r2lab/
   radio.py
   deployment.py
   acceptance.py
+  runtime.py
+  ue.py
 ```
 
 The responsibilities are:
 
 ### `controller.py`
 
-Owns public orchestration and workspace authority:
+Owns public resource/start orchestration and workspace authority:
 
 - resource selection and plan construction;
 - strict Faraday SSH boundary;
 - read-only doctor checks;
 - exact prepare flow;
 - exact release flow;
-- local run manifests and resource claims.
+- active run manifests and resource claims;
+- fresh R2Lab claim/lease/N300 authorization for physical gNB start.
 
-It coordinates lower-level behavior but does not redefine provider state or radio semantics.
+It coordinates lower-level behavior but does not redefine provider state, radio semantics, or qfit session mechanics.
 
 ### `provider.py`
 
@@ -57,15 +60,15 @@ Owns R2Lab provider-facing resource semantics:
 - exact PDU state parsing;
 - verified PDU transitions;
 - qfit resource/node mapping;
-- exact qfit state parsing;
-- verified qfit transitions;
+- exact qfit provider-state parsing;
+- verified qfit power transitions;
 - cleanup evidence and claim-release assessment.
 
 This grouping follows the smoke-002 discovery that provider state, not process return code, is the hardware truth.
 
 ### `radio.py`
 
-Owns radio and UE state semantics:
+Owns radio and sanitized UE state semantics:
 
 - carrier-center, SSB, and Point-A ARFCN meaning;
 - OAI-reference-derived physical candidate validation;
@@ -73,9 +76,10 @@ Owns radio and UE state semantics:
 - qfit cell-acquisition state;
 - registration state;
 - packet-service state;
-- IPv4/PDU evidence classification.
+- IPv4/PDU evidence classification;
+- bounded `wwan0` user-plane probe evidence.
 
-These belong together because they describe what the radio/UE state means, not how Kubernetes or R2Lab power control is executed.
+These belong together because they describe what the radio/UE state means, not how Kubernetes, R2Lab power control, or MBIM mutation is executed.
 
 ### `deployment.py`
 
@@ -89,7 +93,8 @@ Owns the physical gNB deployment pipeline as one subsystem:
 - offline Helm rendering and validation;
 - deterministic chart packaging;
 - stopped cluster staging;
-- non-overlapping singleton gNB lifecycle.
+- non-overlapping singleton gNB lifecycle;
+- exact staged-artifact binding at start.
 
 This is intentionally one coherent deployment boundary. The sequence is easier to inspect from plan through staged artifact without jumping between many sibling `r2lab_physical_*` files.
 
@@ -111,7 +116,35 @@ resource authority
   -> workload
 ```
 
-This remains separate because acceptance evidence is a product-level truth model rather than deployment mechanics.
+It also persists immutable staging/start bindings and ordered acceptance evidence. This remains separate because acceptance is a product-level truth model rather than deployment or modem mechanics.
+
+### `runtime.py`
+
+Owns the read-only live observation boundary after a singleton gNB has started:
+
+- current run/artifact-bound gNB/N2 proof;
+- current qfit management reachability;
+- allow-listed cell/registration/packet/IP observation;
+- strict nested qfit SSH;
+- immediate reduction of raw modem/log output into sanitized evidence;
+- optional `wwan0` user-plane observation for already-established sessions.
+
+It deliberately does not power hardware, attach packet service, create an MBIM session, scale Kubernetes, or redeploy anything.
+
+### `ue.py`
+
+Owns the complementary mutating COTS-UE/session lifecycle and the physical-only workload handoff:
+
+- fixed reviewed qfit activation contract (`internet`, `/dev/cdc-wdm0`, `wwan0`, MBIM session 0, IPv4);
+- explicit radio-on, packet-attach, connect, and interface-configuration primitives;
+- postcondition-based state truth rather than mutation return-code truth;
+- exact rollback using software-radio off plus `wwan0` down;
+- rollback proof from radio-off + detached + no-IPv4 observations;
+- fresh authority/gNB/N2/qfit rechecks immediately before mutation;
+- resumed user-plane proof after PDU activation;
+- explicit physical workload-executor handoff that refuses virtual/RFSIM results.
+
+`ue.py` is a justified additional module because mutating modem/session lifecycle has a different safety contract from `runtime.py` observation. It is not one file per command or per probe.
 
 ## Compatibility surface
 
@@ -145,9 +178,9 @@ r2lab_radio_profile.py
 
 Only the compatibility `synthran/network/r2lab.py` remains under the old network path.
 
-## Safety behavior preserved by the refactor
+## Safety behavior preserved and extended
 
-This was a structural refactor, not a relaxation of the live-derived safety contract. The consolidated package keeps the same requirements:
+The package keeps the live-derived safety contract:
 
 - no automatic R2Lab booking;
 - no broad `all-off` or broad `rhubarbe bye`;
@@ -158,9 +191,13 @@ This was a structural refactor, not a relaxation of the live-derived safety cont
 - unresolved physical state retains the local resource claim;
 - release continues only through independently authorized exact cleanup stages;
 - claim removal requires all selected physical resources to be proven clean;
-- qfit is handled through its qfit-specific provider path;
+- qfit power is handled through its qfit-specific provider path;
 - physical gNB ownership is singleton and non-overlapping;
 - rendered physical deployment must be stopped before start authorization;
+- subscriber-identity diagnostic helpers are excluded from acceptance observation;
+- UE attach/connect is not hidden inside the read-only runtime verifier;
+- failed attach requests exact modem/interface rollback and records unresolved cleanup explicitly;
+- physical workload acceptance cannot be satisfied by the virtual/RFSIM experiment backend;
 - RFSIM remains a separate accepted backend;
 - physical acceptance remains ordered and evidence-backed.
 
@@ -168,10 +205,12 @@ This was a structural refactor, not a relaxation of the live-derived safety cont
 
 A new live discovery does **not** automatically get a new module.
 
-The default is now:
+The default remains:
 
 1. identify which R2Lab subsystem owns the behavior;
 2. add the behavior and regression test there;
 3. create a new module only when a genuinely independent abstraction has enough public surface and internal cohesion to justify it.
+
+The addition of `runtime.py` and `ue.py` follows that rule: one is the read-only observation subsystem and one is the mutating COTS-UE/session subsystem. Neither is decomposed further into one-purpose files.
 
 The goal is not the smallest possible files. The goal is a subsystem that can be understood by following a small number of meaningful boundaries while retaining the fail-closed behavior required for physical testbed control.
