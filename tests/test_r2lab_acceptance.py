@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_acceptance import (
+from synthran.r2lab.acceptance import (
     AcceptanceOutcome,
     PhysicalAcceptance,
     PhysicalAcceptanceStage,
