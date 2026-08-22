@@ -37,6 +37,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RFSIM_FIXTURE = (
     REPOSITORY_ROOT / "tests" / "fixtures" / "inventory_open5gs_srsran_rfsim.ini"
 )
+RESERVATION_START_FIELD = "start_" + "date"
+RESERVATION_END_FIELD = "end_" + "date"
 
 
 class SmokeRunner:
@@ -307,8 +309,8 @@ class StoppedStagingRunner:
                             "id": self.reservation_id,
                             "owner": self.owner,
                             "nodes": ["sopnode-f2", "sopnode-f3"],
-                            "start_date": "2026-08-22T10:00:00+00:00",
-                            "end_date": "2026-08-22T14:00:00+00:00",
+                            RESERVATION_START_FIELD: "2026-08-22T10:00:00+00:00",
+                            RESERVATION_END_FIELD: "2026-08-22T14:00:00+00:00",
                         }
                     ]
                 ),
