@@ -3,13 +3,13 @@ from __future__ import annotations
 import unittest
 
 from synthran.live_preflight import CommandResult
-from synthran.network.r2lab_power import PowerState
-from synthran.network.r2lab_qfit import (
+from synthran.r2lab.provider import (
+    PowerState,
     R2LabQfitStateError,
+    execute_verified_qfit_transition,
     parse_qfit_status,
     qfit_node_number,
 )
-from synthran.network.r2lab_qfit_operations import execute_verified_qfit_transition
 
 
 class ScriptedRunner:
