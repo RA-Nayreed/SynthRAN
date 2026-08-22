@@ -1,9 +1,10 @@
 """Deterministic packaging for a reviewed physical srsRAN Helm chart.
 
 The chart is packaged only after the guarded overlay and offline Helm render have
-been validated.  Packaging is local and deterministic: file order and tar
+been validated. Packaging is local and deterministic: file order and tar
 metadata are normalized, symbolic links are rejected, and gzip time metadata is
-fixed.  The resulting digest can be bound to later live evidence.
+fixed. The resulting digest and generated values digest can be bound to later
+live evidence.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ class R2LabPhysicalArtifactError(RuntimeError):
 class PhysicalChartArtifact:
     run_id: str
     package_path: Path
+    values_path: Path
     package_sha256: str
     values_sha256: str
 
@@ -37,7 +39,7 @@ class PhysicalChartArtifact:
             "run_id": self.run_id,
             "package_file": self.package_path.name,
             "package_sha256": self.package_sha256,
-            "values_file": VALUES_FILE_NAME,
+            "values_file": self.values_path.name,
             "values_sha256": self.values_sha256,
             "acceptance": "offline-packaged-only",
         }
@@ -60,7 +62,7 @@ def package_physical_chart(
     run_id: str,
     destination: Path,
 ) -> PhysicalChartArtifact:
-    """Create one deterministic ``.tgz`` from the isolated reviewed chart tree."""
+    """Create one deterministic ``.tgz`` and copy its exact generated values."""
 
     try:
         validated_run_id = validate_run_id(run_id)
@@ -86,8 +88,9 @@ def package_physical_chart(
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
     package_path = destination / f"srsran-gnb-{validated_run_id}.tgz"
-    if package_path.exists():
-        raise R2LabPhysicalArtifactError("physical chart package already exists")
+    values_path = destination / VALUES_FILE_NAME
+    if package_path.exists() or values_path.exists():
+        raise R2LabPhysicalArtifactError("physical chart artifact already exists")
 
     try:
         with package_path.open("wb") as raw:
@@ -105,13 +108,24 @@ def package_physical_chart(
                         info.mode = 0o644
                         with path.open("rb") as stream:
                             archive.addfile(info, stream)
+        values_path.write_bytes(workspace.values_file.read_bytes())
     except OSError as exc:
         package_path.unlink(missing_ok=True)
+        values_path.unlink(missing_ok=True)
         raise R2LabPhysicalArtifactError("unable to package physical chart workspace") from exc
+
+    values_sha256 = _sha256_file(values_path)
+    if values_sha256 != workspace.values_sha256:
+        package_path.unlink(missing_ok=True)
+        values_path.unlink(missing_ok=True)
+        raise R2LabPhysicalArtifactError(
+            "copied physical chart values do not match the reviewed workspace digest"
+        )
 
     return PhysicalChartArtifact(
         run_id=validated_run_id,
         package_path=package_path,
+        values_path=values_path,
         package_sha256=_sha256_file(package_path),
-        values_sha256=workspace.values_sha256,
+        values_sha256=values_sha256,
     )
