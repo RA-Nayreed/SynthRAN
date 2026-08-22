@@ -4,48 +4,56 @@ This document defines the development boundary for adding a physical R2Lab backe
 
 ## Branch model
 
-R2Lab development does not land directly on `main`.
+R2Lab development does not land directly on `main` while physical acceptance is incomplete.
 
 ```text
 main
   |
   +-- r2lab-integration
         |
-        +-- agent/r2lab-*
+        +-- r2lab-smoke-gate
+        +-- r2lab-*
 ```
 
 - `main` remains the accepted RFSIM integration truth while physical work is under validation.
-- `r2lab-integration` is the temporary accumulation branch for reviewed R2Lab work.
-- Each implementation checkpoint is developed on a separate feature branch and merged by pull request into `r2lab-integration`.
+- `r2lab-integration` is the temporary integration main for reviewed R2Lab work.
+- Each implementation checkpoint is developed on a separate `r2lab-*` feature branch and merged by pull request into `r2lab-integration`.
 - The complete R2Lab change reaches `main` only after the accumulated branch passes offline regression checks and live physical acceptance.
 - Existing RFSIM behavior remains a regression requirement throughout the work.
+
+The existing smoke-gate pull request was created before the branch-prefix convention changed, so its remote head may retain the older prefix until that PR is completed. New branches, documentation, and plans must use the `r2lab-*` convention without that prefix.
 
 The integration branch is not a second product line. The intended final product supports both `rfsim` and `r2lab` as explicit radio backends.
 
 ## Current physical-support boundary
 
-SynthRAN already models reviewed R2Lab resources and contains a fail-closed scripted resource controller. This is resource-control support, not physical 5G path acceptance.
+SynthRAN already models reviewed R2Lab resources and contains a fail-closed scripted resource controller. This is resource-control support, not physical 5G-path acceptance.
 
-The current accepted live network path remains:
+The accepted product path on `main` remains:
 
 ```text
 Open5GS + srsRAN + srsUE + RFSIM
 ```
 
-A physical request such as `physical + r2lab + n300` must not be documented as accepted until a real radio/UE path has been exercised and its evidence has passed the physical acceptance ladder.
+Live R2Lab smoke work has now gone further than the original resource-only gate. `r2lab-smoke-002` accepted the SLICES/POS foundation, Open5GS, the N300-backed srsRAN gNB, and gNB-to-AMF N2/SCTP. A managed qfit UE was reachable, but it did not acquire the tested NR cells, so registration, PDU session, user plane, and the full SynthRAN workload remain unaccepted.
 
-## PR 1 scope: resource smoke gate
+The detailed chronology, evidence, discoveries, and cleanup decisions are recorded in [`docs/r2lab-smoke-002.md`](r2lab-smoke-002.md).
 
-The first R2Lab integration checkpoint freezes the current RFSIM behavior and establishes one exact resource-control smoke cycle around the existing public R2Lab API:
+A physical request such as `physical + r2lab + n300` must not be documented as accepted until a real radio/UE path has exercised the complete acceptance ladder and its evidence has passed review.
+
+## Smoke-gate scope
+
+The smoke-gate checkpoint freezes current RFSIM behavior and establishes the exact resource-control boundary around the public R2Lab API:
 
 ```text
 doctor
   -> plan
   -> prepare
+  -> inspect/recover
   -> release
 ```
 
-This checkpoint deliberately does **not** deploy a physical gNB, attach a UE to Open5GS, move the IoT edge path, or claim physical research acceptance.
+The original offline gate covered `doctor -> plan -> prepare -> release`. Live smoke work exposed additional provider semantics that now belong in this checkpoint before it is ready to merge.
 
 ### Preconditions
 
@@ -54,7 +62,9 @@ The operator must already have:
 - working public-key SSH access to `faraday.inria.fr` for the R2Lab slice;
 - an active R2Lab lease that covers the smoke-test window;
 - no unresolved SynthRAN R2Lab resource claim in the workspace;
-- a reviewed resource pair. The first integration target is `n300 + qhat01`.
+- a reviewed radio and UE selection.
+
+The historical first smoke target was `n300 + qhat01`. The first managed UE that was successfully used for deeper physical diagnosis was `qfit07`; qfit resources are therefore first-class reviewed selections rather than an incidental operator workaround.
 
 SynthRAN does not store an R2Lab password and the smoke gate does not book a lease automatically. Live R2Lab SSH uses the identity stored in the default SynthRAN profile when available. An operator may explicitly override that identity for the current process with `SYNTHRAN_R2LAB_IDENTITY`. The private identity path is used only in the live SSH argv and is not written to plans, manifests, logs, or public summaries.
 
@@ -64,7 +74,7 @@ Set the R2Lab slice without committing it to repository files:
 
 ```bash
 export SYNTHRAN_R2LAB_SLICE=YOUR_R2LAB_SLICE
-export R2LAB_SMOKE_RUN=r2lab-smoke-001
+export R2LAB_SMOKE_RUN=r2lab-smoke-NNN
 ```
 
 If no verified R2Lab identity exists in the default SynthRAN profile, set an explicit private-key reference for the shell:
@@ -78,31 +88,17 @@ Run the read-only checks first:
 ```bash
 python -m synthran r2lab doctor \
   --radio n300 \
-  --ue qhat01
+  --ue qfit07
 
 python -m synthran r2lab plan \
   --radio n300 \
-  --ue qhat01 \
+  --ue qfit07 \
   --run-id "$R2LAB_SMOKE_RUN"
 ```
 
 Only continue when the doctor reports `READY` and the rendered plan names exactly the selected radio and UE.
 
-Then exercise the exact mutation boundary:
-
-```bash
-python -m synthran r2lab prepare \
-  --radio n300 \
-  --ue qhat01 \
-  --run-id "$R2LAB_SMOKE_RUN"
-```
-
-After inspecting the resulting manifest and confirming the selected UE is management-reachable, release the exact run-owned pair:
-
-```bash
-python -m synthran r2lab release \
-  --run-id "$R2LAB_SMOKE_RUN"
-```
+A physical mutation sequence must remain exact-resource only. It must not rely on broad provider cleanup or on the exit code of one hardware mutation as proof of resulting hardware state.
 
 ## Smoke acceptance criteria
 
@@ -114,12 +110,30 @@ The checkpoint passes only when all of the following are true:
 4. `prepare` rechecks the active lease before every physical mutation.
 5. `prepare` powers only the selected radio and selected UE.
 6. The selected UE becomes management-reachable.
-7. The run manifest reaches `ready` while the exact local resource claim is held.
-8. `release` requires the matching run manifest and local claim.
-9. `release` powers off only the exact selected UE and radio.
-10. A successful release removes the active claim and persists manifest status `released` with `resource_claim` set to `released`.
-11. A failed release retains the claim for explicit recovery rather than widening cleanup scope.
-12. The complete existing RFSIM test suite remains green.
+7. The run manifest holds the exact local resource claim while physical state remains active or unresolved.
+8. PDU-backed radio state is accepted from an exact textual status observation, not from mutation return code alone.
+9. Mutation timeout, missing status, or conflicting status preserves the claim and records unknown state.
+10. `release` requires the matching run manifest and local claim.
+11. `release` acts only on the exact selected UE and radio.
+12. Release recovery is stage-aware: uncertainty in one cleanup action never widens cleanup scope.
+13. The active claim is removed only after every run-owned physical resource is proven clean.
+14. No physical gNB update permits overlapping owners of a single SDR.
+15. The complete existing RFSIM test suite remains green.
+
+## Provider-state rule discovered live
+
+Rhubarbe PDU mutation return codes are not equivalent to resulting hardware state.
+
+During `r2lab-smoke-002`, an exact N300 power-off operation reported the radio as `OFF` while the mutation command returned status `1`. An immediate exact-resource PDU status query again reported `OFF`.
+
+SynthRAN therefore uses this rule:
+
+```text
+mutation rc = diagnostic evidence
+exact provider status = resulting PDU state evidence
+```
+
+The pure parser/evaluator for this behavior lives in `synthran/network/r2lab_power.py`. The resource controller still needs to use it for live prepare/release/recovery before this checkpoint is complete.
 
 ## Failure rules
 
@@ -128,19 +142,47 @@ Fail closed on any uncertainty.
 - No active lease: stop before mutation.
 - Faraday transport failure: do not infer provider state from missing output.
 - Existing workspace claim: do not start another R2Lab resource operation.
+- PDU mutation timeout: treat state as unknown and retain the claim.
+- PDU status without an exact selected-resource `ON`/`OFF` observation: treat state as unknown.
+- Conflicting status observations: stop and retain the claim.
 - UE reachability failure after power actions: retain evidence; do not use broad cleanup.
-- Release failure: retain the claim and retry only after inspecting exact current state.
+- Release failure: retain the claim until all selected physical resources are proven clean.
 
 Global power-off is forbidden in SynthRAN-controlled cleanup. In particular, upstream helpers that execute `all-off` are not an acceptable production cleanup boundary for this integration.
 
+## Physical gNB lifecycle rule discovered live
+
+A single physical N300 cannot safely be treated like a replica-friendly software service. During a live configuration change, an ordinary Kubernetes rolling restart briefly allowed the replacement gNB pod to compete with the terminating pod for the same UHD device.
+
+Physical gNB updates must therefore be non-overlapping:
+
+```text
+stop current gNB
+  -> prove pod count zero
+  -> allow SDR claim release
+  -> apply configuration
+  -> start exactly one gNB
+```
+
+The eventual implementation may use a `Recreate` deployment strategy or an equivalent controller-enforced stop/wait/start sequence, but overlap is not acceptable.
+
+## Radio-configuration rule discovered live
+
+The failed UE scans from `r2lab-smoke-002` are evidence for the exact configurations that were tested, not proof of a broken RF path.
+
+A post-run review of the known R2Lab OAI reference showed that it explicitly distinguishes SSB placement, Point A, carrier bandwidth, and antenna count. The live srsRAN experiment did not reproduce all of those semantics. Before another transmit attempt, the physical backend needs an offline validation/render gate that prevents values from being copied between OAI and srsRAN fields with different meanings.
+
+Until that validation exists, no new carrier/SSB guess should be promoted to an accepted SynthRAN physical profile.
+
 ## Evidence produced by the smoke gate
 
-A smoke run writes under:
+A smoke run writes generated evidence under:
 
 ```text
 .synthran/r2lab/<run-id>/
   manifest.json
   r2lab.log
+  evidence/
 ```
 
 The workspace-level active claim is:
@@ -149,8 +191,27 @@ The workspace-level active claim is:
 .synthran/r2lab/active.json
 ```
 
-These files are local execution evidence and must not contain the plain R2Lab slice name or the private SSH identity path. Generated live state remains untracked.
+These files are local execution evidence and must not contain the plain R2Lab slice name, private SSH identity path, subscriber secrets, or other credentials. Generated live state remains untracked.
 
-## Next checkpoint
+Tracked documentation records sanitized conclusions and cryptographic hashes of selected local evidence when useful for later review.
 
-After this gate is accepted, the next PR may make the network deployment adapter backend-aware while preserving the existing RFSIM implementation as its own accepted backend. Physical path acceptance remains deferred until the later deployment, runtime, verification, edge-path, research, and recovery checkpoints are complete.
+## Current coding priorities
+
+The smoke-gate branch now needs to turn the live findings into product behavior in this order:
+
+1. provider-state parsing and verified PDU transitions;
+2. timeout/unknown-state claim retention;
+3. exact stage-aware release and recovery;
+4. qfit lifecycle support based on the live managed-UE path;
+5. non-overlapping physical gNB lifecycle;
+6. physical radio profile separation from RFSIM/srsUE defaults;
+7. offline carrier/SSB/bandwidth/antenna validation;
+8. explicit UE acquisition, registration, PDU-session, and user-plane acceptance states;
+9. sanitized evidence persistence for each live stage;
+10. full RFSIM regression validation before merge into `r2lab-integration`.
+
+## Merge boundary
+
+The smoke-gate pull request remains targeted at `r2lab-integration`, not `main`.
+
+It must not be marked ready merely because the original resource-only tests pass. The live findings above have expanded the acceptance contract. The PR becomes ready only after its controller behavior and tests match the provider semantics that were observed, its documentation accurately records the live result, and the accepted RFSIM path remains green.
