@@ -14,6 +14,7 @@ from synthran.r2lab.radio import (
     R2LabRadioProfileError,
     ReferenceAlignedPhysicalIntent,
     RegistrationState,
+    classify_qfit_runtime,
     derive_carrier_center_from_reference,
     nominal_bandwidth_mhz,
     parse_c5greg,
@@ -209,6 +210,22 @@ class R2LabQfitRuntimeTests(unittest.TestCase):
 
     def test_missing_interface_is_unknown_not_clean(self) -> None:
         self.assertEqual(Ipv4State.UNKNOWN, parse_ipv4_state("", interface_present=False))
+
+    def test_classifier_discards_raw_probe_text_and_returns_only_sanitized_states(self) -> None:
+        evidence = classify_qfit_runtime(
+            qnwinfo_output='+QNWINFO: "NR5G-SA","00101","NR5G BAND 78",621312\n',
+            c5greg_output='+C5GREG: 0,1\n',
+            packet_service_output="Packet service state: 'attached'\n",
+            ipv4_output="9: wwan0    inet 198.51.100.2/24 scope global wwan0\n",
+        )
+        payload = evidence.to_dict()
+        self.assertEqual("acquired-nr-sa", payload["cell"])
+        self.assertEqual("registered", payload["registration"])
+        self.assertEqual("attached", payload["packet_service"])
+        self.assertEqual("present", payload["ipv4"])
+        self.assertTrue(payload["pdu_session_established"])
+        self.assertNotIn("00101", str(payload))
+        self.assertNotIn("198.51.100.2", str(payload))
 
 
 if __name__ == "__main__":
