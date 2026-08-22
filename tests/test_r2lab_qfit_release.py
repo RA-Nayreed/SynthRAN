@@ -7,6 +7,7 @@ import unittest
 
 from synthran.live_preflight import CommandResult
 from synthran.network.r2lab import (
+    R2LabResourceError,
     R2LabSelection,
     build_plan,
     execute_prepare,
@@ -139,7 +140,7 @@ class R2LabQfitReleaseTests(unittest.TestCase):
             release_runner = UnknownQfitStatusRunner()
             release_runner.radio_state = "on"
             release_runner.qfit_state = "on"
-            with self.assertRaises(Exception):
+            with self.assertRaises(R2LabResourceError):
                 execute_release(
                     run_id=plan.run_id,
                     slice_name="oulu_user",
