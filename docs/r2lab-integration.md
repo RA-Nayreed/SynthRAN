@@ -35,7 +35,7 @@ Open5GS + srsRAN + srsUE + RFSIM
 
 Live R2Lab smoke work has gone further than the original resource-only gate. `r2lab-smoke-002` accepted the SLICES/POS foundation, Open5GS, the N300-backed srsRAN gNB, and gNB-to-AMF N2/SCTP. A managed qfit UE was reachable, but it did not acquire the tested NR cells, so registration, PDU session, user plane, and the full SynthRAN workload remain unaccepted.
 
-The detailed chronology, evidence, discoveries, cleanup decisions, and implementation consequences are recorded in [`docs/r2lab-smoke-002.md`](r2lab-smoke-002.md).
+The detailed chronology, evidence, discoveries, cleanup decisions, and implementation consequences are recorded in [`docs/r2lab-smoke-002.md`](r2lab-smoke-002.md). The coding sequence and the reasoning that connected each observation to an implementation change are recorded in [`docs/r2lab-smoke-002-development-log.md`](r2lab-smoke-002-development-log.md).
 
 A physical request such as `physical + r2lab + n300` must not be documented as accepted until a real radio/UE path has exercised the complete acceptance ladder and its evidence has passed review.
 
@@ -116,7 +116,9 @@ The checkpoint passes only when all of the following are true:
 12. Release recovery is stage-aware: uncertainty in one cleanup action never widens cleanup scope.
 13. The active claim is removed only after every run-owned physical resource is proven clean.
 14. No physical gNB update permits overlapping owners of a single SDR.
-15. The complete existing RFSIM test suite remains green.
+15. The physical radio plan preserves carrier-center, SSB, Point-A, bandwidth, SCS, and antenna semantics instead of copying one ARFCN between unlike fields.
+16. Physical acceptance records cell acquisition, registration, PDU session, user plane, and workload as distinct ordered stages.
+17. The complete existing RFSIM test suite remains green.
 
 ## Provider-state rule discovered live
 
@@ -163,6 +165,8 @@ Fail closed on any uncertainty.
 - Conflicting status observations: stop and retain the claim.
 - UE reachability failure after power actions: retain evidence; do not use broad cleanup.
 - Release failure: retain the claim until all selected physical resources are proven clean.
+- Physical gNB configuration failure: leave the exact gNB Deployment stopped.
+- More than one matching physical gNB pod: request exact scale-to-zero recovery and do not report startup success.
 
 Global power-off is forbidden in SynthRAN-controlled cleanup. In particular, upstream helpers that execute `all-off` are not an acceptable production cleanup boundary for this integration.
 
@@ -180,7 +184,9 @@ stop current gNB
   -> start exactly one gNB
 ```
 
-This rule is documented and tested as an integration requirement, but it is not yet wired into the production network deployment adapter. The eventual implementation may use a `Recreate` deployment strategy or an equivalent controller-enforced stop/wait/start sequence, but overlap is not acceptable.
+This rule is now executable in `synthran/network/r2lab_gnb_lifecycle.py`. The lifecycle controller scales only the exact `srsran-gnb` Deployment, queries all matching pods as JSON instead of relying on list order, counts terminating pods as still present, calls the configuration step only after zero pods are proven, and requires exactly one Running/ready pod after startup. If startup becomes ambiguous or overlapping owners are observed, it requests an exact scale-to-zero recovery and fails closed.
+
+This controller is intentionally not yet wired to the live Helm adapter. Separating the ownership state machine from profile rendering lets both boundaries be reviewed independently before another RF mutation.
 
 ## Radio-configuration rule discovered live
 
@@ -188,9 +194,47 @@ The failed UE scans from `r2lab-smoke-002` are evidence for the exact configurat
 
 A post-run review of the known R2Lab OAI reference showed that it explicitly distinguishes SSB placement, Point A, carrier bandwidth, and antenna count. The live srsRAN experiment did not reproduce all of those semantics.
 
-The first offline guard is now implemented in `synthran/network/r2lab_radio_profile.py`: NR-ARFCN values retain semantic labels (`carrier-center`, `ssb`, or `point-a`), and a physical srsRAN candidate refuses an SSB or Point-A value where a carrier-center ARFCN is required. Candidate profiles remain explicitly `offline-candidate-only`; this is not a claim that a new carrier profile has passed live acceptance.
+`r2lab_radio_profile.py` now carries that distinction further than the initial semantic tag. For the reviewed reference grid it derives the resource-grid carrier center from Point A, preserves the expected SSB separately, maps the 162-PRB/30-kHz reference to a nominal 60 MHz carrier, and requires the reviewed 2x2 antenna counts. The resulting helper produces an explicitly `offline-reference-aligned-candidate` intent. It still does **not** claim that this candidate has passed live RF acceptance.
 
-A later backend adapter still needs to render and validate the complete physical srsRAN configuration before another transmit attempt.
+The important relationship encoded for offline review is:
+
+```text
+Point A ARFCN 620040
+  + half of the 162 PRB x 12 subcarriers x 30 kHz grid
+  -> carrier-center ARFCN 621984
+
+expected SSB remains independently represented as ARFCN 621312
+```
+
+This prevents the exact smoke-002 mistake where the SSB value was reused as the carrier-center value.
+
+## Separate physical deployment boundary
+
+The existing `synthran.fiveg_ansible` adapter remains deliberately RFSIM-only. Physical support is not implemented by changing its `SUPPORTED_RADIO` constant.
+
+`synthran/network/r2lab_physical_deployment.py` now provides a separate non-executing physical deployment plan. For the current checkpoint it fails closed to the reviewed `sopnode-f2` core, `sopnode-f3` RAN, and `n300` radio topology. The plan requires the reference-aligned radio intent, keeps TX/RX gains within the reviewed checkpoint range, requires `Recreate`/singleton gNB ownership, and explicitly leaves the srsUE-specific CORESET/PRACH overrides unset.
+
+The plan is still `offline-plan-only`. The remaining adapter work is to map this reviewed canonical plan into the pinned physical Helm/chart inputs and verify the rendered configuration before execution.
+
+## Ordered physical acceptance state
+
+`synthran/network/r2lab_acceptance.py` now models physical acceptance as a monotonic sequence rather than a single success flag:
+
+```text
+resource authority
+  -> SLICES foundation
+  -> Kubernetes
+  -> Open5GS
+  -> gNB/N2
+  -> UE management
+  -> cell acquisition
+  -> registration
+  -> PDU session
+  -> user plane
+  -> workload
+```
+
+Stages cannot be skipped. A failed stage blocks later stages, and unreached stages remain explicitly `not-reached`. This is the software representation of why smoke 002 is a failed physical acceptance even though its lower-layer bring-up succeeded.
 
 ## Evidence produced by the smoke gate
 
@@ -224,19 +268,22 @@ Implemented in the current smoke-gate branch:
 - qfit selection, mutation, and independent provider-state verification;
 - sanitized cleanup assessment in manifests;
 - semantic separation of carrier, SSB, and Point-A ARFCNs;
+- reference-grid derivation of the offline carrier-center/bandwidth/2x2 candidate;
+- a separate fail-closed physical deployment-plan boundary that does not loosen the virtual adapter;
+- executable non-overlapping singleton gNB lifecycle with zero-pod and exactly-one-ready proof;
+- explicit ordered physical acceptance stages;
 - regression coverage for the above while retaining the RFSIM golden-path test.
 
 Still required before physical backend acceptance:
 
-- a separate physical network-deployment adapter instead of loosening the existing RFSIM-only `fiveg_ansible` contract;
-- production non-overlapping gNB deployment/reconfiguration wiring;
-- complete rendered physical srsRAN profile validation;
-- COTS UE acquisition, registration, PDU-session, and user-plane runtime states;
-- end-to-end physical evidence persistence for those stages;
-- another controlled live acceptance run after offline regression is green.
+- map the physical deployment plan into the pinned physical srsRAN Helm/chart values and inspect the fully rendered result;
+- wire the non-overlapping gNB lifecycle to that exact live physical adapter and strict SLICES SSH boundary;
+- add qfit cell-acquisition, registration, PDU-session, and user-plane observations as sanitized runtime evidence;
+- connect those observations to the ordered acceptance model and persisted run evidence;
+- run another controlled live acceptance attempt only after the offline suite and rendered physical profile are green.
 
 ## Merge boundary
 
 The smoke-gate pull request remains targeted at `r2lab-integration`, not `main`, and remains draft.
 
-The current controller behavior now matches the provider semantics learned from smoke 002 at the resource-control layer. The PR must still remain draft while the remaining network/backend boundaries are implemented and reviewed, and the accepted RFSIM path must stay green throughout.
+The resource controller, physical planning boundary, offline radio semantic checks, singleton gNB lifecycle, and ordered acceptance model now encode the main lessons from smoke 002. The PR remains draft while the final physical chart/render/runtime wiring is implemented and reviewed, and the accepted RFSIM path must stay green throughout.
