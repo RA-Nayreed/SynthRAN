@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_power import (
+from synthran.r2lab.provider import (
     PowerState,
     R2LabPowerStateError,
     evaluate_pdu_transition,
