@@ -571,6 +571,7 @@ def authorize_physical_start(
     claim_path = _claim_path(run_root)
     _require_claim(claim_path, run_id=run_id, selection=selection)
     claim = _load_json(claim_path, "active R2Lab resource claim")
+    claim_digest = _claim_sha256(claim)
 
     if manifest.get("status") != "ready" or manifest.get("resource_claim") != "held":
         raise R2LabResourceError("R2Lab run is not in a ready, claimed state")
@@ -603,12 +604,21 @@ def authorize_physical_start(
     if observed.state is not PowerState.ON:
         raise R2LabResourceError("selected N300 is not proven on for physical gNB start")
 
+    # The filesystem claim is part of the authority boundary, so verify that it
+    # did not change while the remote lease and radio observations were in flight.
+    _require_claim(claim_path, run_id=run_id, selection=selection)
+    refreshed_claim = _load_json(claim_path, "active R2Lab resource claim")
+    if _claim_sha256(refreshed_claim) != claim_digest:
+        raise R2LabResourceError(
+            "active R2Lab resource claim changed during authority verification"
+        )
+
     return PhysicalStartAuthority(
         run_id=run_id,
         radio=selection.radio,
         ue=selection.ue,
         ue_kind=selection.ue_kind,
-        claim_sha256=_claim_sha256(claim),
+        claim_sha256=claim_digest,
         lease_verified=True,
         radio_state=observed.state.value,
     ).validate()
