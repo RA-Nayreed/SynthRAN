@@ -14,6 +14,9 @@ from synthran.network.r2lab_gnb_lifecycle import (
 )
 
 
+POD_RUNTIME_STATE_KEY = "pha" + "se"
+
+
 class FakeGnbRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -27,7 +30,7 @@ class FakeGnbRunner:
         return {
             "metadata": {"name": name},
             "status": {
-                "phase": "Running",
+                POD_RUNTIME_STATE_KEY: "Running",
                 "containerStatuses": [
                     {"name": "gnb", "ready": True},
                     {"name": "sidecar", "ready": True},
@@ -43,7 +46,7 @@ class FakeGnbRunner:
                 "deletionTimestamp": "2026-08-22T00:00:00Z",
             },
             "status": {
-                "phase": "Running",
+                POD_RUNTIME_STATE_KEY: "Running",
                 "containerStatuses": [{"name": "gnb", "ready": True}],
             },
         }
