@@ -4,8 +4,8 @@ Rhubarbe PDU mutation exit codes are not sufficient evidence of the resulting
 hardware state. Live R2Lab acceptance showed a successful ``pdu off`` returning
 status 1 while the command output and an immediate status query both reported
 ``OFF``. SynthRAN therefore treats an exact textual status observation as the
-provider truth for a PDU transition and records the mutation return code only as
-diagnostic evidence.
+provider truth for a PDU transition and records mutation/status return codes only
+as diagnostic evidence.
 """
 
 from __future__ import annotations
@@ -42,14 +42,15 @@ class PduTransitionEvidence:
 
     ``mutation_returncode`` is intentionally not used by ``confirmed``. The
     provider's exact status text is the acceptance criterion because Rhubarbe
-    may return a non-zero code for a successful OFF transition.
+    may return a non-zero code for a successful OFF transition. ``None`` means
+    the transport did not yield a return code, for example after a timeout.
     """
 
     resource: str
     requested_state: PowerState
     observed_state: PowerState
-    mutation_returncode: int
-    status_returncode: int
+    mutation_returncode: int | None
+    status_returncode: int | None
     watts: int | None = None
 
     @property
@@ -110,17 +111,17 @@ def evaluate_pdu_transition(
     *,
     resource: str,
     requested_state: PowerState,
-    mutation_returncode: int,
-    status_returncode: int,
+    mutation_returncode: int | None,
+    status_returncode: int | None,
     status_stdout: str = "",
     status_stderr: str = "",
 ) -> PduTransitionEvidence:
     """Evaluate one mutation using an immediate exact-resource status query.
 
     Both stdout and stderr are parsed because provider wrappers can place useful
-    status text on either stream. The status command's exit code is retained but
-    textual state remains authoritative. Missing or contradictory text never
-    becomes a successful transition.
+    status text on either stream. Either command may lack a return code after a
+    transport failure; exact status text can still prove the resulting state.
+    Missing or contradictory text never becomes a successful transition.
     """
 
     if requested_state is PowerState.UNKNOWN:
