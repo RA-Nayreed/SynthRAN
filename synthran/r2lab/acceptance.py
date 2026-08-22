@@ -11,6 +11,7 @@ import tempfile
 from typing import Mapping
 
 from synthran.network.runtime import validate_run_id
+from synthran.r2lab.radio import QfitRuntimeEvidence
 
 
 PHYSICAL_RUN_EVIDENCE_SCHEMA = "synthran/r2lab-physical-run-evidence/v1alpha1"
@@ -309,6 +310,58 @@ class PhysicalRunEvidence:
             run_id=self.run_id,
             staged=self.staged,
             acceptance=self.acceptance.fail_stage(stage, source=source),
+        )
+
+    def record_qfit_runtime(
+        self,
+        evidence: QfitRuntimeEvidence,
+        *,
+        source: str = "sanitized-qfit-runtime",
+    ) -> "PhysicalRunEvidence":
+        """Advance only the UE stages that sanitized qfit evidence actually proves."""
+
+        if self.acceptance.next_stage is not PhysicalAcceptanceStage.CELL_ACQUISITION:
+            expected = self.acceptance.next_stage
+            label = expected.value if expected is not None else "none"
+            raise R2LabAcceptanceError(
+                "qfit runtime evidence requires cell-acquisition as the next stage; "
+                f"current next stage is {label}"
+            )
+
+        state = self
+        cell_source = f"{source}:cell-{evidence.cell.value}"
+        if not evidence.cell_acquired:
+            return state.fail_stage(
+                PhysicalAcceptanceStage.CELL_ACQUISITION,
+                source=cell_source,
+            )
+        state = state.pass_stage(
+            PhysicalAcceptanceStage.CELL_ACQUISITION,
+            source=cell_source,
+        )
+
+        registration_source = f"{source}:registration-{evidence.registration.value}"
+        if not evidence.registered:
+            return state.fail_stage(
+                PhysicalAcceptanceStage.REGISTRATION,
+                source=registration_source,
+            )
+        state = state.pass_stage(
+            PhysicalAcceptanceStage.REGISTRATION,
+            source=registration_source,
+        )
+
+        pdu_source = (
+            f"{source}:packet-{evidence.packet_service.value}-ipv4-{evidence.ipv4.value}"
+        )
+        if not evidence.pdu_session_established:
+            return state.fail_stage(
+                PhysicalAcceptanceStage.PDU_SESSION,
+                source=pdu_source,
+            )
+        return state.pass_stage(
+            PhysicalAcceptanceStage.PDU_SESSION,
+            source=pdu_source,
         )
 
     def to_dict(self) -> dict[str, object]:
