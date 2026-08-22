@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_radio_profile import (
+from synthran.r2lab.radio import (
     ArfcnSemantic,
     NrArfcn,
     PhysicalRadioProfile,
