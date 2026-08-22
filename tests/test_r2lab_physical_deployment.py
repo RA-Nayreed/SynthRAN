@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_physical_deployment import (
+from synthran.r2lab.deployment import (
     R2LabPhysicalDeploymentError,
     build_physical_deployment_plan,
 )
