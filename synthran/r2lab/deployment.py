@@ -58,6 +58,11 @@ GNB_NAMESPACE = NAMESPACE
 GNB_DEPLOYMENT = RELEASE
 GNB_SELECTOR = "app=srsran,component=gnb"
 POD_RUNTIME_STATE_KEY = "pha" + "se"
+DEPLOYMENT_RUN_LABEL = "synthran.run/id"
+DEPLOYMENT_RUN_ANNOTATION = "synthran.io/run-id"
+DEPLOYMENT_PACKAGE_ANNOTATION = "synthran.io/package-sha256"
+DEPLOYMENT_VALUES_ANNOTATION = "synthran.io/values-sha256"
+DEPLOYMENT_RENDER_ANNOTATION = "synthran.io/render-sha256"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_POLL_ATTEMPTS = 40
 DEFAULT_POLL_INTERVAL_SECONDS = 3.0
@@ -66,6 +71,7 @@ DEFAULT_STAGING_TIMEOUT_SECONDS = 120
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _SAFE_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 Runner = Callable[[Sequence[str], int], CommandResult]
 Sleeper = Callable[[float], None]
 Configure = Callable[[], None]
@@ -97,6 +103,10 @@ class R2LabPhysicalStagingError(RuntimeError):
 
 class R2LabGnbLifecycleError(RuntimeError):
     """Raised when singleton gNB ownership cannot be proven safe."""
+
+
+class R2LabPhysicalStartError(RuntimeError):
+    """Raised when a staged physical gNB cannot be started safely."""
 
 
 @dataclass(frozen=True)
@@ -938,6 +948,62 @@ def package_physical_chart(
     )
 
 
+def _validate_sha256_digest(value: str, label: str, error_type: type[RuntimeError]) -> str:
+    if not _SHA256_RE.fullmatch(value):
+        raise error_type(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
+@dataclass(frozen=True)
+class PhysicalStartAuthority:
+    """Sanitized R2Lab authority bound to one active run claim and powered N300."""
+
+    run_id: str
+    radio: str
+    ue: str
+    ue_kind: str
+    claim_sha256: str
+    lease_verified: bool
+    radio_state: str
+
+    def validate(self) -> "PhysicalStartAuthority":
+        try:
+            validated = validate_run_id(self.run_id)
+        except Exception as exc:
+            raise R2LabPhysicalStartError(str(exc)) from exc
+        if validated != self.run_id:
+            raise R2LabPhysicalStartError("physical start authority run ID is not canonical")
+        if self.radio != CURRENT_RADIO:
+            raise R2LabPhysicalStartError(
+                f"current physical start boundary requires radio {CURRENT_RADIO}"
+            )
+        if not _SAFE_NAME_RE.fullmatch(self.ue):
+            raise R2LabPhysicalStartError("physical start authority UE is malformed")
+        if self.ue_kind != "qfit":
+            raise R2LabPhysicalStartError(
+                "current physical start boundary requires a qfit UE selection"
+            )
+        _validate_sha256_digest(self.claim_sha256, "claim digest", R2LabPhysicalStartError)
+        if self.lease_verified is not True:
+            raise R2LabPhysicalStartError("R2Lab lease authority was not verified")
+        if self.radio_state != "on":
+            raise R2LabPhysicalStartError("selected N300 is not proven on")
+        return self
+
+    def to_dict(self) -> dict[str, object]:
+        self.validate()
+        return {
+            "run_id": self.run_id,
+            "radio": self.radio,
+            "ue": self.ue,
+            "ue_kind": self.ue_kind,
+            "claim_sha256": self.claim_sha256,
+            "lease_verified": True,
+            "radio_state": self.radio_state,
+            "status": "authorized-for-singleton-start",
+        }
+
+
 @dataclass(frozen=True)
 class PhysicalStagingResult:
     run_id: str
@@ -947,6 +1013,7 @@ class PhysicalStagingResult:
     namespace_owned: bool
     desired_replicas: int
     gnb_pod_count: int
+    deployment_bound: bool = True
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -957,8 +1024,32 @@ class PhysicalStagingResult:
             "namespace_owned": self.namespace_owned,
             "desired_replicas": self.desired_replicas,
             "gnb_pod_count": self.gnb_pod_count,
+            "deployment_bound": self.deployment_bound,
             "status": "staged-stopped",
             "hardware_mutation": False,
+        }
+
+
+@dataclass(frozen=True)
+class PhysicalGnbStartResult:
+    run_id: str
+    package_sha256: str
+    values_sha256: str
+    render_sha256: str
+    claim_sha256: str
+    maximum_observed_pods: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "package_sha256": self.package_sha256,
+            "values_sha256": self.values_sha256,
+            "render_sha256": self.render_sha256,
+            "claim_sha256": self.claim_sha256,
+            "maximum_observed_pods": self.maximum_observed_pods,
+            "started_exactly_one": True,
+            "status": "gnb-started",
+            "hardware_mutation": True,
         }
 
 
@@ -1037,6 +1128,76 @@ def _parse_pods(text: str) -> int:
     if not isinstance(items, list):
         raise R2LabPhysicalStagingError("gNB pod query returned malformed JSON")
     return len(items)
+
+
+def _deployment_binding_values(
+    *,
+    run_id: str,
+    package_sha256: str,
+    values_sha256: str,
+    render_sha256: str,
+) -> dict[str, str]:
+    try:
+        validated = validate_run_id(run_id)
+    except Exception as exc:
+        raise R2LabPhysicalStagingError(str(exc)) from exc
+    if validated != run_id:
+        raise R2LabPhysicalStagingError("physical staging run ID is not canonical")
+    for value, label in (
+        (package_sha256, "package digest"),
+        (values_sha256, "values digest"),
+        (render_sha256, "render digest"),
+    ):
+        _validate_sha256_digest(value, label, R2LabPhysicalStagingError)
+    return {
+        DEPLOYMENT_RUN_ANNOTATION: run_id,
+        DEPLOYMENT_PACKAGE_ANNOTATION: package_sha256,
+        DEPLOYMENT_VALUES_ANNOTATION: values_sha256,
+        DEPLOYMENT_RENDER_ANNOTATION: render_sha256,
+    }
+
+
+def _validate_deployment_binding_json(
+    text: str,
+    *,
+    run_id: str,
+    package_sha256: str,
+    values_sha256: str,
+    render_sha256: str,
+    require_stopped: bool,
+    error_type: type[RuntimeError],
+) -> int:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise error_type("physical gNB Deployment state is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise error_type("physical gNB Deployment state is malformed")
+    metadata = payload.get("metadata")
+    spec = payload.get("spec")
+    if not isinstance(metadata, dict) or not isinstance(spec, dict):
+        raise error_type("physical gNB Deployment state is incomplete")
+    labels = metadata.get("labels")
+    annotations = metadata.get("annotations")
+    if not isinstance(labels, dict) or not isinstance(annotations, dict):
+        raise error_type("physical gNB Deployment ownership metadata is missing")
+    if labels.get(DEPLOYMENT_RUN_LABEL) != run_id:
+        raise error_type("physical gNB Deployment is not owned by this run")
+    expected = _deployment_binding_values(
+        run_id=run_id,
+        package_sha256=package_sha256,
+        values_sha256=values_sha256,
+        render_sha256=render_sha256,
+    )
+    for key, value in expected.items():
+        if annotations.get(key) != value:
+            raise error_type("physical gNB Deployment artifact binding changed")
+    desired = spec.get("replicas")
+    if not isinstance(desired, int) or isinstance(desired, bool):
+        raise error_type("physical gNB Deployment replica state is malformed")
+    if require_stopped and desired != 0:
+        raise error_type("physical gNB Deployment is not stopped")
+    return desired
 
 
 def execute_stopped_physical_staging(
@@ -1250,6 +1411,43 @@ def execute_stopped_physical_staging(
         "stopped physical Helm staging",
     )
 
+    binding = _deployment_binding_values(
+        run_id=run_id,
+        package_sha256=artifact.package_sha256,
+        values_sha256=artifact.values_sha256,
+        render_sha256=render_evidence.sha256,
+    )
+    _checked(
+        runner,
+        _ssh(
+            known_hosts,
+            "kubectl",
+            "label",
+            f"deployment/{RELEASE}",
+            "-n",
+            NAMESPACE,
+            f"{DEPLOYMENT_RUN_LABEL}={run_id}",
+            "--overwrite",
+        ),
+        min(timeout_seconds, 60),
+        "physical gNB run ownership binding",
+    )
+    _checked(
+        runner,
+        _ssh(
+            known_hosts,
+            "kubectl",
+            "annotate",
+            f"deployment/{RELEASE}",
+            "-n",
+            NAMESPACE,
+            *(f"{key}={value}" for key, value in binding.items()),
+            "--overwrite",
+        ),
+        min(timeout_seconds, 60),
+        "physical gNB artifact binding",
+    )
+
     deployment = _checked(
         runner,
         _ssh(
@@ -1265,10 +1463,15 @@ def execute_stopped_physical_staging(
         min(timeout_seconds, 60),
         "staged physical gNB Deployment query",
     ).stdout
-    try:
-        desired = json.loads(deployment)["spec"]["replicas"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise R2LabPhysicalStagingError("staged gNB Deployment state is malformed") from exc
+    desired = _validate_deployment_binding_json(
+        deployment,
+        run_id=run_id,
+        package_sha256=artifact.package_sha256,
+        values_sha256=artifact.values_sha256,
+        render_sha256=render_evidence.sha256,
+        require_stopped=True,
+        error_type=R2LabPhysicalStagingError,
+    )
     pods = _parse_pods(
         _checked(
             runner,
@@ -1300,6 +1503,7 @@ def execute_stopped_physical_staging(
         namespace_owned=True,
         desired_replicas=desired,
         gnb_pod_count=pods,
+        deployment_bound=True,
     )
 
 
@@ -1473,6 +1677,7 @@ def execute_non_overlapping_gnb_update(
     runner: Runner,
     configure: Configure,
     sleeper: Sleeper,
+    before_start: Configure | None = None,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     shutdown_attempts: int = DEFAULT_POLL_ATTEMPTS,
     startup_attempts: int = DEFAULT_POLL_ATTEMPTS,
@@ -1506,6 +1711,13 @@ def execute_non_overlapping_gnb_update(
         raise R2LabGnbLifecycleError(
             "physical gNB configuration failed while the Deployment was stopped"
         ) from exc
+    if before_start is not None:
+        try:
+            before_start()
+        except Exception as exc:
+            raise R2LabGnbLifecycleError(
+                "physical gNB start authority could not be refreshed while stopped"
+            ) from exc
     _request_scale(runner, 1, timeout_seconds)
     try:
         started, maximum, overlap_seen = _wait_for_exactly_one_ready(
@@ -1547,4 +1759,182 @@ def execute_non_overlapping_gnb_update(
         configured=True,
         started_exactly_one=True,
         maximum_observed_pods=maximum_observed,
+    )
+
+
+def execute_authorized_physical_gnb_start(
+    *,
+    authority: PhysicalStartAuthority,
+    staging: PhysicalStagingResult,
+    owner: str,
+    reservation_id: str,
+    allocation_id: str,
+    known_hosts: Path,
+    now: datetime,
+    runner: Runner,
+    refresh_r2lab_authority: Callable[[], PhysicalStartAuthority],
+    sleeper: Sleeper,
+    timeout_seconds: int = DEFAULT_STAGING_TIMEOUT_SECONDS,
+    shutdown_attempts: int = DEFAULT_POLL_ATTEMPTS,
+    startup_attempts: int = DEFAULT_POLL_ATTEMPTS,
+    poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    uhd_release_seconds: float = DEFAULT_UHD_RELEASE_SECONDS,
+) -> PhysicalGnbStartResult:
+    """Start exactly one staged gNB only while R2Lab/SLICES authority remains proven."""
+
+    authority.validate()
+    if staging.run_id != authority.run_id:
+        raise R2LabPhysicalStartError("staged artifact belongs to a different R2Lab run")
+    if not staging.namespace_owned or not staging.deployment_bound:
+        raise R2LabPhysicalStartError("staged physical Deployment ownership is not proven")
+    if staging.desired_replicas != 0 or staging.gnb_pod_count != 0:
+        raise R2LabPhysicalStartError("physical gNB start requires a proven stopped staging state")
+    for value, label in (
+        (staging.package_sha256, "package digest"),
+        (staging.values_sha256, "values digest"),
+        (staging.render_sha256, "render digest"),
+    ):
+        _validate_sha256_digest(value, label, R2LabPhysicalStartError)
+    if timeout_seconds < 30 or timeout_seconds > 600:
+        raise R2LabPhysicalStartError("physical start timeout must be between 30 and 600 seconds")
+
+    try:
+        owner = _validate_authority(owner, "owner")
+        reservation_id = _validate_authority(reservation_id, "reservation ID")
+        allocation_id = _validate_authority(allocation_id, "allocation ID")
+    except R2LabPhysicalStagingError as exc:
+        raise R2LabPhysicalStartError(str(exc)) from exc
+    known_hosts = known_hosts.expanduser().resolve()
+    if not known_hosts.is_file():
+        raise R2LabPhysicalStartError("strict SLICES known-hosts file is missing")
+
+    try:
+        verify_reservation(
+            runner=runner,
+            reservation_id=reservation_id,
+            owner=owner,
+            nodes={CORE_NODE, RAN_NODE},
+            now=now,
+            timeout_seconds=min(timeout_seconds, 60),
+        )
+        verify_allocations(
+            runner=runner,
+            allocation_id=allocation_id,
+            owner=owner,
+            nodes={CORE_NODE, RAN_NODE},
+            timeout_seconds=min(timeout_seconds, 60),
+        )
+    except Exception as exc:
+        raise R2LabPhysicalStartError("fresh SLICES authority was not proven for gNB start") from exc
+
+    def checked_start(*remote: str, label: str) -> CommandResult:
+        try:
+            result = runner(_ssh(known_hosts, *remote), min(timeout_seconds, 60))
+        except Exception as exc:
+            raise R2LabPhysicalStartError(f"{label} could not be observed") from exc
+        if result.returncode != 0:
+            raise R2LabPhysicalStartError(f"{label} returned nonzero")
+        return result
+
+    namespace_owner = checked_start(
+        "kubectl",
+        "get",
+        "namespace",
+        NAMESPACE,
+        "-o",
+        "jsonpath={.metadata.labels.synthran\\.run/id}",
+        label="Open5GS namespace ownership query",
+    ).stdout.strip()
+    if namespace_owner != staging.run_id:
+        raise R2LabPhysicalStartError("Open5GS namespace is not owned by this physical run")
+
+    def require_bound_stopped_deployment() -> None:
+        deployment = checked_start(
+            "kubectl",
+            "get",
+            f"deployment/{RELEASE}",
+            "-n",
+            NAMESPACE,
+            "-o",
+            "json",
+            label="bound physical gNB Deployment query",
+        ).stdout
+        _validate_deployment_binding_json(
+            deployment,
+            run_id=staging.run_id,
+            package_sha256=staging.package_sha256,
+            values_sha256=staging.values_sha256,
+            render_sha256=staging.render_sha256,
+            require_stopped=True,
+            error_type=R2LabPhysicalStartError,
+        )
+
+    require_bound_stopped_deployment()
+    pods = _parse_pods(
+        checked_start(
+            "kubectl",
+            "get",
+            "pods",
+            "-n",
+            NAMESPACE,
+            "-l",
+            GNB_SELECTOR,
+            "-o",
+            "json",
+            label="pre-start physical gNB pod query",
+        ).stdout
+    )
+    if pods != 0:
+        raise R2LabPhysicalStartError("physical gNB start requires zero existing gNB pods")
+
+    def cluster_runner(command: Sequence[str], command_timeout: int) -> CommandResult:
+        return runner(_ssh(known_hosts, *tuple(command)), command_timeout)
+
+    def before_start() -> None:
+        refreshed = refresh_r2lab_authority().validate()
+        if (
+            refreshed.run_id != authority.run_id
+            or refreshed.radio != authority.radio
+            or refreshed.ue != authority.ue
+            or refreshed.ue_kind != authority.ue_kind
+            or refreshed.claim_sha256 != authority.claim_sha256
+        ):
+            raise R2LabPhysicalStartError("R2Lab claim or selected-resource authority changed")
+        try:
+            verify_allocations(
+                runner=runner,
+                allocation_id=allocation_id,
+                owner=owner,
+                nodes={CORE_NODE, RAN_NODE},
+                timeout_seconds=min(timeout_seconds, 60),
+            )
+        except Exception as exc:
+            raise R2LabPhysicalStartError(
+                "SLICES allocation authority changed before gNB ownership start"
+            ) from exc
+        require_bound_stopped_deployment()
+
+    try:
+        lifecycle = execute_non_overlapping_gnb_update(
+            runner=cluster_runner,
+            configure=lambda: None,
+            before_start=before_start,
+            sleeper=sleeper,
+            timeout_seconds=min(timeout_seconds, 60),
+            shutdown_attempts=shutdown_attempts,
+            startup_attempts=startup_attempts,
+            poll_interval_seconds=poll_interval_seconds,
+            uhd_release_seconds=uhd_release_seconds,
+        )
+    except R2LabGnbLifecycleError as exc:
+        raise R2LabPhysicalStartError(str(exc)) from exc
+    if not lifecycle.started_exactly_one or lifecycle.maximum_observed_pods > 1:
+        raise R2LabPhysicalStartError("physical gNB singleton ownership was not proven")
+    return PhysicalGnbStartResult(
+        run_id=staging.run_id,
+        package_sha256=staging.package_sha256,
+        values_sha256=staging.values_sha256,
+        render_sha256=staging.render_sha256,
+        claim_sha256=authority.claim_sha256,
+        maximum_observed_pods=lifecycle.maximum_observed_pods,
     )
