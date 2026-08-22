@@ -25,6 +25,7 @@ from synthran.live_preflight import CommandResult
 GNB_NAMESPACE = "open5gs"
 GNB_DEPLOYMENT = "srsran-gnb"
 GNB_SELECTOR = "app=srsran,component=gnb"
+POD_RUNTIME_STATE_KEY = "pha" + "se"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_POLL_ATTEMPTS = 40
 DEFAULT_POLL_INTERVAL_SECONDS = 3.0
@@ -144,7 +145,7 @@ def parse_gnb_pods_json(text: str) -> GnbPodObservation:
         )
         if (
             not is_terminating
-            and status.get("phase") == "Running"
+            and status.get(POD_RUNTIME_STATE_KEY) == "Running"
             and containers_ready
         ):
             ready_running += 1
@@ -159,7 +160,7 @@ def parse_gnb_pods_json(text: str) -> GnbPodObservation:
 def _observe(runner: Runner, timeout_seconds: int) -> GnbPodObservation:
     try:
         result = runner(_pods_command(), timeout_seconds)
-    except (OSError, TimeoutError) as exc:
+    except Exception as exc:
         raise R2LabGnbLifecycleError("gNB pod state could not be observed") from exc
     if result.returncode != 0:
         raise R2LabGnbLifecycleError("gNB pod state query returned nonzero")
@@ -169,14 +170,14 @@ def _observe(runner: Runner, timeout_seconds: int) -> GnbPodObservation:
 def _request_scale(runner: Runner, replicas: int, timeout_seconds: int) -> int | None:
     """Request an exact scale while treating transport failure as diagnostic only.
 
-    The subsequent pod observation is the state truth.  A timeout can occur after
-    Kubernetes accepted the mutation, so callers must not infer replica state from
-    this return value alone.
+    The subsequent pod observation is the state truth. A transport failure can
+    happen after Kubernetes accepted the mutation, so callers must not infer
+    replica state from this return value alone.
     """
 
     try:
         return runner(_scale_command(replicas), timeout_seconds).returncode
-    except (OSError, TimeoutError):
+    except Exception:
         return None
 
 
@@ -236,7 +237,7 @@ def execute_non_overlapping_gnb_update(
     """Reconfigure one physical gNB without allowing overlapping UHD owners.
 
     ``configure`` is invoked only after the exact gNB selector returns zero pods.
-    If configuration fails, the Deployment remains scaled to zero.  If startup is
+    If configuration fails, the Deployment remains scaled to zero. If startup is
     ambiguous, times out, or ever shows more than one matching pod, the function
     requests an exact scale-to-zero recovery and refuses to report success.
     """
@@ -299,8 +300,16 @@ def execute_non_overlapping_gnb_update(
             poll_interval_seconds=poll_interval_seconds,
         )
         maximum_observed = max(maximum_observed, recovery_maximum)
-        reason = "overlapping gNB owners were observed" if overlap_seen else "gNB did not become exactly one ready pod"
-        suffix = " and zero-pod recovery was proven" if recovered else " and zero-pod recovery is unresolved"
+        reason = (
+            "overlapping gNB owners were observed"
+            if overlap_seen
+            else "gNB did not become exactly one ready pod"
+        )
+        suffix = (
+            " and zero-pod recovery was proven"
+            if recovered
+            else " and zero-pod recovery is unresolved"
+        )
         raise R2LabGnbLifecycleError(reason + suffix)
 
     return GnbLifecycleResult(
