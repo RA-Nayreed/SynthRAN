@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 
-from synthran.network.r2lab_physical_artifact import (
+from synthran.r2lab.deployment import (
+    PhysicalChartWorkspace,
     R2LabPhysicalArtifactError,
     package_physical_chart,
 )
-from synthran.network.r2lab_physical_chart_workspace import PhysicalChartWorkspace
 
 
 class R2LabPhysicalArtifactTests(unittest.TestCase):
@@ -21,13 +22,14 @@ class R2LabPhysicalArtifactTests(unittest.TestCase):
         deployment.write_text("kind: Deployment\n")
         values = chart / "synthran-physical-values.json"
         values.write_text('{"replicas": 0}\n')
+        values_sha256 = hashlib.sha256(values.read_bytes()).hexdigest()
         return PhysicalChartWorkspace(
             chart_root=chart,
             deployment_template=deployment,
             values_file=values,
             source_template_sha256="a" * 64,
             overlaid_template_sha256="b" * 64,
-            values_sha256="c" * 64,
+            values_sha256=values_sha256,
         )
 
     def test_same_workspace_packages_to_same_digest(self) -> None:
@@ -46,7 +48,7 @@ class R2LabPhysicalArtifactTests(unittest.TestCase):
             )
 
             self.assertEqual(first.package_sha256, second.package_sha256)
-            self.assertEqual("c" * 64, first.values_sha256)
+            self.assertEqual(workspace.values_sha256, first.values_sha256)
             self.assertEqual("offline-packaged-only", first.to_dict()["acceptance"])
             self.assertTrue(first.package_path.is_file())
 
