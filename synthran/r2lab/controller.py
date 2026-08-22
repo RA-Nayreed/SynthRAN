@@ -21,6 +21,12 @@ from typing import Callable, Mapping, Sequence, TextIO
 
 from synthran.live_preflight import CommandResult
 from synthran.network.runtime import validate_run_id
+from synthran.r2lab.deployment import (
+    PhysicalGnbStartResult,
+    PhysicalStagingResult,
+    PhysicalStartAuthority,
+    execute_authorized_physical_gnb_start,
+)
 from synthran.r2lab.provider import (
     CleanupEvidence,
     CleanupState,
@@ -32,6 +38,7 @@ from synthran.r2lab.provider import (
     VerifiedQfitOperation,
     execute_verified_pdu_transition,
     execute_verified_qfit_transition,
+    parse_pdu_status,
     release_assessment,
 )
 from synthran.workspace.model import WorkspaceError
@@ -531,6 +538,82 @@ def _require_claim(path: Path, *, run_id: str, selection: R2LabSelection) -> Non
             raise R2LabResourceError("active R2Lab resource claim does not match the requested run")
 
 
+def _claim_sha256(payload: Mapping[str, object]) -> str:
+    try:
+        encoded = json.dumps(
+            dict(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise R2LabResourceError("active R2Lab resource claim is not canonical JSON data") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def authorize_physical_start(
+    *,
+    run_id: str,
+    slice_name: str,
+    run_root: Path = Path(".synthran/r2lab"),
+    runner: Runner = subprocess_runner,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> PhysicalStartAuthority:
+    """Mint one sanitized start authority from the active claim and live N300 state."""
+
+    run_id = _validate_run(run_id)
+    slice_name = _validate_slice(slice_name)
+    timeout_seconds = _validate_timeout(timeout_seconds)
+    run_root = run_root.resolve()
+    manifest = _load_json(run_root / run_id / "manifest.json", "R2Lab run manifest")
+    selection = _selection_from_manifest(manifest, slice_name=slice_name, run_id=run_id)
+    claim_path = _claim_path(run_root)
+    _require_claim(claim_path, run_id=run_id, selection=selection)
+    claim = _load_json(claim_path, "active R2Lab resource claim")
+
+    if manifest.get("status") != "ready" or manifest.get("resource_claim") != "held":
+        raise R2LabResourceError("R2Lab run is not in a ready, claimed state")
+    if selection.radio != "n300":
+        raise R2LabResourceError("current physical gNB start boundary requires n300")
+    if selection.ue_kind != "qfit":
+        raise R2LabResourceError("current physical gNB start boundary requires a qfit UE")
+
+    try:
+        lease = runner(
+            gateway_command(slice_name, "rhubarbe", "leases", "--check"),
+            timeout_seconds,
+        )
+    except (R2LabResourceError, OSError) as exc:
+        raise R2LabResourceError("fresh R2Lab lease authority could not be verified") from exc
+    if lease.returncode != 0:
+        raise R2LabResourceError("fresh R2Lab lease authority was not verified")
+
+    try:
+        radio = runner(
+            gateway_command(slice_name, "rhubarbe", "pdu", "status", selection.radio),
+            timeout_seconds,
+        )
+    except (R2LabResourceError, OSError) as exc:
+        raise R2LabResourceError("selected N300 state could not be observed") from exc
+    observed = parse_pdu_status(
+        "\n".join(part for part in (radio.stdout, radio.stderr) if part),
+        resource=selection.radio,
+    )
+    if observed.state is not PowerState.ON:
+        raise R2LabResourceError("selected N300 is not proven on for physical gNB start")
+
+    return PhysicalStartAuthority(
+        run_id=run_id,
+        radio=selection.radio,
+        ue=selection.ue,
+        ue_kind=selection.ue_kind,
+        claim_sha256=_claim_sha256(claim),
+        lease_verified=True,
+        radio_state=observed.state.value,
+    ).validate()
+
+
 @dataclass(frozen=True)
 class R2LabResult:
     run_id: str
@@ -790,6 +873,62 @@ def execute_prepare(
     finish_log()
     report("R2Lab resources: READY")
     return R2LabResult(plan.run_id, run_directory, manifest_path, log_path, "ready")
+
+
+def execute_physical_gnb_start(
+    *,
+    run_id: str,
+    slice_name: str,
+    staging: PhysicalStagingResult,
+    owner: str,
+    reservation_id: str,
+    allocation_id: str,
+    known_hosts: Path,
+    now: datetime,
+    run_root: Path = Path(".synthran/r2lab"),
+    r2lab_runner: Runner = subprocess_runner,
+    cluster_runner: Runner = subprocess_runner,
+    sleeper: Sleeper = time.sleep,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> PhysicalGnbStartResult:
+    """Start the exact staged gNB while refreshing both provider authority boundaries."""
+
+    timeout_seconds = _validate_timeout(timeout_seconds)
+    if timeout_seconds < 30:
+        raise R2LabResourceError("physical gNB start timeout must be at least 30 seconds")
+    authority = authorize_physical_start(
+        run_id=run_id,
+        slice_name=slice_name,
+        run_root=run_root,
+        runner=r2lab_runner,
+        timeout_seconds=timeout_seconds,
+    )
+
+    def refresh() -> PhysicalStartAuthority:
+        return authorize_physical_start(
+            run_id=run_id,
+            slice_name=slice_name,
+            run_root=run_root,
+            runner=r2lab_runner,
+            timeout_seconds=timeout_seconds,
+        )
+
+    try:
+        return execute_authorized_physical_gnb_start(
+            authority=authority,
+            staging=staging,
+            owner=owner,
+            reservation_id=reservation_id,
+            allocation_id=allocation_id,
+            known_hosts=known_hosts,
+            now=now,
+            runner=cluster_runner,
+            refresh_r2lab_authority=refresh,
+            sleeper=sleeper,
+            timeout_seconds=timeout_seconds,
+        )
+    except RuntimeError as exc:
+        raise R2LabResourceError("physical gNB start did not satisfy the safety boundary") from exc
 
 
 def execute_release(
