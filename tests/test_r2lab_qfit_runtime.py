@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_qfit_runtime import (
+from synthran.r2lab.radio import (
     CellAcquisitionState,
     Ipv4State,
     PacketServiceState,
