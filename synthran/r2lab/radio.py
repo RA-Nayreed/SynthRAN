@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import ipaddress
 import re
+from typing import Callable, Sequence
+
+from synthran.live_preflight import CommandResult
 
 
 class R2LabRadioProfileError(ValueError):
@@ -371,4 +375,150 @@ def classify_qfit_runtime(
         registration=parse_c5greg(c5greg_output),
         packet_service=parse_packet_service(packet_service_output),
         ipv4=parse_ipv4_state(ipv4_output, interface_present=interface_present),
+    )
+
+
+class UserPlaneProbeError(ValueError):
+    """Raised when a physical user-plane probe request is unsafe or malformed."""
+
+
+UserPlaneRunner = Callable[[Sequence[str], int], CommandResult]
+_PING_SUMMARY_RE = re.compile(
+    r"(?P<tx>\d+)\s+packets transmitted,\s+(?P<rx>\d+)\s+(?:packets\s+)?received",
+    re.IGNORECASE,
+)
+
+
+def _peer_fingerprint(peer: str) -> str:
+    return hashlib.sha256(peer.encode("ascii")).hexdigest()
+
+
+def build_user_plane_ping_command(
+    peer: str,
+    *,
+    interface: str = "wwan0",
+    count: int = 4,
+    reply_timeout_seconds: int = 2,
+) -> tuple[str, ...]:
+    """Build an argv-only probe that is explicitly bound to the physical UE interface."""
+
+    if interface != "wwan0":
+        raise UserPlaneProbeError("current qfit user-plane acceptance requires wwan0")
+    if count < 1 or count > 10:
+        raise UserPlaneProbeError("user-plane ping count must be between 1 and 10")
+    if reply_timeout_seconds < 1 or reply_timeout_seconds > 10:
+        raise UserPlaneProbeError("user-plane ping reply timeout must be between 1 and 10 seconds")
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError as exc:
+        raise UserPlaneProbeError("user-plane peer must be a literal IP address") from exc
+    if not isinstance(address, ipaddress.IPv4Address):
+        raise UserPlaneProbeError("current qfit user-plane checkpoint is IPv4-only")
+    return (
+        "ping",
+        "-n",
+        "-I",
+        interface,
+        "-c",
+        str(count),
+        "-W",
+        str(reply_timeout_seconds),
+        str(address),
+    )
+
+
+@dataclass(frozen=True)
+class UserPlaneProbeEvidence:
+    interface: str
+    peer_sha256: str
+    requested_packets: int
+    transmitted_packets: int
+    received_packets: int
+    summary_observed: bool
+    returncode: int | None
+    transport_error: bool
+
+    def __post_init__(self) -> None:
+        if self.interface != "wwan0":
+            raise UserPlaneProbeError("user-plane evidence must be bound to wwan0")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.peer_sha256):
+            raise UserPlaneProbeError("user-plane peer fingerprint must be SHA-256")
+        if self.requested_packets < 1:
+            raise UserPlaneProbeError("user-plane requested packet count must be positive")
+        if min(self.transmitted_packets, self.received_packets) < 0:
+            raise UserPlaneProbeError("user-plane packet counters cannot be negative")
+        if self.received_packets > self.transmitted_packets:
+            raise UserPlaneProbeError("received packet count cannot exceed transmitted count")
+
+    @property
+    def proven(self) -> bool:
+        return (
+            not self.transport_error
+            and self.summary_observed
+            and self.returncode == 0
+            and self.transmitted_packets == self.requested_packets
+            and self.received_packets == self.requested_packets
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "interface": self.interface,
+            "peer_sha256": self.peer_sha256,
+            "requested_packets": self.requested_packets,
+            "transmitted_packets": self.transmitted_packets,
+            "received_packets": self.received_packets,
+            "summary_observed": self.summary_observed,
+            "returncode": self.returncode,
+            "transport_error": self.transport_error,
+            "proven": self.proven,
+            "probe": "interface-bound-icmp",
+        }
+
+
+def execute_user_plane_probe(
+    *,
+    peer: str,
+    runner: UserPlaneRunner,
+    interface: str = "wwan0",
+    count: int = 4,
+    reply_timeout_seconds: int = 2,
+    command_timeout_seconds: int = 15,
+) -> UserPlaneProbeEvidence:
+    """Run one bounded interface-bound probe and retain no raw network output."""
+
+    command = build_user_plane_ping_command(
+        peer,
+        interface=interface,
+        count=count,
+        reply_timeout_seconds=reply_timeout_seconds,
+    )
+    if command_timeout_seconds < 1 or command_timeout_seconds > 60:
+        raise UserPlaneProbeError("user-plane command timeout must be between 1 and 60 seconds")
+    fingerprint = _peer_fingerprint(str(ipaddress.ip_address(peer)))
+    try:
+        result = runner(command, command_timeout_seconds)
+    except (RuntimeError, OSError):
+        return UserPlaneProbeEvidence(
+            interface=interface,
+            peer_sha256=fingerprint,
+            requested_packets=count,
+            transmitted_packets=0,
+            received_packets=0,
+            summary_observed=False,
+            returncode=None,
+            transport_error=True,
+        )
+    text = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    match = _PING_SUMMARY_RE.search(text)
+    transmitted = int(match.group("tx")) if match is not None else 0
+    received = int(match.group("rx")) if match is not None else 0
+    return UserPlaneProbeEvidence(
+        interface=interface,
+        peer_sha256=fingerprint,
+        requested_packets=count,
+        transmitted_packets=transmitted,
+        received_packets=received,
+        summary_observed=match is not None,
+        returncode=result.returncode,
+        transport_error=False,
     )
