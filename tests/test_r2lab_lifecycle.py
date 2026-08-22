@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_lifecycle import (
+from synthran.r2lab.provider import (
     CleanupEvidence,
     CleanupState,
     release_assessment,
