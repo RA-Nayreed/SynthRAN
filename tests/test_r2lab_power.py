@@ -58,6 +58,27 @@ class R2LabPowerStateTests(unittest.TestCase):
         self.assertEqual(1, evidence.mutation_returncode)
         self.assertEqual(PowerState.OFF, evidence.observed_state)
 
+    def test_timeout_returncode_can_still_be_resolved_by_exact_status(self) -> None:
+        evidence = evaluate_pdu_transition(
+            resource="n300",
+            requested_state=PowerState.OFF,
+            mutation_returncode=None,
+            status_returncode=0,
+            status_stdout="pdu2 chain-0@outlet-1 (n300): OFF\n",
+        )
+        self.assertTrue(evidence.confirmed)
+        self.assertIsNone(evidence.mutation_returncode)
+
+    def test_timeout_without_state_evidence_remains_unknown(self) -> None:
+        evidence = evaluate_pdu_transition(
+            resource="n300",
+            requested_state=PowerState.OFF,
+            mutation_returncode=None,
+            status_returncode=None,
+        )
+        self.assertFalse(evidence.confirmed)
+        self.assertEqual(PowerState.UNKNOWN, evidence.observed_state)
+
     def test_textual_state_not_mutation_returncode_decides_transition(self) -> None:
         evidence = evaluate_pdu_transition(
             resource="n300",
