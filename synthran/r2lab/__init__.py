@@ -2,7 +2,7 @@
 
 The package is organized by subsystem rather than one file per live discovery:
 provider control, radio/UE state, deployment, acceptance, runtime verification,
-and orchestration.
+mutating UE/session lifecycle, and orchestration.
 """
 
 from synthran.r2lab.controller import (
@@ -29,21 +29,47 @@ from synthran.r2lab.runtime import (
     parse_n2_log_state,
     verify_gnb_n2,
 )
+from synthran.r2lab.ue import (
+    AuthorizedQfitActivationOutcome,
+    AuthorizedQfitUserPlaneOutcome,
+    PhysicalWorkloadContext,
+    PhysicalWorkloadHandoffOutcome,
+    PhysicalWorkloadResult,
+    QfitActivationRequest,
+    QfitActivationResult,
+    R2LabQfitActivationError,
+    execute_authorized_qfit_activation,
+    execute_authorized_qfit_user_plane,
+    execute_physical_workload_handoff,
+    execute_qfit_activation,
+)
 
 __all__ = [
+    "AuthorizedQfitActivationOutcome",
+    "AuthorizedQfitUserPlaneOutcome",
     "GnbN2Evidence",
     "N2State",
     "PhysicalRuntimeVerificationResult",
+    "PhysicalWorkloadContext",
+    "PhysicalWorkloadHandoffOutcome",
+    "PhysicalWorkloadResult",
+    "QfitActivationRequest",
+    "QfitActivationResult",
     "R2LabDoctorReport",
     "R2LabPlan",
+    "R2LabQfitActivationError",
     "R2LabResourceError",
     "R2LabResult",
     "R2LabRuntimeVerificationError",
     "R2LabSelection",
     "build_plan",
+    "execute_authorized_qfit_activation",
+    "execute_authorized_qfit_user_plane",
     "execute_physical_gnb_start",
     "execute_physical_runtime_verification",
+    "execute_physical_workload_handoff",
     "execute_prepare",
+    "execute_qfit_activation",
     "execute_qfit_management_probe",
     "execute_qfit_runtime_probe",
     "execute_release",
