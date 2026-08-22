@@ -3,8 +3,7 @@ from __future__ import annotations
 import unittest
 
 from synthran.live_preflight import CommandResult
-from synthran.network.r2lab_operations import execute_verified_pdu_transition
-from synthran.network.r2lab_power import PowerState
+from synthran.r2lab.provider import PowerState, execute_verified_pdu_transition
 
 
 class ScriptedRunner:
