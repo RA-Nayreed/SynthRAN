@@ -63,7 +63,7 @@ class R2LabPhysicalRenderTests(unittest.TestCase):
 
     def test_render_contains_no_rfsim_settings(self) -> None:
         text = render_physical_srsran(
-            build_physical_deployment_plan(run_id="r2lab-no-rfsim")
+            build_physical_deployment_plan(run_id="r2lab-physical-clean-render")
         ).render_json()
         self.assertNotIn("rfsim", text.lower())
 
