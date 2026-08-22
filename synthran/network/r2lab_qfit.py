@@ -52,9 +52,9 @@ def parse_qfit_status(output: str, *, qfit: str) -> QfitStatusObservation:
 
     value = qfit.strip().lower()
     node = qfit_node_number(value)
-    token = f"reboot{node:02d}"
+    status_prefix = f"reboot{node:02d}"
     pattern = re.compile(
-        rf"(?<![A-Za-z0-9_-]){re.escape(token)}\s*:\s*(on|off)(?![A-Za-z0-9_-])",
+        rf"(?<![A-Za-z0-9_-]){re.escape(status_prefix)}\s*:\s*(on|off)(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     )
 
