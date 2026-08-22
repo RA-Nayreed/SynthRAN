@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from synthran.live_preflight import CommandResult
 from synthran.r2lab.radio import (
     ArfcnSemantic,
     CellAcquisitionState,
@@ -14,8 +15,11 @@ from synthran.r2lab.radio import (
     R2LabRadioProfileError,
     ReferenceAlignedPhysicalIntent,
     RegistrationState,
+    UserPlaneProbeError,
+    build_user_plane_ping_command,
     classify_qfit_runtime,
     derive_carrier_center_from_reference,
+    execute_user_plane_probe,
     nominal_bandwidth_mhz,
     parse_c5greg,
     parse_ipv4_state,
@@ -226,6 +230,69 @@ class R2LabQfitRuntimeTests(unittest.TestCase):
         self.assertTrue(payload["pdu_session_established"])
         self.assertNotIn("00101", str(payload))
         self.assertNotIn("198.51.100.2", str(payload))
+
+
+class R2LabUserPlaneProbeTests(unittest.TestCase):
+    def test_probe_is_argv_only_and_explicitly_bound_to_wwan0(self) -> None:
+        command = build_user_plane_ping_command("198.51.100.10")
+        self.assertEqual("ping", command[0])
+        self.assertEqual("wwan0", command[command.index("-I") + 1])
+        self.assertEqual("4", command[command.index("-c") + 1])
+        self.assertEqual("198.51.100.10", command[-1])
+
+    def test_probe_rejects_hostname_or_nonphysical_interface(self) -> None:
+        with self.assertRaisesRegex(UserPlaneProbeError, "literal IP"):
+            build_user_plane_ping_command("example.invalid")
+        with self.assertRaisesRegex(UserPlaneProbeError, "wwan0"):
+            build_user_plane_ping_command("198.51.100.10", interface="eth0")
+
+    def test_success_persists_counts_and_peer_fingerprint_not_raw_peer(self) -> None:
+        commands: list[tuple[str, ...]] = []
+
+        def runner(command, timeout_seconds: int) -> CommandResult:
+            commands.append(tuple(command))
+            return CommandResult(
+                0,
+                "4 packets transmitted, 4 received, 0% packet loss, time 3ms\n",
+                "",
+            )
+
+        evidence = execute_user_plane_probe(
+            peer="198.51.100.10",
+            runner=runner,
+        )
+        payload = evidence.to_dict()
+        self.assertTrue(payload["proven"])
+        self.assertEqual(4, payload["transmitted_packets"])
+        self.assertEqual(4, payload["received_packets"])
+        self.assertEqual("wwan0", payload["interface"])
+        self.assertEqual(64, len(payload["peer_sha256"]))
+        self.assertNotIn("198.51.100.10", str(payload))
+        self.assertEqual("wwan0", commands[0][commands[0].index("-I") + 1])
+
+    def test_loss_or_transport_error_is_not_user_plane_proof(self) -> None:
+        loss = execute_user_plane_probe(
+            peer="198.51.100.10",
+            runner=lambda command, timeout_seconds: CommandResult(
+                1,
+                "4 packets transmitted, 3 received, 25% packet loss\n",
+                "",
+            ),
+        )
+        self.assertFalse(loss.proven)
+        self.assertTrue(loss.summary_observed)
+        self.assertEqual(3, loss.received_packets)
+
+        def failing(command, timeout_seconds: int) -> CommandResult:
+            raise RuntimeError("network unavailable")
+
+        unavailable = execute_user_plane_probe(
+            peer="198.51.100.10",
+            runner=failing,
+        )
+        self.assertFalse(unavailable.proven)
+        self.assertTrue(unavailable.transport_error)
+        self.assertNotIn("network unavailable", str(unavailable.to_dict()))
 
 
 if __name__ == "__main__":
