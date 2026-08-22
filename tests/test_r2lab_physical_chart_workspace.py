@@ -6,16 +6,14 @@ import tempfile
 import unittest
 
 from synthran.dependencies import load_lock
-from synthran.network.r2lab_physical_chart import (
+from synthran.r2lab.deployment import (
+    VALUES_FILE_NAME,
     PhysicalChartBindings,
     R2LabPhysicalChartError,
     build_physical_chart_bundle,
-)
-from synthran.network.r2lab_physical_chart_workspace import (
-    VALUES_FILE_NAME,
+    build_physical_deployment_plan,
     materialize_physical_chart_workspace,
 )
-from synthran.network.r2lab_physical_deployment import build_physical_deployment_plan
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
