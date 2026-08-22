@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from synthran.network.r2lab_physical_deployment import build_physical_deployment_plan
-from synthran.network.r2lab_physical_render import (
+from synthran.r2lab.deployment import (
     AMF_ADDRESS_PLACEHOLDER,
     GNB_BIND_ADDRESS_PLACEHOLDER,
     N300_DEVICE_ARGS_PLACEHOLDER,
+    build_physical_deployment_plan,
     render_physical_srsran,
 )
 
