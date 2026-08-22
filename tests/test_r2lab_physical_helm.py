@@ -5,14 +5,12 @@ import unittest
 
 from synthran.dependencies import load_lock
 from synthran.live_preflight import CommandResult
-from synthran.network.r2lab_physical_chart import (
+from synthran.r2lab.deployment import (
     PhysicalChartBindings,
-    build_physical_chart_bundle,
-)
-from synthran.network.r2lab_physical_chart_workspace import PhysicalChartWorkspace
-from synthran.network.r2lab_physical_deployment import build_physical_deployment_plan
-from synthran.network.r2lab_physical_helm import (
+    PhysicalChartWorkspace,
     R2LabPhysicalHelmError,
+    build_physical_chart_bundle,
+    build_physical_deployment_plan,
     render_physical_chart_offline,
     validate_physical_helm_render,
 )
