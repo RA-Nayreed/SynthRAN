@@ -8,6 +8,10 @@ from synthran.network.r2lab_radio_profile import (
     PhysicalRadioProfile,
     R2LAB_OAI_BAND78_REFERENCE,
     R2LabRadioProfileError,
+    ReferenceAlignedPhysicalIntent,
+    derive_carrier_center_from_reference,
+    nominal_bandwidth_mhz,
+    r2lab_oai_aligned_candidate,
 )
 
 
@@ -77,6 +81,72 @@ class R2LabRadioProfileTests(unittest.TestCase):
             3405.0,
             NrArfcn(627_000, ArfcnSemantic.CARRIER_CENTER).frequency_mhz,
         )
+
+    def test_reference_grid_derives_distinct_carrier_center(self) -> None:
+        carrier = derive_carrier_center_from_reference(R2LAB_OAI_BAND78_REFERENCE)
+        self.assertEqual(ArfcnSemantic.CARRIER_CENTER, carrier.semantic)
+        self.assertEqual(621_984, carrier.value)
+        self.assertAlmostEqual(3329.76, carrier.frequency_mhz)
+        self.assertNotEqual(R2LAB_OAI_BAND78_REFERENCE.ssb.value, carrier.value)
+
+    def test_reference_grid_maps_to_nominal_60mhz_profile(self) -> None:
+        self.assertEqual(60, nominal_bandwidth_mhz(R2LAB_OAI_BAND78_REFERENCE))
+        intent = r2lab_oai_aligned_candidate()
+        self.assertEqual(60, intent.profile.channel_bandwidth_mhz)
+        self.assertEqual(2, intent.profile.nof_antennas_dl)
+        self.assertEqual(2, intent.profile.nof_antennas_ul)
+        self.assertEqual(
+            "offline-reference-aligned-candidate",
+            intent.to_dict()["acceptance"],
+        )
+
+    def test_reference_alignment_rejects_smoke002_ssb_as_carrier(self) -> None:
+        intent = ReferenceAlignedPhysicalIntent(
+            profile=PhysicalRadioProfile(
+                band=78,
+                carrier=NrArfcn(621_312, ArfcnSemantic.CARRIER_CENTER),
+                channel_bandwidth_mhz=60,
+                common_scs_khz=30,
+                nof_antennas_dl=2,
+                nof_antennas_ul=2,
+            ),
+            expected_ssb=R2LAB_OAI_BAND78_REFERENCE.ssb,
+            reference=R2LAB_OAI_BAND78_REFERENCE,
+        )
+        with self.assertRaisesRegex(R2LabRadioProfileError, "carrier center"):
+            intent.validate()
+
+    def test_reference_alignment_rejects_narrow_or_siso_candidate(self) -> None:
+        carrier = derive_carrier_center_from_reference(R2LAB_OAI_BAND78_REFERENCE)
+        narrow = ReferenceAlignedPhysicalIntent(
+            profile=PhysicalRadioProfile(
+                band=78,
+                carrier=carrier,
+                channel_bandwidth_mhz=20,
+                common_scs_khz=30,
+                nof_antennas_dl=2,
+                nof_antennas_ul=2,
+            ),
+            expected_ssb=R2LAB_OAI_BAND78_REFERENCE.ssb,
+            reference=R2LAB_OAI_BAND78_REFERENCE,
+        )
+        with self.assertRaisesRegex(R2LabRadioProfileError, "bandwidth"):
+            narrow.validate()
+
+        siso = ReferenceAlignedPhysicalIntent(
+            profile=PhysicalRadioProfile(
+                band=78,
+                carrier=carrier,
+                channel_bandwidth_mhz=60,
+                common_scs_khz=30,
+                nof_antennas_dl=1,
+                nof_antennas_ul=1,
+            ),
+            expected_ssb=R2LAB_OAI_BAND78_REFERENCE.ssb,
+            reference=R2LAB_OAI_BAND78_REFERENCE,
+        )
+        with self.assertRaisesRegex(R2LabRadioProfileError, "antenna"):
+            siso.validate()
 
 
 if __name__ == "__main__":
