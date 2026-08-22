@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from synthran.r2lab.acceptance import (
     AcceptanceOutcome,
+    PHYSICAL_RUN_EVIDENCE_SCHEMA,
     PhysicalAcceptance,
     PhysicalAcceptanceStage,
+    PhysicalRunEvidence,
     R2LabAcceptanceError,
     STAGE_ORDER,
+    StagedPhysicalEvidence,
 )
 
 
@@ -78,6 +84,93 @@ class R2LabAcceptanceTests(unittest.TestCase):
         self.assertEqual("passed", payload["stages"][0]["outcome"])
         self.assertEqual("not-reached", payload["stages"][1]["outcome"])
         self.assertIsNone(payload["stages"][1]["source"])
+
+
+class R2LabPersistentEvidenceTests(unittest.TestCase):
+    def staging_payload(self, *, run_id: str = "r2lab-evidence") -> dict[str, object]:
+        return {
+            "run_id": run_id,
+            "package_sha256": "a" * 64,
+            "values_sha256": "b" * 64,
+            "render_sha256": "c" * 64,
+            "namespace_owned": True,
+            "desired_replicas": 0,
+            "gnb_pod_count": 0,
+            "status": "staged-stopped",
+            "hardware_mutation": False,
+        }
+
+    def test_staging_digest_binds_exact_stopped_result(self) -> None:
+        first = StagedPhysicalEvidence.from_staging_result(self.staging_payload())
+        second = StagedPhysicalEvidence.from_staging_result(self.staging_payload())
+        self.assertEqual(first.staging_sha256, second.staging_sha256)
+        self.assertEqual(64, len(first.staging_sha256))
+
+        changed = self.staging_payload()
+        changed["render_sha256"] = "d" * 64
+        third = StagedPhysicalEvidence.from_staging_result(changed)
+        self.assertNotEqual(first.staging_sha256, third.staging_sha256)
+
+    def test_unsafe_or_running_staging_result_is_not_persistable(self) -> None:
+        running = self.staging_payload()
+        running["desired_replicas"] = 1
+        with self.assertRaisesRegex(R2LabAcceptanceError, "zero-pod"):
+            StagedPhysicalEvidence.from_staging_result(running)
+
+        mutated = self.staging_payload()
+        mutated["hardware_mutation"] = True
+        with self.assertRaisesRegex(R2LabAcceptanceError, "hardware mutation"):
+            StagedPhysicalEvidence.from_staging_result(mutated)
+
+    def test_run_evidence_binds_staging_once_and_preserves_ordered_acceptance(self) -> None:
+        evidence = PhysicalRunEvidence(run_id="r2lab-evidence")
+        evidence = evidence.bind_staging(self.staging_payload())
+        evidence = evidence.pass_stage(
+            PhysicalAcceptanceStage.RESOURCE_AUTHORITY,
+            source="fresh-r2lab-and-slices-authority",
+        )
+        evidence = evidence.pass_stage(
+            PhysicalAcceptanceStage.SLICES_FOUNDATION,
+            source="owned-stopped-staging",
+        )
+
+        payload = evidence.to_dict()
+        self.assertEqual(PHYSICAL_RUN_EVIDENCE_SCHEMA, payload["schema"])
+        self.assertEqual("r2lab-evidence", payload["run_id"])
+        self.assertEqual("staged-stopped", payload["staged"]["status"])
+        self.assertEqual("passed", payload["acceptance"]["stages"][0]["outcome"])
+        self.assertEqual("passed", payload["acceptance"]["stages"][1]["outcome"])
+        self.assertEqual("kubernetes", payload["acceptance"]["next_stage"])
+
+        with self.assertRaisesRegex(R2LabAcceptanceError, "immutable staging"):
+            evidence.bind_staging(self.staging_payload())
+
+    def test_run_id_mismatch_is_rejected(self) -> None:
+        evidence = PhysicalRunEvidence(run_id="r2lab-evidence")
+        with self.assertRaisesRegex(R2LabAcceptanceError, "different physical run"):
+            evidence.bind_staging(self.staging_payload(run_id="r2lab-other"))
+
+    def test_atomic_json_persistence_contains_hashes_and_acceptance(self) -> None:
+        evidence = PhysicalRunEvidence(run_id="r2lab-evidence").bind_staging(
+            self.staging_payload()
+        )
+        evidence = evidence.pass_stage(
+            PhysicalAcceptanceStage.RESOURCE_AUTHORITY,
+            source="authority-evidence",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence" / "physical-run.json"
+            written = evidence.write_json(target)
+            self.assertEqual(target.resolve(), written)
+            payload = json.loads(target.read_text(encoding="utf-8"))
+
+        self.assertEqual(PHYSICAL_RUN_EVIDENCE_SCHEMA, payload["schema"])
+        self.assertEqual("a" * 64, payload["staged"]["package_sha256"])
+        self.assertEqual("b" * 64, payload["staged"]["values_sha256"])
+        self.assertEqual("c" * 64, payload["staged"]["render_sha256"])
+        self.assertEqual(64, len(payload["staged"]["staging_sha256"]))
+        self.assertEqual("passed", payload["acceptance"]["stages"][0]["outcome"])
 
 
 if __name__ == "__main__":
