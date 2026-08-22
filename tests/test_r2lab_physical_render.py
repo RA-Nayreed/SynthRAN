@@ -26,17 +26,37 @@ class R2LabPhysicalRenderTests(unittest.TestCase):
         self.assertEqual(30, cell["common_scs"])
         self.assertEqual(2, cell["nof_antennas_dl"])
         self.assertEqual(2, cell["nof_antennas_ul"])
+        self.assertEqual([{"sst": 1}], cell["slicing"])
         self.assertEqual(621_312, config["synthran_review"]["expected_ssb_arfcn"])
         self.assertEqual(620_040, config["synthran_review"]["reference_point_a_arfcn"])
         self.assertFalse(config["synthran_review"]["live_accepted"])
+
+    def test_render_matches_pinned_cu_cp_and_remote_control_shape(self) -> None:
+        config = render_physical_srsran(
+            build_physical_deployment_plan(run_id="r2lab-chart-shape")
+        ).to_dict()["gnb_config"]
+        amf = config["cu_cp"]["amf"]
+
+        self.assertEqual(AMF_ADDRESS_PLACEHOLDER, amf["addr"])
+        self.assertEqual(GNB_BIND_ADDRESS_PLACEHOLDER, amf["bind_addr"])
+        self.assertEqual(38412, amf["port"])
+        self.assertEqual(8001, config["remote_control"]["port"])
+        self.assertTrue(config["remote_control"]["enabled"])
+        self.assertEqual(
+            [{"sst": 1}],
+            amf["supported_tracking_areas"][0]["plmn_list"][0][
+                "tai_slice_support_list"
+            ],
+        )
 
     def test_render_keeps_runtime_network_values_as_placeholders(self) -> None:
         config = render_physical_srsran(
             build_physical_deployment_plan(run_id="r2lab-placeholders")
         ).to_dict()["gnb_config"]
+        amf = config["cu_cp"]["amf"]
 
-        self.assertEqual(AMF_ADDRESS_PLACEHOLDER, config["amf"]["addr"])
-        self.assertEqual(GNB_BIND_ADDRESS_PLACEHOLDER, config["amf"]["bind_addr"])
+        self.assertEqual(AMF_ADDRESS_PLACEHOLDER, amf["addr"])
+        self.assertEqual(GNB_BIND_ADDRESS_PLACEHOLDER, amf["bind_addr"])
         self.assertEqual(N300_DEVICE_ARGS_PLACEHOLDER, config["ru_sdr"]["device_args"])
 
     def test_render_is_uhd_recreate_and_stopped_before_lifecycle_start(self) -> None:
