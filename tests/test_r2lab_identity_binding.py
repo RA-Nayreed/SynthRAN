@@ -18,9 +18,52 @@ from synthran.network.r2lab import (
 class IdentityAwareRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
+        self.power: dict[str, str] = {}
+
+    @staticmethod
+    def remote(command: tuple[str, ...]) -> tuple[str, ...]:
+        split = command.index("--")
+        return command[split + 2 :]
 
     def __call__(self, command, timeout_seconds: int) -> CommandResult:
-        self.commands.append(tuple(command))
+        value = tuple(command)
+        self.commands.append(value)
+        remote = self.remote(value)
+        if remote == ("rhubarbe", "leases", "--check"):
+            return CommandResult(0, "", "")
+        if remote[:3] == ("rhubarbe", "pdu", "on") and len(remote) == 4:
+            resource = remote[3]
+            self.power[resource] = "on"
+            return CommandResult(
+                0,
+                f"pdu2 chain-0@outlet-1 ({resource}): ON (28W)\n",
+                "",
+            )
+        if remote[:3] == ("rhubarbe", "pdu", "off") and len(remote) == 4:
+            resource = remote[3]
+            self.power[resource] = "off"
+            return CommandResult(
+                1,
+                f"pdu2 chain-0@outlet-1 ({resource}): OFF\n",
+                "",
+            )
+        if remote[:3] == ("rhubarbe", "pdu", "status") and len(remote) == 4:
+            resource = remote[3]
+            state = self.power.get(resource)
+            if state == "on":
+                return CommandResult(
+                    0,
+                    f"pdu2 chain-0@outlet-1 ({resource}): ON (28W)\n",
+                    "",
+                )
+            if state == "off":
+                return CommandResult(
+                    0,
+                    f"pdu2 chain-0@outlet-1 ({resource}): OFF\n",
+                    "",
+                )
+        if remote[:1] == ("ping",):
+            return CommandResult(0, "", "")
         return CommandResult(0, "", "")
 
 
