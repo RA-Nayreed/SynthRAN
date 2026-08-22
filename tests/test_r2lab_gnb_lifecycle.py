@@ -4,7 +4,7 @@ import json
 import unittest
 
 from synthran.live_preflight import CommandResult
-from synthran.network.r2lab_gnb_lifecycle import (
+from synthran.r2lab.deployment import (
     GNB_DEPLOYMENT,
     GNB_NAMESPACE,
     GNB_SELECTOR,
