@@ -27,6 +27,7 @@ class SmokeRunner:
 
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
+        self.power: dict[str, str] = {}
 
     @staticmethod
     def remote(command: tuple[str, ...]) -> tuple[str, ...]:
@@ -41,6 +42,38 @@ class SmokeRunner:
             ("true",),
             ("rhubarbe", "leases", "--check"),
         }:
+            return CommandResult(0, "", "")
+        if remote[:3] == ("rhubarbe", "pdu", "on") and len(remote) == 4:
+            resource = remote[3]
+            self.power[resource] = "on"
+            return CommandResult(
+                0,
+                f"pdu2 chain-0@outlet-1 ({resource}): ON (28W)\n",
+                "",
+            )
+        if remote[:3] == ("rhubarbe", "pdu", "off") and len(remote) == 4:
+            resource = remote[3]
+            self.power[resource] = "off"
+            return CommandResult(
+                1,
+                f"pdu2 chain-0@outlet-1 ({resource}): OFF\n",
+                "",
+            )
+        if remote[:3] == ("rhubarbe", "pdu", "status") and len(remote) == 4:
+            resource = remote[3]
+            state = self.power.get(resource)
+            if state == "on":
+                return CommandResult(
+                    0,
+                    f"pdu2 chain-0@outlet-1 ({resource}): ON (28W)\n",
+                    "",
+                )
+            if state == "off":
+                return CommandResult(
+                    0,
+                    f"pdu2 chain-0@outlet-1 ({resource}): OFF\n",
+                    "",
+                )
             return CommandResult(0, "", "")
         if remote[:1] == ("ping",):
             return CommandResult(0, "", "")
@@ -81,9 +114,12 @@ class R2LabSmokeGateTests(unittest.TestCase):
         self.assertFalse(payload["safety"]["automatic_lease_booking"])
         self.assertFalse(payload["safety"]["password_storage"])
         self.assertFalse(payload["safety"]["global_power_off"])
+        self.assertFalse(payload["safety"]["mutation_returncode_is_state_truth"])
+        self.assertTrue(payload["safety"]["claim_release_requires_proven_clean_state"])
         self.assertNotIn("oulu_user", rendered)
         self.assertNotIn("all-off", rendered)
         planned_commands = "\n".join(payload["commands"]).lower()
+        self.assertIn("pdu status n300", planned_commands)
         self.assertNotIn("password", planned_commands)
         self.assertNotIn(" -p ", f" {planned_commands} ")
 
@@ -116,10 +152,13 @@ class R2LabSmokeGateTests(unittest.TestCase):
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "pdu", "on", "n300"),
+                    ("rhubarbe", "pdu", "status", "n300"),
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "pdu", "off", "qhat01"),
+                    ("rhubarbe", "pdu", "status", "qhat01"),
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "pdu", "on", "qhat01"),
+                    ("rhubarbe", "pdu", "status", "qhat01"),
                     ("ping", "-c", "1", "-W", "1", "qhat01"),
                     ("rhubarbe", "leases", "--check"),
                 ],
@@ -141,13 +180,16 @@ class R2LabSmokeGateTests(unittest.TestCase):
             )
             self.assertEqual("released", released_manifest["status"])
             self.assertEqual("released", released_manifest["resource_claim"])
+            self.assertTrue(released_manifest["cleanup"]["claim_releasable"])
 
             self.assertEqual(
                 [
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "pdu", "off", "qhat01"),
+                    ("rhubarbe", "pdu", "status", "qhat01"),
                     ("rhubarbe", "leases", "--check"),
                     ("rhubarbe", "pdu", "off", "n300"),
+                    ("rhubarbe", "pdu", "status", "n300"),
                 ],
                 runner.remote_commands,
             )
