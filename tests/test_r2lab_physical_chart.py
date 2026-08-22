@@ -4,14 +4,14 @@ from pathlib import Path
 import unittest
 
 from synthran.dependencies import load_lock
-from synthran.network.r2lab_physical_chart import (
+from synthran.r2lab.deployment import (
     PINNED_SRSRAN_HELM_COMMIT,
     PhysicalChartBindings,
     R2LabPhysicalChartError,
     build_physical_chart_bundle,
+    build_physical_deployment_plan,
     overlay_pinned_deployment_template,
 )
-from synthran.network.r2lab_physical_deployment import build_physical_deployment_plan
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
