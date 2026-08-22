@@ -121,7 +121,7 @@ The failed scan is valid evidence for the configuration actually transmitted, bu
 
 A physical srsRAN candidate refuses an SSB or Point-A ARFCN where a carrier-center value is required. The reference stores the observed OAI SSB/Point-A/bandwidth/2x2 facts without declaring a derived srsRAN profile live-accepted.
 
-All candidate output remains explicitly `offline-candidate-only`.
+All candidate output remains explicitly offline-only.
 
 ## 7. Kubernetes rolling overlap became a deployment requirement
 
@@ -133,9 +133,9 @@ During a live gNB configuration update, ordinary Kubernetes rolling behavior bri
 
 A physical SDR is a singleton hardware owner, not a replica-friendly stateless service. Any physical adapter that allows overlapping gNB owners can fail even when both configurations are otherwise valid.
 
-### Current status
+### Original requirement
 
-The required sequence is documented as:
+The required sequence was recorded as:
 
 ```text
 stop current gNB
@@ -145,7 +145,7 @@ stop current gNB
   -> start exactly one gNB
 ```
 
-This requirement is not yet wired into the production network-deployment adapter. That is intentionally still pending rather than weakening the existing RFSIM-only adapter.
+This was initially left as a documented requirement rather than weakening the existing RFSIM-only adapter.
 
 ## 8. CI exposed a privacy-scanner false positive
 
@@ -174,16 +174,165 @@ The follow-up Actions run then passed all stages: offline unit tests, workbench 
 
 This is retained in the development record because the correct resolution was to make the implementation unambiguous to the existing privacy policy rather than adding an exception.
 
-## 9. Current safe boundary
+## 9. The virtual adapter was deliberately left unchanged
 
-The smoke-gate resource controller now codifies the provider semantics learned from the live run, and the offline suite has passed with those changes.
+### Observation
 
-The next work should not simply change the existing `fiveg_ansible` constant from `rfsim` to `n300`. That adapter is still the accepted virtual golden path and deliberately rejects physical radio values. Physical deployment needs a separate backend-aware path that preserves the RFSIM contract while adding:
+The accepted `fiveg_ansible` path still hard-rejects anything except `rru=rfsim`.
 
-- physical inventory/profile validation;
-- non-overlapping gNB lifecycle;
-- rendered srsRAN carrier/SSB validation;
-- qfit acquisition/registration/PDU/user-plane states;
-- evidence for each acceptance stage.
+### Reasoning
 
-No new live RF mutation should be required to implement those boundaries offline.
+Changing the existing `SUPPORTED_RADIO` constant from `rfsim` to include `n300` would mix two different deployment contracts. The virtual path assumes srsUE/RFSIM behavior, while the physical path needs UHD, singleton ownership, COTS UE semantics, different radio validation, and different evidence.
+
+### Decision
+
+The physical backend is being implemented as a separate boundary. The existing virtual adapter remains a regression oracle rather than becoming a conditional collection of physical exceptions.
+
+## 10. The rolling-overlap rule was turned into executable code
+
+### Observation used
+
+During smoke 002, an ordinary rolling restart created a replacement gNB before the terminating gNB had fully released the N300. The live recovery that worked was scale to zero, wait until no gNB pod exists, allow UHD release, then restart one gNB.
+
+### Implementation
+
+`synthran/network/r2lab_gnb_lifecycle.py` now implements that exact ownership sequence as an injected Kubernetes controller.
+
+It:
+
+- scales only `deployment/srsran-gnb` in the `open5gs` namespace;
+- queries all matching pods as JSON using the exact gNB selector;
+- never relies on Kubernetes list ordering or `.items[0]`;
+- counts a terminating pod as still present because it can still own the UHD device;
+- invokes the configuration callback only after zero matching pods are proven;
+- waits the explicit UHD-release interval before configuration;
+- starts with exactly one desired replica;
+- accepts startup only when exactly one matching pod is Running and every reported container is ready;
+- treats a scale command return code as diagnostic rather than replica-state truth when the subsequent pod observation proves the state;
+- requests exact scale-to-zero recovery if startup is ambiguous or if more than one gNB pod is observed.
+
+### Tests
+
+`tests/test_r2lab_gnb_lifecycle.py` covers:
+
+- terminating pods preventing configuration;
+- configuration occurring only after zero pods;
+- state proof overriding a non-zero scale mutation return code;
+- configuration failure leaving the Deployment stopped;
+- overlapping startup owners triggering fail-closed scale-to-zero recovery;
+- malformed pod JSON failing closed.
+
+This turns the most important Kubernetes-specific live discovery into product behavior while still keeping Helm rendering separate.
+
+## 11. The OAI reference was converted into a semantic offline candidate
+
+### Observation used
+
+The R2Lab OAI reference recorded:
+
+- SSB ARFCN `621312`;
+- Point-A ARFCN `620040`;
+- 162 PRBs at 30 kHz SCS;
+- two TX and two RX paths.
+
+The smoke-002 final experiment had reused the SSB ARFCN as the srsRAN carrier-center ARFCN and had not reproduced the 60 MHz/2x2 reference semantics.
+
+### Derivation now encoded
+
+`r2lab_radio_profile.py` now derives the resource-grid center from Point A instead of copying the SSB value:
+
+```text
+occupied grid = 162 PRB x 12 subcarriers x 30 kHz
+half grid     = 29.16 MHz
+FR1 raster    = 15 kHz per ARFCN step above 3 GHz
+ARFCN offset  = 29.16 MHz / 15 kHz = 1944
+carrier       = 620040 + 1944 = 621984
+```
+
+The resulting carrier-center frequency is approximately 3329.76 MHz. The expected SSB remains a separate semantic field at ARFCN 621312. The 162-PRB/30-kHz grid maps to a nominal 60 MHz carrier, and the reference-aligned intent requires 2x2 antennas.
+
+### Safety property
+
+The helper is named and serialized as an `offline-reference-aligned-candidate`. It is not marked live accepted. Tests explicitly reject:
+
+- reusing the SSB value as carrier center;
+- using a 20 MHz profile against the 162-PRB reference;
+- using a SISO profile against the reviewed 2x2 reference.
+
+This is how the software now preserves the distinction that was missed during the manual frequency experiment.
+
+## 12. A separate physical deployment plan was introduced
+
+### Reasoning
+
+Once the reference semantics and singleton lifecycle were executable, the next safe boundary was a physical plan that cannot accidentally fall through to the RFSIM adapter.
+
+### Code
+
+`synthran/network/r2lab_physical_deployment.py` defines a non-executing physical plan for the currently reviewed topology. It deliberately fails closed to:
+
+- Open5GS on `sopnode-f2`;
+- srsRAN on `sopnode-f3`;
+- N300 as the physical radio;
+- the reference-aligned radio intent;
+- the reviewed TX/RX gain range;
+- `Recreate`/maximum-one-gNB ownership;
+- no inherited srsUE-specific CORESET or PRACH override.
+
+The plan is `offline-plan-only` and states that the next step is to map these canonical values into the pinned physical Helm/chart representation and inspect the fully rendered result before execution.
+
+### Why the topology is intentionally narrow
+
+Smoke 002 gave strong evidence for one exact foundation/core/RAN layout. Generalizing to every supported SLICES node pair before a second physical acceptance would create untested degrees of freedom. The first physical adapter therefore encodes only what the live run actually exercised.
+
+## 13. Physical acceptance became an ordered state machine
+
+### Observation used
+
+Smoke 002 simultaneously had successful lower-layer stages and an unsuccessful overall physical result. A single `success` boolean cannot represent that truthfully.
+
+### Code
+
+`synthran/network/r2lab_acceptance.py` now defines this ordered acceptance ladder:
+
+```text
+resource authority
+  -> SLICES foundation
+  -> Kubernetes
+  -> Open5GS
+  -> gNB/N2
+  -> UE management
+  -> cell acquisition
+  -> registration
+  -> PDU session
+  -> user plane
+  -> workload
+```
+
+Evidence must be contiguous. Stages cannot be skipped, a failed stage blocks all later acceptance, and all later stages remain explicitly `not-reached`.
+
+This directly models the smoke-002 result: the run can retain PASS evidence through UE management, FAIL at cell acquisition, and must not accidentally report registration or user-plane success.
+
+## 14. Current safe boundary
+
+The smoke-gate branch now contains executable boundaries for the main lessons learned during the live run:
+
+- provider state is independent of mutation return code;
+- timeout means unknown until exact state resolves it;
+- qfit is a first-class provider resource;
+- cleanup is exact and claim-aware;
+- a physical gNB is a singleton owner;
+- the reviewed OAI fields have distinct frequency semantics;
+- physical deployment has a separate adapter boundary;
+- physical acceptance is staged and monotonic.
+
+Still intentionally pending:
+
+- mapping the canonical physical plan into the pinned physical srsRAN Helm/chart values;
+- inspecting the complete rendered physical configuration before execution;
+- wiring the non-overlapping lifecycle to that live physical chart adapter and strict SLICES SSH path;
+- qfit cell-acquisition, registration, PDU-session, and user-plane probes with sanitized evidence;
+- connecting those runtime observations to the ordered acceptance record;
+- a second controlled physical acceptance run.
+
+No additional RF mutation was needed to implement these boundaries. They were derived from the evidence already collected in smoke 002.
