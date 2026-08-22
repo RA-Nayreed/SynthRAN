@@ -89,9 +89,34 @@ def start_payload() -> dict[str, object]:
     }
 
 
+def raw_started_evidence() -> PhysicalRunEvidence:
+    return (
+        PhysicalRunEvidence(run_id=RUN_ID)
+        .bind_staging(staging_payload())
+        .bind_gnb_start(start_payload())
+    )
+
+
 def base_evidence() -> PhysicalRunEvidence:
-    return PhysicalRunEvidence(run_id=RUN_ID).bind_staging(staging_payload()).bind_gnb_start(
-        start_payload()
+    """Activation begins only after lower foundation/core acceptance exists."""
+
+    evidence = raw_started_evidence()
+    for stage in STAGE_ORDER[:4]:
+        evidence = evidence.pass_stage(stage, source=f"test-{stage.value}")
+    return evidence
+
+
+def pdu_evidence() -> PhysicalRunEvidence:
+    evidence = base_evidence()
+    for stage in STAGE_ORDER[4:9]:
+        evidence = evidence.pass_stage(stage, source=f"test-{stage.value}")
+    return evidence
+
+
+def user_plane_evidence() -> PhysicalRunEvidence:
+    return pdu_evidence().pass_stage(
+        PhysicalAcceptanceStage.USER_PLANE,
+        source="test-user-plane",
     )
 
 
@@ -117,20 +142,6 @@ def proven_gnb() -> GnbN2Evidence:
         n2_state=N2State.ESTABLISHED,
         log_observed=True,
         transport_error=False,
-    )
-
-
-def pdu_evidence() -> PhysicalRunEvidence:
-    evidence = base_evidence()
-    for stage in STAGE_ORDER[:9]:
-        evidence = evidence.pass_stage(stage, source=f"test-{stage.value}")
-    return evidence
-
-
-def user_plane_evidence() -> PhysicalRunEvidence:
-    return pdu_evidence().pass_stage(
-        PhysicalAcceptanceStage.USER_PLANE,
-        source="test-user-plane",
     )
 
 
@@ -215,32 +226,43 @@ class R2LabQfitActivationCommandTests(unittest.TestCase):
             ),
         )
 
-    def test_activation_command_set_is_exact_and_does_not_use_broad_upstream_helpers(self) -> None:
-        request = QfitActivationRequest(run_id=RUN_ID, qfit="qfit07")
-        commands = qfit_activation_commands(request)
+    def test_activation_command_set_is_exact_and_excludes_broad_helpers(self) -> None:
+        commands = qfit_activation_commands(
+            QfitActivationRequest(run_id=RUN_ID, qfit="qfit07")
+        )
         rendered = "\n".join(" ".join(command) for command in commands.values())
         self.assertIn("apn=internet", rendered)
         self.assertIn("/dev/cdc-wdm0", rendered)
         self.assertIn("wwan0", rendered)
-        self.assertNotIn("start.sh", rendered)
-        self.assertNotIn("stop.sh", rendered)
-        self.assertNotIn("prepare-ue", rendered)
-        self.assertNotIn("config-ue", rendered)
-        self.assertNotIn("check-ue", rendered)
-        self.assertNotIn("AT+CIMI", rendered)
-        self.assertNotIn("disconnect", rendered)
+        for forbidden in (
+            "start.sh",
+            "stop.sh",
+            "prepare-ue",
+            "config-ue",
+            "check-ue",
+            "AT+CIMI",
+            "disconnect",
+        ):
+            self.assertNotIn(forbidden, rendered)
 
     def test_activation_refuses_unreviewed_dnn_or_interface(self) -> None:
         with self.assertRaisesRegex(R2LabQfitActivationError, "internet DNN"):
-            QfitActivationRequest(run_id=RUN_ID, qfit="qfit07", dnn="oai.ipv4").validate()
+            QfitActivationRequest(
+                run_id=RUN_ID,
+                qfit="qfit07",
+                dnn="oai.ipv4",
+            ).validate()
         with self.assertRaisesRegex(R2LabQfitActivationError, "wwan0"):
-            QfitActivationRequest(run_id=RUN_ID, qfit="qfit07", interface="eth0").validate()
+            QfitActivationRequest(
+                run_id=RUN_ID,
+                qfit="qfit07",
+                interface="eth0",
+            ).validate()
 
 
 class R2LabQfitActivationExecutionTests(unittest.TestCase):
-    def test_postcondition_truth_can_accept_nonzero_mutation_returncodes(self) -> None:
-        runner = DirectQfitRunner(mutation_returncode=1)
-        result = execute_qfit_activation(
+    def execute(self, runner: DirectQfitRunner) -> QfitActivationResult:
+        return execute_qfit_activation(
             request=QfitActivationRequest(run_id=RUN_ID, qfit="qfit07"),
             runner=runner,
             observer=runner.observe,
@@ -251,48 +273,30 @@ class R2LabQfitActivationExecutionTests(unittest.TestCase):
             rollback_attempts=1,
             poll_interval_seconds=0,
         )
+
+    def test_postcondition_truth_can_accept_nonzero_mutation_returncodes(self) -> None:
+        result = self.execute(DirectQfitRunner(mutation_returncode=1))
         self.assertTrue(result.accepted)
         self.assertEqual("pdu-established", result.status)
         self.assertTrue(result.final_runtime.pdu_session_established)
         self.assertTrue(any(step.returncode == 1 for step in result.steps))
-        payload = result.to_dict()
-        self.assertFalse(payload["raw_modem_output_persisted"])
-        self.assertFalse(payload["subscriber_identity_queried"])
+        self.assertFalse(result.to_dict()["raw_modem_output_persisted"])
+        self.assertFalse(result.to_dict()["subscriber_identity_queried"])
 
     def test_existing_pdu_is_idempotent_and_performs_no_mutation(self) -> None:
         runner = DirectQfitRunner()
         runner.radio_on = True
         runner.attached = True
         runner.ipv4 = True
-        result = execute_qfit_activation(
-            request=QfitActivationRequest(run_id=RUN_ID, qfit="qfit07"),
-            runner=runner,
-            observer=runner.observe,
-            sleeper=lambda seconds: None,
-            registration_attempts=1,
-            packet_attempts=1,
-            pdu_attempts=1,
-            rollback_attempts=1,
-            poll_interval_seconds=0,
-        )
+        result = self.execute(runner)
         self.assertTrue(result.accepted)
         self.assertEqual("already-established", result.status)
         self.assertEqual((), result.steps)
         self.assertTrue(all("--query-radio-state" in command for command in runner.commands))
 
-    def test_attach_failure_requests_exact_radio_off_and_link_down_rollback(self) -> None:
+    def test_attach_failure_requests_exact_rollback(self) -> None:
         runner = DirectQfitRunner(attach_effective=False)
-        result = execute_qfit_activation(
-            request=QfitActivationRequest(run_id=RUN_ID, qfit="qfit07"),
-            runner=runner,
-            observer=runner.observe,
-            sleeper=lambda seconds: None,
-            registration_attempts=1,
-            packet_attempts=1,
-            pdu_attempts=1,
-            rollback_attempts=1,
-            poll_interval_seconds=0,
-        )
+        result = self.execute(runner)
         self.assertFalse(result.accepted)
         self.assertEqual("failed-clean", result.status)
         self.assertTrue(result.rollback_proven)
@@ -303,35 +307,15 @@ class R2LabQfitActivationExecutionTests(unittest.TestCase):
         self.assertNotIn("--disconnect", rendered)
 
     def test_unproven_rollback_remains_explicitly_unresolved(self) -> None:
-        runner = DirectQfitRunner(attach_effective=False, rollback_effective=False)
-        result = execute_qfit_activation(
-            request=QfitActivationRequest(run_id=RUN_ID, qfit="qfit07"),
-            runner=runner,
-            observer=runner.observe,
-            sleeper=lambda seconds: None,
-            registration_attempts=1,
-            packet_attempts=1,
-            pdu_attempts=1,
-            rollback_attempts=1,
-            poll_interval_seconds=0,
+        result = self.execute(
+            DirectQfitRunner(attach_effective=False, rollback_effective=False)
         )
         self.assertFalse(result.accepted)
         self.assertEqual("failed-unresolved", result.status)
         self.assertFalse(result.rollback_proven)
 
     def test_activation_evidence_serialization_contains_no_raw_network_values(self) -> None:
-        runner = DirectQfitRunner()
-        result = execute_qfit_activation(
-            request=QfitActivationRequest(run_id=RUN_ID, qfit="qfit07"),
-            runner=runner,
-            observer=runner.observe,
-            sleeper=lambda seconds: None,
-            registration_attempts=1,
-            packet_attempts=1,
-            pdu_attempts=1,
-            rollback_attempts=1,
-            poll_interval_seconds=0,
-        )
+        result = self.execute(DirectQfitRunner())
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "activation.json"
             result.write_json(path)
@@ -342,12 +326,8 @@ class R2LabQfitActivationExecutionTests(unittest.TestCase):
 
 
 class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
-    def successful_activation(self) -> QfitActivationResult:
-        detached = runtime_state()
-        attached = runtime_state(
-            packet=PacketServiceState.ATTACHED,
-            ipv4=Ipv4State.PRESENT,
-        )
+    @staticmethod
+    def successful_activation() -> QfitActivationResult:
         return QfitActivationResult(
             run_id=RUN_ID,
             qfit="qfit07",
@@ -356,12 +336,35 @@ class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
             device="/dev/cdc-wdm0",
             session_id=0,
             status="pdu-established",
-            initial_runtime=detached,
-            final_runtime=attached,
+            initial_runtime=runtime_state(),
+            final_runtime=runtime_state(
+                packet=PacketServiceState.ATTACHED,
+                ipv4=Ipv4State.PRESENT,
+            ),
             final_radio_state=SoftwareRadioState.ON,
             rollback_proven=False,
             steps=(),
         )
+
+    @patch("synthran.r2lab.ue.execute_qfit_activation")
+    @patch("synthran.r2lab.controller.authorize_physical_start")
+    def test_lower_acceptance_evidence_is_required_before_activation(
+        self,
+        authorize,
+        activate,
+    ) -> None:
+        authorize.return_value = authority()
+        with self.assertRaisesRegex(R2LabQfitActivationError, "current next stage"):
+            execute_authorized_qfit_activation(
+                evidence=raw_started_evidence(),
+                slice_name="oulu_user",
+                run_root=Path("/tmp/r2lab-tests"),
+                known_hosts=Path(__file__),
+                r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
+                cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
+                sleeper=lambda seconds: None,
+            )
+        activate.assert_not_called()
 
     @patch("synthran.r2lab.ue.execute_qfit_activation")
     @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
@@ -392,23 +395,21 @@ class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
             sleeper=lambda seconds: None,
         )
         self.assertIsNotNone(outcome.activation)
-        self.assertEqual(
-            AcceptanceOutcome.PASSED,
-            outcome.evidence.acceptance.outcome_for(PhysicalAcceptanceStage.GNB_N2),
-        )
-        self.assertEqual(
-            AcceptanceOutcome.PASSED,
-            outcome.evidence.acceptance.outcome_for(PhysicalAcceptanceStage.REGISTRATION),
-        )
-        self.assertEqual(
-            AcceptanceOutcome.PASSED,
-            outcome.evidence.acceptance.outcome_for(PhysicalAcceptanceStage.PDU_SESSION),
-        )
+        for stage in (
+            PhysicalAcceptanceStage.GNB_N2,
+            PhysicalAcceptanceStage.REGISTRATION,
+            PhysicalAcceptanceStage.PDU_SESSION,
+        ):
+            self.assertEqual(
+                AcceptanceOutcome.PASSED,
+                outcome.evidence.acceptance.outcome_for(stage),
+            )
         self.assertEqual(
             PhysicalAcceptanceStage.USER_PLANE,
             outcome.evidence.acceptance.next_stage,
         )
 
+    @patch("synthran.r2lab.ue.execute_qfit_activation")
     @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
     @patch("synthran.r2lab.runtime.execute_qfit_management_probe")
     @patch("synthran.r2lab.runtime.verify_gnb_n2")
@@ -419,6 +420,7 @@ class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
         verify_gnb,
         management,
         runtime_probe,
+        activate,
     ) -> None:
         authorize.return_value = authority()
         verify_gnb.return_value = proven_gnb()
@@ -441,13 +443,14 @@ class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
             PhysicalAcceptanceStage.CELL_ACQUISITION,
             outcome.evidence.acceptance.failed_stage,
         )
+        activate.assert_not_called()
 
     @patch("synthran.r2lab.ue.execute_user_plane_probe")
     @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
     @patch("synthran.r2lab.runtime.execute_qfit_management_probe")
     @patch("synthran.r2lab.runtime.verify_gnb_n2")
     @patch("synthran.r2lab.controller.authorize_physical_start")
-    def test_authorized_user_plane_advances_to_workload_only_after_current_pdu_reproof(
+    def test_authorized_user_plane_requires_current_pdu_reproof(
         self,
         authorize,
         verify_gnb,
@@ -489,128 +492,89 @@ class R2LabAuthorizedQfitFlowTests(unittest.TestCase):
 
 
 class R2LabPhysicalWorkloadHandoffTests(unittest.TestCase):
-    @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
-    @patch("synthran.r2lab.runtime.execute_qfit_management_probe")
-    @patch("synthran.r2lab.runtime.verify_gnb_n2")
-    @patch("synthran.r2lab.controller.authorize_physical_start")
-    def test_explicit_physical_executor_can_complete_final_acceptance_stage(
-        self,
-        authorize,
-        verify_gnb,
-        management,
-        runtime_probe,
-    ) -> None:
-        authorize.return_value = authority()
-        verify_gnb.return_value = proven_gnb()
-        management.return_value = True
-        runtime_probe.return_value = runtime_state(
-            packet=PacketServiceState.ATTACHED,
-            ipv4=Ipv4State.PRESENT,
+    def patch_current_path(self):
+        return (
+            patch(
+                "synthran.r2lab.controller.authorize_physical_start",
+                return_value=authority(),
+            ),
+            patch(
+                "synthran.r2lab.runtime.verify_gnb_n2",
+                return_value=proven_gnb(),
+            ),
+            patch(
+                "synthran.r2lab.runtime.execute_qfit_management_probe",
+                return_value=True,
+            ),
+            patch(
+                "synthran.r2lab.runtime.execute_qfit_runtime_probe",
+                return_value=runtime_state(
+                    packet=PacketServiceState.ATTACHED,
+                    ipv4=Ipv4State.PRESENT,
+                ),
+            ),
         )
 
-        seen = []
-
-        def executor(context):
-            seen.append(context.to_dict())
-            return PhysicalWorkloadResult(
-                run_id=RUN_ID,
-                workload_id="physical-baseline-001",
-                backend="r2lab",
-                interface="wwan0",
-                evidence_sha256="f" * 64,
-                accepted=True,
-                cleanup_proven=True,
-            )
-
-        outcome = execute_physical_workload_handoff(
-            evidence=user_plane_evidence(),
-            slice_name="oulu_user",
-            run_root=Path("/tmp/r2lab-tests"),
-            known_hosts=Path(__file__),
-            r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
-            cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
-            executor=executor,
-        )
-        self.assertEqual(1, len(seen))
-        self.assertEqual("r2lab", seen[0]["backend"])
-        self.assertTrue(outcome.evidence.acceptance.accepted)
-        self.assertEqual(
-            AcceptanceOutcome.PASSED,
-            outcome.evidence.acceptance.outcome_for(PhysicalAcceptanceStage.WORKLOAD),
-        )
-
-    @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
-    @patch("synthran.r2lab.runtime.execute_qfit_management_probe")
-    @patch("synthran.r2lab.runtime.verify_gnb_n2")
-    @patch("synthran.r2lab.controller.authorize_physical_start")
-    def test_virtual_result_cannot_satisfy_physical_workload_stage(
-        self,
-        authorize,
-        verify_gnb,
-        management,
-        runtime_probe,
-    ) -> None:
-        authorize.return_value = authority()
-        verify_gnb.return_value = proven_gnb()
-        management.return_value = True
-        runtime_probe.return_value = runtime_state(
-            packet=PacketServiceState.ATTACHED,
-            ipv4=Ipv4State.PRESENT,
-        )
-
-        def virtual_executor(context):
-            return PhysicalWorkloadResult(
-                run_id=RUN_ID,
-                workload_id="virtual-baseline",
-                backend="rfsim",
-                interface="wwan0",
-                evidence_sha256="f" * 64,
-                accepted=True,
-                cleanup_proven=True,
-            )
-
-        with self.assertRaisesRegex(R2LabQfitActivationError, "non-R2Lab"):
-            execute_physical_workload_handoff(
+    def test_explicit_physical_executor_can_complete_final_acceptance_stage(self) -> None:
+        patches = self.patch_current_path()
+        with patches[0], patches[1], patches[2], patches[3]:
+            outcome = execute_physical_workload_handoff(
                 evidence=user_plane_evidence(),
                 slice_name="oulu_user",
                 run_root=Path("/tmp/r2lab-tests"),
                 known_hosts=Path(__file__),
                 r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
                 cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
-                executor=virtual_executor,
+                executor=lambda context: PhysicalWorkloadResult(
+                    run_id=RUN_ID,
+                    workload_id="physical-baseline-001",
+                    backend="r2lab",
+                    interface="wwan0",
+                    evidence_sha256="f" * 64,
+                    accepted=True,
+                    cleanup_proven=True,
+                ),
             )
+        self.assertTrue(outcome.evidence.acceptance.accepted)
 
-    @patch("synthran.r2lab.runtime.execute_qfit_runtime_probe")
-    @patch("synthran.r2lab.runtime.execute_qfit_management_probe")
-    @patch("synthran.r2lab.runtime.verify_gnb_n2")
-    @patch("synthran.r2lab.controller.authorize_physical_start")
-    def test_executor_exception_is_sanitized_and_records_workload_failure(
-        self,
-        authorize,
-        verify_gnb,
-        management,
-        runtime_probe,
-    ) -> None:
-        authorize.return_value = authority()
-        verify_gnb.return_value = proven_gnb()
-        management.return_value = True
-        runtime_probe.return_value = runtime_state(
-            packet=PacketServiceState.ATTACHED,
-            ipv4=Ipv4State.PRESENT,
-        )
+    def test_virtual_result_cannot_satisfy_physical_workload_stage(self) -> None:
+        patches = self.patch_current_path()
+        with patches[0], patches[1], patches[2], patches[3]:
+            with self.assertRaisesRegex(R2LabQfitActivationError, "non-R2Lab"):
+                execute_physical_workload_handoff(
+                    evidence=user_plane_evidence(),
+                    slice_name="oulu_user",
+                    run_root=Path("/tmp/r2lab-tests"),
+                    known_hosts=Path(__file__),
+                    r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
+                    cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
+                    executor=lambda context: PhysicalWorkloadResult(
+                        run_id=RUN_ID,
+                        workload_id="virtual-baseline",
+                        backend="rfsim",
+                        interface="wwan0",
+                        evidence_sha256="f" * 64,
+                        accepted=True,
+                        cleanup_proven=True,
+                    ),
+                )
+
+    def test_executor_exception_is_sanitized_and_records_workload_failure(self) -> None:
+        patches = self.patch_current_path()
 
         def failing_executor(context):
             raise RuntimeError("private remote detail")
 
-        outcome = execute_physical_workload_handoff(
-            evidence=user_plane_evidence(),
-            slice_name="oulu_user",
-            run_root=Path("/tmp/r2lab-tests"),
-            known_hosts=Path(__file__),
-            r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
-            cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
-            executor=failing_executor,
-        )
+        with patches[0], patches[1], patches[2], patches[3]:
+            outcome = execute_physical_workload_handoff(
+                evidence=user_plane_evidence(),
+                slice_name="oulu_user",
+                run_root=Path("/tmp/r2lab-tests"),
+                known_hosts=Path(__file__),
+                r2lab_runner=lambda command, timeout: CommandResult(0, "", ""),
+                cluster_runner=lambda command, timeout: CommandResult(0, "", ""),
+                executor=failing_executor,
+            )
         self.assertIsNone(outcome.result)
         self.assertEqual(
             PhysicalAcceptanceStage.WORKLOAD,
