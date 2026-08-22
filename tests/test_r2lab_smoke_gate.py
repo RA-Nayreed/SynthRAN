@@ -14,11 +14,18 @@ from synthran.live_preflight import CommandResult
 from synthran.network.r2lab import (
     R2LabSelection,
     build_plan,
+    execute_physical_gnb_start,
     execute_prepare,
     execute_release,
     run_doctor,
 )
 from synthran.r2lab.deployment import (
+    DEPLOYMENT_PACKAGE_ANNOTATION,
+    DEPLOYMENT_RENDER_ANNOTATION,
+    DEPLOYMENT_RUN_ANNOTATION,
+    DEPLOYMENT_RUN_LABEL,
+    DEPLOYMENT_VALUES_ANNOTATION,
+    POD_RUNTIME_STATE_KEY,
     PhysicalChartArtifact,
     PhysicalHelmRenderEvidence,
     R2LabPhysicalStagingError,
@@ -43,6 +50,10 @@ class SmokeRunner:
     def remote(command: tuple[str, ...]) -> tuple[str, ...]:
         split = command.index("--")
         return command[split + 2 :]
+
+    @staticmethod
+    def qfit_node(qfit: str) -> int:
+        return int(qfit.removeprefix("qfit"))
 
     def __call__(self, command, timeout_seconds: int) -> CommandResult:
         value = tuple(command)
@@ -84,6 +95,21 @@ class SmokeRunner:
                     f"pdu2 chain-0@outlet-1 ({resource}): OFF\n",
                     "",
                 )
+            return CommandResult(0, "", "")
+        if remote[:2] == ("qfit", "on") and len(remote) == 3:
+            qfit = remote[2]
+            self.power[qfit] = "on"
+            return CommandResult(0, f"reboot{self.qfit_node(qfit):02d}:ok\n", "")
+        if remote[:2] == ("qfit", "off") and len(remote) == 3:
+            qfit = remote[2]
+            self.power[qfit] = "off"
+            return CommandResult(0, f"reboot{self.qfit_node(qfit):02d}:ok\n", "")
+        if remote[:2] == ("rhubarbe", "status") and len(remote) == 3:
+            node = int(remote[2])
+            qfit = f"qfit{node:02d}"
+            state = self.power.get(qfit)
+            if state in {"on", "off"}:
+                return CommandResult(0, f"reboot{node:02d}:{state}\n", "")
             return CommandResult(0, "", "")
         if remote[:1] == ("ping",):
             return CommandResult(0, "", "")
@@ -213,7 +239,7 @@ class R2LabSmokeGateTests(unittest.TestCase):
 
 
 class StoppedStagingRunner:
-    """Provider double for the live-but-stopped physical chart boundary."""
+    """Provider double for stopped staging and authorized singleton start."""
 
     def __init__(
         self,
@@ -224,6 +250,7 @@ class StoppedStagingRunner:
         allocation_id: str,
         package_sha256: str,
         values_sha256: str,
+        render_sha256: str,
     ) -> None:
         self.run_id = run_id
         self.owner = owner
@@ -231,15 +258,41 @@ class StoppedStagingRunner:
         self.allocation_id = allocation_id
         self.package_sha256 = package_sha256
         self.values_sha256 = values_sha256
+        self.render_sha256 = render_sha256
         self.commands: list[tuple[str, ...]] = []
         self.existing_replicas: int | None = None
         self.remote_digest_match = True
+        self.deployment_exists = False
+        self.labels: dict[str, str] = {}
+        self.annotations: dict[str, str] = {}
+        self.pods: list[dict[str, object]] = []
 
     @staticmethod
     def remote(command: tuple[str, ...]) -> tuple[str, ...] | None:
         if not command or command[0] != "ssh":
             return None
         return tuple(shlex.split(command[-1]))
+
+    def deployment_json(self, *, replicas: int) -> str:
+        return json.dumps(
+            {
+                "metadata": {
+                    "labels": dict(self.labels),
+                    "annotations": dict(self.annotations),
+                },
+                "spec": {"replicas": replicas},
+            }
+        )
+
+    @staticmethod
+    def ready_pod() -> dict[str, object]:
+        return {
+            "metadata": {"name": "gnb-current"},
+            "status": {
+                POD_RUNTIME_STATE_KEY: "Running",
+                "containerStatuses": [{"name": "gnb", "ready": True}],
+            },
+        }
 
     def __call__(self, command, timeout_seconds: int) -> CommandResult:
         value = tuple(command)
@@ -282,25 +335,51 @@ class StoppedStagingRunner:
                     f"{self.package_sha256}  {remote[1]}\n{self.values_sha256}  {remote[2]}\n",
                     "",
                 )
-            return CommandResult(0, f"{'0' * 64}  {remote[1]}\n{'1' * 64}  {remote[2]}\n", "")
+            return CommandResult(
+                0,
+                f"{'0' * 64}  {remote[1]}\n{'1' * 64}  {remote[2]}\n",
+                "",
+            )
         if remote == ("helm", "version", "--short"):
             return CommandResult(0, "v3.18.4+g123\n", "")
         if remote[:4] == ("kubectl", "get", "namespace", "open5gs"):
             return CommandResult(0, self.run_id, "")
         if remote[:3] == ("kubectl", "get", "deployment/srsran-gnb"):
             if "--ignore-not-found" in remote:
-                if self.existing_replicas is None:
+                if not self.deployment_exists and self.existing_replicas is None:
                     return CommandResult(0, "", "")
-                return CommandResult(
-                    0,
-                    json.dumps({"spec": {"replicas": self.existing_replicas}}),
-                    "",
-                )
-            return CommandResult(0, json.dumps({"spec": {"replicas": 0}}), "")
+                replicas = 0 if self.existing_replicas is None else self.existing_replicas
+                return CommandResult(0, self.deployment_json(replicas=replicas), "")
+            replicas = 0 if self.existing_replicas is None else self.existing_replicas
+            return CommandResult(0, self.deployment_json(replicas=replicas), "")
         if remote[:3] == ("kubectl", "get", "pods"):
-            return CommandResult(0, json.dumps({"items": []}), "")
+            return CommandResult(0, json.dumps({"items": self.pods}), "")
         if remote[:3] == ("helm", "upgrade", "--install"):
+            self.deployment_exists = True
+            self.existing_replicas = 0
             return CommandResult(0, "Release staged\n", "")
+        if remote[:3] == ("kubectl", "label", "deployment/srsran-gnb"):
+            assignment = next(
+                item for item in remote if item.startswith(f"{DEPLOYMENT_RUN_LABEL}=")
+            )
+            key, assigned = assignment.split("=", 1)
+            self.labels[key] = assigned
+            return CommandResult(0, "", "")
+        if remote[:3] == ("kubectl", "annotate", "deployment/srsran-gnb"):
+            for item in remote:
+                if item.startswith("synthran.io/") and "=" in item:
+                    key, assigned = item.split("=", 1)
+                    self.annotations[key] = assigned
+            return CommandResult(0, "", "")
+        if remote[:3] == ("kubectl", "scale", "deployment/srsran-gnb"):
+            if "--replicas=0" in remote:
+                self.existing_replicas = 0
+                self.pods = []
+                return CommandResult(0, "", "")
+            if "--replicas=1" in remote:
+                self.existing_replicas = 1
+                self.pods = [self.ready_pod()]
+                return CommandResult(0, "", "")
         raise AssertionError(f"unexpected remote command: {remote}")
 
 
@@ -344,48 +423,77 @@ class R2LabStoppedPhysicalStagingTests(unittest.TestCase):
             allocation_id=self.allocation_id,
             package_sha256=artifact.package_sha256,
             values_sha256=artifact.values_sha256,
+            render_sha256=self.render.sha256,
         )
+
+    def stage(
+        self,
+        *,
+        root: Path,
+        artifact: PhysicalChartArtifact,
+        runner: StoppedStagingRunner,
+    ):
+        known_hosts = root / "known_hosts"
+        known_hosts.write_text("sopnode-f2 ssh-ed25519 AAAATEST\n", encoding="utf-8")
+        result = execute_stopped_physical_staging(
+            lock=self.lock,
+            artifact=artifact,
+            render_evidence=self.render,
+            run_id=self.run_id,
+            owner=self.owner,
+            reservation_id=self.reservation_id,
+            allocation_id=self.allocation_id,
+            known_hosts=known_hosts,
+            now=self.now,
+            runner=runner,
+        )
+        return result, known_hosts
 
     def test_staging_requires_authority_transfers_exact_artifact_and_stays_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             artifact = self.make_artifact(root)
-            known_hosts = root / "known_hosts"
-            known_hosts.write_text("sopnode-f2 ssh-ed25519 AAAATEST\n", encoding="utf-8")
             runner = self.make_runner(artifact)
-
-            result = execute_stopped_physical_staging(
-                lock=self.lock,
-                artifact=artifact,
-                render_evidence=self.render,
-                run_id=self.run_id,
-                owner=self.owner,
-                reservation_id=self.reservation_id,
-                allocation_id=self.allocation_id,
-                known_hosts=known_hosts,
-                now=self.now,
-                runner=runner,
-            )
+            result, _ = self.stage(root=root, artifact=artifact, runner=runner)
 
         payload = result.to_dict()
         self.assertEqual("staged-stopped", payload["status"])
         self.assertFalse(payload["hardware_mutation"])
         self.assertTrue(payload["namespace_owned"])
+        self.assertTrue(payload["deployment_bound"])
         self.assertEqual(0, payload["desired_replicas"])
         self.assertEqual(0, payload["gnb_pod_count"])
         self.assertEqual(artifact.package_sha256, payload["package_sha256"])
         self.assertEqual(artifact.values_sha256, payload["values_sha256"])
         self.assertEqual(self.render.sha256, payload["render_sha256"])
+        self.assertEqual(self.run_id, runner.labels[DEPLOYMENT_RUN_LABEL])
+        self.assertEqual(self.run_id, runner.annotations[DEPLOYMENT_RUN_ANNOTATION])
+        self.assertEqual(
+            artifact.package_sha256,
+            runner.annotations[DEPLOYMENT_PACKAGE_ANNOTATION],
+        )
+        self.assertEqual(
+            artifact.values_sha256,
+            runner.annotations[DEPLOYMENT_VALUES_ANNOTATION],
+        )
+        self.assertEqual(
+            self.render.sha256,
+            runner.annotations[DEPLOYMENT_RENDER_ANNOTATION],
+        )
 
         command_text = "\n".join(" ".join(command) for command in runner.commands)
         self.assertIn("StrictHostKeyChecking=yes", command_text)
         self.assertIn("helm upgrade --install", command_text)
+        self.assertIn("kubectl label deployment/srsran-gnb", command_text)
+        self.assertIn("kubectl annotate deployment/srsran-gnb", command_text)
         self.assertNotIn("--replicas=1", command_text)
         self.assertNotIn("rhubarbe", command_text)
         self.assertNotIn("qfit", command_text)
         self.assertNotIn("all-off", command_text)
         allocation_queries = [
-            command for command in runner.commands if command[:3] == ("pos", "allocations", "show")
+            command
+            for command in runner.commands
+            if command[:3] == ("pos", "allocations", "show")
         ]
         self.assertEqual(4, len(allocation_queries))
 
@@ -412,7 +520,9 @@ class R2LabStoppedPhysicalStagingTests(unittest.TestCase):
                     runner=runner,
                 )
 
-        self.assertFalse(any(command and command[0] in {"ssh", "scp"} for command in runner.commands))
+        self.assertFalse(
+            any(command and command[0] in {"ssh", "scp"} for command in runner.commands)
+        )
 
     def test_staging_refuses_running_existing_gnb_before_helm_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -439,7 +549,11 @@ class R2LabStoppedPhysicalStagingTests(unittest.TestCase):
 
         remote_commands = [runner.remote(command) for command in runner.commands]
         self.assertFalse(
-            any(remote is not None and remote[:3] == ("helm", "upgrade", "--install") for remote in remote_commands)
+            any(
+                remote is not None
+                and remote[:3] == ("helm", "upgrade", "--install")
+                for remote in remote_commands
+            )
         )
 
     def test_staging_refuses_remote_digest_mismatch_before_helm_write(self) -> None:
@@ -467,7 +581,153 @@ class R2LabStoppedPhysicalStagingTests(unittest.TestCase):
 
         remote_commands = [runner.remote(command) for command in runner.commands]
         self.assertFalse(
-            any(remote is not None and remote[:3] == ("helm", "upgrade", "--install") for remote in remote_commands)
+            any(
+                remote is not None
+                and remote[:3] == ("helm", "upgrade", "--install")
+                for remote in remote_commands
+            )
+        )
+
+    def test_authorized_start_rechecks_claim_and_staged_binding_before_scale_one(self) -> None:
+        run_id = self.run_id
+        selection = R2LabSelection.build(
+            slice_name="oulu_user",
+            radio="n300",
+            ue="qfit07",
+        )
+        provider = SmokeRunner()
+        plan = build_plan(run_id=run_id, selection=selection)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_root = root / "r2lab"
+            execute_prepare(
+                plan=plan,
+                run_root=run_root,
+                runner=provider,
+                sleeper=lambda _: None,
+                reachability_attempts=1,
+            )
+            artifact = self.make_artifact(root)
+            cluster = self.make_runner(artifact)
+            staging, known_hosts = self.stage(
+                root=root,
+                artifact=artifact,
+                runner=cluster,
+            )
+            provider.commands.clear()
+            cluster.commands.clear()
+
+            started = execute_physical_gnb_start(
+                run_id=run_id,
+                slice_name="oulu_user",
+                staging=staging,
+                owner=self.owner,
+                reservation_id=self.reservation_id,
+                allocation_id=self.allocation_id,
+                known_hosts=known_hosts,
+                now=self.now,
+                run_root=run_root,
+                r2lab_runner=provider,
+                cluster_runner=cluster,
+                sleeper=lambda _: None,
+                timeout_seconds=30,
+            )
+
+        payload = started.to_dict()
+        self.assertEqual("gnb-started", payload["status"])
+        self.assertTrue(payload["started_exactly_one"])
+        self.assertTrue(payload["hardware_mutation"])
+        self.assertEqual(1, payload["maximum_observed_pods"])
+        self.assertEqual(staging.package_sha256, payload["package_sha256"])
+        self.assertEqual(staging.values_sha256, payload["values_sha256"])
+        self.assertEqual(staging.render_sha256, payload["render_sha256"])
+        self.assertEqual(64, len(payload["claim_sha256"]))
+
+        provider_remote = provider.remote_commands
+        self.assertGreaterEqual(
+            provider_remote.count(("rhubarbe", "leases", "--check")), 2
+        )
+        self.assertGreaterEqual(
+            provider_remote.count(("rhubarbe", "pdu", "status", "n300")), 2
+        )
+        cluster_remote = [cluster.remote(command) for command in cluster.commands]
+        scale_one = [
+            remote
+            for remote in cluster_remote
+            if remote is not None and "--replicas=1" in remote
+        ]
+        self.assertEqual(1, len(scale_one))
+        self.assertEqual(1, len(cluster.pods))
+
+    def test_authorized_start_never_scales_up_after_claim_changes(self) -> None:
+        run_id = self.run_id
+        selection = R2LabSelection.build(
+            slice_name="oulu_user",
+            radio="n300",
+            ue="qfit07",
+        )
+        provider = SmokeRunner()
+        plan = build_plan(run_id=run_id, selection=selection)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_root = root / "r2lab"
+            execute_prepare(
+                plan=plan,
+                run_root=run_root,
+                runner=provider,
+                sleeper=lambda _: None,
+                reachability_attempts=1,
+            )
+            artifact = self.make_artifact(root)
+            cluster = self.make_runner(artifact)
+            staging, known_hosts = self.stage(
+                root=root,
+                artifact=artifact,
+                runner=cluster,
+            )
+
+            calls = 0
+
+            def changing_provider(command, timeout_seconds: int) -> CommandResult:
+                nonlocal calls
+                result = provider(command, timeout_seconds)
+                remote = provider.remote(tuple(command))
+                if remote == ("rhubarbe", "leases", "--check"):
+                    calls += 1
+                    if calls == 2:
+                        claim = json.loads(
+                            (run_root / "active.json").read_text(encoding="utf-8")
+                        )
+                        claim["created_at_utc"] = "2026-08-22T13:59:59Z"
+                        (run_root / "active.json").write_text(
+                            json.dumps(claim, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                return result
+
+            cluster.commands.clear()
+            with self.assertRaisesRegex(Exception, "safety boundary"):
+                execute_physical_gnb_start(
+                    run_id=run_id,
+                    slice_name="oulu_user",
+                    staging=staging,
+                    owner=self.owner,
+                    reservation_id=self.reservation_id,
+                    allocation_id=self.allocation_id,
+                    known_hosts=known_hosts,
+                    now=self.now,
+                    run_root=run_root,
+                    r2lab_runner=changing_provider,
+                    cluster_runner=cluster,
+                    sleeper=lambda _: None,
+                    timeout_seconds=30,
+                )
+
+        cluster_remote = [cluster.remote(command) for command in cluster.commands]
+        self.assertFalse(
+            any(remote is not None and "--replicas=1" in remote for remote in cluster_remote)
         )
 
 
