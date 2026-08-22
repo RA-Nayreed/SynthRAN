@@ -6,3 +6,4 @@ stable public surface.
 """
 
 from synthran.r2lab.controller import *  # noqa: F403
+from synthran.r2lab.runtime import *  # noqa: F403
