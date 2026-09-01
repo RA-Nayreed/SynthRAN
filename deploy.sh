@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; DRY_RUN=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
     -n|--no-input) NO_INPUT=true; shift ;;
+    -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--no-input] [--dry-run]"; echo "Without options, deployment choices are prompted interactively."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--no-input] [--no-reservation] [--dry-run]"; echo "Without options, deployment choices are prompted interactively."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -64,23 +65,40 @@ if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
     SELECTED_R2LAB_USERNAME=""
   fi
 
+  if command -v pos >/dev/null; then
+    echo
+    echo "Available SOP nodes:"
+    pos nodes list || true
+    echo
+  fi
   read -r -p "Core node [sopnode-f2]: " SELECTED_CORE_NODE; SELECTED_CORE_NODE=${SELECTED_CORE_NODE:-sopnode-f2}
   read -r -p "RAN node [sopnode-f3]: " SELECTED_RAN_NODE; SELECTED_RAN_NODE=${SELECTED_RAN_NODE:-sopnode-f3}
   read -r -p "Broker node [$SELECTED_CORE_NODE]: " SELECTED_BROKER_NODE; SELECTED_BROKER_NODE=${SELECTED_BROKER_NODE:-$SELECTED_CORE_NODE}
   read -r -p "5G profile [default]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-default}
+  read -r -p "Reserve and reimage selected SOP nodes? [Y/n]: " RESERVE_CHOICE
+  if [[ "${RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]]; then
+    SELECTED_RESERVE=false
+  else
+    SELECTED_RESERVE=true
+    read -r -p "Reservation duration in minutes [120]: " SELECTED_DURATION; SELECTED_DURATION=${SELECTED_DURATION:-120}
+    [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
+    read -r -p "POS image [ubuntu-jammy]: " SELECTED_POS_IMAGE; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
+  fi
+  SELECTED_DURATION=${SELECTED_DURATION:-120}; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
   if [[ "$SELECTED_PLATFORM" == rfsim ]]; then DEFAULT_UES="uesim01,uesim02"; else DEFAULT_UES="qhat01"; fi
   read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES; SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" <<'PY'
+  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" <<'PY'
 import copy, sys, yaml
 from pathlib import Path
-source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username = sys.argv[1:]
+source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image = sys.argv[1:]
 scenario = yaml.safe_load(Path(source).read_text())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 if not ues: raise SystemExit('At least one UE is required')
 if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUEs')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
+scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
 defaults = list(scenario['devices'].values())
 scenario['devices'] = {name: copy.deepcopy(defaults[index % len(defaults)]) for index, name in enumerate(ues)}
@@ -95,6 +113,7 @@ PY
   echo "  Broker:   $SELECTED_BROKER_NODE"
   echo "  UEs:      $SELECTED_UES"
   echo "  Profile:  $SELECTED_PROFILE"
+  echo "  POS:      $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
@@ -115,6 +134,35 @@ variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsi
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
+
+if ! $NO_RESERVATION; then
+  mapfile -t POS_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
+import sys, yaml
+from pathlib import Path
+d = yaml.safe_load(Path(sys.argv[1]).read_text())['deployment']
+r = d.get('reservation', {})
+print('true' if r.get('enabled', True) else 'false')
+print(int(r.get('duration_minutes', 120)))
+print(r.get('image', 'ubuntu-jammy'))
+for node in dict.fromkeys(d['nodes'].values()): print(node)
+PY
+  )
+  if [[ "${POS_SETTINGS[0]}" == true ]]; then
+    command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
+    POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
+    echo "Allocating SOP nodes for ${POS_DURATION} minutes: ${POS_NODES[*]}"
+    pos allocations allocate --duration "$POS_DURATION" "${POS_NODES[@]}" 2>&1 | tee "$RUN_DIR/pos-allocation.log"
+    for node in "${POS_NODES[@]}"; do
+      echo "Selecting image $POS_IMAGE on $node"
+      pos nodes image "$node" "$POS_IMAGE" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+    done
+    for node in "${POS_NODES[@]}"; do
+      echo "Resetting $node"
+      pos nodes reset --non-blocking "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+    done
+  fi
+fi
+
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 ansible-galaxy collection install -r deployment/collections/requirements.yml
 ansible-playbook -i "$RUN_DIR/inventory.ini" \

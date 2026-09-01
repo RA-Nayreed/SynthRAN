@@ -5,6 +5,7 @@ deployment:
   profile: default
   nodes: {core: sopnode-f2, ran: sopnode-f3, broker: sopnode-f2}
   ues: [uesim01, uesim02]
+  reservation: {enabled: true, duration_minutes: 120, image: ubuntu-jammy}
 model:
   seed: 1
   duration_seconds: 10

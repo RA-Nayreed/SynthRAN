@@ -7,7 +7,8 @@ propagation, packet analysis, and capacitor/controller primitives remain
 available under `synthran.model` for standalone studies.
 
 The primary interface is one interactive command. It prompts for the core, RAN,
-platform, radio unit, nodes, profile, and UEs; creates or reuses `.venv`;
+platform, radio unit, currently available nodes, profile, UEs, POS reservation
+duration, and node image; creates or reuses `.venv`;
 generates the immutable energy-aware trace; deploys the network; maps devices to
 UE tunnels; replays MQTT; and reconciles the JSONL artifacts:
 
@@ -24,7 +25,9 @@ run is available without deploying infrastructure:
 ```
 
 Use `--config scenarios/<name>.yml` for reproducible non-interactive execution,
-or `--no-input` to run the default reference scenario without prompts.
+or `--no-input` to run the default reference scenario without prompts. Use
+`--no-reservation` only when the selected SOP nodes are already allocated,
+imaged, booted, and reachable.
 
 Operational failures stop deployment and retain the run directory; delivery
 gaps are summarized as experiment results rather than deployment failures.
