@@ -12,9 +12,9 @@ def replay(trace, broker, port=1883, qos=1, interface=None, start_utc=None, outp
     if interface:
         output_ip = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", interface], check=True, capture_output=True, text=True).stdout
         bind_address = output_ip.split("inet ", 1)[1].split("/", 1)[0]
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, bind_address=bind_address)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_publish = lambda _c, _u, mid, _reason, _props: acknowledgements.add(mid)
-    client.connect(broker, int(port)); client.loop_start()
+    client.connect(broker, int(port), bind_address=bind_address); client.loop_start()
     start = datetime.fromisoformat(start_utc.replace("Z", "+00:00")).timestamp() if start_utc else time.time()
     for event in events:
         wait = start + float(event["time_offset_s"]) - time.time()
