@@ -199,15 +199,9 @@ PY
       fi
       POS_LAST_ERROR=$POS_OUTPUT
       if [[ "$POS_OUTPUT" == *"already allocated"* ]]; then
-        echo "Nodes already allocated; attempting to reuse and extend the current allocation"
-        for ((extension=candidate; extension>=10; extension-=10)); do
-          if POS_OUTPUT=$(pos allocations add "${POS_NODES[@]}" --duration "$extension" 2>&1); then
-            POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION=$extension
-            printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
-            break 2
-          fi
-          POS_LAST_ERROR=$POS_OUTPUT
-        done
+        POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION="existing reservation"
+        printf '%s\n' "$POS_OUTPUT" > "$RUN_DIR/pos-allocation.log"
+        echo "Nodes are already allocated; reusing the active reservation"
         break
       fi
       [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
@@ -217,7 +211,11 @@ PY
       echo "Unable to allocate or extend these nodes; they may belong to another user" >&2
       exit 1
     fi
-    echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
+    if $POS_REUSED; then
+      echo "POS allocation ready using the existing reservation"
+    else
+      echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
+    fi
     if $POS_REUSED; then
       echo "Reusing existing node state; skipping image selection and reset"
     else
