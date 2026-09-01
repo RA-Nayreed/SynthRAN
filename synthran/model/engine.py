@@ -47,7 +47,11 @@ class EnergyWorkloadModel:
                     if self.scheduler_hook: allowed = bool(self.scheduler_hook(name, now, allowed))
                     record = {"time_offset_s": now, "device": name, "voltage_v": state.voltage_v, "required_energy_j": required, "available_energy_j": available}
                     if allowed:
-                        sequence = sum(e["device"] == name for e in events); event_id = hashlib.sha256(f"{name}:{now}:{sequence}".encode()).hexdigest()[:20]; payload = {"event_id": event_id, "device": name, "sequence": sequence, "modeled_time_s": now, "value": self.random.randint(100, 255)}; encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")); record.update({"topic": f'{self.scenario["mqtt"].get("topic_prefix", "synthran")}/{name}', "payload": encoded, "event_id": event_id}); events.append(record); state.consumed_j += required; state.voltage_v = math.sqrt(max(0., state.voltage_v**2 - 2 * required / capacitance))
+                        sequence = sum(e["device"] == name for e in events); event_id = hashlib.sha256(f"{name}:{now}:{sequence}".encode()).hexdigest()[:20]; payload = {"event_id": event_id, "device": name, "sequence": sequence, "modeled_time_s": now, "value": self.random.randint(100, 255)}
+                        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")); requested_bytes = int(self.scenario["mqtt"].get("payload_bytes", 0))
+                        if requested_bytes > len(encoded.encode("utf-8")) + 13:
+                            payload["padding"] = "x" * (requested_bytes - len(encoded.encode("utf-8")) - 13); encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+                        record.update({"topic": f'{self.scenario["mqtt"].get("topic_prefix", "synthran")}/{name}', "payload": encoded, "event_id": event_id}); events.append(record); state.consumed_j += required; state.voltage_v = math.sqrt(max(0., state.voltage_v**2 - 2 * required / capacitance))
                     else: record["reason"] = "controller_sleeping" if state.state != "ready" else "insufficient_energy"; suppressed.append(record)
                 histories[name].append({"time_s": now, "voltage_v": state.voltage_v, "harvested_energy_j": state.harvested_j, "consumed_energy_j": state.consumed_j, "controller_state": state.state})
         return {"events": events, "suppressed": suppressed, "histories": histories, "transitions": transitions}

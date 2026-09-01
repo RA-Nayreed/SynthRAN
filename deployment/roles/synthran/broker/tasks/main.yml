@@ -1,29 +1,48 @@
 ---
+- name: Install broker and Python runtime
+  package:
+    name: [mosquitto, python3, python3-pip, python3-venv]
+    state: present
 - name: Copy SynthRAN package
   copy: {src: "{{ playbook_dir }}/../../synthran", dest: /opt/synthran-source/}
 - name: Copy package metadata
   copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /opt/synthran-source/pyproject.toml}
+- name: Create isolated SynthRAN runtime
+  command: python3 -m venv /opt/synthran-venv
+  args: {creates: /opt/synthran-venv/bin/python}
 - name: Install SynthRAN runtime
-  pip: {name: /opt/synthran-source, executable: pip3}
-- name: Install broker and Python MQTT client
-  package: {name: "{{ item }}", state: present}
-  loop: [mosquitto, python3-paho-mqtt]
+  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check /opt/synthran-source
+- name: Configure N6-side MQTT listener
+  copy:
+    dest: /etc/mosquitto/conf.d/synthran.conf
+    content: |
+      listener {{ mqtt_port }} 0.0.0.0
+      allow_anonymous true
+  notify: Restart Mosquitto
 - name: Create artifact directory
   file: {path: /var/log/synthran, state: directory, mode: '0755'}
 - name: Initialize receipt artifact
-  copy: {content: "", dest: /var/log/synthran/receipts.jsonl, force: false}
-- name: Start broker
+  copy: {content: "", dest: /var/log/synthran/receipts.jsonl, force: true}
+- name: Start broker before collector
   service: {name: mosquitto, state: started, enabled: true}
+- name: Apply pending broker configuration
+  meta: flush_handlers
+- name: Wait for N6-side broker listener
+  wait_for: {host: 127.0.0.1, port: "{{ mqtt_port }}", timeout: 30}
 - name: Install receipt collector unit
   copy:
     dest: /etc/systemd/system/synthran-collector.service
     content: |
       [Unit]
       After=mosquitto.service
+      Requires=mosquitto.service
       [Service]
-      ExecStart=/usr/bin/python3 -m synthran.cli workload collect --output /var/log/synthran/receipts.jsonl
+      ExecStart=/opt/synthran-venv/bin/python -m synthran.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts.jsonl
       Restart=on-failure
       [Install]
       WantedBy=multi-user.target
 - name: Start receipt collector
-  systemd: {name: synthran-collector, daemon_reload: true, state: started, enabled: true}
+  systemd: {name: synthran-collector, daemon_reload: true, state: restarted, enabled: true}
+- name: Verify receipt collector is active
+  command: systemctl is-active synthran-collector
+  changed_when: false

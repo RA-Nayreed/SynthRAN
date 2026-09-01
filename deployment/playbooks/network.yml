@@ -1,7 +1,7 @@
 ---
 - hosts: sopnodes
   become: true
-  roles: [setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/k8s/k8s_env]
+  roles: [setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/k8s/k8s_env, setup/ovs]
 - hosts: core_node
   become: true
   roles: [setup/k8s/cluster_create, setup/k8s/remove_cp_taint, setup/cni, setup/storage]
@@ -9,6 +9,14 @@
   become: true
   roles:
     - {role: setup/k8s/cluster_join, when: "inventory_hostname != groups['core_node'][0]"}
+- hosts: core_node
+  become: true
+  roles:
+    - {role: setup/gre_tunnel, when: bridge_enabled}
+- hosts: ran_node
+  become: true
+  roles:
+    - {role: setup/gre_tunnel, when: bridge_enabled}
 - hosts: core_node
   roles:
     - {role: 5g/open5gs/config, when: "core == 'open5gs'"}

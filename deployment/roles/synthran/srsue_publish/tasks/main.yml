@@ -1,0 +1,143 @@
+---
+- name: Resolve the broker's N6-reachable address
+  set_fact:
+    synthran_effective_broker_address: >-
+      {{ mqtt_broker_address if mqtt_broker_address else
+         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+
+- name: Locate the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} get pods -n {{ ran_ns | default(core) }}
+    -l app=srsran,component=ue -o jsonpath={.items[0].metadata.name}
+  register: synthran_ue_pod
+  changed_when: false
+  failed_when: synthran_ue_pod.stdout == ''
+
+- name: Wait for every mapped srsUE tunnel and PDU address
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- sh -lc
+    "ip -4 -o addr show dev {{ item.interface }} | grep -q ' inet '"
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }} -> {{ item.interface }}"}
+  register: synthran_tunnel_wait
+  changed_when: false
+  retries: 90
+  delay: 2
+  until: synthran_tunnel_wait.rc == 0
+
+- name: Route each publisher source address through its own srsUE tunnel
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- sh -lc
+    "src=$(ip -4 -o addr show dev {{ item.interface }} | awk '{print $4}' | cut -d/ -f1);
+    ip rule del priority {{ 1000 + item.index }} 2>/dev/null || true;
+    ip rule add priority {{ 1000 + item.index }} from $src/32 table {{ 100 + item.index }};
+    ip route replace default dev {{ item.interface }} table {{ 100 + item.index }}"
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }} source policy via {{ item.interface }}"}
+  changed_when: true
+
+- name: Reset runtime staging directory on the RAN node
+  file: {path: /tmp/synthran-build, state: absent}
+- name: Stage SynthRAN runtime on the RAN node
+  copy: {src: "{{ playbook_dir }}/../../synthran", dest: /tmp/synthran-build/}
+- name: Stage package metadata on the RAN node
+  copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /tmp/synthran-build/pyproject.toml}
+- name: Stage immutable energy-ready trace on the RAN node
+  copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
+
+- name: Copy runtime into the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} cp -n {{ ran_ns | default(core) }}
+    /tmp/synthran-build/. {{ synthran_ue_pod.stdout }}:/opt/synthran-runtime
+- name: Copy trace into the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} cp -n {{ ran_ns | default(core) }}
+    /tmp/synthran-events.jsonl {{ synthran_ue_pod.stdout }}:/opt/synthran-events.jsonl
+- name: Create an isolated runtime inside the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- python3 -m venv /opt/synthran-venv
+- name: Install the runtime inside the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- /opt/synthran-venv/bin/pip install --disable-pip-version-check /opt/synthran-runtime
+
+- name: Choose one shared UTC replay start after UE attachment
+  set_fact:
+    synthran_replay_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Replay each device through its assigned srsUE tunnel
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- /opt/synthran-venv/bin/python -m synthran.cli workload replay
+    --trace /opt/synthran-events.jsonl
+    --device {{ item.device }}
+    --broker {{ synthran_effective_broker_address }}
+    --port {{ mqtt_port }}
+    --qos {{ mqtt_qos }}
+    --interface {{ item.interface }}
+    --start-utc {{ synthran_replay_start_utc }}
+    --output /var/log/synthran-publisher-{{ item.device }}.jsonl
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }} via {{ item.interface }}"}
+  async: "{{ ((mqtt_start_delay_seconds | int) + 3600) }}"
+  poll: 0
+  register: synthran_publish_jobs
+
+- name: Wait for all device publishers
+  async_status: {jid: "{{ item.ansible_job_id }}"}
+  loop: "{{ synthran_publish_jobs.results }}"
+  loop_control: {label: "{{ item.item.device }}"}
+  register: synthran_publish_status
+  until: synthran_publish_status.finished
+  retries: 720
+  delay: 5
+
+- name: Read publisher JSONL from the srsUE pod
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- cat /var/log/synthran-publisher-{{ item.device }}.jsonl
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }}"}
+  register: synthran_publisher_artifacts
+  changed_when: false
+
+- name: Save publisher JSONL in the run directory
+  delegate_to: localhost
+  become: false
+  copy:
+    content: "{{ item.stdout }}{{ '\n' if item.stdout else '' }}"
+    dest: "{{ run_dir }}/publisher-{{ item.item.device }}.jsonl"
+  loop: "{{ synthran_publisher_artifacts.results }}"
+  loop_control: {label: "{{ item.item.device }}"}
+
+- name: Read srsUE logs
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ synthran_ue_pod.stdout }} -- cat /var/log/ue{{ item.index }}.log
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }}"}
+  register: synthran_srsue_logs
+  changed_when: false
+
+- name: Save srsUE logs in the run directory
+  delegate_to: localhost
+  become: false
+  copy:
+    content: "{{ item.stdout }}{{ '\n' if item.stdout else '' }}"
+    dest: "{{ run_dir }}/srsue-{{ item.item.device }}.log"
+  loop: "{{ synthran_srsue_logs.results }}"
+  loop_control: {label: "{{ item.item.device }}"}
+
+- name: Read srsRAN gNB log
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} exec -n {{ ran_ns | default(core) }}
+    {{ gnb_pod_name_result.stdout }} -c gnb-logs -- cat /var/log/gnb.log
+  register: synthran_gnb_log
+  changed_when: false
+- name: Save srsRAN gNB log in the run directory
+  delegate_to: localhost
+  become: false
+  copy: {content: "{{ synthran_gnb_log.stdout }}\n", dest: "{{ run_dir }}/srsran-gnb.log"}

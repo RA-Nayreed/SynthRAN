@@ -6,23 +6,28 @@ UE interfaces. Simulated backscatter, protocol scheduling, collisions, SIC,
 propagation, packet analysis, and capacitor/controller primitives remain
 available under `synthran.model` for standalone studies.
 
-Generate a headless model run:
+The primary interface is one interactive command. It prompts for the core, RAN,
+platform, radio unit, nodes, profile, and UEs; creates or reuses `.venv`;
+generates the immutable energy-aware trace; deploys the network; maps devices to
+UE tunnels; replays MQTT; and reconciles the JSONL artifacts:
 
 ```sh
-python -m synthran.cli model run --config scenarios/reference.yml --output results/example/model
+./deploy.sh
 ```
 
-Replay its immutable trace through a UE tunnel:
+For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly
+to `tun_srsue1`, `tun_srsue2`, and `tun_srsue3` inside the srsUE pod. A preparation-only
+run is available without deploying infrastructure:
 
 ```sh
-synthran workload replay --trace results/example/model/events.jsonl \
-  --broker 10.45.0.1 --interface uesimtun0 --start-utc 2026-09-01T12:00:00Z
+./deploy.sh --dry-run
 ```
 
-Run the complete deployment workflow with `./deploy.sh --config
-scenarios/reference.yml`. Operational failures stop deployment and retain the
-run directory; delivery gaps are summarized as experiment results rather than
-deployment failures.
+Use `--config scenarios/<name>.yml` for reproducible non-interactive execution,
+or `--no-input` to run the default reference scenario without prompts.
+
+Operational failures stop deployment and retain the run directory; delivery
+gaps are summarized as experiment results rather than deployment failures.
 
 The deployment matrix retains OAI, Open5GS, Free5GC, OAI RAN, srsRAN,
 UERANSIM, RF simulation, and physical R2Lab adapters. Supported UE interfaces

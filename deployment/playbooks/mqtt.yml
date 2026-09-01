@@ -2,11 +2,24 @@
 - hosts: broker_node
   become: true
   roles: [synthran/broker]
-- hosts: ues
+- hosts: ran_node
+  roles:
+    - role: synthran/srsue_publish
+      when: ran | lower == 'srsran' and platform == 'rfsim'
+- hosts: physical_ues
   become: true
-  roles: [synthran/publisher]
+  roles:
+    - role: synthran/publisher
+      when: platform in ['r2lab', 'physical']
 - hosts: broker_node
   become: true
   tasks:
+    - name: Stop receipt collector to flush its artifact
+      systemd: {name: synthran-collector, state: stopped}
     - name: Fetch broker receipts
       fetch: {src: /var/log/synthran/receipts.jsonl, dest: "{{ run_dir }}/broker.jsonl", flat: true}
+    - name: Collect broker and receipt-collector logs
+      shell: journalctl -u mosquitto -u synthran-collector --no-pager > /var/log/synthran/services.log
+      changed_when: false
+    - name: Fetch broker and receipt-collector logs
+      fetch: {src: /var/log/synthran/services.log, dest: "{{ run_dir }}/broker-services.log", flat: true}

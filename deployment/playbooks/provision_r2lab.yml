@@ -1,16 +1,7 @@
 ---
-- name: Cleanup R2Lab
+- name: Prepare the selected R2Lab radio unit
   hosts: faraday
-  roles:
-    - role: r2lab/cleanup
-      when: not no_r2lab_cleanup | default(false)
-
-- name: Power ON RRU on R2Lab
-  hosts: faraday
+  gather_facts: false
   roles:
     - role: r2lab/rru
-
-- name: Setup UEs on R2Lab
-  hosts: faraday
-  roles:
-    - role: r2lab/ue/setup
+      when: platform == 'r2lab'

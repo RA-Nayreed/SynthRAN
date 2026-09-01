@@ -144,7 +144,7 @@
                     mkdir -p /dev/net
                     if [ ! -c /dev/net/tun ]; then mknod /dev/net/tun c 10 200; fi
                     ip route del default dev n3 || true
-                    apt update && apt install -y iproute2 tmux
+                    apt update && apt install -y iproute2 tmux python3 python3-pip python3-venv
                     sleep infinity
                 env:
                   - name: PATH
