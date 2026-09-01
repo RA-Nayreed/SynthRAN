@@ -154,7 +154,16 @@ elif d['platform'] == 'physical':
     physical_hosts = ues
 else:
     physical_hosts = []
-def host_entry(name): return f'{name} ip={socket.gethostbyname(name)}'
+storage_by_node = {
+    'sopnode-f1': 'sda2',
+    'sopnode-f2': 'sda2',
+    'sopnode-f3': 'sda2',
+    'sopnode-w3': 'sdb2',
+}
+def host_entry(name):
+    try: storage = storage_by_node[name]
+    except KeyError: raise SystemExit(f'No validated containerd storage mapping for {name}')
+    return f'{name} ip={socket.gethostbyname(name)} storage={storage}'
 faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}"] if d['platform']=='r2lab' else []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node','broker_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')

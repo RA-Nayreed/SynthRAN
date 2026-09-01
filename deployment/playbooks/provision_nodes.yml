@@ -6,3 +6,18 @@
     - name: Wait for SSH after POS boot completion
       wait_for_connection: {connect_timeout: 10, sleep: 5, timeout: 180}
     - setup:
+    - name: Verify mapped containerd storage device exists
+      stat: {path: "/dev/{{ storage }}"}
+      register: synthran_storage_device
+    - name: Stop before provisioning when storage mapping is invalid
+      assert:
+        that: synthran_storage_device.stat.exists
+        fail_msg: "Mapped containerd storage /dev/{{ storage }} does not exist on {{ inventory_hostname }}"
+    - name: Read mapped storage filesystem type
+      command: "blkid -s TYPE -o value /dev/{{ storage }}"
+      register: synthran_storage_fstype
+      changed_when: false
+    - name: Require ext4 containerd storage
+      assert:
+        that: synthran_storage_fstype.stdout == 'ext4'
+        fail_msg: "Mapped storage /dev/{{ storage }} on {{ inventory_hostname }} is not ext4"
