@@ -1,24 +1,29 @@
 ---
 - hosts: broker_node
   become: true
+  any_errors_fatal: true
   roles: [synthran/broker]
 - hosts: localhost
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Choose one shared UTC start for physical UE publishers
       set_fact:
         synthran_physical_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
 - hosts: ran_node
+  any_errors_fatal: true
   roles:
     - role: synthran/software_ue_publish
       when: platform == 'rfsim' and ran | lower in ['srsran', 'ueransim', 'oai']
 - hosts: physical_ues
   become: true
+  any_errors_fatal: true
   roles:
     - role: synthran/publisher
       when: platform in ['r2lab', 'physical']
 - hosts: broker_node
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Stop receipt collector to flush its artifact
       systemd: {name: synthran-collector, state: stopped}

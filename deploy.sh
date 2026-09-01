@@ -121,6 +121,7 @@ scenario = yaml.safe_load(Path(source).read_text())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 if not ues: raise SystemExit('At least one UE is required')
 if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUEs')
+if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
 scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
@@ -148,6 +149,7 @@ import os, socket, sys, yaml
 from pathlib import Path
 c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
 if d['ran'].lower() == 'srsran' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUE devices')
+if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit('UERANSIM cannot be combined with an R2Lab physical radio')
 if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     physical_hosts = [f"{ue} ansible_user=root ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'" for ue in ues]
@@ -155,18 +157,10 @@ elif d['platform'] == 'physical':
     physical_hosts = ues
 else:
     physical_hosts = []
-storage_by_node = {
-    'sopnode-f1': 'sda2',
-    'sopnode-f2': 'sda2',
-    'sopnode-f3': 'sda2',
-    'sopnode-w3': 'sdb2',
-}
 def host_entry(name):
-    try: storage = storage_by_node[name]
-    except KeyError: raise SystemExit(f'No validated containerd storage mapping for {name}')
-    return f'{name} ip={socket.gethostbyname(name)} storage={storage}'
+    return f'{name} ip={socket.gethostbyname(name)}'
 faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}"] if d['platform']=='r2lab' else []
-lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node','broker_node']
+lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
 ue_map=[{'device':name,'index':i+1,'interface':f'tun_srsue{i+1}'} for i,name in enumerate(ues)]
 variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map}
@@ -189,6 +183,7 @@ PY
   if [[ "${POS_SETTINGS[0]}" == true ]]; then
     command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
     POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
+    POS_NODE_SELECTOR=$(IFS=,; echo "${POS_NODES[*]}")
     POS_REUSED=false; POS_RESERVED=false; POS_LAST_ERROR=""
     echo "Requesting up to ${POS_DURATION} minutes for: ${POS_NODES[*]}"
     for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
@@ -199,23 +194,74 @@ PY
       fi
       POS_LAST_ERROR=$POS_OUTPUT
       if [[ "$POS_OUTPUT" == *"already allocated"* ]]; then
-        POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION="existing reservation"
         printf '%s\n' "$POS_OUTPUT" > "$RUN_DIR/pos-allocation.log"
-        echo "Nodes are already allocated; reusing the active reservation"
+        pos calendar list --json > "$RUN_DIR/pos-calendar-before.json"
+        POS_OWNER=${USER:-$(id -un)}
+        pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-owner.json"
+        mapfile -t POS_REFRESH < <("$SYNTHRAN_PYTHON" - \
+          "$RUN_DIR/pos-calendar-before.json" "$RUN_DIR/pos-calendar-owner.json" \
+          "$POS_DURATION" "${POS_NODES[@]}" <<'PY'
+import json, math, sys
+from datetime import datetime
+all_events = json.load(open(sys.argv[1], encoding='utf-8'))
+own_events = json.load(open(sys.argv[2], encoding='utf-8'))
+requested = int(sys.argv[3]); nodes = set(sys.argv[4:]); now = datetime.now()
+def stamp(value): return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+active = [e for e in own_events if nodes <= set(e['nodes']) and stamp(e['start_date']) <= now < stamp(e['end_date'])]
+if len(active) != 1:
+    raise SystemExit(f'Expected one active calendar entry owned by the current user for {sorted(nodes)}, found {len(active)}')
+event = active[0]
+remaining = max(0, math.floor((stamp(event['end_date']) - now).total_seconds() / 60))
+limit = requested
+for other in all_events:
+    if other['id'] == event['id'] or not nodes.intersection(other['nodes']): continue
+    start = stamp(other['start_date'])
+    if start > now: limit = min(limit, math.floor((start - now).total_seconds() / 60))
+print(event['id']); print(remaining); print(max(0, limit))
+PY
+        )
+        POS_EVENT_ID=${POS_REFRESH[0]}; POS_REMAINING=${POS_REFRESH[1]}; POS_AVAILABLE=${POS_REFRESH[2]}
+        if (( POS_REMAINING >= POS_DURATION )); then
+          POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION=$POS_REMAINING
+          echo "Current reservation already covers ${POS_REMAINING} minutes from now"
+        else
+          (( POS_AVAILABLE >= 10 )) || { echo "Less than 10 conflict-free minutes remain for the selected nodes" >&2; exit 1; }
+          echo "Refreshing calendar event ${POS_EVENT_ID}: ${POS_REMAINING} minutes remain; up to ${POS_AVAILABLE} minutes are available from now"
+          pos allocations free "${POS_NODES[0]}" 2>&1 | tee -a "$RUN_DIR/pos-allocation.log"
+          POS_CALENDAR_CREATED=false
+          for ((extension=POS_AVAILABLE; extension>=10; extension-=10)); do
+            if POS_OUTPUT=$(pos calendar create --start now --duration "$extension" "$POS_NODE_SELECTOR" 2>&1); then
+              POS_CALENDAR_CREATED=true; POS_ACTUAL_DURATION=$extension
+              printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
+              break
+            fi
+            POS_LAST_ERROR=$POS_OUTPUT
+          done
+          if ! $POS_CALENDAR_CREATED; then
+            printf '%s\n' "$POS_LAST_ERROR" >&2
+            echo "The old allocation was released, but POS could not create replacement calendar coverage" >&2
+            exit 1
+          fi
+          if ! POS_OUTPUT=$(pos allocations allocate "${POS_NODES[@]}" 2>&1); then
+            printf '%s\n' "$POS_OUTPUT" >&2
+            echo "Calendar coverage was created, but POS could not reallocate the nodes" >&2
+            exit 1
+          fi
+          printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
+          POS_RESERVED=true; POS_REUSED=true
+          pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-after.json"
+          echo "Reservation synchronized to now for ${POS_ACTUAL_DURATION} minutes"
+        fi
         break
       fi
       [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
     done
     if ! $POS_RESERVED; then
       printf '%s\n' "$POS_LAST_ERROR" >&2
-      echo "Unable to allocate or extend these nodes; they may belong to another user" >&2
+      echo "Unable to reserve these nodes for any usable duration; they may belong to another user" >&2
       exit 1
     fi
-    if $POS_REUSED; then
-      echo "POS allocation ready using the existing reservation"
-    else
-      echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
-    fi
+    echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
     if $POS_REUSED; then
       echo "Reusing existing node state; skipping image selection and reset"
     else
@@ -232,6 +278,7 @@ PY
 fi
 
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
+export ANSIBLE_LOG_PATH="$PWD/$RUN_DIR/ansible.log"
 ansible-galaxy collection install -r deployment/collections/requirements.yml
 ansible-playbook -i "$RUN_DIR/inventory.ini" \
   -e "@deployment/group_vars/all/all.yml" \
