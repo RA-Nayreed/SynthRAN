@@ -23,6 +23,25 @@ fi
 "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e .
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 
+choose_sop_node() {
+  local label="$1" default_node="$2" node_choice
+  echo
+  echo "Which node should host the ${label}? (default: ${default_node})"
+  echo "1) sopnode-f1"
+  echo "2) sopnode-f2"
+  echo "3) sopnode-f3"
+  echo "4) sopnode-w3"
+  read -r -p "Enter choice [1-4]: " node_choice
+  case "${node_choice:-}" in
+    "") SELECTED_NODE="$default_node" ;;
+    1) SELECTED_NODE=sopnode-f1 ;;
+    2) SELECTED_NODE=sopnode-f2 ;;
+    3) SELECTED_NODE=sopnode-f3 ;;
+    4) SELECTED_NODE=sopnode-w3 ;;
+    *) echo "Invalid node choice" >&2; exit 2 ;;
+  esac
+}
+
 if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   echo
@@ -65,15 +84,9 @@ if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
     SELECTED_R2LAB_USERNAME=""
   fi
 
-  if command -v pos >/dev/null; then
-    echo
-    echo "Available SOP nodes:"
-    pos nodes list || true
-    echo
-  fi
-  read -r -p "Core node [sopnode-f2]: " SELECTED_CORE_NODE; SELECTED_CORE_NODE=${SELECTED_CORE_NODE:-sopnode-f2}
-  read -r -p "RAN node [sopnode-f3]: " SELECTED_RAN_NODE; SELECTED_RAN_NODE=${SELECTED_RAN_NODE:-sopnode-f3}
-  read -r -p "Broker node [$SELECTED_CORE_NODE]: " SELECTED_BROKER_NODE; SELECTED_BROKER_NODE=${SELECTED_BROKER_NODE:-$SELECTED_CORE_NODE}
+  choose_sop_node "core" "sopnode-f2"; SELECTED_CORE_NODE="$SELECTED_NODE"
+  choose_sop_node "RAN" "sopnode-f3"; SELECTED_RAN_NODE="$SELECTED_NODE"
+  choose_sop_node "broker" "$SELECTED_CORE_NODE"; SELECTED_BROKER_NODE="$SELECTED_NODE"
   read -r -p "5G profile [default]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-default}
   read -r -p "Reserve and reimage selected SOP nodes? [Y/n]: " RESERVE_CHOICE
   if [[ "${RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]]; then
