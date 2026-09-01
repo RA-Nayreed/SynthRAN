@@ -183,7 +183,6 @@ PY
   if [[ "${POS_SETTINGS[0]}" == true ]]; then
     command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
     POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
-    POS_NODE_SELECTOR=$(IFS=,; echo "${POS_NODES[*]}")
     POS_REUSED=false; POS_RESERVED=false; POS_LAST_ERROR=""
     echo "Requesting up to ${POS_DURATION} minutes for: ${POS_NODES[*]}"
     for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
@@ -195,63 +194,26 @@ PY
       POS_LAST_ERROR=$POS_OUTPUT
       if [[ "$POS_OUTPUT" == *"already allocated"* ]]; then
         printf '%s\n' "$POS_OUTPUT" > "$RUN_DIR/pos-allocation.log"
-        pos calendar list --json > "$RUN_DIR/pos-calendar-before.json"
         POS_OWNER=${USER:-$(id -un)}
         pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-owner.json"
-        mapfile -t POS_REFRESH < <("$SYNTHRAN_PYTHON" - \
-          "$RUN_DIR/pos-calendar-before.json" "$RUN_DIR/pos-calendar-owner.json" \
-          "$POS_DURATION" "${POS_NODES[@]}" <<'PY'
+        POS_ACTUAL_DURATION=$("$SYNTHRAN_PYTHON" - \
+          "$RUN_DIR/pos-calendar-owner.json" "${POS_NODES[@]}" <<'PY'
 import json, math, sys
 from datetime import datetime
-all_events = json.load(open(sys.argv[1], encoding='utf-8'))
-own_events = json.load(open(sys.argv[2], encoding='utf-8'))
-requested = int(sys.argv[3]); nodes = set(sys.argv[4:]); now = datetime.now()
+own_events = json.load(open(sys.argv[1], encoding='utf-8'))
+nodes = set(sys.argv[2:]); now = datetime.now()
 def stamp(value): return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
-active = [e for e in own_events if nodes <= set(e['nodes']) and stamp(e['start_date']) <= now < stamp(e['end_date'])]
-if len(active) != 1:
-    raise SystemExit(f'Expected one active calendar entry owned by the current user for {sorted(nodes)}, found {len(active)}')
-event = active[0]
-remaining = max(0, math.floor((stamp(event['end_date']) - now).total_seconds() / 60))
-limit = requested
-for other in all_events:
-    if other['id'] == event['id'] or not nodes.intersection(other['nodes']): continue
-    start = stamp(other['start_date'])
-    if start > now: limit = min(limit, math.floor((start - now).total_seconds() / 60))
-print(event['id']); print(remaining); print(max(0, limit))
+active = [e for e in own_events if nodes.intersection(e['nodes']) and stamp(e['start_date']) <= now < stamp(e['end_date'])]
+covered = set().union(*(set(e['nodes']) for e in active)) if active else set()
+missing = nodes - covered
+if missing:
+    raise SystemExit(f'The selected nodes are allocated, but the current user has no active calendar coverage for {sorted(missing)}')
+remaining = min(math.floor((stamp(e['end_date']) - now).total_seconds() / 60) for e in active if nodes.intersection(e['nodes']))
+print(max(0, remaining))
 PY
         )
-        POS_EVENT_ID=${POS_REFRESH[0]}; POS_REMAINING=${POS_REFRESH[1]}; POS_AVAILABLE=${POS_REFRESH[2]}
-        if (( POS_REMAINING >= POS_DURATION )); then
-          POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION=$POS_REMAINING
-          echo "Current reservation already covers ${POS_REMAINING} minutes from now"
-        else
-          (( POS_AVAILABLE >= 10 )) || { echo "Less than 10 conflict-free minutes remain for the selected nodes" >&2; exit 1; }
-          echo "Refreshing calendar event ${POS_EVENT_ID}: ${POS_REMAINING} minutes remain; up to ${POS_AVAILABLE} minutes are available from now"
-          pos allocations free "${POS_NODES[0]}" 2>&1 | tee -a "$RUN_DIR/pos-allocation.log"
-          POS_CALENDAR_CREATED=false
-          for ((extension=POS_AVAILABLE; extension>=10; extension-=10)); do
-            if POS_OUTPUT=$(pos calendar create --start now --duration "$extension" "$POS_NODE_SELECTOR" 2>&1); then
-              POS_CALENDAR_CREATED=true; POS_ACTUAL_DURATION=$extension
-              printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
-              break
-            fi
-            POS_LAST_ERROR=$POS_OUTPUT
-          done
-          if ! $POS_CALENDAR_CREATED; then
-            printf '%s\n' "$POS_LAST_ERROR" >&2
-            echo "The old allocation was released, but POS could not create replacement calendar coverage" >&2
-            exit 1
-          fi
-          if ! POS_OUTPUT=$(pos allocations allocate "${POS_NODES[@]}" 2>&1); then
-            printf '%s\n' "$POS_OUTPUT" >&2
-            echo "Calendar coverage was created, but POS could not reallocate the nodes" >&2
-            exit 1
-          fi
-          printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
-          POS_RESERVED=true; POS_REUSED=true
-          pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-after.json"
-          echo "Reservation synchronized to now for ${POS_ACTUAL_DURATION} minutes"
-        fi
+        POS_RESERVED=true; POS_REUSED=true
+        echo "Reusing the current allocation unchanged; ${POS_ACTUAL_DURATION} minutes of calendar coverage remain"
         break
       fi
       [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
