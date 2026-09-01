@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthran"
+version = "0.1.0"
+description = "Energy-aware 6G modeling over real 5G user planes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "BSD-3-Clause"}
+dependencies = ["numpy>=1.24", "pandas>=2", "simpy>=4", "PyYAML>=6", "paho-mqtt>=2"]
+
+[project.optional-dependencies]
+analysis = ["matplotlib>=3.7"]
+
+[project.scripts]
+synthran = "synthran.cli:main"
+
+[tool.setuptools.package-data]
+synthran = ["data/*.csv"]
+

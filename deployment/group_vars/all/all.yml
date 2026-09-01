@@ -1,0 +1,5 @@
+# automatically loaded by ansible
+
+# Active profile, can be overloaded via -e
+fiveg_profile: default
+

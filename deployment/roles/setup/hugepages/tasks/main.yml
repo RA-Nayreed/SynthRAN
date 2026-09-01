@@ -1,0 +1,37 @@
+- name: HUGEPAGES_SETUP
+  ansible.builtin.meta: noop
+
+- name: Configure 1G hugepages (40 × 1G), disable 2M, set default=1G – runtime + persistent
+  block:
+
+    - name: Apply hugepages settings immediately (runtime only)
+      ansible.builtin.shell: |
+        set -e
+
+        # Allocate 40×1G pages through procfs
+        echo 40 > /proc/sys/vm/nr_hugepages
+
+        # Use 1G hugepage sysfs interface if present
+        if [ -d /sys/kernel/mm/hugepages/hugepages-1048576kB ]; then
+            echo 40 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+        fi
+
+        # Disable 2M hugepages if supported
+        if [ -d /sys/kernel/mm/hugepages/hugepages-2048kB ]; then
+            echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+        fi
+      become: true
+      changed_when: true
+
+    - name: Show current hugepages status
+      ansible.builtin.shell: grep -i huge /proc/meminfo
+      register: hugepages_status
+      changed_when: false
+      become: true
+
+    - name: Display hugepages status
+      ansible.builtin.debug:
+        msg: "{{ hugepages_status.stdout_lines }}"
+
+  when:
+    - ran_boot_mode == "live"

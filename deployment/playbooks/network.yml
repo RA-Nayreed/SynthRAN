@@ -1,0 +1,28 @@
+---
+- hosts: sopnodes
+  become: true
+  roles: [setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/k8s/k8s_env]
+- hosts: core_node
+  become: true
+  roles: [setup/k8s/cluster_create, setup/k8s/remove_cp_taint, setup/cni, setup/storage]
+- hosts: ran_node
+  become: true
+  roles:
+    - {role: setup/k8s/cluster_join, when: "inventory_hostname != groups['core_node'][0]"}
+- hosts: core_node
+  roles:
+    - {role: 5g/open5gs/config, when: "core == 'open5gs'"}
+    - {role: 5g/open5gs/deploy, when: "core == 'open5gs'"}
+    - {role: 5g/free5gc/node, when: "core == 'free5gc'"}
+    - {role: 5g/free5gc/config, when: "core == 'free5gc'"}
+    - {role: 5g/free5gc/deploy, when: "core == 'free5gc'"}
+- hosts: ran_node
+  roles:
+    - {role: 5g/oai/config, when: "core == 'oai' or ran == 'oai'"}
+    - {role: 5g/oai/setup, when: "core == 'oai' or ran == 'oai'"}
+    - {role: 5g/oai/core, when: "core == 'oai'"}
+    - {role: 5g/oai/ran, when: "ran == 'oai'"}
+    - {role: 5g/srsRAN/config, when: "ran|lower == 'srsran'"}
+    - {role: 5g/srsRAN/deploy, when: "ran|lower == 'srsran'"}
+    - {role: 5g/ueransim/config, when: "ran == 'ueransim'"}
+    - {role: 5g/ueransim/deploy, when: "ran == 'ueransim'"}

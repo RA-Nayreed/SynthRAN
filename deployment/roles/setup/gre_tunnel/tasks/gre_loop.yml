@@ -1,0 +1,43 @@
+- name: Set local and remote IPs for {{ item.name }}
+  ansible.builtin.set_fact:
+    local_ip: >-
+      {{ item.local_ip_core
+         if inventory_hostname in groups['core_node']
+         else item.local_ip_ran }}
+    remote_ip: >-
+      {{ hostvars[groups['ran_node'][0]].ip
+         if inventory_hostname in groups['core_node']
+         else hostvars[groups['core_node'][0]].ip }}
+
+- name: Remove existing GRE tunnel if present ({{ item.name }})
+  ansible.builtin.shell: >
+    ovs-vsctl --if-exists del-port {{ item.name }} gre-{{ item.name }}
+  ignore_errors: yes
+
+- name: Remove existing patch ports if present ({{ item.name }}) [free5gc only]
+  ansible.builtin.shell: |
+    ovs-vsctl --if-exists del-port n3br patch-n3-n4 || true
+    ovs-vsctl --if-exists del-port n4br patch-n4-n3 || true
+  ignore_errors: yes
+  when: core == 'free5gc'
+
+- name: Create GRE tunnel on {{ item.name }} [non-free5gc or n3br only]
+  ansible.builtin.shell: >
+    ovs-vsctl add-port {{ item.name }} gre-{{ item.name }} \
+      -- set interface gre-{{ item.name }} type=gre options:remote_ip={{ remote_ip }}
+  ignore_errors: yes
+  when: core != 'free5gc' or item.name == 'n3br'
+
+- name: Create patch ports between n3br and n4br [free5gc n4br only]
+  ansible.builtin.shell: |
+    ovs-vsctl add-port n3br patch-n3-n4 -- set interface patch-n3-n4 type=patch options:peer=patch-n4-n3
+    ovs-vsctl add-port n4br patch-n4-n3 -- set interface patch-n4-n3 type=patch options:peer=patch-n3-n4
+  ignore_errors: yes
+  when: core == 'free5gc' and item.name == 'n4br'
+
+- name: Configure bridge {{ item.name }}
+  ansible.builtin.shell: |
+    ip addr flush dev {{ item.name }} || true
+    ip addr add {{ local_ip }} dev {{ item.name }}
+    ip link set {{ item.name }} up
+

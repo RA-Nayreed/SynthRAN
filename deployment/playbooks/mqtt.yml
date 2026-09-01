@@ -1,0 +1,12 @@
+---
+- hosts: broker_node
+  become: true
+  roles: [synthran/broker]
+- hosts: ues
+  become: true
+  roles: [synthran/publisher]
+- hosts: broker_node
+  become: true
+  tasks:
+    - name: Fetch broker receipts
+      fetch: {src: /var/log/synthran/receipts.jsonl, dest: "{{ run_dir }}/broker.jsonl", flat: true}

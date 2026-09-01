@@ -1,0 +1,7 @@
+---
+- name: Verify reserved nodes are reachable
+  hosts: sopnodes
+  gather_facts: false
+  tasks:
+    - wait_for_connection: {timeout: 300}
+    - setup:

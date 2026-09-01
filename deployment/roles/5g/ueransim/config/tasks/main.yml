@@ -1,0 +1,123 @@
+---
+
+- name: Check if yq is already installed
+  ansible.builtin.stat:
+    path: "{{ yq_bin_path }}"
+  register: yq_bin
+
+- name: Download yq binary using curl or wget
+  ansible.builtin.shell: |
+    set -e
+    if command -v curl >/dev/null 2>&1; then
+      curl -L --fail "{{ yq_url }}" -o "{{ yq_bin_path }}"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -O "{{ yq_bin_path }}" "{{ yq_url }}"
+    else
+      echo "Neither curl nor wget found" >&2
+      exit 1
+    fi
+  args:
+    creates: "{{ yq_bin_path }}"
+  when: not yq_bin.stat.exists
+  become: true
+
+- name: Ensure yq is executable
+  ansible.builtin.file:
+    path: "{{ yq_bin_path }}"
+    mode: '0755'
+    state: file
+  become: true
+
+
+- name: Load active 5G profile
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    name: fiveg
+
+- name: Validate PLMN
+  assert:
+    that:
+      - fiveg.plmn.mcc is defined
+      - fiveg.plmn.mnc is defined
+      - fiveg.plmn.tac is defined
+
+- name: Validate slices
+  assert:
+    that:
+      - slice.name is defined
+      - slice.sst is defined
+      - slice.dnn is defined
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    loop_var: slice
+
+- name: Validate UE slice references
+  assert:
+    that:
+      - ue.value.slice in fiveg.slices | map(attribute='name') | list
+  loop: "{{ fiveg.ues | dict2items }}"
+  loop_control:
+    loop_var: ue
+
+# ============================================================
+# Dispatch to core-specific config
+# ============================================================
+- name: Configure ueransim for open5gs
+  ansible.builtin.include_tasks: config_open5gs.yml
+  when: core == 'open5gs'
+
+- name: Configure ueransim for free5gc
+  ansible.builtin.include_tasks: config_free5gc.yml
+  when: core == 'free5gc'
+  vars:
+    ueransim_network: "{{ ueransim_free5gc_network }}"
+
+# Retrieve ueransim repo for oai
+- name: Remove existing free5gc directory to ensure clean state
+  ansible.builtin.file:
+    path: "{{ free5gc_repo_dest }}"
+    state: absent
+  when: core == 'oai'
+
+- name: Clone free5gc repo
+  ansible.builtin.git:
+    repo: "{{ free5gc_repo_url }}"
+    dest: "{{ free5gc_repo_dest }}"
+    version: "{{ free5gc_repo_branch }}"
+    update: yes
+    force: yes
+  when: core == 'oai'
+
+- name: Fix chart templates - use $.Values in gnb/ue context
+  ansible.builtin.replace:
+    path: "{{ item.file }}"
+    regexp: "{{ item.regexp }}"
+    replace: "{{ item.replace }}"
+  when: core == 'oai'
+  loop:
+    - file: "{{ ueransim_chart_path }}/templates/gnb/gnb-deployment.yaml"
+      regexp: 'toYaml \.nodeSelector'
+      replace: 'toYaml $.Values.nodeSelector'
+    - file: "{{ ueransim_chart_path }}/templates/gnb/gnb-deployment.yaml"
+      regexp: 'toYaml \.affinity'
+      replace: 'toYaml $.Values.affinity'
+    - file: "{{ ueransim_chart_path }}/templates/gnb/gnb-deployment.yaml"
+      regexp: 'toYaml \.tolerations'
+      replace: 'toYaml $.Values.tolerations'
+    - file: "{{ ueransim_chart_path }}/templates/ue/ue-deployment.yaml"
+      regexp: 'toYaml \.nodeSelector'
+      replace: 'toYaml $.Values.nodeSelector'
+    - file: "{{ ueransim_chart_path }}/templates/ue/ue-deployment.yaml"
+      regexp: 'toYaml \.affinity'
+      replace: 'toYaml $.Values.affinity'
+    - file: "{{ ueransim_chart_path }}/templates/ue/ue-deployment.yaml"
+      regexp: 'toYaml \.tolerations'
+      replace: 'toYaml $.Values.tolerations'
+  changed_when: false
+
+- name: Configure ueransim for oai
+  ansible.builtin.include_tasks: config_oai.yml
+  when: core == 'oai'
+  vars:
+    ueransim_network: "{{ ueransim_oai_network }}"
+

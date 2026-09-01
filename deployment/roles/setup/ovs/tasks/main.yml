@@ -1,0 +1,75 @@
+---
+- name: RESTART_OVS_SETUP
+  ansible.builtin.meta: noop
+
+- name: Ensure OVS is installed
+  ansible.builtin.apt:
+    name: openvswitch-switch
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Ensure OVS services are running
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - ovsdb-server
+    - ovs-vswitchd
+  become: true
+
+- name: Define OVS bridges
+  set_fact:
+    ovs_bridges:
+      - n2br
+      - n3br
+      - n4br
+
+- name: Create OVS bridges
+  ansible.builtin.command: "ovs-vsctl --may-exist add-br {{ item }}"
+  loop: "{{ ovs_bridges }}"
+  become: true
+
+# following unused now
+- name: Pin ovs-vswitchd on cores 0-5 (RAN node only)
+  block:
+    - name: Enable CPUAffinity override dir
+      ansible.builtin.file:
+        path: /etc/systemd/system/ovs-vswitchd.service.d
+        state: directory
+    - name: Apply CPUAffinity for ovs-vswitchd
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ovs-vswitchd.service.d/cpu-affinity.conf
+        content: |
+          [Service]
+          CPUAffinity=0-5
+    - name: Restart ovs-vswitchd with new affinity
+      ansible.builtin.systemd:
+        daemon_reload: yes
+        name: ovs-vswitchd
+        state: restarted
+  become: true
+  when: fhi72 and inventory_hostname in groups['ran_node']
+
+
+#  Verification
+- name: Verify OVS daemons
+  ansible.builtin.service_facts:
+
+- name: Fail if ovsdb-server is not running
+  ansible.builtin.fail:
+    msg: "❌ ovsdb-server is not running on {{ inventory_hostname }}"
+  when: services['ovsdb-server.service'].state != "running"
+
+- name: Fail if ovs-vswitchd is not running
+  ansible.builtin.fail:
+    msg: "❌ ovs-vswitchd is not running on {{ inventory_hostname }}"
+  when: services['ovs-vswitchd.service'].state != "running"
+
+- name: Verify OVS bridges
+  ansible.builtin.command: "ovs-vsctl br-exists {{ item }}"
+  loop: "{{ ovs_bridges }}"
+  become: true
+  changed_when: false
+  

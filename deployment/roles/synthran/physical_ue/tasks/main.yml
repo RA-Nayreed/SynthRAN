@@ -1,0 +1,7 @@
+---
+- name: Require supported physical IoT modem interface
+  command: ip link show wwan0
+  changed_when: false
+- name: Enable physical modem interface
+  command: ip link set wwan0 up
+  changed_when: true

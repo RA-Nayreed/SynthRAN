@@ -1,0 +1,94 @@
+---
+- name: Ensure CPUAffinity is set in system.conf
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/system.conf
+    regexp: '^CPUAffinity='
+    # FIX: align with reservedSystemCPUs 0-5 in kubelet config
+    line: 'CPUAffinity=0-5'
+    state: present
+
+- name: Reload systemd config
+  become: true
+  ansible.builtin.command:
+    cmd: systemctl daemon-reexec
+
+- name: Add Kubernetes and RT settings to sysctl.conf
+  become: true
+  ansible.builtin.blockinfile:
+    path: /etc/sysctl.conf
+    insertafter: EOF
+    block: |
+      ## For kubernetes
+      fs.inotify.max_user_instances=65536
+      ## Realtime kernel settings
+      # FIX: -1 disables RT throttling entirely — kernel watchdog cannot preempt
+      # a runaway RT thread → livelock → kernel panic → reboot.
+      # 900000 = 90% RT budget, leaving 5% for kernel housekeeping.
+      kernel.sched_rt_runtime_us=900000
+      kernel.timer_migration=0
+    marker: "# {mark} RAN tuning"
+
+- name: Apply sysctl changes (reload)
+  become: true
+  ansible.builtin.command:
+    cmd: sysctl -p
+  changed_when: false
+
+- name: Ensure python3 and PyYAML are installed
+  apt:
+    name:
+      - python3
+      - python3-yaml
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Merge CPU-only kubelet config safely
+  become: true
+  shell: |
+    python3 - <<'EOF'
+    import yaml, os
+    cfg = "/var/lib/kubelet/config.yaml"
+    patch = {
+      "cgroupDriver": "systemd",
+      "cpuManagerPolicy": "static",
+      "cpuManagerPolicyOptions": {"full-pcpus-only": "true"},
+      "reservedSystemCPUs": "0-5",
+      "topologyManagerPolicy": "best-effort",
+      "failSwapOn": False,
+      "featureGates": {
+        "CPUManager": True,
+        "CPUManagerPolicyOptions": True,
+      }
+    }
+    if not os.path.exists(cfg):
+      exit(0)
+    with open(cfg) as f:
+      data = yaml.safe_load(f) or {}
+    data.setdefault("featureGates", {})
+    data["featureGates"].update(patch["featureGates"])
+    for k, v in patch.items():
+      if k != "featureGates":
+        data[k] = v
+    with open(cfg + ".tmp", "w") as f:
+      yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    os.replace(cfg + ".tmp", cfg)
+    print("APPLIED")
+    EOF
+  register: merge_result
+  changed_when: "'APPLIED' in merge_result.stdout"
+
+- name: Remove kubelet CPU manager checkpoint
+  become: true
+  file:
+    path: /var/lib/kubelet/cpu_manager_state
+    state: absent
+
+- name: Restart kubelet
+  become: true
+  systemd:
+    name: kubelet
+    state: restarted
+    daemon_reload: yes
+

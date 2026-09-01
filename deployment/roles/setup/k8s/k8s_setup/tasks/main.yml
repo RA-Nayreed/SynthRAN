@@ -1,0 +1,69 @@
+---
+- name: Create /etc/apt/keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  become: true
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Download Kubernetes GPG key
+  ansible.builtin.shell: |
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | \
+      gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  become: true
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Add Kubernetes APT repository (v1.32)
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }} signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg]
+      https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /
+    state: present
+    filename: kubernetes
+    update_cache: yes
+  become: true
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Update APT cache
+  ansible.builtin.apt:
+    update_cache: yes
+  become: true
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Install kubelet, kubeadm, kubectl (exact version 1.32.9)
+  ansible.builtin.apt:
+    name:
+      - kubelet=1.32.9-1.1
+      - kubeadm=1.32.9-1.1
+      - kubectl=1.32.9-1.1
+    state: present
+    update_cache: no
+  become: true
+  register: k8s_install
+  retries: 5
+  delay: 10
+  until: k8s_install is succeeded
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Verify kubeadm is installed
+  ansible.builtin.command: kubeadm version
+  become: true
+  register: kubeadm_check
+  changed_when: false
+  failed_when: kubeadm_check.rc != 0
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Hold Kubernetes packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+  become: true
+  when: ansible_facts.os_family == 'Debian'

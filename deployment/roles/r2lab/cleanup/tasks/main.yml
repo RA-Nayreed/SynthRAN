@@ -1,0 +1,8 @@
+---
+- name: Power OFF R2Lab testbed
+  shell: |
+    source ~/.bashrc
+    all-off
+  args:
+    executable: /bin/bash
+  ignore_errors: yes

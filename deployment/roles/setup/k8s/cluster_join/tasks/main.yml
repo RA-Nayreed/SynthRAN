@@ -1,0 +1,259 @@
+---
+- name: START_K8S_JOIN
+  ansible.builtin.meta: noop
+
+# Cleanup if node already joined a k8s cluster
+- name: Check if node has leftover Kubernetes data
+  ansible.builtin.stat:
+    path: /etc/kubernetes
+  register: kube_dir
+
+- name: Reset node if Kubernetes data exists
+  ansible.builtin.command: kubeadm reset -f
+  when: kube_dir.stat.exists
+  ignore_errors: true
+  become: true
+
+- name: Remove all Kubernetes and CNI state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/kubernetes
+    - /etc/cni
+    - /var/lib/kubelet
+    - /var/lib/cni
+    - /run/flannel
+  when: kube_dir.stat.exists
+  become: true
+  ignore_errors: true
+
+# FIX: full containerd data wipe — metadata/snapshots from previous joins
+#      reference deleted blobs → kubeadm join fails with "blob not found".
+- name: Stop containerd before full data wipe
+  ansible.builtin.systemd:
+    name: containerd
+    state: stopped
+  become: true
+
+- name: Wipe all containerd data (metadata, snapshots, blobs)
+  ansible.builtin.shell: |
+    rm -rf /var/lib/containerd/io.containerd.content.v1.content
+    rm -rf /var/lib/containerd/io.containerd.metadata.v1.bolt
+    rm -rf /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
+    rm -rf /var/lib/containerd/io.containerd.snapshotter.v1.native
+    rm -rf /var/lib/containerd/io.containerd.runtime.v1.linux
+    rm -rf /var/lib/containerd/io.containerd.runtime.v2.task
+    rm -rf /var/lib/containerd/io.containerd.grpc.v1.cri
+    rm -rf /var/lib/containerd/tmpmounts
+  become: true
+
+- name: Restart containerd after full wipe
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+  become: true
+
+- name: Wait for containerd to settle
+  ansible.builtin.pause:
+    seconds: 5
+
+# === INSTALLATION DES PLUGINS CNI DE BASE ====================================
+- name: Ensure CNI directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/cni/net.d
+    - /opt/cni/bin
+    - /var/lib/cni
+  become: true
+
+- name: Download CNI plugins (via curl, plus fiable)
+  ansible.builtin.shell: |
+    curl -fsSL -o /tmp/cni-plugins.tgz \
+      https://github.com/containernetworking/plugins/releases/download/v1.5.1/cni-plugins-linux-amd64-v1.5.1.tgz
+  args:
+    creates: /tmp/cni-plugins.tgz
+  become: true
+
+- name: Extract CNI plugins
+  ansible.builtin.unarchive:
+    src: /tmp/cni-plugins.tgz
+    dest: /opt/cni/bin
+    remote_src: true
+  become: true
+
+- name: Fix permissions
+  ansible.builtin.file:
+    path: /opt/cni/bin
+    owner: root
+    group: root
+    mode: '0755'
+    recurse: true
+  become: true
+
+- name: Verify essential CNI binaries exist
+  ansible.builtin.stat:
+    path: "/opt/cni/bin/{{ item }}"
+  with_items:
+    - loopback
+    - bridge
+    - portmap
+  register: cni_check
+  become: true
+
+- name: Fail if essential CNI plugins are missing
+  ansible.builtin.fail:
+    msg: "❌ CNI plugin {{ item.item }} missing on node {{ inventory_hostname }}"
+  when: not item.stat.exists
+  loop: "{{ cni_check.results }}"
+
+# === PREPARE JOIN ============================================================
+- name: Ensure /root/.kube exists
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Fetch admin.conf from master to control machine
+  ansible.builtin.fetch:
+    src: /etc/kubernetes/admin.conf
+    dest: ./admin.conf
+    flat: yes
+  delegate_to: "{{ groups['core_node'][0] }}"
+  when: inventory_hostname == groups['k8s_workers'][0]
+
+- name: Copy admin.conf to worker node
+  ansible.builtin.copy:
+    src: ./admin.conf
+    dest: /root/.kube/config
+    mode: '0644'
+  become: true
+
+- name: Ensure master CORE node is resolvable
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[groups['core_node'][0]].ip }} {{ groups['core_node'][0] }}"
+  become: true
+
+- name: Set kubelet RAN node IP explicitly
+  copy:
+    dest: /etc/default/kubelet
+    content: |
+      KUBELET_EXTRA_ARGS=--node-ip={{ hostvars[inventory_hostname].ip }}
+  become: true
+
+- name: Restart kubelet
+  systemd:
+    name: kubelet
+    state: restarted
+  become: true
+
+- name: Ensure kube-proxy config exists and symlink is correct
+  block:
+    - name: Ensure kube-proxy directory exists
+      ansible.builtin.file:
+        path: /var/lib/kube-proxy
+        state: directory
+        mode: '0755'
+      become: true
+
+    - name: Check if kube-proxy config exists on disk
+      ansible.builtin.stat:
+        path: /etc/kubernetes/config.conf
+      register: kubeproxy_conf
+      become: true
+
+    - name: Create symlink to kube-proxy config if it exists
+      ansible.builtin.file:
+        src: /etc/kubernetes/config.conf
+        dest: /var/lib/kube-proxy/kubeproxy-config.yaml
+        state: link
+        force: yes
+      become: true
+      when: kubeproxy_conf.stat.exists
+
+    - name: Warn user if kube-proxy config is missing
+      ansible.builtin.debug:
+        msg: >
+          "⚠️ kube-proxy configuration not found on disk; relying on DaemonSet ConfigMap.
+          Pod kube-proxy should start normally if running as DaemonSet."
+      when: not kubeproxy_conf.stat.exists
+
+- name: Remove stale node entry from cluster
+  delegate_to: "{{ groups['core_node'][0] }}"
+  become: true
+  ansible.builtin.shell: |
+    kubectl delete node {{ inventory_hostname }} --ignore-not-found
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+- name: Read join command
+  ansible.builtin.set_fact:
+    kubeadm_join_command: "{{ lookup('file', '.kubeadm_join_command.txt') }}"
+
+- name: Debug join command
+  ansible.builtin.debug:
+    var: kubeadm_join_command
+
+# === JOIN THE CLUSTER ========================================================
+- name: Join node to the cluster
+  ansible.builtin.command: "{{ kubeadm_join_command }} --ignore-preflight-errors=SystemVerification --v=5"
+  become: true
+
+# === VERIFY COREDNS READINESS (run on control-plane only) =====================
+- name: Wait until CoreDNS pods are Ready
+  become: true
+  delegate_to: "{{ groups['core_node'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  ansible.builtin.shell: |
+    set -e
+    echo "Checking CoreDNS pods readiness on control-plane node..."
+    kubectl wait -n kube-system \
+      --for=condition=Ready pod -l k8s-app=kube-dns \
+      --timeout=300s
+  register: coredns_wait
+  retries: 5
+  delay: 15
+  until: coredns_wait.rc == 0
+  changed_when: false
+
+- name: Debug CoreDNS status if not ready
+  when: coredns_wait.rc != 0
+  become: true
+  delegate_to: "{{ groups['core_node'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  ansible.builtin.shell: |
+    echo "CoreDNS pods not ready yet — showing status:"
+    kubectl get pods -n kube-system -l k8s-app=kube-dns -o wide
+    echo
+    echo "--- Describe output ---"
+    kubectl describe pods -n kube-system -l k8s-app=kube-dns | tail -n 50
+
+# === TEST COREDNS RESOLUTION FROM BOTH NODES ================================
+- name: Test CoreDNS resolution from core and ran nodes
+  become: true
+  delegate_to: "{{ groups['core_node'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  ansible.builtin.shell: |
+    set -eux
+    for NODE in {{ groups['core_node'][0] }} {{ groups['ran_node'][0] }}; do
+      echo "=== Testing DNS on $NODE ==="
+      kubectl run dns-test-$NODE \
+        --image=busybox:1.36 \
+        --restart=Never \
+        --overrides='{"spec": {"nodeName": "'"${NODE}"'"}}' \
+        --command -- sh -c 'nslookup kubernetes.default.svc.cluster.local' || true
+    done
+
+    echo "Cleaning up test pods..."
+    kubectl delete pod dns-test-{{ groups['core_node'][0] }} --ignore-not-found
+    kubectl delete pod dns-test-{{ groups['ran_node'][0] }} --ignore-not-found
+  changed_when: false
+

@@ -1,0 +1,93 @@
+---
+
+- name: Check if yq is already installed
+  ansible.builtin.stat:
+    path: "{{ yq_bin_path }}"
+  register: yq_bin
+
+- name: Download yq binary using curl or wget
+  ansible.builtin.shell: |
+    set -e
+    if command -v curl >/dev/null 2>&1; then
+      curl -L --fail "{{ yq_url }}" -o "{{ yq_bin_path }}"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -O "{{ yq_bin_path }}" "{{ yq_url }}"
+    else
+      echo "Neither curl nor wget found" >&2
+      exit 1
+    fi
+  args:
+    creates: "{{ yq_bin_path }}"
+  when: not yq_bin.stat.exists
+  become: true
+
+- name: Ensure yq is executable
+  ansible.builtin.file:
+    path: "{{ yq_bin_path }}"
+    mode: '0755'
+    state: file
+  become: true
+
+- name: Resolve 5G profile file
+  set_fact:
+    fiveg_profile_file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+
+- name: Load 5G profile
+  include_vars:
+    file: "{{ fiveg_profile_file }}"
+    name: fiveg
+
+- name: Show active 5G profile
+  debug:
+    msg:
+      - "Using 5G profile: {{ fiveg_profile | default('default') }}"
+      - "PLMN: {{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}"
+      - "TAC: {{ fiveg.plmn.tac }}"
+
+- name: Initialize gnb_slices and amf_slices
+  set_fact:
+    gnb_slices: []
+    amf_slices: []
+
+- name: Map slices strictly for gNB and AMF
+  set_fact:
+    gnb_slices: "{{ (gnb_slices | default([])) + [ slice_entry ] }}"
+    amf_slices: "{{ (amf_slices | default([])) + [ slice_entry ] }}"
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    loop_var: sl_item
+  vars:
+    slice_entry:
+      sst: "{{ sl_item.sst | int }}"
+      sd: "{{ lookup('template', 'slice_sd.j2') | trim }}"
+
+- name: Update gNB configurations (Structure only)
+  ansible.builtin.shell: >
+    {{ yq_bin_path }} eval -i '
+      .gnbConfig.cu_cp.amf.supported_tracking_areas[0].plmn_list[0].tai_slice_support_list = {{ amf_slices | to_json }} |
+      .gnbConfig.cell_cfg.plmn = "{{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}" |
+      .gnbConfig.cell_cfg.tac = {{ fiveg.plmn.tac | int }} |
+      .gnbConfig.cell_cfg.slicing = {{ gnb_slices | to_json }}
+    ' "{{ values_file }}"
+
+- name: Force remove quotes on SD values (Post-processing)
+  replace:
+    path: "{{ values_file }}"
+    regexp: 'sd: "(0x[0-9A-Fa-f]+)"'
+    replace: 'sd: \1'
+
+- name: Force remove quotes on SST values (Post-processing)
+  replace:
+    path: "{{ values_file }}"
+    regexp: 'sst: "([0-9]+)"'
+    replace: 'sst: \1'
+
+- name: Ensure values file has node constraints
+  blockinfile:
+    path: "{{ values_file }}"
+    marker: "# {mark} ANSIBLE MANAGED NODE SELECTOR"
+    insertafter: EOF
+    block: |
+      nodeSelector:
+        kubernetes.io/hostname: "{{ ran_node_name }}"
+      nodeName: {{ ran_node_name }}

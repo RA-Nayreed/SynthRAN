@@ -1,0 +1,146 @@
+---
+- name: RESTART_AFTER_REBOOT
+  ansible.builtin.meta: noop
+
+- name: Refresh boolean variables on all hosts
+  ansible.builtin.set_fact:
+    fhi72: "{{ (hostvars[item].get('fhi72', False) | bool) }}"
+    aw2s: "{{ (hostvars[item].get('aw2s', False) | bool) }}"
+    f3_ran: "{{ (hostvars[item].get('f3_ran', False) | bool) }}"
+    bridge_enabled: "{{ (hostvars[item].get('bridge_enabled', False) | bool) }}"
+  loop: "{{ groups['all'] }}"
+  delegate_to: "{{ item }}"
+  run_once: true
+
+# fix ubuntu mirror issue
+- name: Detect OS codename
+  ansible.builtin.set_fact:
+    os_codename: "{{ ansible_distribution_release }}"
+
+- name: Ensure Ubuntu main repo
+  ansible.builtin.apt_repository:
+    repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }} main restricted universe multiverse"
+    state: present
+    filename: ubuntu
+
+- name: Ensure Ubuntu updates repo
+  ansible.builtin.apt_repository:
+    repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }}-updates main restricted universe multiverse"
+    state: present
+    filename: ubuntu
+
+- name: Ensure Ubuntu security repo
+  ansible.builtin.apt_repository:
+    repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }}-security main restricted universe multiverse"
+    state: present
+    filename: ubuntu
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Ensure apt is consistent before installs
+  ansible.builtin.shell: |
+    dpkg --configure -a
+    apt -f install -y
+  become: true
+  
+- name: Ensure required apt packages are installed
+  apt:
+    name:
+      - emacs
+      - tmux
+      - git
+      - curl
+      - iproute2
+      - tcpdump
+      - python3-pip
+      - python3-venv        # Replaces virtualenv (PEP-668 safe)
+      - jq
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Disable swap
+  shell: |
+    swapoff -a
+    sed -i.bak '/ swap / s/^/#/' /etc/fstab
+  become: true
+
+- name: Load kernel modules for Kubernetes networking
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+  become: true
+
+- name: Ensure kernel modules are loaded on boot
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+  become: true
+
+- name: Set sysctl parameters for Kubernetes networking
+  copy:
+    dest: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+  become: true
+
+- name: Apply sysctl parameters
+  command: sysctl --system
+  become: true
+
+# ptp on ran-node will use Etc/UTC time zone, core-node must do the same
+- name: Set time zone to Europe/Paris
+  command: timedatectl set-timezone Europe/Paris
+  become: true
+  changed_when: true
+  register: timezone_result
+  
+- name: Verify time zone setting
+  command: timedatectl
+  register: timedatectl_output
+  changed_when: false
+
+- name: Display timedatectl output
+  debug:
+    msg: "{{ timedatectl_output.stdout_lines }}"
+
+# install dhp service on the node, required later for k8s dhcp cni
+- name: Install systemd service for CNI DHCP daemon
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/cni-dhcp.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=CNI DHCP Daemon
+      After=network.target
+
+      [Service]
+      ExecStart=/opt/cni/bin/dhcp daemon
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  become: true
+
+- name: Enable and start CNI DHCP daemon
+  ansible.builtin.systemd:
+    name: cni-dhcp.service
+    enabled: yes
+    state: started
+  become: true

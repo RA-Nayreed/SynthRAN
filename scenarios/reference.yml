@@ -1,0 +1,18 @@
+deployment:
+  core: open5gs
+  ran: ueransim
+  platform: rfsim
+  profile: default
+  nodes: {core: sopnode-f2, ran: sopnode-f3, broker: sopnode-f2}
+  ues: [uesim01, uesim02]
+model:
+  seed: 1
+  duration_seconds: 10
+  energy: {mode: hybrid, trace: "builtin:stable", units: uw, interpolation: linear, repeat: true, wpt_power_w: 0.000025}
+  capacitor: {capacitance_f: 0.0003, series_resistance_ohm: 5000, leakage_resistance_ohm: 100000, initial_voltage_v: 0, timestep_seconds: 0.001}
+  controller: {low_voltage_v: 1.3, high_voltage_v: 1.7}
+  topology: {frequency_hz: 924000000, pathloss: macro}
+mqtt: {port: 1883, qos: 1, topic_prefix: synthran, payload_bytes: 256, start_delay_seconds: 30}
+devices:
+  uesim01: {energy_mode: wpt, sensing_interval_ms: 1000}
+  uesim02: {energy_mode: hybrid, sensing_interval_ms: 500}

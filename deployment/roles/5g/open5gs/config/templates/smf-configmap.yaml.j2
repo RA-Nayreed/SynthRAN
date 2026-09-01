@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ smf_name }}-configmap
+  labels:
+    app: open5gs
+    nf: smf
+    name: {{ smf_name }}
+data:
+  smfcfg.yaml: |
+    logger:
+      file: /open5gs/install/var/log/open5gs/smf.log
+
+    global:
+      max:
+        ue: 1024
+
+    smf:
+      sbi:
+        server:
+          - dev: eth0
+            advertise: {{ smf_name }}-nsmf
+            port: 80
+        client:
+          scp:
+            - uri: http://scp-nscp:80
+      pfcp:
+        server:
+          - dev: n4
+        client:
+          upf:
+{% for slice in fiveg.slices %}{% if slice.name == smf_slice %}
+            - address: 10.10.4.{{ loop.index }}
+              dnn: {{ slice.dnn }}
+{% endif %}{% endfor %}
+      gtpc:
+        server:
+          - dev: eth0
+      gtpu:
+        server:
+          - dev: n3
+      metrics:
+        server:
+          - address: 0.0.0.0
+            port: 9090
+      session:
+{% for slice in fiveg.slices %}{% if slice.name == smf_slice %}
+        - subnet: {{ slice.ip_prefix }}.0/16
+{% endif %}{% endfor %}
+      dns:
+        - 8.8.8.8
+        - 8.8.4.4
+      mtu: 1400
+      ctf:
+        enabled: auto
+      freeDiameter: /open5gs/install/etc/freeDiameter/smf.conf
+
+      info:
+{% for slice in fiveg.slices %}
+{% if slice.name == smf_slice %}
+        - s_nssai:
+            sst: {{ slice.sst }}
+{% if slice.sd == "EMPTY" or slice.sd == "" %}
+            sd: FFFFFF
+{% else %}
+            sd: {{ slice.sd }}
+{% endif %}
+            dnn:
+              - {{ slice.dnn }}
+{% endif %}
+{% endfor %}
+
+  wrapper.sh: |
+    #!/bin/bash
+
+    # Wait for Multus to attach the n4 interface
+    echo "Waiting for n4 interface..."
+    while ! ip link show n4 >/dev/null 2>&1; do echo "Waiting for n4..."; sleep 2; done
+
+    # Added security delay to ensure UPF and NRF/SCP are fully reachable
+    # This prevents the 'No SMF Instance' error in AMF during registration
+    echo "Stabilizing network and waiting for SBI discovery (15s)..."
+    sleep 15;
+
+    # Start the Open5GS SMF daemon
+    /open5gs/install/bin/open5gs-smfd -c /open5gs/config/smfcfg.yaml

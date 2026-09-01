@@ -1,0 +1,4 @@
+---
+- import_playbook: provision_nodes.yml
+- import_playbook: network.yml
+- import_playbook: mqtt.yml

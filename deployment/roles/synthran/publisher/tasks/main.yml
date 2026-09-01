@@ -1,0 +1,27 @@
+---
+- name: Copy SynthRAN package
+  copy: {src: "{{ playbook_dir }}/../../synthran", dest: /opt/synthran-source/}
+- name: Copy package metadata
+  copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /opt/synthran-source/pyproject.toml}
+- name: Install SynthRAN runtime
+  pip: {name: /opt/synthran-source, executable: pip3}
+- name: Select real UE tunnel
+  shell: "ip -o link show | awk -F': ' '$2 ~ /^(uesimtun0|oaitun_|tun_srsue|wwan0)/ {print $2; exit}'"
+  register: ue_tunnel
+  changed_when: false
+  failed_when: ue_tunnel.stdout == ''
+- name: Copy immutable trace
+  copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
+- name: Record selected interface
+  copy: {content: "{{ ue_tunnel.stdout }}\n", dest: /var/log/synthran-interface}
+- name: Replay through selected UE interface
+  command: >-
+    python3 -m synthran.cli workload replay
+    --trace /tmp/synthran-events.jsonl
+    --broker {{ hostvars[groups['broker_node'][0]].ansible_host | default(groups['broker_node'][0]) }}
+    --interface {{ ue_tunnel.stdout }}
+    --device {{ inventory_hostname }}
+    --start-utc {{ mqtt_start_utc }}
+    --output /var/log/synthran-publisher.jsonl
+- name: Fetch publisher records
+  fetch: {src: /var/log/synthran-publisher.jsonl, dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl", flat: true}

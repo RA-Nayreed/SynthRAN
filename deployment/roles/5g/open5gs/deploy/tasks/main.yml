@@ -1,0 +1,421 @@
+---
+- name: START_OPEN5GS_DEPLOY
+  ansible.builtin.meta: noop
+
+- name: Python venv setup block (fhi72 only)
+  block:
+    - name: Install python3-venv, python3-pip, setuptools and wheel
+      ansible.builtin.apt:
+        name:
+          - python3-venv
+          - python3-pip
+          - python3-setuptools
+          - python3-wheel
+        state: present
+      become: yes
+
+    - name: Install kubernetes Python library for Ansible (via pip with --break-system-packages)
+      ansible.builtin.pip:
+        name: kubernetes
+        state: present
+        executable: pip3
+        extra_args: "--break-system-packages"
+      become: yes
+      register: pip_install
+      ignore_errors: yes
+
+    - name: Install python3-kubernetes via apt as fallback
+      ansible.builtin.apt:
+        name: python3-kubernetes
+        state: present
+      become: yes
+      when: pip_install is failed
+
+    - name: Create Python virtual environment (idempotent)
+      ansible.builtin.command:
+        cmd: python3 -m venv "{{ repo_dest }}/venv"
+        creates: "{{ repo_dest }}/venv/bin/activate"
+      become: yes
+
+    - name: Bootstrap pip, setuptools and wheel in venv
+      ansible.builtin.command:
+        cmd: "{{ repo_dest }}/venv/bin/python -m ensurepip --upgrade"
+      become: yes
+
+    - name: Upgrade pip, setuptools and wheel explicitly in venv
+      ansible.builtin.command:
+        cmd: "{{ repo_dest }}/venv/bin/pip install --upgrade pip setuptools wheel"
+      become: yes
+
+    - name: Install Python requirements in venv
+      ansible.builtin.command:
+        cmd: "{{ repo_dest }}/venv/bin/pip install -r {{ repo_dest }}/requirements.txt"
+      become: yes
+
+  when: core_node_name == ran_node_name and core == "open5gs" and fhi72
+
+- name: Reload and restart kubelet
+  ansible.builtin.shell: |
+    systemctl daemon-reload
+    systemctl restart kubelet
+  become: true
+  changed_when: false
+
+- name: Restart CoreDNS pods after kubelet restart
+  ansible.builtin.shell: |
+    kubectl -n kube-system delete pod -l k8s-app=kube-dns --ignore-not-found
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: false
+
+- name: Wait for CoreDNS to be Ready
+  ansible.builtin.shell: |
+    kubectl wait -n kube-system --for=condition=Ready pod -l k8s-app=kube-dns --timeout=180s
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: wait_coredns
+  retries: 3
+  delay: 10
+  until: wait_coredns.rc == 0
+  changed_when: false
+
+- name: Test CoreDNS resolution from core node
+  become: true
+  delegate_to: "{{ groups['core_node'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  ansible.builtin.shell: |
+    set -eux
+    for NODE in {{ groups['core_node'][0] }}; do
+      kubectl run dns-test-$NODE --image=busybox:1.36 --restart=Never \
+        --overrides='{"spec": {"nodeName": "'"${NODE}"'"}}' --command -- sh -c 'nslookup kubernetes.default.svc.cluster.local' || true
+    done
+    kubectl delete pod dns-test-{{ groups['core_node'][0] }} --ignore-not-found
+  changed_when: false
+
+- name: Ensure Open5GS namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ open5gs_ns }}"
+    state: present
+
+- name: Force Open5GS workloads on core_node (nodeName)
+  ansible.builtin.copy:
+    dest: "{{ repo_dest }}/{{ deployment_option }}/open5gs-node-patch.yaml"
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: any
+      spec:
+        template:
+          spec:
+            nodeName: "{{ core_node_name }}"
+      ---
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: any
+      spec:
+        template:
+          spec:
+            nodeName: "{{ core_node_name }}"
+
+- name: Apply MongoDB with Kustomize
+  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/mongodb" -n {{ open5gs_ns }}
+
+- name: Wait for MongoDB pod to be Ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ open5gs_ns }}"
+    label_selectors:
+      - app.kubernetes.io/name=mongodb
+  register: mongo_pods
+  until: >
+    mongo_pods.resources | length > 0 and
+    (mongo_pods.resources[0].status.containerStatuses is defined) and
+    (mongo_pods.resources[0].status.containerStatuses[0].ready | default(false))
+  retries: 40
+  delay: 10
+
+- name: Apply NADs with Kustomize
+  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/networks5g" -n {{ open5gs_ns }}
+
+- name: Wait for kube-apiserver to be responsive
+  shell: kubectl get --raw='/healthz'
+  register: api_health
+  retries: 30
+  delay: 10
+  until: api_health.rc == 0
+  changed_when: false
+
+- name: Wait for CRDs registration to be ready
+  shell: kubectl get crds
+  register: crd_list
+  retries: 20
+  delay: 5
+  until: "'network-attachment-definitions.k8s.cni.cncf.io' in crd_list.stdout"
+  changed_when: false
+
+- name: Install jq
+  ansible.builtin.apt:
+    name: jq
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Wait for Multus CRD
+  ansible.builtin.shell: kubectl get crd network-attachment-definitions.k8s.cni.cncf.io
+  register: multus_crd_check
+  retries: 60
+  delay: 5
+  until: multus_crd_check.rc == 0
+  changed_when: false
+  failed_when: false
+
+- name: Install OVS CNI via Cluster Network Addons Operator (single-node)
+  block:
+    - name: Apply Cluster Network Addons Operator namespace
+      ansible.builtin.shell: |
+        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/namespace.yaml
+
+    - name: Apply Cluster Network Addons CRDs
+      ansible.builtin.shell: |
+        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/network-addons-config.crd.yaml
+
+    - name: Apply Cluster Network Addons Operator
+      ansible.builtin.shell: |
+        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/operator.yaml
+
+    - name: Create NetworkAddonsConfig for OVS
+      ansible.builtin.copy:
+        dest: /tmp/netaddonsconf.yaml
+        content: |
+          apiVersion: networkaddonsoperator.network.kubevirt.io/v1
+          kind: NetworkAddonsConfig
+          metadata:
+            name: cluster
+          spec:
+            ovs: {}
+
+    - name: Apply NetworkAddonsConfig
+      ansible.builtin.shell: |
+        kubectl apply -f /tmp/netaddonsconf.yaml
+
+    - name: Wait for NetworkAddonsConfig to become Available
+      ansible.builtin.shell: |
+        kubectl wait networkaddonsconfig cluster --for condition=Available --timeout=300s
+  when: core_node_name == ran_node_name and core == "open5gs"
+  become: yes
+
+- name: Patch NADs to use unique interface names
+  shell: |
+    set -eu
+    for nad in n2network n3network n4network; do
+      case "$nad" in
+        n2network) ifname=n2 ;;
+        n3network) ifname=n3 ;;
+        n4network) ifname=n4 ;;
+      esac
+      if ! kubectl get networkattachmentdefinition "$nad" -n {{ open5gs_ns }} &>/dev/null; then
+        continue
+      fi
+      config=$(kubectl get networkattachmentdefinition "$nad" -n {{ open5gs_ns }} -o jsonpath='{.spec.config}')
+      newconfig=$(echo "$config" | jq --arg n "$ifname" '.ifname = $n')
+      kubectl patch networkattachmentdefinition "$nad" -n {{ open5gs_ns }} --type=merge -p "{\"spec\":{\"config\":$newconfig}}"
+    done
+  args:
+    executable: /bin/bash
+  register: patch_nad
+  failed_when: false
+  changed_when: false
+
+- name: Verify required NADs exist
+  kubernetes.core.k8s_info:
+    kind: NetworkAttachmentDefinition
+    namespace: "{{ open5gs_ns }}"
+  register: nad_info
+
+- name: Fail if a required NAD is missing
+  ansible.builtin.fail:
+    msg: "NAD {{ item }} is missing in {{ open5gs_ns }}"
+  loop: "{{ nad_list }}"
+  when: item not in (nad_info.resources | map(attribute='metadata.name') | list)
+
+- name: Ensure OVS bridges exist and are up for FHI72
+  block:
+    - name: Create OVS bridges if they don't exist
+      ansible.builtin.shell: |
+        ovs-vsctl --no-headings list-br | grep -q "n2br" || ovs-vsctl add-br n2br
+        ovs-vsctl --no-headings list-br | grep -q "n3br" || ovs-vsctl add-br n3br
+        ovs-vsctl --no-headings list-br | grep -q "n4br" || ovs-vsctl add-br n4br
+      become: true
+      changed_when: false
+
+    - name: Bring OVS bridges up
+      ansible.builtin.shell: |
+        ip link set dev n2br up || true
+        ip link set dev n3br up || true
+        ip link set dev n4br up || true
+      become: true
+      changed_when: false
+
+    - name: Remove any stale veth ports from bridges
+      ansible.builtin.shell: |
+        for br in n2br n3br n4br; do
+          for port in $(ovs-vsctl list-ports "$br" 2>/dev/null | grep veth); do
+            ovs-vsctl del-port "$br" "$port" || true
+          done
+        done
+      become: true
+      changed_when: false
+
+  when: core_node_name == ran_node_name and core == "open5gs" and fhi72
+
+- name: Bring OVS bridges up if single-node Open5GS (non-FHI72)
+  ansible.builtin.shell: |
+    ip link set dev n2br up
+    ip link set dev n3br up
+    ip link set dev n4br up
+    for br in n2br n3br n4br; do
+      for port in $(ovs-vsctl list-ports $br | grep veth); do
+         ovs-vsctl del-port $br $port || true
+      done
+    done
+  become: true
+  when: core_node_name == ran_node_name and core == "open5gs" and not fhi72
+
+- name: Assign Gateway IPs to OVS bridges for Single-Node SCTP bind
+  ansible.builtin.shell: |
+    ip addr add 10.10.2.254/24 dev n2br || true
+    ip addr add 10.10.3.254/24 dev n3br || true
+    ip addr add 10.10.4.254/24 dev n4br || true
+  become: true
+  when: core_node_name == ran_node_name and core == "open5gs"
+
+- name: Wait for OVS resource registration on Node (optional for FHI72)
+  ansible.builtin.shell: |
+    kubectl get node {{ inventory_hostname }} -o json | grep -q "ovs-cni.network.kubevirt.io/n3br"
+  register: ovs_res_check
+  until: ovs_res_check.rc == 0
+  retries: 10
+  delay: 5
+  changed_when: false
+  failed_when: false
+  when: core_node_name == ran_node_name and core == "open5gs" and fhi72
+
+- name: Warn if OVS resources not available (FHI72 only)
+  ansible.builtin.debug:
+    msg: "OVS device resources not registered - OK for FHI72 single-node setups"
+  when:
+    - core_node_name == ran_node_name and core == "open5gs" and fhi72
+    - ovs_res_check is failed
+
+- name: Force cleanup existing Open5GS pods
+  ansible.builtin.shell: kubectl delete pods -n {{ open5gs_ns }} -l app=open5gs --force --grace-period=0 || true
+  when: core_node_name == ran_node_name and core == "open5gs"
+
+- name: Apply Open5GS NFs with Kustomize
+  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/{{ deployment_option }}" -n {{ open5gs_ns }}
+
+- name: Wait for Open5GS Core NFs pods Ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ open5gs_ns }}"
+    label_selectors:
+      - "nf={{ item }}"
+  register: nf_pod
+  until: >
+    nf_pod.resources | length > 0 and
+    (nf_pod.resources[0].status.containerStatuses is defined) and
+    (nf_pod.resources[0].status.containerStatuses[0].ready | default(false))
+  loop: "{{ nfs }}"
+  retries: 40
+  delay: 5
+
+- name: Verify Multus N3 interface inside AMF pod
+  ansible.builtin.shell: |
+    AMF_POD=$(kubectl get pods -n {{ open5gs_ns }} -l nf=amf -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n3 | grep "inet 10.10.3.200"
+  register: amf_n3_check
+  until: amf_n3_check.rc == 0
+  retries: 15
+  delay: 5
+  when: core == "open5gs"
+  changed_when: false
+
+- name: Install python3-venv, python3-pip, setuptools and wheel
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+      - python3-pip
+      - python3-setuptools
+      - python3-wheel
+    state: present
+  become: yes
+
+- name: Create Python virtual environment (idempotent)
+  ansible.builtin.command:
+    cmd: python3 -m venv "{{ repo_dest }}/venv"
+    creates: "{{ repo_dest }}/venv/bin/activate"
+  become: yes
+
+- name: Bootstrap pip, setuptools and wheel in venv
+  ansible.builtin.command:
+    cmd: "{{ repo_dest }}/venv/bin/python -m ensurepip --upgrade"
+  become: yes
+
+- name: Upgrade pip, setuptools and wheel explicitly in venv
+  ansible.builtin.command:
+    cmd: "{{ repo_dest }}/venv/bin/pip install --upgrade pip setuptools wheel"
+  become: yes
+
+- name: Install Python requirements in venv
+  ansible.builtin.command:
+    cmd: "{{ repo_dest }}/venv/bin/pip install -r {{ repo_dest }}/requirements.txt"
+  become: yes
+
+- name: Deploy Open5GS Web UI
+  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/open5gs-webui" -n {{ open5gs_ns }}
+
+- name: Wait for WebUI pod Ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ open5gs_ns }}"
+    label_selectors:
+      - "nf=webui"
+  register: webui_pod
+  until: >
+    webui_pod.resources | length > 0 and
+    (webui_pod.resources[0].status.containerStatuses[0].ready | default(false))
+  retries: 30
+  delay: 5
+  failed_when: false
+  changed_when: false
+
+- name: Warn if WebUI not ready
+  ansible.builtin.debug:
+    msg: "WebUI pod not Ready — continuing (optional component)"
+  when: webui_pod is failed or
+        webui_pod.resources | length == 0 or
+        not (webui_pod.resources[0].status.containerStatuses[0].ready | default(false))
+
+- name: Run Python scripts to generate and add subscribers
+  ansible.builtin.shell: |
+    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
+    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/add-subscribers.py
+  args:
+    chdir: "{{ repo_dest }}"
+
+- name: Run add-admin-account.py
+  ansible.builtin.command: >
+    {{ repo_dest }}/venv/bin/python mongo-tools/add-admin-account.py
+  args:
+    chdir: "{{ repo_dest }}"
+
+- name: Check Open5GS deployment
+  ansible.builtin.include_role:
+    name: 5g/open5gs/check_all

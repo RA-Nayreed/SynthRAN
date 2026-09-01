@@ -1,0 +1,123 @@
+---
+- name: START_K8S_ADDS_ON
+  ansible.builtin.meta: noop
+
+- name: Force Ansible to use venv Python
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
+
+- name: Ensure Open vSwitch is installed
+  apt:
+    name: openvswitch-switch
+    state: present
+    update_cache: yes
+  become: true
+  when: bridge_enabled
+
+- name: Create OVS bridges for ovs-cni
+  command: "ovs-vsctl --may-exist add-br {{ item }}"
+  loop:
+    - n2br
+    - n3br
+    - n4br
+  become: true
+  when: bridge_enabled
+
+- name: Render NetworkAddonsConfig manifest locally (bridge enabled)
+  ansible.builtin.template:
+    src: network-addons-config.yaml.j2
+    dest: /tmp/network-addons-config.yaml
+  when: bridge_enabled
+
+- name: Render NetworkAddonsConfig manifest locally (bridge disabled)
+  ansible.builtin.template:
+    src: network-addons-config-full-oai.yaml.j2
+    dest: /tmp/network-addons-config.yaml
+  when: not bridge_enabled
+
+- name: Apply Cluster-Network-Addons Operator manifests
+  ansible.builtin.shell: |
+    kubectl apply -f {{ item }}
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  loop:
+    - "https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/namespace.yaml"
+    - "https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/network-addons-config.crd.yaml"
+    - "https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/operator.yaml"
+  become: true
+
+- name: Wait for cluster-network-addons namespace to exist
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: cluster-network-addons
+    kubeconfig: /etc/kubernetes/admin.conf
+  register: cnano_ns
+  retries: 15
+  delay: 5
+  until: cnano_ns.resources | length > 0
+  changed_when: false
+
+- name: Force CNAO Operator deployment onto core_node
+  kubernetes.core.k8s:
+    kind: Deployment
+    namespace: cluster-network-addons
+    name: cluster-network-addons-operator
+    merge_type: strategic-merge
+    definition:
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: "{{ inventory_hostname }}"
+            tolerations:
+              - key: "node-role.kubernetes.io/control-plane"
+                operator: "Exists"
+                effect: "NoSchedule"
+    kubeconfig: /etc/kubernetes/admin.conf
+  become: true
+
+- name: Wait for cluster-network-addons-operator to be ready
+  ansible.builtin.shell: |
+    kubectl -n cluster-network-addons rollout status deployment/cluster-network-addons-operator --timeout=300s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: cnao_operator_wait
+  retries: 5
+  delay: 10
+  until: cnao_operator_wait.rc == 0
+  changed_when: false
+
+- name: Apply NetworkAddonsConfig from /tmp
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/network-addons-config.yaml
+    kubeconfig: /etc/kubernetes/admin.conf
+  changed_when: false
+
+- name: Wait for NetworkAddonsConfig to reach Available condition
+  ansible.builtin.shell: |
+    set -e
+    for i in $(seq 1 60); do
+      phase=$(kubectl -n cluster-network-addons get networkaddonsconfig cluster -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "Unknown")
+      echo "⏳ Waiting for NetworkAddonsConfig to be Available (attempt $i): $phase"
+      if [ "$phase" = "True" ]; then
+        echo "✅ NetworkAddonsConfig is Available"
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "❌ NetworkAddonsConfig did not become Available in time"
+    exit 1
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: cnao_available
+  retries: 3
+  delay: 5
+  until: cnao_available.rc == 0
+  changed_when: false
+
+- name: Reset ansible_python_interpreter to system python3
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /usr/bin/python3
+

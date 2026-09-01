@@ -1,0 +1,125 @@
+---
+# see https://gitlab.eurecom.fr/oai/orchestration/charts/-/blob/oai-gnb-fhi-72/oai-gnb-fhi-72/README.md#prerequisite
+- name: RESTART_SR-IOV
+  ansible.builtin.meta: noop
+
+- name: Load ran_node vars on controller
+  include_vars:
+    file: "/home/turletti/xp/post5g-beta/ptp_test/5g_ansible/group_vars/ran_node.yml"
+    name: ran_vars
+  run_once: true
+  delegate_to: localhost
+
+- name: Prepare Python environment on Master (Core Node)
+  delegate_to: "{{ groups['core_node'][0] }}"
+  run_once: true
+  become: true
+  block:
+    - name: Create venv for Kubernetes modules
+      ansible.builtin.command:
+        cmd: python3 -m venv /opt/ansible-k8s-venv
+        creates: /opt/ansible-k8s-venv/bin/activate
+
+    - name: Bootstrap pip, setuptools and wheel in venv
+      ansible.builtin.command:
+        cmd: /opt/ansible-k8s-venv/bin/python -m ensurepip --upgrade
+      become: true
+
+    - name: Upgrade pip, setuptools and wheel explicitly in venv
+      ansible.builtin.command:
+        cmd: /opt/ansible-k8s-venv/bin/pip install --upgrade pip setuptools wheel
+      become: true
+
+    - name: Install kubernetes Python module in venv
+      ansible.builtin.command:
+        cmd: /opt/ansible-k8s-venv/bin/pip install --upgrade kubernetes
+      become: true
+
+    - name: Force Ansible to use this venv for delegated tasks
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /opt/ansible-k8s-venv/bin/python
+
+- name: Label node {{ inventory_hostname }} as SR-IOV capable
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: "{{ inventory_hostname }}"
+    definition:
+      metadata:
+        labels:
+          feature.node.kubernetes.io/network-sriov.capable: "true"
+          node-role.kubernetes.io/worker: ""
+    state: patched
+  delegate_to: "{{ groups['core_node'][0] }}"   # run from control/master node
+
+- name: Wait until SR-IOV operator detects NICs on the node
+  kubernetes.core.k8s_info:
+    api_version: sriovnetwork.openshift.io/v1
+    kind: SriovNetworkNodeState
+    name: "{{ inventory_hostname }}"
+    namespace: "{{ ran_vars.sriovNetworkNamespace }}"
+  register: sriov_node_state
+  until:
+    - sriov_node_state.resources is defined
+    - sriov_node_state.resources | length > 0
+    - sriov_node_state.resources[0].status is defined
+    - sriov_node_state.resources[0].status.interfaces is defined
+    - >
+      sriov_node_state.resources[0].status.interfaces
+      | selectattr('name', 'equalto', ran_vars.dpdk_interface_c.split('#')[0])
+      | list | length > 0
+  retries: 30
+  delay: 15
+  failed_when: false
+  delegate_to: "{{ groups['core_node'][0] }}"
+
+- name: Create SR-IOV Node Policies for C_PLANE
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: sriovnetwork.openshift.io/v1
+      kind: SriovNetworkNodePolicy
+      metadata:
+        name: "{{ ran_vars.sriovResourceNameCplane }}"
+        namespace: "{{ ran_vars.sriovNetworkNamespace }}"
+      spec:
+        deviceType: vfio-pci
+        isRdma: false
+        linkType: eth
+        mtu: 9216
+        nicSelector:
+          pfNames:
+          - "{{ ran_vars.dpdk_interface_c }}"
+          rootDevices:
+          - "{{ ran_vars.pci_dpdk_interface }}"
+        nodeSelector:
+          feature.node.kubernetes.io/network-sriov.capable: "true"
+        numVfs: 4
+        priority: 12
+        resourceName: "{{ ran_vars.sriovResourceNameCplane }}"
+
+- name: Create SR-IOV Node Policies for U_PLANE
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: sriovnetwork.openshift.io/v1
+      kind: SriovNetworkNodePolicy
+      metadata:
+        name: "{{ ran_vars.sriovResourceNameUplane }}"
+        namespace: "{{ ran_vars.sriovNetworkNamespace }}"
+      spec:
+        deviceType: vfio-pci
+        isRdma: false
+        linkType: eth
+        mtu: 9216
+        nicSelector:
+          pfNames:
+          - "{{ ran_vars.dpdk_interface_u }}"
+          rootDevices:
+          - "{{ ran_vars.pci_dpdk_interface }}"
+        nodeSelector:
+          feature.node.kubernetes.io/network-sriov.capable: "true"
+        numVfs: 4
+        priority: 11
+        resourceName: "{{ ran_vars.sriovResourceNameUplane }}"
+

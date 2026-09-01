@@ -1,0 +1,29 @@
+---
+- name: Copy SynthRAN package
+  copy: {src: "{{ playbook_dir }}/../../synthran", dest: /opt/synthran-source/}
+- name: Copy package metadata
+  copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /opt/synthran-source/pyproject.toml}
+- name: Install SynthRAN runtime
+  pip: {name: /opt/synthran-source, executable: pip3}
+- name: Install broker and Python MQTT client
+  package: {name: "{{ item }}", state: present}
+  loop: [mosquitto, python3-paho-mqtt]
+- name: Create artifact directory
+  file: {path: /var/log/synthran, state: directory, mode: '0755'}
+- name: Initialize receipt artifact
+  copy: {content: "", dest: /var/log/synthran/receipts.jsonl, force: false}
+- name: Start broker
+  service: {name: mosquitto, state: started, enabled: true}
+- name: Install receipt collector unit
+  copy:
+    dest: /etc/systemd/system/synthran-collector.service
+    content: |
+      [Unit]
+      After=mosquitto.service
+      [Service]
+      ExecStart=/usr/bin/python3 -m synthran.cli workload collect --output /var/log/synthran/receipts.jsonl
+      Restart=on-failure
+      [Install]
+      WantedBy=multi-user.target
+- name: Start receipt collector
+  systemd: {name: synthran-collector, daemon_reload: true, state: started, enabled: true}

@@ -1,0 +1,44 @@
+---
+- name: RESTART_K8S_ENV
+  ansible.builtin.meta: noop
+
+# Install k9s
+- name: Download k9s .deb package using wget
+  ansible.builtin.command:
+    cmd: >
+      wget -O {{ k9s_deb_path }}
+      https://github.com/derailed/k9s/releases/latest/download/k9s_linux_amd64.deb
+  args:
+    creates: "{{ k9s_deb_path }}"   # prevents re-downloading every run
+
+- name: Install k9s
+  ansible.builtin.apt:
+    deb: "{{ k9s_deb_path }}"
+    state: present
+  become: true
+
+- name: Ensure k9s binary is available
+  ansible.builtin.command: k9s version
+  register: k9s_check
+  changed_when: false
+
+- name: Display k9s version
+  debug:
+    var: k9s_check.stdout
+
+- name: Ensure kubectl alias k exists for root
+  ansible.builtin.lineinfile:
+    path: /root/.bashrc
+    regexp: '^alias k='
+    line: "alias k=kubectl"
+    state: present
+  become: true
+
+- name: Ensure kubectl namespace alias kns exists for root
+  ansible.builtin.lineinfile:
+    path: /root/.bashrc
+    regexp: '^kns\(\)'
+    line: 'kns() { kubectl config set-context --current --namespace="$1"; }'
+    state: present
+  become: true
+

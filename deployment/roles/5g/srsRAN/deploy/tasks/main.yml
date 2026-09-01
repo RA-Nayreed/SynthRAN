@@ -1,0 +1,16 @@
+---
+- name: Patch Helm charts
+  include_tasks: patch_charts.yml
+  when: rru == 'rfsim'
+
+- name: Deploy srsRAN UEs (broker must be ready before gNB)
+  include_tasks: deploy_srsues.yml
+  when: rru == 'rfsim'
+
+- name: Deploy srsRAN gNB
+  include_tasks: deploy_gnb.yml
+
+- name: Start GNU Radio broker (after gNB is ready)
+  include_tasks: start_broker.yml
+  when: rru == 'rfsim'
+

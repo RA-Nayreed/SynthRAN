@@ -1,0 +1,131 @@
+---
+
+- name: START_RAN_K8S
+  ansible.builtin.meta: noop
+
+- name: Ensure CPUAffinity 5-15 is set in system.conf
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/system.conf
+    regexp: '^CPUAffinity='
+    line: 'CPUAffinity=5-15'
+    state: present
+
+- name: Reload systemd config
+  become: true
+  ansible.builtin.command:
+    cmd: systemctl daemon-reexec
+
+- name: Add Kubernetes and RT settings to sysctl.conf
+  become: true
+  ansible.builtin.blockinfile:
+    path: /etc/sysctl.conf
+    insertafter: EOF
+    block: |
+      ## For kubernetes
+      fs.inotify.max_user_instances=65536
+      ## Realtime kernel settings
+      kernel.sched_rt_runtime_us=-1
+      kernel.timer_migration=0
+    marker: "# {mark} RAN tuning"
+
+- name: Apply sysctl changes (reload)
+  become: true
+  ansible.builtin.command:
+    cmd: sysctl -p
+  changed_when: false
+
+- name: Ensure python3 and PyYAML are installed
+  become: true
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-yaml
+    state: present
+    update_cache: yes
+
+- name: Merge CPU-only kubelet config safely
+  become: true
+  ansible.builtin.shell: |
+    python3 - <<'EOF'
+    import yaml, os
+    cfg = "/var/lib/kubelet/config.yaml"
+    # 1. CPU/RT patch only
+    patch = {
+        "cgroupDriver": "systemd",
+        "cpuManagerPolicy": "static",
+        "cpuManagerPolicyOptions": {"full-pcpus-only": "true"},
+        "reservedSystemCPUs": "0-15",
+        "failSwapOn": False,
+        "featureGates": {
+            "CPUManager": True,
+            "CPUManagerPolicyOptions": True
+        }
+    }
+    # FIX: removed rootDir from patch — rootDir is kubelet's own working directory
+    #      (default /var/lib/kubelet). Setting it to /var/lib/containerd was incorrect:
+    #      it pointed kubelet's state dir at the containerd data dir, corrupting both.
+    #      kubelet detects imageFs automatically via containerd CRI stats.
+    #      Storage eviction settings are owned by pre_k8s and must not be overwritten here.
+
+    # 2. Add storage settings only on shared RAN+CORE node
+    is_shared_node = {{ True if (ran_node_name == core_node_name) else False }}
+    if is_shared_node:
+        # FIX: removed rootDir here too — same reason as above
+        patch["evictionHard"] = {
+            "nodefs.available": "2%",
+            "imagefs.available": "2%"
+        }
+        patch["evictionMinimumReclaim"] = {
+            "nodefs.available": "500Mi"
+        }
+
+    if not os.path.exists(cfg):
+        print("ERROR: Kubelet config not found")
+        exit(1)
+
+    with open(cfg) as f: 
+        data = yaml.safe_load(f) or {}
+
+    # 3. Merge featureGates separately to avoid overwriting existing ones
+    if "featureGates" in patch:
+        data.setdefault("featureGates", {}).update(patch["featureGates"])
+    
+    # 4. Merge other keys
+    for k, v in patch.items():
+        if k != "featureGates":
+            data[k] = v
+
+    # 5. Atomic write to avoid corrupted config
+    with open(cfg + ".tmp", "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    
+    os.replace(cfg + ".tmp", cfg)
+    print("APPLIED")
+    EOF
+  register: merge_result
+  changed_when: "'APPLIED' in merge_result.stdout"
+
+- name: Restart kubelet
+  become: true
+  ansible.builtin.systemd:
+    name: kubelet
+    state: restarted
+    daemon_reload: yes
+
+- name: Remove kubelet CPU manager checkpoint file
+  become: true
+  ansible.builtin.file:
+    path: /var/lib/kubelet/cpu_manager_state
+    state: absent
+
+# FIX: added post-merge check to catch any rootDir regression
+- name: Verify rootDir is absent from kubelet config after merge
+  ansible.builtin.shell: |
+    grep 'rootDir' /var/lib/kubelet/config.yaml && echo "ERROR: rootDir still present" || echo "OK: rootDir absent"
+  register: rootdir_check
+  changed_when: false
+  become: true
+
+- ansible.builtin.debug:
+    var: rootdir_check.stdout
