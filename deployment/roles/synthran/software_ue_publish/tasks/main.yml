@@ -1,0 +1,154 @@
+---
+- name: Resolve the broker's N6-reachable address
+  set_fact:
+    synthran_effective_broker_address: >-
+      {{ mqtt_broker_address if mqtt_broker_address else
+         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+
+- name: Install UE-tunnel discovery helper
+  copy:
+    src: discover_ue_tunnels.py
+    dest: /tmp/synthran-discover-ue-tunnels.py
+    mode: '0755'
+- name: Discover software UE network namespaces and tunnels
+  command: python3 /tmp/synthran-discover-ue-tunnels.py
+  register: synthran_discovery
+  changed_when: false
+- name: Decode discovered UE tunnels
+  set_fact:
+    synthran_software_tunnels: "{{ synthran_discovery.stdout | from_json }}"
+- name: Require one real tunnel per modeled device
+  assert:
+    that:
+      - synthran_software_tunnels | length >= synthran_ue_map | length
+    fail_msg: >-
+      Found {{ synthran_software_tunnels | length }} UE tunnel(s), but the scenario
+      requires {{ synthran_ue_map | length }}: {{ synthran_discovery.stdout }}
+- name: Select only the tunnels assigned to modeled devices
+  set_fact:
+    synthran_assigned_tunnels: "{{ synthran_software_tunnels[:synthran_ue_map | length] }}"
+- name: Build unique UE pod list
+  set_fact:
+    synthran_software_pods: "{{ synthran_assigned_tunnels | unique(attribute='pod') | list }}"
+
+- name: Add isolated publisher runtime to each UE pod network namespace
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} debug -n {{ item.namespace }} pod/{{ item.pod }}
+    --image={{ synthran_runtime_image | default('python:3.13-slim') }}
+    --container=synthran-runtime -- sleep infinity
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  changed_when: true
+- name: Wait for publisher runtime containers
+  shell: >-
+    test "$(kubectl get pod -n {{ item.namespace }} {{ item.pod }}
+    -o jsonpath='{.status.ephemeralContainerStatuses[?(@.name=="synthran-runtime")].state.running.startedAt}')" != ""
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  register: synthran_runtime_wait
+  changed_when: false
+  retries: 30
+  delay: 2
+  until: synthran_runtime_wait.rc == 0
+
+- name: Reset runtime staging directory
+  file: {path: /tmp/synthran-build, state: absent}
+- name: Stage SynthRAN package on RAN node
+  copy: {src: "{{ playbook_dir }}/../../synthran", dest: /tmp/synthran-build/}
+- name: Stage package metadata on RAN node
+  copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /tmp/synthran-build/pyproject.toml}
+- name: Stage immutable workload trace on RAN node
+  copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
+- name: Copy package into every publisher runtime
+  command: >-
+    kubectl cp -n {{ item.namespace }} -c synthran-runtime
+    /tmp/synthran-build/. {{ item.pod }}:/opt/synthran-runtime
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+- name: Copy trace into every publisher runtime
+  command: >-
+    kubectl cp -n {{ item.namespace }} -c synthran-runtime
+    /tmp/synthran-events.jsonl {{ item.pod }}:/opt/synthran-events.jsonl
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+- name: Install SynthRAN inside publisher runtimes
+  command: >-
+    kubectl exec -n {{ item.namespace }} {{ item.pod }} -c synthran-runtime --
+    python3 -m pip install --disable-pip-version-check /opt/synthran-runtime
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+
+- name: Configure source-policy routing for every assigned UE tunnel
+  shell: >-
+    kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
+    {{ synthran_assigned_tunnels[item.index - 1].pod }}
+    -c {{ synthran_assigned_tunnels[item.index - 1].container }} -- sh -lc
+    'src=$(ip -4 -o addr show dev {{ synthran_assigned_tunnels[item.index - 1].interface }} | awk "{print \$4}" | cut -d/ -f1);
+    ip rule del priority {{ 1000 + item.index }} 2>/dev/null || true;
+    ip rule add priority {{ 1000 + item.index }} from "$src"/32 table {{ 100 + item.index }};
+    ip route replace default dev {{ synthran_assigned_tunnels[item.index - 1].interface }} table {{ 100 + item.index }}'
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }} via {{ synthran_assigned_tunnels[item.index - 1].interface }}"}
+  changed_when: true
+
+- name: Choose one shared UTC start after every UE is attached
+  set_fact:
+    synthran_replay_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
+- name: Replay each device through its assigned UE tunnel
+  command: >-
+    kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
+    {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
+    python3 -m synthran.cli workload replay
+    --trace /opt/synthran-events.jsonl --device {{ item.device }}
+    --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --bind-address {{ synthran_assigned_tunnels[item.index - 1].address }}
+    --start-utc {{ synthran_replay_start_utc }}
+    --output /tmp/publisher-{{ item.device }}.jsonl
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }}"}
+  async: "{{ (mqtt_start_delay_seconds | int) + 3600 }}"
+  poll: 0
+  register: synthran_publish_jobs
+- name: Wait for publishers
+  async_status: {jid: "{{ item.ansible_job_id }}"}
+  loop: "{{ synthran_publish_jobs.results }}"
+  loop_control: {label: "{{ item.item.device }}"}
+  register: synthran_publish_status
+  until: synthran_publish_status.finished
+  retries: 720
+  delay: 5
+
+- name: Read publisher JSONL
+  command: >-
+    kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
+    {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
+    cat /tmp/publisher-{{ item.device }}.jsonl
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }}"}
+  register: synthran_publisher_artifacts
+  changed_when: false
+- name: Save publisher JSONL
+  delegate_to: localhost
+  become: false
+  copy:
+    content: "{{ item.stdout }}{{ '\n' if item.stdout else '' }}"
+    dest: "{{ run_dir }}/publisher-{{ item.item.device }}.jsonl"
+  loop: "{{ synthran_publisher_artifacts.results }}"
+  loop_control: {label: "{{ item.item.device }}"}
+- name: Collect native UE container logs
+  command: >-
+    kubectl logs -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
+    {{ synthran_assigned_tunnels[item.index - 1].pod }}
+    -c {{ synthran_assigned_tunnels[item.index - 1].container }}
+  loop: "{{ synthran_ue_map }}"
+  loop_control: {label: "{{ item.device }}"}
+  register: synthran_native_ue_logs
+  changed_when: false
+- name: Save native UE logs
+  delegate_to: localhost
+  become: false
+  copy:
+    content: "{{ item.stdout }}\n"
+    dest: "{{ run_dir }}/ue-{{ item.item.device }}.log"
+  loop: "{{ synthran_native_ue_logs.results }}"
+  loop_control: {label: "{{ item.item.device }}"}

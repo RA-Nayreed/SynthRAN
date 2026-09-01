@@ -45,8 +45,18 @@ choose_sop_node() {
 if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   echo
-  echo "SynthRAN 5G deployment"
-  echo "======================="
+  printf '\033[1;36m'
+  cat <<'BANNER'
+  _____             _   _     _____            _   _
+ / ____|           | | | |   |  __ \     /\   | \ | |
+| (___  _   _ _ __ | |_| |__ | |__) |   /  \  |  \| |
+ \___ \| | | | '_ \| __| '_ \|  _  /   / /\ \ | . ` |
+ ____) | |_| | | | | |_| | | | | \ \  / ____ \| |\  |
+|_____/ \__, |_| |_|\__|_| |_|_|  \_\/_/    \_\_| \_|
+         __/ |
+        |___/       Energy-aware 5G/6G deployment
+BANNER
+  printf '\033[0m'
   echo "Which CORE do you want to deploy? (default: Open5GS)"
   echo "1) OAI"
   echo "2) Open5GS"
@@ -137,7 +147,13 @@ import os, socket, sys, yaml
 from pathlib import Path
 c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
 if d['ran'].lower() == 'srsran' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUE devices')
-physical_hosts = ues if d['platform'] in {'r2lab','physical'} else []
+if d['platform'] == 'r2lab':
+    r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
+    physical_hosts = [f"{ue} ansible_user=root ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'" for ue in ues]
+elif d['platform'] == 'physical':
+    physical_hosts = ues
+else:
+    physical_hosts = []
 def host_entry(name): return f'{name} ip={socket.gethostbyname(name)}'
 faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}"] if d['platform']=='r2lab' else []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node','broker_node']
@@ -170,8 +186,8 @@ PY
       pos nodes image "$node" "$POS_IMAGE" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
     done
     for node in "${POS_NODES[@]}"; do
-      echo "Resetting $node"
-      pos nodes reset --non-blocking "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+      echo "Resetting and waiting for $node to finish booting"
+      pos nodes reset --blocking --verbose "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
     done
   fi
 fi

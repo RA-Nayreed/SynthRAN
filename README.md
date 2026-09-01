@@ -36,3 +36,9 @@ The deployment matrix retains OAI, Open5GS, Free5GC, OAI RAN, srsRAN,
 UERANSIM, RF simulation, and physical R2Lab adapters. Supported UE interfaces
 are `uesimtun0`, `oaitun_*`, `tun_srsue*`, and physical `wwan0`; smartphones are
 not supported.
+
+For software UEs, the workload role discovers the real tunnel inside running
+UE pods and injects an isolated publisher container into the same network
+namespace. This keeps MQTT replay independent of the selected core and dispatches
+uniformly across OAI NR-UE, UERANSIM, and srsUE. Physical qhat/qfit publishers
+run on their UE hosts and bind to `wwan0`.

@@ -3,13 +3,13 @@ import json, subprocess, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-def replay(trace, broker, port=1883, qos=1, interface=None, start_utc=None, output="publisher.jsonl", device=None):
+def replay(trace, broker, port=1883, qos=1, interface=None, start_utc=None, output="publisher.jsonl", device=None, bind_address=None):
     import paho.mqtt.client as mqtt
     events = [json.loads(line) for line in Path(trace).read_text(encoding="utf-8").splitlines() if line]
     if device: events = [event for event in events if event["device"] == device]
     records, acknowledgements = [], set()
-    bind_address = ""
-    if interface:
+    bind_address = bind_address or ""
+    if interface and not bind_address:
         output_ip = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", interface], check=True, capture_output=True, text=True).stdout
         bind_address = output_ip.split("inet ", 1)[1].split("/", 1)[0]
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)

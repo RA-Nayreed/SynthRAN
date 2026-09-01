@@ -2,10 +2,16 @@
 - hosts: broker_node
   become: true
   roles: [synthran/broker]
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Choose one shared UTC start for physical UE publishers
+      set_fact:
+        synthran_physical_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
 - hosts: ran_node
   roles:
-    - role: synthran/srsue_publish
-      when: ran | lower == 'srsran' and platform == 'rfsim'
+    - role: synthran/software_ue_publish
+      when: platform == 'rfsim' and ran | lower in ['srsran', 'ueransim', 'oai']
 - hosts: physical_ues
   become: true
   roles:
