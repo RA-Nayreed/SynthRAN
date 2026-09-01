@@ -57,6 +57,7 @@ if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
         |___/       Energy-aware 5G/6G deployment
 BANNER
   printf '\033[0m'
+  echo
   echo "Which CORE do you want to deploy? (default: Open5GS)"
   echo "1) OAI"
   echo "2) Open5GS"
@@ -98,7 +99,7 @@ BANNER
   choose_sop_node "RAN" "sopnode-f3"; SELECTED_RAN_NODE="$SELECTED_NODE"
   choose_sop_node "broker" "$SELECTED_CORE_NODE"; SELECTED_BROKER_NODE="$SELECTED_NODE"
   read -r -p "5G profile [default]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-default}
-  read -r -p "Reserve and reimage selected SOP nodes? [Y/n]: " RESERVE_CHOICE
+  read -r -p "Ensure selected SOP nodes are reserved? [Y/n]: " RESERVE_CHOICE
   if [[ "${RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]]; then
     SELECTED_RESERVE=false
   else
@@ -188,16 +189,47 @@ PY
   if [[ "${POS_SETTINGS[0]}" == true ]]; then
     command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
     POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
-    echo "Allocating SOP nodes for ${POS_DURATION} minutes: ${POS_NODES[*]}"
-    pos allocations allocate --duration "$POS_DURATION" "${POS_NODES[@]}" 2>&1 | tee "$RUN_DIR/pos-allocation.log"
-    for node in "${POS_NODES[@]}"; do
-      echo "Selecting image $POS_IMAGE on $node"
-      pos nodes image "$node" "$POS_IMAGE" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+    POS_REUSED=false; POS_RESERVED=false; POS_LAST_ERROR=""
+    echo "Requesting up to ${POS_DURATION} minutes for: ${POS_NODES[*]}"
+    for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
+      if POS_OUTPUT=$(pos allocations allocate --duration "$candidate" "${POS_NODES[@]}" 2>&1); then
+        POS_RESERVED=true; POS_ACTUAL_DURATION=$candidate
+        printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
+        break
+      fi
+      POS_LAST_ERROR=$POS_OUTPUT
+      if [[ "$POS_OUTPUT" == *"already allocated"* ]]; then
+        echo "Nodes already allocated; attempting to reuse and extend the current allocation"
+        for ((extension=candidate; extension>=10; extension-=10)); do
+          if POS_OUTPUT=$(pos allocations add "${POS_NODES[@]}" --duration "$extension" 2>&1); then
+            POS_RESERVED=true; POS_REUSED=true; POS_ACTUAL_DURATION=$extension
+            printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
+            break 2
+          fi
+          POS_LAST_ERROR=$POS_OUTPUT
+        done
+        break
+      fi
+      [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
     done
-    for node in "${POS_NODES[@]}"; do
-      echo "Resetting and waiting for $node to finish booting"
-      pos nodes reset --blocking --verbose "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
-    done
+    if ! $POS_RESERVED; then
+      printf '%s\n' "$POS_LAST_ERROR" >&2
+      echo "Unable to allocate or extend these nodes; they may belong to another user" >&2
+      exit 1
+    fi
+    echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
+    if $POS_REUSED; then
+      echo "Reusing existing node state; skipping image selection and reset"
+    else
+      for node in "${POS_NODES[@]}"; do
+        echo "Selecting image $POS_IMAGE on $node"
+        pos nodes image "$node" "$POS_IMAGE" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+      done
+      for node in "${POS_NODES[@]}"; do
+        echo "Resetting and waiting for $node to finish booting"
+        pos nodes reset --blocking --verbose "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
+      done
+    fi
   fi
 fi
 
