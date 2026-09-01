@@ -1,28 +1,34 @@
 ---
-- hosts: sopnodes
+- name: "[4/8] Prepare core and RAN hosts"
+  hosts: sopnodes
   become: true
   any_errors_fatal: true
   roles: [setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/k8s/k8s_env, setup/ovs]
-- hosts: core_node
+- name: "[4/8] Create the Kubernetes control plane"
+  hosts: core_node
   become: true
   any_errors_fatal: true
   roles: [setup/k8s/cluster_create, setup/k8s/remove_cp_taint, setup/cni, setup/storage]
-- hosts: ran_node
+- name: "[4/8] Join the RAN host to Kubernetes"
+  hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
     - {role: setup/k8s/cluster_join, when: "inventory_hostname != groups['core_node'][0]"}
-- hosts: core_node
+- name: "[5/8] Configure core-side transport"
+  hosts: core_node
   become: true
   any_errors_fatal: true
   roles:
     - {role: setup/gre_tunnel, when: bridge_enabled}
-- hosts: ran_node
+- name: "[5/8] Configure RAN-side transport"
+  hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
     - {role: setup/gre_tunnel, when: bridge_enabled}
-- hosts: core_node
+- name: "[5/8] Deploy the selected 5G core"
+  hosts: core_node
   any_errors_fatal: true
   roles:
     - {role: 5g/open5gs/config, when: "core == 'open5gs'"}
@@ -30,7 +36,8 @@
     - {role: 5g/free5gc/node, when: "core == 'free5gc'"}
     - {role: 5g/free5gc/config, when: "core == 'free5gc'"}
     - {role: 5g/free5gc/deploy, when: "core == 'free5gc'"}
-- hosts: ran_node
+- name: "[6/8] Deploy the selected RAN and software UEs"
+  hosts: ran_node
   any_errors_fatal: true
   roles:
     - {role: 5g/oai/config, when: "core == 'oai' or ran == 'oai'"}

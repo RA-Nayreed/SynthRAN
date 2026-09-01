@@ -1,5 +1,5 @@
 ---
-- name: Verify provisioned nodes are reachable over SSH
+- name: "[4/8] Validate selected SOP nodes"
   hosts: sopnodes
   gather_facts: false
   any_errors_fatal: true

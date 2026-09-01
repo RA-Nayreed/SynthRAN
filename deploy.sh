@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
     -n|--no-input) NO_INPUT=true; shift ;;
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--no-input] [--no-reservation] [--dry-run]"; echo "Without options, deployment choices are prompted interactively."; exit 0 ;;
+    -v|--verbose) VERBOSE=true; shift ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--no-input] [--no-reservation] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 if [[ -x .venv/bin/python ]]; then
   SYNTHRAN_PYTHON=.venv/bin/python
 else
@@ -20,8 +22,12 @@ else
   python3 -m venv .venv
   SYNTHRAN_PYTHON=.venv/bin/python
 fi
-"$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e .
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+echo "[setup] Preparing the local SynthRAN runtime"
+if ! "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e . >"$RUN_DIR/bootstrap.log" 2>&1; then
+  cat "$RUN_DIR/bootstrap.log" >&2
+  echo "Runtime preparation failed; full output: $RUN_DIR/bootstrap.log" >&2
+  exit 1
+fi
 
 choose_sop_node() {
   local label="$1" default_node="$2" node_choice
@@ -143,6 +149,7 @@ PY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
 
+echo "[1/8] Generating the energy-aware sensor trace"
 "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
 "$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" <<'PY'
 import os, socket, sys, yaml
@@ -168,6 +175,7 @@ Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
 
+echo "[2/8] Preparing SOP node reservations"
 if ! $NO_RESERVATION; then
   mapfile -t POS_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
@@ -239,13 +247,43 @@ PY
   fi
 fi
 
+echo "[3/8] Preparing Ansible dependencies"
+if ! ansible-galaxy collection install -r deployment/collections/requirements.yml >"$RUN_DIR/ansible-galaxy.log" 2>&1; then
+  cat "$RUN_DIR/ansible-galaxy.log" >&2
+  echo "Ansible dependency preparation failed; full output: $RUN_DIR/ansible-galaxy.log" >&2
+  exit 1
+fi
+
+echo "[4/8] Provisioning nodes and deploying the selected 5G stack"
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
-export ANSIBLE_LOG_PATH="$PWD/$RUN_DIR/ansible.log"
-ansible-galaxy collection install -r deployment/collections/requirements.yml
-ansible-playbook -i "$RUN_DIR/inventory.ini" \
-  -e "@deployment/group_vars/all/all.yml" \
-  -e "@$RUN_DIR/deployment-vars.yml" \
-  deployment/playbooks/site.yml
+export ANSIBLE_FORCE_COLOR=0
+ANSIBLE_COMMAND=(ansible-playbook -i "$RUN_DIR/inventory.ini"
+  -e "@deployment/group_vars/all/all.yml"
+  -e "@$RUN_DIR/deployment-vars.yml"
+  deployment/playbooks/site.yml)
+set +e
+if $VERBOSE; then
+  "${ANSIBLE_COMMAND[@]}" 2>&1 | tee "$RUN_DIR/ansible.log"
+  ANSIBLE_RC=${PIPESTATUS[0]}
+else
+  "${ANSIBLE_COMMAND[@]}" 2>&1 | tee "$RUN_DIR/ansible.log" | awk '
+    /^PLAY \[/ { print; next }
+    /^TASK \[/ || /^RUNNING HANDLER \[/ { pending=$0; next }
+    /^changed:/ { if (pending != "") print pending; pending=""; print substr($0,1,360); next }
+    /^fatal:/ || /^unreachable:/ { if (pending != "") print pending; pending=""; print substr($0,1,900); next }
+    /^\[WARNING\]/ { print; next }
+    /^PLAY RECAP/ { recap=1; print; next }
+    recap { print }
+  '
+  ANSIBLE_RC=${PIPESTATUS[0]}
+fi
+set -e
+if (( ANSIBLE_RC != 0 )); then
+  echo "Deployment failed; complete Ansible output: $RUN_DIR/ansible.log" >&2
+  exit "$ANSIBLE_RC"
+fi
+
+echo "[8/8] Reconciling model, publisher, and broker results"
 "$SYNTHRAN_PYTHON" - "$RUN_DIR" <<'PY'
 import sys
 from pathlib import Path
