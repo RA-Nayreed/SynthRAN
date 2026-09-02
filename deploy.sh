@@ -15,6 +15,14 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+R2LAB_IDENTITY_FILE=${R2LAB_IDENTITY_FILE:-}
+if [[ -z "$R2LAB_IDENTITY_FILE" && -r "$HOME/.ssh/id_rsa_r2lab_duckburg" ]]; then
+  R2LAB_IDENTITY_FILE="$HOME/.ssh/id_rsa_r2lab_duckburg"
+fi
+if [[ -n "$R2LAB_IDENTITY_FILE" ]]; then
+  [[ -r "$R2LAB_IDENTITY_FILE" ]] || { echo "R2Lab SSH identity is not readable: $R2LAB_IDENTITY_FILE" >&2; exit 1; }
+  export R2LAB_IDENTITY_FILE
+fi
 deployment_section() {
   echo
   echo "$1"
@@ -198,14 +206,21 @@ if d['ran'].lower() == 'srsran' and len(ues) > 3: raise SystemExit('srsRAN RFSIM
 if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit('UERANSIM cannot be combined with an R2Lab physical radio')
 if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
-    physical_hosts = [f"{ue} ansible_user=root ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'" for ue in ues]
+    identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
+    key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
+    physical_hosts = [f"{ue} ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'" for ue in ues]
 elif d['platform'] == 'physical':
     physical_hosts = ues
 else:
     physical_hosts = []
 def host_entry(name):
     return f'{name} ip={socket.gethostbyname(name)}'
-faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}"] if d['platform']=='r2lab' else []
+if d['platform'] == 'r2lab':
+    identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
+    key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
+    faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}{key_arg}"]
+else:
+    faraday = []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
 ue_map=[{'device':name,'index':i+1,'interface':f'tun_srsue{i+1}'} for i,name in enumerate(ues)]
@@ -343,29 +358,21 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
   echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
-  # Resolve a configured jump once, then isolate the nested ssh process from
-  # ~/.ssh/config.  Otherwise a ProxyJump rule can recursively reapply itself
-  # (notably when deploy.sh is already running on that SOP node).
-  R2LAB_JUMP=$(ssh -G "$R2LAB_USERNAME@faraday.inria.fr" 2>/dev/null \
-    | awk '$1 == "proxyjump" { print $2; exit }')
-  R2LAB_SSH=(ssh -o StrictHostKeyChecking=accept-new)
-  if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
-    R2LAB_PROXY_COMMAND="ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $R2LAB_JUMP"
-    R2LAB_SSH+=(-o ProxyJump=none -o "ProxyCommand=$R2LAB_PROXY_COMMAND")
+  # Match the original 5g_ansible flow: use the operator's normal SSH
+  # configuration and run rhubarbe directly on Faraday. Select Duckburg's
+  # non-standard R2Lab identity explicitly when it is present.
+  R2LAB_SSH=(ssh)
+  if [[ -n "${R2LAB_IDENTITY_FILE:-}" ]]; then
+    R2LAB_SSH+=(-i "$R2LAB_IDENTITY_FILE" -o IdentitiesOnly=yes)
+    echo "Using R2Lab SSH identity: $R2LAB_IDENTITY_FILE"
   fi
   echo "Checking SSH access to $R2LAB_USERNAME@faraday.inria.fr"
   if ! "${R2LAB_SSH[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
     "$R2LAB_USERNAME@faraday.inria.fr" true; then
-    echo "Cannot authenticate to Faraday; no R2Lab reservation was attempted." >&2
-    if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
-      echo "Configured SSH jump: $R2LAB_JUMP" >&2
-    fi
-    echo "First make this command succeed on Duckburg:" >&2
-    echo "  ssh $R2LAB_USERNAME@faraday.inria.fr true" >&2
+    echo "R2Lab SSH authentication failed; no reservation was attempted" >&2
     exit 1
   fi
-  if ! "${R2LAB_SSH[@]}" \
-    "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
+  if ! "${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
     2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
     echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
     exit 1
