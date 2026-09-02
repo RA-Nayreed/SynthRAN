@@ -100,7 +100,8 @@ def main():
             run("pos", "calendar", "create", "--start", "now", "--duration", str(remaining), *event["nodes"], check=False)
         detail = (error.stderr or error.stdout or str(error)).strip()
         raise SystemExit(f"Unable to replace the SOP calendar reservation; previous remaining coverage was restored where possible:\n{detail}")
-    print(result.stdout.strip())
+    reservation_id = result.stdout.strip()
+    print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
     newly_allocated = []
     for node in selected:
         allocation = run("pos", "allocations", "allocate", node, check=False)

@@ -214,8 +214,8 @@ Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
 
-deployment_section "Preparing SOP node reservations"
 if ! $NO_RESERVATION && ! $SOP_RESERVATION_DONE; then
+  deployment_section "Preparing SOP node reservations"
   mapfile -t POS_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
 from pathlib import Path
@@ -338,11 +338,19 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   }
   R2LAB_CLOCK=$(date +'%H%M')
   R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
-  R2LAB_END=$(date -d "$R2LAB_START +${R2LAB_DURATION} minutes" +'%Y-%m-%dT%H:%M')
+  R2LAB_START_EPOCH=$(date -d "$R2LAB_START" +%s)
+  R2LAB_END=$(date -d "@$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))" +'%Y-%m-%dT%H:%M')
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
   echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
-  if ! ssh -o ProxyJump=none -o StrictHostKeyChecking=accept-new \
+  # Enroll any configured jump host before OpenSSH starts the ProxyJump child.
+  R2LAB_JUMP=$(ssh -G "$R2LAB_USERNAME@faraday.inria.fr" 2>/dev/null \
+    | awk '$1 == "proxyjump" { print $2; exit }')
+  if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+      "$R2LAB_JUMP" true >/dev/null 2>&1 || true
+  fi
+  if ! ssh -o StrictHostKeyChecking=accept-new \
     "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
     2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
     echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
