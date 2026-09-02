@@ -217,10 +217,9 @@ PY
     if ! POS_COVERAGE_OUTPUT=$("$SYNTHRAN_PYTHON" - \
       "$RUN_DIR/pos-calendar-owner.json" "$POS_DURATION" "${POS_NODES[@]}" <<'PY'
 import json, math, sys
-from datetime import datetime, timedelta
+from datetime import datetime
 events = json.load(open(sys.argv[1], encoding='utf-8'))
-requested = int(sys.argv[2]); nodes = sys.argv[3:]; now = datetime.now()
-target = now + timedelta(minutes=requested)
+nodes = sys.argv[3:]; now = datetime.now()
 def stamp(value): return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
 active_ends = {}
 for node in nodes:
@@ -235,13 +234,11 @@ if not active_ends:
     print('fresh')
 else:
     print('reuse')
-    for node, end in active_ends.items():
-        if end < target:
-            duration = max(1, math.ceil((target - end).total_seconds() / 60))
-            print(f'extend|{node}|{end:%Y-%m-%d_%H:%M}|{duration}')
-    remaining = min(math.floor((max(end, target) - now).total_seconds() / 60)
+    remaining = min(math.floor((end - now).total_seconds() / 60)
                     for end in active_ends.values())
+    common_end = min(active_ends.values())
     print(f'duration|{max(0, remaining)}')
+    print(f'end|{common_end:%Y-%m-%dT%H:%M}')
 PY
     ); then
       echo "Unable to reconcile the current SOP calendar coverage" >&2
@@ -249,18 +246,16 @@ PY
     fi
     mapfile -t POS_COVERAGE <<< "$POS_COVERAGE_OUTPUT"
     if [[ "${POS_COVERAGE[0]}" == reuse ]]; then
-      POS_REUSED=true; POS_RESERVED=true; POS_ACTUAL_DURATION=$POS_DURATION
+      POS_REUSED=true; POS_RESERVED=true; POS_ACTUAL_DURATION=0; POS_CALENDAR_END=""
       for coverage in "${POS_COVERAGE[@]:1}"; do
         IFS='|' read -r action node start extension <<< "$coverage"
-        if [[ "$action" == extend ]]; then
-          echo "Extending calendar coverage for $node by ${extension} minutes from $start"
-          pos calendar create --start "$start" --duration "$extension" "$node" \
-            2>&1 | tee -a "$RUN_DIR/pos-allocation.log"
-        elif [[ "$action" == duration ]]; then
+        if [[ "$action" == duration ]]; then
           POS_ACTUAL_DURATION=$node
+        elif [[ "$action" == end ]]; then
+          POS_CALENDAR_END=$node
         fi
       done
-      echo "Reusing the active allocation; calendar coverage now reaches ${POS_ACTUAL_DURATION} minutes from now"
+      echo "Reusing the active allocation unchanged; calendar coverage ends at $POS_CALENDAR_END (${POS_ACTUAL_DURATION} minutes remain)"
     else
       for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
         if POS_OUTPUT=$(pos calendar create --start now --duration "$candidate" "${POS_NODES[@]}" 2>&1); then
@@ -313,7 +308,11 @@ PY
       }
       R2LAB_CLOCK=$(date +'%H%M')
       R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
-      R2LAB_END=$(date -d "$R2LAB_START +${POS_ACTUAL_DURATION} minutes" +'%Y-%m-%dT%H:%M')
+      if $POS_REUSED; then
+        R2LAB_END=$POS_CALENDAR_END
+      else
+        R2LAB_END=$(date -d "$R2LAB_START +${POS_ACTUAL_DURATION} minutes" +'%Y-%m-%dT%H:%M')
+      fi
       printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
         "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
       echo "Synchronizing R2Lab reservation from $R2LAB_START to $R2LAB_END"
