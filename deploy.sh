@@ -343,14 +343,16 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
   echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
-  # Enroll any configured jump host before OpenSSH starts the ProxyJump child.
+  # ProxyJump starts a second ssh process that does not inherit destination
+  # host-key options, so make that process explicit when a jump is configured.
   R2LAB_JUMP=$(ssh -G "$R2LAB_USERNAME@faraday.inria.fr" 2>/dev/null \
     | awk '$1 == "proxyjump" { print $2; exit }')
+  R2LAB_SSH=(ssh -o StrictHostKeyChecking=accept-new)
   if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
-    ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-      "$R2LAB_JUMP" true >/dev/null 2>&1 || true
+    R2LAB_PROXY_COMMAND="ssh -o ProxyJump=none -o StrictHostKeyChecking=accept-new -W %h:%p $R2LAB_JUMP"
+    R2LAB_SSH+=(-o ProxyJump=none -o "ProxyCommand=$R2LAB_PROXY_COMMAND")
   fi
-  if ! ssh -o StrictHostKeyChecking=accept-new \
+  if ! "${R2LAB_SSH[@]}" \
     "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
     2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
     echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
