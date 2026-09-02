@@ -54,7 +54,7 @@
   failed_when: false
   register: helm_uninstall_result
 
-- name: Debug Helm uninstall result
+- name: Report the previous Free5GC release removal
   debug:
     msg: "{{ helm_uninstall_result.stderr | default('no output') }}"
   when:
@@ -332,7 +332,7 @@
   register: add_subscribers_result
   changed_when: true
 
-- name: Show add_subscribers output
+- name: Report Free5GC subscriber provisioning
   debug:
     msg: "{{ add_subscribers_result.stdout_lines }}"
 

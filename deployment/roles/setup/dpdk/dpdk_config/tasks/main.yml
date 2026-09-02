@@ -1,12 +1,9 @@
 ---
-- name: RESTART_DPDK_CONFIG
-  ansible.builtin.meta: noop
-
 - name: Load variables from group_vars/ran_node.yml
   ansible.builtin.include_vars:
     file: /home/turletti/xp/post5g-beta/ptp_test/5g_ansible/group_vars/ran_node.yml
 
-- name: Debug loaded variables
+- name: Report loaded DPDK configuration
   ansible.builtin.debug:
     msg: |
       Loaded variables:
@@ -33,7 +30,7 @@
     state: present
   become: yes
 
-- name: Debug variables
+- name: Report resolved DPDK interfaces
   ansible.builtin.debug:
     msg: "Using dpdk_interface: {{ dpdk_interface }}, U-plane PCI: {{ dpdk_u_plane_pci }}, C-plane PCI: {{ dpdk_c_plane_pci }}, Driver: {{ dpdk_driver }}"
 
@@ -109,6 +106,6 @@
   changed_when: false
   become: yes
 
-- name: Debug VF binding status
+- name: Report VF binding status
   ansible.builtin.debug:
     msg: "U-plane PCI: {{ dpdk_u_plane_pci }}, C-plane PCI: {{ dpdk_c_plane_pci }}"

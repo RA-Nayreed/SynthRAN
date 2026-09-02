@@ -75,7 +75,7 @@
     path: "{{ free5gc_repo_dest }}/charts/free5gc/charts/free5gc-upf/templates/upf/upf-configmap.yaml"
     regexp: 'echo "1200 n6if" >> /etc/iproute2/rt_tables'
     replace: 'mkdir -p /etc/iproute2 && echo "1200 n6if" >> /etc/iproute2/rt_tables'
-  ignore_errors: true
+  failed_when: false
 
 - name: Patch iupf1 N3 addr to 0.0.0.0 so gtp5g listens on all interfaces (N3 + N9)
   ansible.builtin.replace:

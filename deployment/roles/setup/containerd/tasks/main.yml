@@ -1,7 +1,4 @@
 ---
-- name: START_CONTAINERD
-  ansible.builtin.meta: noop
-
 # --- Handle live Ubuntu RAN images before containerd install ---
 - name: Detect if running from a live Ubuntu image
   ansible.builtin.shell: |
@@ -18,16 +15,16 @@
         state: directory
         mode: '0755'
 
-    - name: Check if /var/lib/containerd is already mounted
+    - name: Check the containerd storage mount
       ansible.builtin.command: mountpoint -q /var/lib/containerd
       register: containerd_mp
-      ignore_errors: true
       changed_when: false
+      failed_when: false
 
     # FIX: was: mount tmpfs 10G — same root cause as pre_k8s: tmpfs causes
     #      InvalidDiskCapacity. pre_k8s already mounts the real disk here.
     #      This block now only asserts the mount is present; it does NOT remount.
-    - name: Warn if /var/lib/containerd is not yet mounted (will be done by pre_k8s)
+    - name: Report pending containerd storage preparation
       ansible.builtin.debug:
         msg: >
           WARNING: /var/lib/containerd is not mounted on a real filesystem yet on {{ inventory_hostname }}.
@@ -40,13 +37,15 @@
   tags: ['live-fix']
 
 # containerd installation
-- name: Remove old Docker repo junk
+- name: Remove obsolete Docker repository files
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
     - /etc/apt/sources.list.d/docker.list
     - /etc/apt/keyrings/docker.asc
+  loop_control:
+    label: "{{ item }}"
   become: true
   when: ansible_facts.os_family == 'Debian'
 
@@ -70,7 +69,7 @@
   changed_when: false
   become: true
 
-- name: Write config.toml
+- name: Install the generated containerd configuration
   ansible.builtin.copy:
     dest: /etc/containerd/config.toml
     content: "{{ containerd_cfg.stdout }}"
@@ -140,7 +139,7 @@
 #  become: true
 
 # ---- Restart and enable
-- name: Restart & enable containerd
+- name: Restart and enable containerd
   ansible.builtin.systemd:
     name: containerd
     enabled: yes
@@ -156,15 +155,16 @@
     timeout: 20
   become: true
 
-- name: Display containerd cgroup driver for debug
+- name: Read the configured containerd cgroup driver
   ansible.builtin.shell: |
     grep -E 'SystemdCgroup|systemd_cgroup' /etc/containerd/config.toml | head -n 3
   register: cgroup_check
   changed_when: false
   become: true
 
-- ansible.builtin.debug:
-    var: cgroup_check.stdout
+- name: Report the containerd cgroup driver
+  ansible.builtin.debug:
+    msg: "{{ cgroup_check.stdout | trim }}"
 
 #- name: Fail if docker_pat is not set
 #  ansible.builtin.fail:
@@ -173,12 +173,13 @@
 
 # FIX: added snapshotter verification — catch any residual "native" entry that
 #      the replace above may have missed (e.g. plugin-specific overrides).
-- name: Verify no native snapshotter remains in config
+- name: Verify the overlayfs snapshotter configuration
   ansible.builtin.shell: |
     grep 'snapshotter' /etc/containerd/config.toml | grep '"native"' || echo "OK: no native snapshotter"
   register: snapshotter_check
   changed_when: false
   become: true
 
-- ansible.builtin.debug:
-    var: snapshotter_check.stdout
+- name: Report the containerd snapshotter status
+  ansible.builtin.debug:
+    msg: "{{ snapshotter_check.stdout | trim }}"

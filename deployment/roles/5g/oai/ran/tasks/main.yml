@@ -1,7 +1,4 @@
 ---
-- name: START_OAI_RAN
-  ansible.builtin.meta: noop
-
 - name: Remove previous OAI RAN deployment if any
   ansible.builtin.command: "{{ demo_oai_script }} stop-ran"
   args:
@@ -64,7 +61,7 @@
       until: gnb_log_check.rc == 0
       retries: 6
       delay: 10
-      ignore_errors: true
+      failed_when: false
 
     - name: Handle sync failure
       block:

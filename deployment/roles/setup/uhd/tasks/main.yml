@@ -9,7 +9,7 @@
   register: uhd_check
   changed_when: false
 
-- name: Display installed UHD/GNU Radio versions
+- name: Report the installed UHD version
   debug:
     msg: |
       UHD installed: {{ uhd_check.stdout | default('none') }}
@@ -87,7 +87,7 @@
       register: uhd_verify
       failed_when: uhd_verify.rc != 0
 
-    - name: Display UHD version
+    - name: Report the verified UHD version
       debug:
         msg: "UHD installed: {{ uhd_verify.stdout }}"
 

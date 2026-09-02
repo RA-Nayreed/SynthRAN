@@ -1,7 +1,4 @@
 ---
-- name: START_K8S_JOIN
-  ansible.builtin.meta: noop
-
 # Cleanup if node already joined a k8s cluster
 - name: Check if node has leftover Kubernetes data
   ansible.builtin.stat:
@@ -11,7 +8,9 @@
 - name: Reset node if Kubernetes data exists
   ansible.builtin.command: kubeadm reset -f
   when: kube_dir.stat.exists
-  ignore_errors: true
+  register: worker_kubeadm_reset
+  changed_when: worker_kubeadm_reset.rc == 0
+  failed_when: false
   become: true
 
 - name: Remove all Kubernetes and CNI state
@@ -26,7 +25,8 @@
     - /run/flannel
   when: kube_dir.stat.exists
   become: true
-  ignore_errors: true
+  loop_control:
+    label: "{{ item }}"
 
 # FIX: full containerd data wipe — metadata/snapshots from previous joins
 #      reference deleted blobs → kubeadm join fails with "blob not found".
@@ -36,7 +36,7 @@
     state: stopped
   become: true
 
-- name: Wipe all containerd data (metadata, snapshots, blobs)
+- name: Remove stale containerd cluster data
   ansible.builtin.shell: |
     rm -rf /var/lib/containerd/io.containerd.content.v1.content
     rm -rf /var/lib/containerd/io.containerd.metadata.v1.bolt
@@ -70,7 +70,7 @@
     - /var/lib/cni
   become: true
 
-- name: Download CNI plugins (via curl, plus fiable)
+- name: Download the base CNI plugins
   ansible.builtin.shell: |
     curl -fsSL -o /tmp/cni-plugins.tgz \
       https://github.com/containernetworking/plugins/releases/download/v1.5.1/cni-plugins-linux-amd64-v1.5.1.tgz
@@ -85,7 +85,7 @@
     remote_src: true
   become: true
 
-- name: Fix permissions
+- name: Set CNI plugin permissions
   ansible.builtin.file:
     path: /opt/cni/bin
     owner: root
@@ -109,6 +109,8 @@
     msg: "❌ CNI plugin {{ item.item }} missing on node {{ inventory_hostname }}"
   when: not item.stat.exists
   loop: "{{ cni_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 # === PREPARE JOIN ============================================================
 - name: Ensure /root/.kube exists
@@ -195,9 +197,9 @@
   ansible.builtin.set_fact:
     kubeadm_join_command: "{{ lookup('file', '.kubeadm_join_command.txt') }}"
 
-- name: Debug join command
+- name: Report the Kubernetes join target
   ansible.builtin.debug:
-    var: kubeadm_join_command
+    msg: "Joining {{ inventory_hostname }} to {{ groups['core_node'][0] }}"
 
 # === JOIN THE CLUSTER ========================================================
 - name: Join node to the cluster
@@ -222,7 +224,7 @@
   until: coredns_wait.rc == 0
   changed_when: false
 
-- name: Debug CoreDNS status if not ready
+- name: Collect CoreDNS diagnostics when readiness fails
   when: coredns_wait.rc != 0
   become: true
   delegate_to: "{{ groups['core_node'][0] }}"

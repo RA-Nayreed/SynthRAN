@@ -1,7 +1,4 @@
 ---
-- name: RESTART_OVS_SETUP
-  ansible.builtin.meta: noop
-
 - name: Ensure OVS is installed
   ansible.builtin.apt:
     name: openvswitch-switch

@@ -120,7 +120,7 @@
   changed_when: false
   failed_when: false
 
-- name: Show UE IP addresses
+- name: Report UE tunnel addresses
   ansible.builtin.debug:
     msg: "{{ item.item.name }} ({{ item.item.imsi }}) → {{ item.stdout | default('N/A') }}"
   loop: "{{ ue_ips.results }}"

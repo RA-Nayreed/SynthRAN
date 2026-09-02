@@ -1,7 +1,4 @@
 ---
-- name: RESTART_SRIOV
-  ansible.builtin.meta: noop
-
 - name: Update APT package cache
   ansible.builtin.apt:
     update_cache: yes
@@ -106,6 +103,6 @@
     namespace: sriov-network-operator
   register: sriov_pods
 
-- name: Debug deployed pods
+- name: Report deployed SR-IOV operator pods
   ansible.builtin.debug:
     var: sriov_pods.resources

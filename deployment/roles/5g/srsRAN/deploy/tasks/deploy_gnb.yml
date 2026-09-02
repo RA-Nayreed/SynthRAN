@@ -182,7 +182,7 @@
       set_fact:
         governor_value: "{{ governor_logs.stdout | regex_search('After:\\n(.*)', '\\1') | default('unknown') }}"
 
-    - name: Show governor status
+    - name: Report the RAN CPU governor
       ansible.builtin.debug:
         msg: "CPU governor on {{ ran_node_name }}: {{ governor_value }}"
 

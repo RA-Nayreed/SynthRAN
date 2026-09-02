@@ -10,7 +10,7 @@
       - ue_list | length > 0
     fail_msg: "ue_list is not defined - ensure config role ran before deploy"
 
-- name: Debug UE list
+- name: Report the selected srsUE devices
   ansible.builtin.debug:
     msg: "Deploying {{ ue_list | length }} UE(s): {{ ue_list | map(attribute='name') | list }}"
 
@@ -64,7 +64,7 @@
         -n {{ ran_ns }} --timeout=300s
       changed_when: false
 
-    - name: Debug UE pod name
+    - name: Report the srsUE pod name
       ansible.builtin.debug:
         msg: "UE pod: {{ ue_pod_name }}"
 
@@ -77,7 +77,7 @@
 
   when: rru == 'rfsim'
 
-- name: Summary (Non-RFSIM)
+- name: Report non-RFSIM UE deployment status
   ansible.builtin.debug:
     msg:
       - "gNB deployed in namespace {{ ran_ns }}"

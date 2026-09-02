@@ -1,8 +1,5 @@
 ---
-- name: RESTART_AFTER_REBOOT
-  ansible.builtin.meta: noop
-
-- name: Refresh boolean variables on all hosts
+- name: Resolve deployment feature flags on every host
   ansible.builtin.set_fact:
     fhi72: "{{ (hostvars[item].get('fhi72', False) | bool) }}"
     aw2s: "{{ (hostvars[item].get('aw2s', False) | bool) }}"
@@ -11,25 +8,27 @@
   loop: "{{ groups['all'] }}"
   delegate_to: "{{ item }}"
   run_once: true
+  loop_control:
+    label: "{{ item }}"
 
 # fix ubuntu mirror issue
-- name: Detect OS codename
+- name: Record the Ubuntu release codename
   ansible.builtin.set_fact:
     os_codename: "{{ ansible_distribution_release }}"
 
-- name: Ensure Ubuntu main repo
+- name: Configure the Ubuntu main repository
   ansible.builtin.apt_repository:
     repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }} main restricted universe multiverse"
     state: present
     filename: ubuntu
 
-- name: Ensure Ubuntu updates repo
+- name: Configure the Ubuntu updates repository
   ansible.builtin.apt_repository:
     repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }}-updates main restricted universe multiverse"
     state: present
     filename: ubuntu
 
-- name: Ensure Ubuntu security repo
+- name: Configure the Ubuntu security repository
   ansible.builtin.apt_repository:
     repo: "deb http://fr.archive.ubuntu.com/ubuntu {{ os_codename }}-security main restricted universe multiverse"
     state: present
@@ -40,13 +39,13 @@
     update_cache: yes
     cache_valid_time: 3600
 
-- name: Ensure apt is consistent before installs
+- name: Repair interrupted package operations
   ansible.builtin.shell: |
     dpkg --configure -a
     apt -f install -y
   become: true
   
-- name: Ensure required apt packages are installed
+- name: Install required system packages
   apt:
     name:
       - emacs
@@ -105,14 +104,14 @@
   changed_when: true
   register: timezone_result
   
-- name: Verify time zone setting
-  command: timedatectl
+- name: Read clock synchronization status
+  command: timedatectl show --property=Timezone --property=NTPSynchronized
   register: timedatectl_output
   changed_when: false
 
-- name: Display timedatectl output
+- name: Confirm synchronized system clock
   debug:
-    msg: "{{ timedatectl_output.stdout_lines }}"
+    msg: "{{ timedatectl_output.stdout_lines | join(', ') }}"
 
 # install dhp service on the node, required later for k8s dhcp cni
 - name: Install systemd service for CNI DHCP daemon

@@ -1,7 +1,4 @@
 ---
-- name: START_OAI_SETUP
-  ansible.builtin.meta: noop
-
 - name: Check if yq is already installed
   ansible.builtin.stat:
     path: "{{ yq_bin_path }}"

@@ -1,5 +1,5 @@
 ---
-- name: "[4/8] Prepare the selected R2Lab radio unit"
+- name: Prepare the selected R2Lab radio unit
   hosts: faraday
   gather_facts: false
   roles:

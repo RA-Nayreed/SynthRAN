@@ -1,8 +1,5 @@
 ---
 # see https://gitlab.eurecom.fr/oai/orchestration/charts/-/blob/oai-gnb-fhi-72/oai-gnb-fhi-72/README.md#prerequisite
-- name: RESTART_SR-IOV
-  ansible.builtin.meta: noop
-
 - name: Load ran_node vars on controller
   include_vars:
     file: "/home/turletti/xp/post5g-beta/ptp_test/5g_ansible/group_vars/ran_node.yml"

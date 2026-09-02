@@ -70,7 +70,7 @@
   register: uhd_version_check
   failed_when: uhd_version_check.rc != 0
 
-- name: Display UHD version
+- name: Report the installed UHD version
   debug:
     msg: "UHD installed: {{ uhd_version_check.stdout }}"
 
@@ -112,7 +112,7 @@
   register: ue_binary
   failed_when: not ue_binary.stat.exists
 
-- name: Display OAI build success
+- name: Report the OAI build result
   debug:
     msg: "OpenAirInterface5G built successfully. nrUE binary at {{ oai_src_dir }}/cmake_targets/ran_build/build/nr-uesoftmodem"
 
@@ -133,7 +133,7 @@
     group: "{{ ansible_user }}"
     mode: '0755'
 
-- name: Display launch instructions
+- name: Report OAI UE launch instructions
   debug:
     msg: |
       ========================================
@@ -167,7 +167,7 @@
   poll: 0
   register: ue_launch
 
-- name: Display UE launch status
+- name: Report OAI UE launch status
   debug:
     msg: "UE launched in background (async job {{ ue_launch.ansible_job_id }})"
   when: launch_ue | bool

@@ -1,7 +1,4 @@
 ---
-- name: RESTART_K8S_ENV
-  ansible.builtin.meta: noop
-
 # Install k9s
 - name: Download k9s .deb package using wget
   ansible.builtin.command:
@@ -21,10 +18,6 @@
   ansible.builtin.command: k9s version
   register: k9s_check
   changed_when: false
-
-- name: Display k9s version
-  debug:
-    var: k9s_check.stdout
 
 - name: Ensure kubectl alias k exists for root
   ansible.builtin.lineinfile:

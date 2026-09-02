@@ -75,7 +75,7 @@
   ansible.builtin.set_fact:
     values_file: "{{ [repo_dest_abs, 'charts', 'srsran-gnb', values_filename] | path_join }}"
 
-- name: debug
+- name: Report the srsRAN configuration paths
   ansible.builtin.debug:
     msg:
       - "repo_dest_abs='{{ repo_dest_abs }}'"
@@ -114,7 +114,7 @@
 - name: Apply 5G profile to gNB and UE configs
   include_tasks: apply_5g_profile.yaml
 
-- name: Debug amf ip/port
+- name: Report the srsRAN AMF endpoint
   debug:
     msg:
       - "amf_ip={{ srsran_network.n2.amf_ip | quote }}"

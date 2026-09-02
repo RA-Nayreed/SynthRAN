@@ -9,9 +9,9 @@
     state: directory
     mode: '0755'
 
-- name: DEBUG plmn
+- name: Report the selected OAI PLMN
   debug:
-    var: plmn
+    msg: "PLMN={{ plmn }}"
     
 - name: Render 5G environment file
   template:
@@ -20,7 +20,7 @@
     mode: '0644'
   register: fiveg_env
 
-- name: Show if 5G parameters changed
+- name: Report updated OAI parameters
   debug:
     msg: "5G parameters updated"
   when: fiveg_env.changed

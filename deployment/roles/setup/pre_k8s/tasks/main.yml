@@ -10,7 +10,7 @@
   become: true
 
 # --- Handle containerd storage for live system ---
-- name: Create /var/lib/containerd tmpfs for live system
+- name: Prepare persistent containerd storage on the live system
   block:
     - name: Create containerd directory
       ansible.builtin.file:
@@ -31,11 +31,10 @@
       ansible.builtin.systemd:
         name: containerd
         state: stopped
-      ignore_errors: true
 
     # FIX: unmount all stacked mounts via shell loop — avoids ansible.builtin.mount
     #      state: unmounted which would write a new fstab entry.
-    - name: Unmount all stacked mounts on /var/lib/containerd
+    - name: Clear stale containerd mounts
       ansible.builtin.shell: |
         for i in $(seq 1 10); do
           findmnt /var/lib/containerd &>/dev/null || break
@@ -44,14 +43,14 @@
         done
 
     # Detect whether /dev/{{ storage }} is already mounted elsewhere on this node
-    - name: Detect existing mountpoint for /dev/{{ storage }}
+    - name: Find the existing storage-device mountpoint
       ansible.builtin.shell: |
         findmnt -n -o TARGET /dev/{{ storage }} 2>/dev/null || echo "none"
       register: storage_existing_mount
       changed_when: false
 
     # Strategy A: disk already mounted elsewhere → bind-mount a subdir
-    - name: "[bind] Create containerd subdir under existing mountpoint"
+    - name: Create the containerd directory on mounted storage
       ansible.builtin.file:
         path: "{{ storage_existing_mount.stdout | trim }}/containerd"
         state: directory
@@ -61,7 +60,7 @@
         - storage_existing_mount.stdout | trim != "/var/lib/containerd"
 
     # FIX: use shell mount --bind instead of ansible.builtin.mount to avoid fstab write
-    - name: "[bind] Bind-mount {{ storage_existing_mount.stdout | trim }}/containerd onto /var/lib/containerd"
+    - name: Bind mounted storage to the containerd data directory
       ansible.builtin.shell: |
         mount --bind "{{ storage_existing_mount.stdout | trim }}/containerd" /var/lib/containerd
       when:
@@ -70,7 +69,7 @@
 
     # Strategy B: disk not mounted anywhere → mount directly
     # FIX: use shell mount instead of ansible.builtin.mount to avoid fstab write
-    - name: "[direct] Mount /dev/{{ storage }} onto /var/lib/containerd"
+    - name: Mount the storage device at the containerd data directory
       ansible.builtin.shell: |
         mount -t ext4 -o defaults,noatime /dev/{{ storage }} /var/lib/containerd
       when:
@@ -87,7 +86,7 @@
         state: directory
         mode: '0755'
 
-    - name: Bind-mount overlayfs snapshotter dir as a separate mountpoint (fix CRI capacityBytes)
+    - name: Expose overlayfs capacity statistics to CRI
       ansible.builtin.shell: |
         findmnt /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs &>/dev/null || \
           mount --bind /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs \
@@ -177,7 +176,7 @@
     state: absent
   become: true
 
-- name: Patch kubelet config (Unified)
+- name: Configure kubelet storage eviction thresholds
   ansible.builtin.blockinfile:
     path: /var/lib/kubelet/config.yaml
     block: |
@@ -234,9 +233,9 @@
   changed_when: false
   become: true
 
-- name: Show /var/lib/containerd mount status
+- name: Report the containerd storage filesystem
   ansible.builtin.debug:
-    msg: "/var/lib/containerd fstype = {{ containerd_mount.stdout }}"
+    msg: "/var/lib/containerd uses {{ containerd_mount.stdout | trim }} on /dev/{{ storage }}"
 
 - name: Fail if /var/lib/containerd is on a virtual filesystem
   ansible.builtin.fail:
@@ -252,9 +251,9 @@
   changed_when: false
   become: true
 
-- name: Show kubelet config check
+- name: Report kubelet storage policy validation
   ansible.builtin.debug:
-    msg: "{{ kubelet_config_check.stdout }}"
+    msg: "Kubelet eviction policy: {{ 'configured' if 'evictionHard' in kubelet_config_check.stdout else 'missing' }}"
 
 - name: Fail if /var/lib/containerd is not on a real filesystem
   ansible.builtin.fail:

@@ -1,6 +1,3 @@
-- name: HUGEPAGES_SETUP
-  ansible.builtin.meta: noop
-
 - name: Configure 1G hugepages (40 × 1G), disable 2M, set default=1G – runtime + persistent
   block:
 

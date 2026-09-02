@@ -73,7 +73,7 @@
   loop_control:
     loop_var: ue
 
-- name: Display NAD and values generation summary
+- name: Report generated UERANSIM configuration
   ansible.builtin.debug:
     msg: |
       ✓ NAD OVS generated in : {{ ueransim_chart_path }}/nad/

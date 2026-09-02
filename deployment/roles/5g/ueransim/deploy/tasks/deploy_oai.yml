@@ -29,7 +29,7 @@
   retries: 3
   delay: 2
 
-- name: Display created NADs
+- name: Report the created network attachments
   ansible.builtin.debug:
     msg: |
       Created NetworkAttachmentDefinitions:

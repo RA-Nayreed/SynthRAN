@@ -87,7 +87,7 @@
     chdir: "{{ repo_dest }}"
   register: generate_result
 
-- name: Show generated subscribers info
+- name: Report generated Open5GS subscribers
   ansible.builtin.debug:
     msg: "{{ generate_result.stdout }}"
 
@@ -97,6 +97,6 @@
     chdir: "{{ repo_dest }}"
   register: add_result
 
-- name: Show add subscribers output
+- name: Report Open5GS subscriber provisioning
   ansible.builtin.debug:
     msg: "{{ add_result.stdout }}"

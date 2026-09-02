@@ -200,7 +200,7 @@
   changed_when: false
   when: subscribers_script_path.stdout | trim | length > 0
 
-- name: Debug MongoDB list output
+- name: Report the Free5GC subscriber inventory
   debug:
     msg: "MongoDB list output: {{ mongo_list_output.stdout | default('N/A') }}"
   when: subscribers_script_path.stdout | trim | length > 0

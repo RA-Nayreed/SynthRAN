@@ -14,7 +14,7 @@
   when: rru in ['benetel1', 'benetel2'] and ran in ['srsRAN', 'oai']
   register: prepare_rru_output
 
-- name: Show prepare RRU output
+- name: Report R2Lab radio preparation
   debug:
     msg: "{{ prepare_rru_output.stdout | default('Task skipped') }}"
 
@@ -23,7 +23,7 @@
   register: pdu_status
   delegate_to: faraday.inria.fr
 
-- name: Show PDU status
+- name: Report R2Lab PDU status
   debug:
     var: pdu_status.stdout
 

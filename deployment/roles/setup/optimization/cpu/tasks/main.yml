@@ -2,9 +2,6 @@
 - name: Configure CPU and tuned profile on Ubuntu 22.04
   block:
   
-    - name: CPU_CHECK
-      ansible.builtin.meta: noop
-  
     - name: Install cpupower utility
       package:
         name:
@@ -105,7 +102,7 @@
             done
           register: disable_idle
           changed_when: "'disabling' in disable_idle.stdout"
-          ignore_errors: true
+          failed_when: false
 
         - name: Show CPU idle states after disabling
           shell: cpupower idle-info

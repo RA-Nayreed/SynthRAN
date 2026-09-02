@@ -19,7 +19,7 @@
   register: gnuradio_check
   changed_when: false
 
-- name: Display installed UHD/GNU Radio versions
+- name: Report installed UHD and GNU Radio versions
   debug:
     msg: |
       UHD installed: {{ uhd_check.stdout | default('none') }}
@@ -136,7 +136,7 @@
       register: uhd_verify
       failed_when: uhd_verify.rc != 0
 
-    - name: Display UHD version
+    - name: Report the installed UHD version
       debug:
         msg: "UHD installed: {{ uhd_verify.stdout }}"
 
@@ -223,7 +223,7 @@
       register: gnuradio_verify
       failed_when: gnuradio_verify.rc != 0
 
-    - name: Display GNU Radio version
+    - name: Report the installed GNU Radio version
       debug:
         msg: "GNU Radio installed: {{ gnuradio_verify.stdout }}"
 

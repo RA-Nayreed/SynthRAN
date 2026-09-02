@@ -1,7 +1,4 @@
 ---
-- name: START_K8S_CREATE
-  ansible.builtin.meta: noop
-
 - name: Normalize booleans for current host
   ansible.builtin.set_fact:
     fhi72: "{{ fhi72 | default(false) | bool }}"
@@ -21,7 +18,7 @@
     name: kubelet
     state: stopped
   become: true
-  ignore_errors: true
+  failed_when: false
 
 # FIX: kube-apiserver and other static pod processes can survive as orphan processes
 #      outside containerd (crictl ps returns empty) after kubelet stops — they hold
@@ -32,7 +29,7 @@
       pkill -9 -x "$proc" 2>/dev/null && echo "Killed $proc" || true
     done
   become: true
-  ignore_errors: true
+  changed_when: false
 
 - name: Wait for ports 6443 and 10259 to be released (max 30s)
   ansible.builtin.shell: |
@@ -51,12 +48,14 @@
   become: true
   changed_when: false
 
-- name: Reset Kubernetes (safe)
+- name: Reset the previous Kubernetes control plane
   ansible.builtin.command: kubeadm reset -f
-  ignore_errors: true
+  register: kubeadm_reset
+  changed_when: kubeadm_reset.rc == 0
+  failed_when: false
   become: true
 
-- name: Remove old Kubernetes and CNI directories (safe)
+- name: Remove previous Kubernetes and CNI state
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -69,7 +68,8 @@
     - /var/lib/cni
     - /run/flannel
   become: true
-  ignore_errors: true
+  loop_control:
+    label: "{{ item }}"
 
 # FIX: kubeadm reset and previous Ansible runs pollute /etc/fstab with tmpfs
 #      and ext4 entries for /var/lib/containerd. systemd replays them at containerd

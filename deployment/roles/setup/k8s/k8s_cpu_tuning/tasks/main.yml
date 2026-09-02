@@ -1,8 +1,5 @@
 ---
 
-- name: START_RAN_K8S
-  ansible.builtin.meta: noop
-
 - name: Ensure CPUAffinity 5-15 is set in system.conf
   become: true
   ansible.builtin.lineinfile:
