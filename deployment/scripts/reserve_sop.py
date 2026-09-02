@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, datetime as dt, itertools, json, os, subprocess, sys
+import argparse, datetime as dt, json, math, os, subprocess
 from pathlib import Path
 
 import yaml
@@ -10,7 +10,10 @@ def run(*args, check=True):
     return subprocess.run(args, text=True, capture_output=True, check=check)
 
 def stamp(value):
-    return dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    parsed = dt.datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
+    return parsed
 
 def calendars(owner=None):
     command = ["pos", "calendar", "list", "--json"]
@@ -60,7 +63,7 @@ def main():
     if not reservation.get("enabled", True): return
     duration = int(reservation.get("duration_minutes", 120)); image = reservation.get("image", "ubuntu-jammy")
     owner = os.environ.get("USER") or run("id", "-un").stdout.strip()
-    now = dt.datetime.now(); end = now + dt.timedelta(minutes=duration)
+    now = dt.datetime.now().astimezone(); end = now + dt.timedelta(minutes=duration)
     events = calendars(); own_active = [e for e in events if e.get("owner") == owner and stamp(e["start_date"]) <= now < stamp(e["end_date"])]
     nodes = dict(deployment["nodes"]); requested = set(nodes.values())
     related = [e for e in own_active if requested.intersection(e["nodes"])]
@@ -73,8 +76,6 @@ def main():
         if action == 3: nodes = manual_nodes(nodes); requested = set(nodes.values())
         if action == 2:
             deployment["nodes"] = nodes; path.write_text(yaml.safe_dump(scenario, sort_keys=False)); return
-        for event in related:
-            run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
     candidates = available(events, owner, now, end)
     unavailable = sorted(requested - set(candidates) - old_nodes)
     if unavailable:
@@ -87,14 +88,28 @@ def main():
             result = run("pos", "calendar", "create", "--asap", "--duration", str(duration), *sorted(requested))
             print(result.stdout.strip()); raise SystemExit("Future reservation created; rerun deploy.sh when it becomes active")
     selected = list(dict.fromkeys(nodes.values()))
-    result = run("pos", "calendar", "create", "--start", "now", "--duration", str(duration), *selected)
+    deleted = []
+    try:
+        for event in related:
+            run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
+            deleted.append(event)
+        result = run("pos", "calendar", "create", "--start", "now", "--duration", str(duration), *selected)
+    except subprocess.CalledProcessError as error:
+        for event in deleted:
+            remaining = max(1, math.ceil((stamp(event["end_date"]) - dt.datetime.now().astimezone()).total_seconds() / 60))
+            run("pos", "calendar", "create", "--start", "now", "--duration", str(remaining), *event["nodes"], check=False)
+        detail = (error.stderr or error.stdout or str(error)).strip()
+        raise SystemExit(f"Unable to replace the SOP calendar reservation; previous remaining coverage was restored where possible:\n{detail}")
     print(result.stdout.strip())
-    new_nodes = [node for node in selected if node not in old_nodes]
+    newly_allocated = []
     for node in selected:
         allocation = run("pos", "allocations", "allocate", node, check=False)
-        if allocation.returncode and "already allocated" not in allocation.stderr + allocation.stdout:
+        allocation_text = allocation.stderr + allocation.stdout
+        if allocation.returncode and "already allocated" not in allocation_text:
             raise SystemExit((allocation.stderr or allocation.stdout).strip())
-    for node in new_nodes:
+        if allocation.returncode == 0 and node not in old_nodes:
+            newly_allocated.append(node)
+    for node in newly_allocated:
         run("pos", "nodes", "image", node, image)
         run("pos", "nodes", "reset", "--blocking", "--verbose", node)
     deployment["nodes"] = nodes
