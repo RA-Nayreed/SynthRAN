@@ -24,8 +24,16 @@
       - n4br
 
 - name: Create OVS bridges
-  ansible.builtin.command: "ovs-vsctl --may-exist add-br {{ item }}"
+  ansible.builtin.shell: |
+    if ovs-vsctl br-exists {{ item }}; then
+      echo existing
+    else
+      ovs-vsctl add-br {{ item }}
+      echo created
+    fi
   loop: "{{ ovs_bridges }}"
+  register: ovs_bridge_create
+  changed_when: ovs_bridge_create.stdout | trim == 'created'
   become: true
 
 # following unused now
@@ -54,15 +62,13 @@
 - name: Verify OVS daemons
   ansible.builtin.service_facts:
 
-- name: Fail if ovsdb-server is not running
-  ansible.builtin.fail:
-    msg: "❌ ovsdb-server is not running on {{ inventory_hostname }}"
-  when: services['ovsdb-server.service'].state != "running"
-
-- name: Fail if ovs-vswitchd is not running
-  ansible.builtin.fail:
-    msg: "❌ ovs-vswitchd is not running on {{ inventory_hostname }}"
-  when: services['ovs-vswitchd.service'].state != "running"
+- name: Validate OVS service health
+  ansible.builtin.assert:
+    that:
+      - services['ovsdb-server.service'].state == 'running'
+      - services['ovs-vswitchd.service'].state == 'running'
+    fail_msg: "One or more Open vSwitch services are not running on {{ inventory_hostname }}"
+    success_msg: "Open vSwitch services are running"
 
 - name: Verify OVS bridges
   ansible.builtin.command: "ovs-vsctl br-exists {{ item }}"

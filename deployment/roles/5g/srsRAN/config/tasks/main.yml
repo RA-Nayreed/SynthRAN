@@ -5,28 +5,15 @@
     path: /opt/ansible-venv/bin/python
   register: venv_python
 
-- name: Save current interpreter
-  ansible.builtin.set_fact:
-    _original_python_interpreter: "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
-
-- name: Switch to venv python if available
+- name: Use the shared Kubernetes-enabled Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
-  when:
-    - venv_python.stat.exists
-    - core == 'free5gc'
-    - core_node_name != ran_node_name
+  when: venv_python.stat.exists
 
 - name: Load common variables
   include_vars:
     file: "../../common/defaults/main.yml"
 
-- name: Ensure kubernetes python client is installed
-  ansible.builtin.package:
-    name: python3-kubernetes
-    state: present
-  become: yes
-  
 - name: Remove existing srsRAN Helm directory to ensure clean state
   ansible.builtin.file:
     path: "{{ repo_dest }}"
@@ -46,8 +33,6 @@
     kind: Namespace
     name: "{{ ran_ns }}"
     state: present
-  vars:
-    ansible_python_interpreter: "{{ ansible_playbook_python }}"
 
 - name: Gather env facts (remote)
   ansible.builtin.setup:
@@ -225,7 +210,7 @@
       {% endfor %}
   when: rru == 'rfsim'
 
-- name: Restore original python interpreter if it was changed
+- name: Retain the Kubernetes-enabled Ansible Python runtime
   ansible.builtin.set_fact:
-    ansible_python_interpreter: "{{ _original_python_interpreter }}"
-  when: _original_python_interpreter is defined
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
+  when: venv_python.stat.exists

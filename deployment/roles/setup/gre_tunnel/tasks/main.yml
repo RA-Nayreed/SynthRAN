@@ -26,6 +26,7 @@
   loop: "{{ gre_bridges }}"
   loop_control:
     loop_var: item
+    label: "{{ item.name }}"
 
 #- name: Pause to debug
 #  ansible.builtin.pause:

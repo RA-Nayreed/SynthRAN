@@ -321,6 +321,8 @@
   loop:
     - { regexp: '^\s*- --allocate-node-cidrs=', line: '    - --allocate-node-cidrs=true' }
     - { regexp: '^\s*- --cluster-cidr=', line: '    - --cluster-cidr=10.244.0.0/16' }
+  loop_control:
+    label: "{{ item.line | trim }}"
   become: true
 
 - name: Create .kube directory in user's home
@@ -338,39 +340,6 @@
   become: true
 
 # === TOOLING =======================================
-- name: Ensure Python tooling is available
-  ansible.builtin.apt:
-    name:
-      - python3-venv
-      - python3-pip
-      - python3-setuptools
-      - curl
-    state: present
-    update_cache: yes
-  become: true
-
-- name: Create Python venv for Kubernetes tasks (idempotent)
-  ansible.builtin.command: python3 -m venv /opt/ansible-venv
-  args:
-    creates: /opt/ansible-venv/bin/activate
-  become: true
-
-- name: Upgrade ensurepip in venv
-  ansible.builtin.command: /opt/ansible-venv/bin/python -m ensurepip --upgrade
-  become: true
-
-- name: Bootstrap pip, setuptools and wheel in venv
-  ansible.builtin.command: /opt/ansible-venv/bin/pip install --upgrade pip setuptools wheel
-  become: true
-
-- name: Install kubernetes Python module in venv
-  ansible.builtin.command: /opt/ansible-venv/bin/pip install --upgrade kubernetes
-  become: true
-
-- name: Force Ansible to use venv Python
-  ansible.builtin.set_fact:
-    ansible_python_interpreter: /opt/ansible-venv/bin/python
-
 - name: Install Helm if missing
   ansible.builtin.shell: |
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

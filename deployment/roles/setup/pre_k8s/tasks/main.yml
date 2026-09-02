@@ -120,10 +120,11 @@
   register: storage_device
   become: true
 
-- name: Fail if storage device does not exist
-  ansible.builtin.fail:
-    msg: "Storage device /dev/{{ storage }} does not exist"
-  when: not storage_device.stat.exists
+- name: Validate the containerd storage device
+  ansible.builtin.assert:
+    that: storage_device.stat.exists
+    fail_msg: "Storage device /dev/{{ storage }} does not exist"
+    success_msg: "Storage device /dev/{{ storage }} is available"
 
 - name: Create containerd mount point
   ansible.builtin.file:
@@ -164,6 +165,8 @@
     path: /var/lib/kubelet/config.yaml
     state: touch
     mode: '0644'
+    access_time: preserve
+    modification_time: preserve
 
 # FIX: remove any existing rootDir line before patching — blockinfile only adds
 #      its own block, it does not clean up lines written by previous role runs

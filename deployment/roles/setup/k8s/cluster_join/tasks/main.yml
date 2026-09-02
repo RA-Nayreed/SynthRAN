@@ -104,13 +104,14 @@
   register: cni_check
   become: true
 
-- name: Fail if essential CNI plugins are missing
-  ansible.builtin.fail:
-    msg: "❌ CNI plugin {{ item.item }} missing on node {{ inventory_hostname }}"
-  when: not item.stat.exists
-  loop: "{{ cni_check.results }}"
-  loop_control:
-    label: "{{ item.item }}"
+- name: Validate the essential CNI plugins
+  ansible.builtin.assert:
+    that: >-
+      cni_check.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Missing CNI plugins on {{ inventory_hostname }}:
+      {{ cni_check.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}
+    success_msg: "All essential CNI plugins are installed"
 
 # === PREPARE JOIN ============================================================
 - name: Ensure /root/.kube exists

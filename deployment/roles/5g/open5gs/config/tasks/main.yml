@@ -30,6 +30,7 @@
   loop: "{{ fiveg.slices }}"
   loop_control:
     loop_var: slice
+    label: "{{ slice.name }}"
 
 - name: Validate UE slice references
   assert:
@@ -38,6 +39,7 @@
   loop: "{{ fiveg.ues | dict2items }}"
   loop_control:
     loop_var: ue
+    label: "{{ ue.key }}"
 
 - name: Update AMF ConfigMap on disk
   ansible.builtin.template:

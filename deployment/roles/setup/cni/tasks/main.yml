@@ -114,7 +114,7 @@
   until: cnao_available.rc == 0
   changed_when: false
 
-- name: Reset ansible_python_interpreter to system python3
+- name: Retain the Kubernetes-enabled Ansible Python runtime
   ansible.builtin.set_fact:
-    ansible_python_interpreter: /usr/bin/python3
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
 

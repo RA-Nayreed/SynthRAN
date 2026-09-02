@@ -44,6 +44,7 @@
     dpkg --configure -a
     apt -f install -y
   become: true
+  changed_when: false
   
 - name: Install required system packages
   apt:
@@ -63,9 +64,19 @@
 
 - name: Disable swap
   shell: |
-    swapoff -a
-    sed -i.bak '/ swap / s/^/#/' /etc/fstab
+    changed=false
+    if swapon --noheadings | grep -q .; then
+      swapoff -a
+      changed=true
+    fi
+    if grep -Eq '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab; then
+      sed -i.bak '/ swap / s/^/#/' /etc/fstab
+      changed=true
+    fi
+    echo "$changed"
   become: true
+  register: swap_result
+  changed_when: swap_result.stdout | trim == 'true'
 
 - name: Load kernel modules for Kubernetes networking
   modprobe:
@@ -96,13 +107,18 @@
 - name: Apply sysctl parameters
   command: sysctl --system
   become: true
+  changed_when: false
 
 # ptp on ran-node will use Etc/UTC time zone, core-node must do the same
+- name: Read the configured timezone
+  command: timedatectl show --property=Timezone --value
+  register: configured_timezone
+  changed_when: false
+
 - name: Set time zone to Europe/Paris
   command: timedatectl set-timezone Europe/Paris
   become: true
-  changed_when: true
-  register: timezone_result
+  when: configured_timezone.stdout | trim != 'Europe/Paris'
   
 - name: Read clock synchronization status
   command: timedatectl show --property=Timezone --property=NTPSynchronized

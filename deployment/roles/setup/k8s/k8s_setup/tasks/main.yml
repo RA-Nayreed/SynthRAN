@@ -67,3 +67,24 @@
     - kubectl
   become: true
   when: ansible_facts.os_family == 'Debian'
+
+- name: Create the shared Ansible Kubernetes runtime
+  ansible.builtin.command: python3 -m venv /opt/ansible-venv
+  args:
+    creates: /opt/ansible-venv/bin/python
+  become: true
+
+- name: Check the Kubernetes Python client
+  ansible.builtin.command: /opt/ansible-venv/bin/python -c "import kubernetes"
+  register: kubernetes_python_client
+  changed_when: false
+  failed_when: false
+
+- name: Install the Kubernetes Python client
+  ansible.builtin.command: /opt/ansible-venv/bin/pip install --disable-pip-version-check kubernetes
+  become: true
+  when: kubernetes_python_client.rc != 0
+
+- name: Use the shared Kubernetes-enabled Python runtime
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
