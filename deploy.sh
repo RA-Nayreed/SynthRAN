@@ -218,7 +218,7 @@ def host_entry(name):
 if d['platform'] == 'r2lab':
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    faraday = [f"faraday ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}{key_arg}"]
+    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}{key_arg}"]
 else:
     faraday = []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node']
