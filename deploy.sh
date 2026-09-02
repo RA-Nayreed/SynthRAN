@@ -100,7 +100,21 @@ BANNER
     echo "4) benetel2"
     read -r -p "Enter choice [1-4]: " RU_CHOICE
     case "${RU_CHOICE:-1}" in 1) SELECTED_RU=n300;; 2) SELECTED_RU=n320;; 3) SELECTED_RU=benetel1;; 4) SELECTED_RU=benetel2;; *) echo "Invalid RU choice" >&2; exit 2;; esac
-    read -r -p "R2Lab username: " SELECTED_R2LAB_USERNAME
+    if [[ -f .r2lab_config ]]; then
+      # shellcheck disable=SC1091
+      source .r2lab_config
+      SELECTED_R2LAB_USERNAME=${R2LAB_USERNAME:-}
+      echo "Using saved R2Lab credentials for ${SELECTED_R2LAB_USERNAME:-unknown}"
+    else
+      read -r -p "R2Lab username (slice name): " SELECTED_R2LAB_USERNAME
+      read -r -p "R2Lab account email: " R2LAB_EMAIL
+      read -r -s -p "R2Lab password: " R2LAB_PASSWORD
+      echo
+      ( umask 077
+        printf 'R2LAB_USERNAME=%q\nR2LAB_EMAIL=%q\nR2LAB_PASSWORD=%q\n' \
+          "$SELECTED_R2LAB_USERNAME" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" > .r2lab_config
+      )
+    fi
     [[ -n "$SELECTED_R2LAB_USERNAME" ]] || { echo "R2Lab username is required" >&2; exit 2; }
   else
     SELECTED_R2LAB_USERNAME=""
@@ -198,39 +212,74 @@ PY
     POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
     POS_REUSED=false; POS_RESERVED=false; POS_LAST_ERROR=""
     echo "Requesting up to ${POS_DURATION} minutes for: ${POS_NODES[*]}"
-    for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
-      if POS_OUTPUT=$(pos allocations allocate --duration "$candidate" "${POS_NODES[@]}" 2>&1); then
-        POS_RESERVED=true; POS_ACTUAL_DURATION=$candidate
-        printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
-        break
-      fi
-      POS_LAST_ERROR=$POS_OUTPUT
-      if [[ "$POS_OUTPUT" == *"already allocated"* ]]; then
-        printf '%s\n' "$POS_OUTPUT" > "$RUN_DIR/pos-allocation.log"
-        POS_OWNER=${USER:-$(id -un)}
-        pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-owner.json"
-        POS_ACTUAL_DURATION=$("$SYNTHRAN_PYTHON" - \
-          "$RUN_DIR/pos-calendar-owner.json" "${POS_NODES[@]}" <<'PY'
+    POS_OWNER=${USER:-$(id -un)}
+    pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-owner.json"
+    if ! POS_COVERAGE_OUTPUT=$("$SYNTHRAN_PYTHON" - \
+      "$RUN_DIR/pos-calendar-owner.json" "$POS_DURATION" "${POS_NODES[@]}" <<'PY'
 import json, math, sys
-from datetime import datetime
-own_events = json.load(open(sys.argv[1], encoding='utf-8'))
-nodes = set(sys.argv[2:]); now = datetime.now()
+from datetime import datetime, timedelta
+events = json.load(open(sys.argv[1], encoding='utf-8'))
+requested = int(sys.argv[2]); nodes = sys.argv[3:]; now = datetime.now()
+target = now + timedelta(minutes=requested)
 def stamp(value): return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
-active = [e for e in own_events if nodes.intersection(e['nodes']) and stamp(e['start_date']) <= now < stamp(e['end_date'])]
-covered = set().union(*(set(e['nodes']) for e in active)) if active else set()
-missing = nodes - covered
-if missing:
-    raise SystemExit(f'The selected nodes are allocated, but the current user has no active calendar coverage for {sorted(missing)}')
-remaining = min(math.floor((stamp(e['end_date']) - now).total_seconds() / 60) for e in active if nodes.intersection(e['nodes']))
-print(max(0, remaining))
+active_ends = {}
+for node in nodes:
+    active = [stamp(e['end_date']) for e in events
+              if node in e['nodes'] and stamp(e['start_date']) <= now < stamp(e['end_date'])]
+    if active:
+        active_ends[node] = max(active)
+if active_ends and len(active_ends) != len(nodes):
+    missing = sorted(set(nodes) - set(active_ends))
+    raise SystemExit(f'Only part of the requested SOP set has active calendar coverage; missing {missing}')
+if not active_ends:
+    print('fresh')
+else:
+    print('reuse')
+    for node, end in active_ends.items():
+        if end < target:
+            duration = max(1, math.ceil((target - end).total_seconds() / 60))
+            print(f'extend|{node}|{end:%Y-%m-%d_%H:%M}|{duration}')
+    remaining = min(math.floor((max(end, target) - now).total_seconds() / 60)
+                    for end in active_ends.values())
+    print(f'duration|{max(0, remaining)}')
 PY
-        )
-        POS_RESERVED=true; POS_REUSED=true
-        echo "Reusing the current allocation unchanged; ${POS_ACTUAL_DURATION} minutes of calendar coverage remain"
-        break
+    ); then
+      echo "Unable to reconcile the current SOP calendar coverage" >&2
+      exit 1
+    fi
+    mapfile -t POS_COVERAGE <<< "$POS_COVERAGE_OUTPUT"
+    if [[ "${POS_COVERAGE[0]}" == reuse ]]; then
+      POS_REUSED=true; POS_RESERVED=true; POS_ACTUAL_DURATION=$POS_DURATION
+      for coverage in "${POS_COVERAGE[@]:1}"; do
+        IFS='|' read -r action node start extension <<< "$coverage"
+        if [[ "$action" == extend ]]; then
+          echo "Extending calendar coverage for $node by ${extension} minutes from $start"
+          pos calendar create --start "$start" --duration "$extension" "$node" \
+            2>&1 | tee -a "$RUN_DIR/pos-allocation.log"
+        elif [[ "$action" == duration ]]; then
+          POS_ACTUAL_DURATION=$node
+        fi
+      done
+      echo "Reusing the active allocation; calendar coverage now reaches ${POS_ACTUAL_DURATION} minutes from now"
+    else
+      for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
+        if POS_OUTPUT=$(pos calendar create --start now --duration "$candidate" "${POS_NODES[@]}" 2>&1); then
+          POS_RESERVED=true; POS_ACTUAL_DURATION=$candidate
+          printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
+          break
+        fi
+        POS_LAST_ERROR=$POS_OUTPUT
+        [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
+      done
+      if $POS_RESERVED; then
+        POS_OUTPUT=$(pos allocations allocate "${POS_NODES[@]}" 2>&1) || {
+          printf '%s\n' "$POS_OUTPUT" >&2
+          echo "Calendar reservation succeeded, but POS could not allocate the selected nodes" >&2
+          exit 1
+        }
+        printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
       fi
-      [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
-    done
+    fi
     if ! $POS_RESERVED; then
       printf '%s\n' "$POS_LAST_ERROR" >&2
       echo "Unable to reserve these nodes for any usable duration; they may belong to another user" >&2
@@ -248,6 +297,31 @@ PY
         echo "Resetting and waiting for $node to finish booting"
         pos nodes reset --blocking --verbose "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
       done
+    fi
+
+    if [[ "$("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
+import sys, yaml
+print(yaml.safe_load(open(sys.argv[1]))['deployment'].get('platform', 'rfsim'))
+PY
+    )" == r2lab ]]; then
+      [[ -f .r2lab_config ]] || { echo "R2Lab credentials are missing from .r2lab_config" >&2; exit 1; }
+      # shellcheck disable=SC1091
+      source .r2lab_config
+      [[ -n "${R2LAB_USERNAME:-}" && -n "${R2LAB_EMAIL:-}" && -n "${R2LAB_PASSWORD:-}" ]] || {
+        echo "R2Lab username, email, and password must all be set in .r2lab_config" >&2
+        exit 1
+      }
+      R2LAB_CLOCK=$(date +'%H%M')
+      R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
+      R2LAB_END=$(date -d "$R2LAB_START +${POS_ACTUAL_DURATION} minutes" +'%Y-%m-%dT%H:%M')
+      printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
+        "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
+      echo "Synchronizing R2Lab reservation from $R2LAB_START to $R2LAB_END"
+      if ! ssh "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
+        2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
+        echo "R2Lab reservation failed; the SOP allocation was left intact" >&2
+        exit 1
+      fi
     fi
   fi
 fi
