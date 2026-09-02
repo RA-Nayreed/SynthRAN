@@ -9,6 +9,25 @@ POOL = ["sopnode-f1", "sopnode-f2", "sopnode-f3", "sopnode-w3"]
 def run(*args, check=True):
     return subprocess.run(args, text=True, capture_output=True, check=check)
 
+def run_visible(*args, check=True):
+    process = subprocess.Popen(
+        args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+    )
+    output = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(f"  {line}", end="", flush=True)
+        output.append(line)
+    returncode = process.wait()
+    result = subprocess.CompletedProcess(args, returncode, "".join(output), "")
+    if check and returncode:
+        raise subprocess.CalledProcessError(returncode, args, output=result.stdout)
+    return result
+
 def stamp(value):
     parsed = dt.datetime.fromisoformat(value)
     if parsed.tzinfo is None:
@@ -104,15 +123,26 @@ def main():
     print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
     newly_allocated = []
     for node in selected:
-        allocation = run("pos", "allocations", "allocate", node, check=False)
-        allocation_text = allocation.stderr + allocation.stdout
-        if allocation.returncode and "already allocated" not in allocation_text:
-            raise SystemExit((allocation.stderr or allocation.stdout).strip())
+        print(f"Allocating {node} for this deployment", flush=True)
+        allocation = run_visible("pos", "allocations", "allocate", node, check=False)
+        allocation_text = allocation.stdout
+        allocation_lower = allocation_text.lower()
+        already_active = (
+            "already allocated" in allocation_lower
+            or "a command for allocation" in allocation_lower
+        )
+        if allocation.returncode and not already_active:
+            raise SystemExit(allocation_text.strip())
         if allocation.returncode == 0 and node not in old_nodes:
             newly_allocated.append(node)
+        elif node in old_nodes or already_active:
+            print(f"Reusing the active allocation for {node}", flush=True)
     for node in newly_allocated:
-        run("pos", "nodes", "image", node, image)
-        run("pos", "nodes", "reset", "--blocking", "--verbose", node)
+        print(f"Selecting image {image} on {node}", flush=True)
+        run_visible("pos", "nodes", "image", node, image)
+        print(f"Resetting {node}; waiting for POS to report boot completion", flush=True)
+        run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
+        print(f"{node} finished its POS reset", flush=True)
     deployment["nodes"] = nodes
     path.write_text(yaml.safe_dump(scenario, sort_keys=False))
     Path(args.run_dir, "pos-selection.json").write_text(json.dumps({"nodes": nodes, "duration_minutes": duration}, indent=2) + "\n")
