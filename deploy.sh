@@ -269,8 +269,33 @@ ANSIBLE_COMMAND=(ansible-playbook -i "$RUN_DIR/inventory.ini"
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
+echo "Showing deployment stages, retries, warnings, and failures; full host results are saved to $RUN_DIR/ansible.log"
+echo
 set +e
-"${ANSIBLE_COMMAND[@]}" 2>&1 | tee "$RUN_DIR/ansible.log"
+"${ANSIBLE_COMMAND[@]}" 2>&1 \
+  | tee "$RUN_DIR/ansible.log" \
+  | awk '
+      function important(line) {
+        return line ~ /^(PLAY|TASK|RUNNING HANDLER|FAILED - RETRYING|fatal:|UNREACHABLE!|NO MORE HOSTS LEFT|PLAY RECAP|\[WARNING\]|\[DEPRECATION WARNING\])/
+      }
+      important($0) {
+        suppress_result = 0
+        print
+        fflush()
+        next
+      }
+      /^(ok|changed|skipping|included): \[/ {
+        if ($0 ~ /=> \{$/) {
+          suppress_result = 1
+        }
+        next
+      }
+      suppress_result { next }
+      {
+        print
+        fflush()
+      }
+    '
 ANSIBLE_RC=${PIPESTATUS[0]}
 set -e
 if (( ANSIBLE_RC != 0 )); then
