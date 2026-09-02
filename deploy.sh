@@ -343,14 +343,26 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
   echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
-  # ProxyJump starts a second ssh process that does not inherit destination
-  # host-key options, so make that process explicit when a jump is configured.
+  # Resolve a configured jump once, then isolate the nested ssh process from
+  # ~/.ssh/config.  Otherwise a ProxyJump rule can recursively reapply itself
+  # (notably when deploy.sh is already running on that SOP node).
   R2LAB_JUMP=$(ssh -G "$R2LAB_USERNAME@faraday.inria.fr" 2>/dev/null \
     | awk '$1 == "proxyjump" { print $2; exit }')
   R2LAB_SSH=(ssh -o StrictHostKeyChecking=accept-new)
   if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
-    R2LAB_PROXY_COMMAND="ssh -o ProxyJump=none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $R2LAB_JUMP"
+    R2LAB_PROXY_COMMAND="ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $R2LAB_JUMP"
     R2LAB_SSH+=(-o ProxyJump=none -o "ProxyCommand=$R2LAB_PROXY_COMMAND")
+  fi
+  echo "Checking SSH access to $R2LAB_USERNAME@faraday.inria.fr"
+  if ! "${R2LAB_SSH[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
+    "$R2LAB_USERNAME@faraday.inria.fr" true; then
+    echo "Cannot authenticate to Faraday; no R2Lab reservation was attempted." >&2
+    if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
+      echo "Configured SSH jump: $R2LAB_JUMP" >&2
+    fi
+    echo "First make this command succeed on Duckburg:" >&2
+    echo "  ssh $R2LAB_USERNAME@faraday.inria.fr true" >&2
+    exit 1
   fi
   if ! "${R2LAB_SSH[@]}" \
     "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
