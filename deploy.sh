@@ -349,7 +349,7 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
     | awk '$1 == "proxyjump" { print $2; exit }')
   R2LAB_SSH=(ssh -o StrictHostKeyChecking=accept-new)
   if [[ -n "$R2LAB_JUMP" && "$R2LAB_JUMP" != none ]]; then
-    R2LAB_PROXY_COMMAND="ssh -o ProxyJump=none -o StrictHostKeyChecking=accept-new -W %h:%p $R2LAB_JUMP"
+    R2LAB_PROXY_COMMAND="ssh -o ProxyJump=none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $R2LAB_JUMP"
     R2LAB_SSH+=(-o ProxyJump=none -o "ProxyCommand=$R2LAB_PROXY_COMMAND")
   fi
   if ! "${R2LAB_SSH[@]}" \
