@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; SOP_RESERVATION_DONE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
@@ -116,8 +116,19 @@ BANNER
       )
     fi
     [[ -n "$SELECTED_R2LAB_USERNAME" ]] || { echo "R2Lab username is required" >&2; exit 2; }
+    read -r -p "Reserve the R2Lab testbed? [Y/n]: " R2LAB_RESERVE_CHOICE
+    SELECTED_R2LAB_RESERVE=true
+    SELECTED_R2LAB_DURATION=120
+    [[ "${R2LAB_RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]] && SELECTED_R2LAB_RESERVE=false
+    if $SELECTED_R2LAB_RESERVE; then
+      read -r -p "R2Lab reservation duration in minutes [120]: " SELECTED_R2LAB_DURATION
+      SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-120}
+      [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
+    fi
   else
     SELECTED_R2LAB_USERNAME=""
+    SELECTED_R2LAB_RESERVE=false
+    SELECTED_R2LAB_DURATION=120
   fi
 
   choose_sop_node "core" "sopnode-f2"; SELECTED_CORE_NODE="$SELECTED_NODE"
@@ -138,10 +149,10 @@ BANNER
   read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES; SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" <<'PY'
+  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
 import copy, sys, yaml
 from pathlib import Path
-source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image = sys.argv[1:]
+source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration = sys.argv[1:]
 scenario = yaml.safe_load(Path(source).read_text())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 if not ues: raise SystemExit('At least one UE is required')
@@ -149,6 +160,7 @@ if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('s
 if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
 scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
+scenario['deployment']['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
 if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
 defaults = list(scenario['devices'].values())
 scenario['devices'] = {name: copy.deepcopy(defaults[index % len(defaults)]) for index, name in enumerate(ues)}
@@ -164,8 +176,16 @@ PY
   echo "  UEs:      $SELECTED_UES"
   echo "  Profile:  $SELECTED_PROFILE"
   echo "  POS:      $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+  [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:    $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
+fi
+
+if ! $NO_RESERVATION && ! $DRY_RUN; then
+  deployment_section "Resolving the SOP reservation"
+  command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
+  "$SYNTHRAN_PYTHON" deployment/scripts/reserve_sop.py "$CONFIG" "$RUN_DIR"
+  SOP_RESERVATION_DONE=true
 fi
 
 deployment_section "Generating the energy-aware sensor trace"
@@ -195,7 +215,7 @@ PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
 
 deployment_section "Preparing SOP node reservations"
-if ! $NO_RESERVATION; then
+if ! $NO_RESERVATION && ! $SOP_RESERVATION_DONE; then
   mapfile -t POS_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
 from pathlib import Path
@@ -294,34 +314,39 @@ PY
       done
     fi
 
-    if [[ "$("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
+  fi
+fi
+
+mapfile -t R2LAB_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
-print(yaml.safe_load(open(sys.argv[1]))['deployment'].get('platform', 'rfsim'))
+d = yaml.safe_load(open(sys.argv[1]))['deployment']
+r = d.get('r2lab_reservation', {})
+print(d.get('platform', 'rfsim'))
+print('true' if r.get('enabled', True) else 'false')
+print(int(r.get('duration_minutes', 120)))
 PY
-    )" == r2lab ]]; then
-      [[ -f .r2lab_config ]] || { echo "R2Lab credentials are missing from .r2lab_config" >&2; exit 1; }
-      # shellcheck disable=SC1091
-      source .r2lab_config
-      [[ -n "${R2LAB_USERNAME:-}" && -n "${R2LAB_EMAIL:-}" && -n "${R2LAB_PASSWORD:-}" ]] || {
-        echo "R2Lab username, email, and password must all be set in .r2lab_config" >&2
-        exit 1
-      }
-      R2LAB_CLOCK=$(date +'%H%M')
-      R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
-      if $POS_REUSED; then
-        R2LAB_END=$POS_CALENDAR_END
-      else
-        R2LAB_END=$(date -d "$R2LAB_START +${POS_ACTUAL_DURATION} minutes" +'%Y-%m-%dT%H:%M')
-      fi
-      printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
-        "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
-      echo "Synchronizing R2Lab reservation from $R2LAB_START to $R2LAB_END"
-      if ! ssh "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
-        2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
-        echo "R2Lab reservation failed; the SOP allocation was left intact" >&2
-        exit 1
-      fi
-    fi
+)
+if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_RESERVATION" == false ]]; then
+  deployment_section "Preparing the R2Lab reservation"
+  R2LAB_DURATION=${R2LAB_SETTINGS[2]}
+  [[ -f .r2lab_config ]] || { echo "R2Lab credentials are missing from .r2lab_config" >&2; exit 1; }
+  # shellcheck disable=SC1091
+  source .r2lab_config
+  [[ -n "${R2LAB_USERNAME:-}" && -n "${R2LAB_EMAIL:-}" && -n "${R2LAB_PASSWORD:-}" ]] || {
+    echo "R2Lab username, email, and password must all be set in .r2lab_config" >&2
+    exit 1
+  }
+  R2LAB_CLOCK=$(date +'%H%M')
+  R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
+  R2LAB_END=$(date -d "$R2LAB_START +${R2LAB_DURATION} minutes" +'%Y-%m-%dT%H:%M')
+  printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
+    "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
+  echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
+  if ! ssh -o ProxyJump=none -o StrictHostKeyChecking=accept-new \
+    "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
+    2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
+    echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
+    exit 1
   fi
 fi
 
