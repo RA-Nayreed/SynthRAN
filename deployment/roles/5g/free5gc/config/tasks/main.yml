@@ -114,6 +114,7 @@
 
 - name: Validate PLMN
   assert:
+    quiet: true
     that:
       - fiveg.plmn.mcc is defined
       - fiveg.plmn.mnc is defined
@@ -121,6 +122,7 @@
 
 - name: Validate slices
   assert:
+    quiet: true
     that:
       - slice.name is defined
       - slice.sst is defined
@@ -130,14 +132,17 @@
   loop: "{{ fiveg.slices }}"
   loop_control:
     loop_var: slice
+    label: "{{ slice.name }}"
 
 - name: Validate UE slice references
   assert:
+    quiet: true
     that:
       - ue.value.slice in fiveg.slices | map(attribute='name') | list
   loop: "{{ fiveg.ues | dict2items }}"
   loop_control:
     loop_var: ue
+    label: "{{ ue.key }}"
 
 - name: Remove n2 default gateway when core and RAN are on the same node
   ansible.builtin.shell: >

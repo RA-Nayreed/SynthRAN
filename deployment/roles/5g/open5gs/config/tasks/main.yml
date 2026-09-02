@@ -16,6 +16,7 @@
 
 - name: Validate PLMN
   assert:
+    quiet: true
     that:
       - fiveg.plmn.mcc is defined
       - fiveg.plmn.mnc is defined
@@ -23,6 +24,7 @@
 
 - name: Validate slices
   assert:
+    quiet: true
     that:
       - slice.name is defined
       - slice.sst is defined
@@ -34,6 +36,7 @@
 
 - name: Validate UE slice references
   assert:
+    quiet: true
     that:
       - ue.value.slice in fiveg.slices | map(attribute='name') | list
   loop: "{{ fiveg.ues | dict2items }}"

@@ -30,21 +30,60 @@
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
   any_errors_fatal: true
-  roles:
-    - {role: 5g/open5gs/config, when: "core == 'open5gs'"}
-    - {role: 5g/open5gs/deploy, when: "core == 'open5gs'"}
-    - {role: 5g/free5gc/node, when: "core == 'free5gc'"}
-    - {role: 5g/free5gc/config, when: "core == 'free5gc'"}
-    - {role: 5g/free5gc/deploy, when: "core == 'free5gc'"}
+  tasks:
+    - name: Configure Open5GS
+      ansible.builtin.include_role:
+        name: 5g/open5gs/config
+      when: core == 'open5gs'
+    - name: Deploy Open5GS
+      ansible.builtin.include_role:
+        name: 5g/open5gs/deploy
+      when: core == 'open5gs'
+    - name: Prepare the Free5GC host
+      ansible.builtin.include_role:
+        name: 5g/free5gc/node
+      when: core == 'free5gc'
+    - name: Configure Free5GC
+      ansible.builtin.include_role:
+        name: 5g/free5gc/config
+      when: core == 'free5gc'
+    - name: Deploy Free5GC
+      ansible.builtin.include_role:
+        name: 5g/free5gc/deploy
+      when: core == 'free5gc'
 - name: "Deploy the {{ ran | upper }} RAN and software UEs"
   hosts: ran_node
   any_errors_fatal: true
-  roles:
-    - {role: 5g/oai/config, when: "core == 'oai' or ran == 'oai'"}
-    - {role: 5g/oai/setup, when: "core == 'oai' or ran == 'oai'"}
-    - {role: 5g/oai/core, when: "core == 'oai'"}
-    - {role: 5g/oai/ran, when: "ran == 'oai'"}
-    - {role: 5g/srsRAN/config, when: "ran|lower == 'srsran'"}
-    - {role: 5g/srsRAN/deploy, when: "ran|lower == 'srsran'"}
-    - {role: 5g/ueransim/config, when: "ran == 'ueransim'"}
-    - {role: 5g/ueransim/deploy, when: "ran == 'ueransim'"}
+  tasks:
+    - name: Configure OAI
+      ansible.builtin.include_role:
+        name: 5g/oai/config
+      when: core == 'oai' or ran == 'oai'
+    - name: Prepare OAI
+      ansible.builtin.include_role:
+        name: 5g/oai/setup
+      when: core == 'oai' or ran == 'oai'
+    - name: Deploy the OAI core
+      ansible.builtin.include_role:
+        name: 5g/oai/core
+      when: core == 'oai'
+    - name: Deploy the OAI RAN
+      ansible.builtin.include_role:
+        name: 5g/oai/ran
+      when: ran == 'oai'
+    - name: Configure srsRAN
+      ansible.builtin.include_role:
+        name: 5g/srsRAN/config
+      when: ran | lower == 'srsran'
+    - name: Deploy srsRAN
+      ansible.builtin.include_role:
+        name: 5g/srsRAN/deploy
+      when: ran | lower == 'srsran'
+    - name: Configure UERANSIM
+      ansible.builtin.include_role:
+        name: 5g/ueransim/config
+      when: ran == 'ueransim'
+    - name: Deploy UERANSIM
+      ansible.builtin.include_role:
+        name: 5g/ueransim/deploy
+      when: ran == 'ueransim'

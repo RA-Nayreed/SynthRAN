@@ -339,14 +339,6 @@
     mode: '0600'
   become: true
 
-# === TOOLING =======================================
-- name: Install Helm if missing
-  ansible.builtin.shell: |
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  args:
-    creates: /usr/local/bin/helm
-  become: true
-
 # === FLANNEL (CNI) ============================================================
 - name: Ensure CNI directories exist
   ansible.builtin.file:

@@ -88,3 +88,19 @@
 - name: Use the shared Kubernetes-enabled Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
+
+- name: Check whether Helm is installed
+  ansible.builtin.command: helm version --short
+  register: helm_version
+  changed_when: false
+  failed_when: false
+
+- name: Install Helm on the Kubernetes host
+  ansible.builtin.shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  become: true
+  when: helm_version.rc != 0
+
+- name: Verify Helm is available
+  ansible.builtin.command: helm version --short
+  changed_when: false
