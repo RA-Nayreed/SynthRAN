@@ -415,7 +415,11 @@ set +e
       }
       important($0) {
         suppress_result = 0
-        print
+        line = $0
+        if (line ~ /^(PLAY|TASK|RUNNING HANDLER)/) {
+          sub(/[[:space:]]+\*+$/, "", line)
+        }
+        print line
         fflush()
         next
       }
@@ -426,6 +430,7 @@ set +e
         next
       }
       suppress_result { next }
+      /^[[:space:]]*$/ { next }
       {
         print
         fflush()

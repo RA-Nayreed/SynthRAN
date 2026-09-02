@@ -94,7 +94,15 @@ def main():
         if action == 4: raise SystemExit("Deployment aborted")
         if action == 3: nodes = manual_nodes(nodes); requested = set(nodes.values())
         if action == 2:
-            deployment["nodes"] = nodes; path.write_text(yaml.safe_dump(scenario, sort_keys=False)); return
+            reserved_nodes = list(dict.fromkeys(node for event in related for node in event["nodes"]))
+            if not requested.issubset(set(reserved_nodes)):
+                nodes = automatic_nodes(nodes, reserved_nodes)
+                print("Using the nodes covered by the active reservation:")
+                print(f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}")
+            deployment["nodes"] = nodes
+            path.write_text(yaml.safe_dump(scenario, sort_keys=False))
+            Path(args.run_dir, "pos-selection.json").write_text(json.dumps({"nodes": nodes, "duration_minutes": duration, "reused": True}, indent=2) + "\n")
+            return
     candidates = available(events, owner, now, end)
     unavailable = sorted(requested - set(candidates) - old_nodes)
     if unavailable:
