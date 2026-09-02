@@ -357,7 +357,7 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   R2LAB_END=$(date -d "@$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))" +'%Y-%m-%dT%H:%M')
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
-  echo "Requesting R2Lab independently from $R2LAB_START to $R2LAB_END"
+  echo "Resolving R2Lab access for $R2LAB_START to $R2LAB_END"
   # Match the original 5g_ansible flow: use the operator's normal SSH
   # configuration and run rhubarbe directly on Faraday. Select Duckburg's
   # non-standard R2Lab identity explicitly when it is present.
@@ -372,10 +372,18 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
     echo "R2Lab SSH authentication failed; no reservation was attempted" >&2
     exit 1
   fi
-  if ! "${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
+  R2LAB_LEASE_CHECK=$("${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" \
+    "rhubarbe leases --check" 2>&1) && R2LAB_LEASE_ACTIVE=true || R2LAB_LEASE_ACTIVE=false
+  if $R2LAB_LEASE_ACTIVE; then
+    printf '%s\n' "$R2LAB_LEASE_CHECK" | tee "$RUN_DIR/r2lab-reservation.log"
+    echo "Reusing the active R2Lab lease owned by $R2LAB_USERNAME"
+  else
+    echo "No active owned R2Lab lease was found; requesting a new lease"
+    if ! "${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
     2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
-    echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
-    exit 1
+      echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
+      exit 1
+    fi
   fi
 fi
 
