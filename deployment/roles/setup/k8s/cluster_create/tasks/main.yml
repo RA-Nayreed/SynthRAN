@@ -528,4 +528,5 @@
     dest: .kubeadm_join_command.txt
     mode: '0644'
   delegate_to: localhost
+  become: false
   run_once: true
