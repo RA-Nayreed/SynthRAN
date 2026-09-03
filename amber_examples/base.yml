@@ -1,0 +1,36 @@
+# Copy this file and select one of the protocols shown in this directory.
+deployment:
+  core: open5gs
+  ran: srsran
+  platform: rfsim
+  nodes: {core: localhost, ran: localhost, broker: localhost}
+  ues: [node-00, node-01, node-02]
+model:
+  engine: amber
+  seed: 7
+  duration_ms: 20000
+  energy: {mode: hybrid, combine_mode: max, trace: "builtin:stable", units: uw, repeat: true}
+  capacitor: {capacitance_f: 0.0003, series_resistance_ohm: 5000, leakage_resistance_ohm: 100000, initial_voltage_v: 0, maximum_voltage_v: 2}
+  controller:
+    threshold_low_v: 1.3
+    threshold_high_v: 1.7
+    currents_a: {listening: 0.00014, sensing: 0.000512, processing: 0.00128, transmitting: 0.005}
+    durations_ms: {listening: 5, sensing: 2, processing: 5, transmitting: 15}
+  topology:
+    nodes: {placement: {type: random_annulus, min_radius_m: 5, max_radius_m: 40}}
+    base_station:
+      x: 0
+      y: 0
+      height_m: 25
+      sectors:
+        - {azimuth_deg: 0, beamwidth_deg: 65, power_dbm: 46}
+        - {azimuth_deg: 120, beamwidth_deg: 65, power_dbm: 46}
+        - {azimuth_deg: 240, beamwidth_deg: 65, power_dbm: 46}
+  propagation: {frequency_hz: 924000000, model: macro, los: true}
+  protocol: {type: broadcast, slots: 4, tx_duration_ms: 5, rx_duration_ms: 10}
+  receiver: {sic: false, required_sinr_db: 3, cancellation_factor: 0.9, collision_window_ms: 5}
+mqtt: {port: 1883, qos: 1, topic_prefix: synthran, payload_bytes: 256}
+devices:
+  node-00: {energy_mode: wpt, x: 0, y: 20, subcarrier_shift: 0}
+  node-01: {energy_mode: wpt, x: 0, y: 30, subcarrier_shift: 0}
+  node-02: {energy_mode: hybrid, x: 0, y: 40, subcarrier_shift: 0}
