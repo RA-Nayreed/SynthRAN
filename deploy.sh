@@ -572,57 +572,7 @@ echo
 set +e
 stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}" 2>&1 \
   | stdbuf -oL -eL tee "$RUN_DIR/ansible.log" \
-  | stdbuf -oL -eL awk '
-      /^(PLAY|TASK|RUNNING HANDLER)/ {
-        suppress_result = 0
-        line = $0
-        sub(/[[:space:]]+\*+$/, "", line)
-        if (line ~ /^PLAY/) {
-          sub(/^PLAY \[/, "\n== ", line)
-          sub(/\]$/, " ==", line)
-        } else {
-          sub(/^(TASK|RUNNING HANDLER) \[/, "  -> ", line)
-          sub(/\]$/, "", line)
-        }
-        print line
-        fflush()
-        next
-      }
-      /^FAILED - RETRYING:/ {
-        line = $0
-        sub(/^FAILED - RETRYING:/, "     retry:", line)
-        print line
-        fflush()
-        next
-      }
-      /^(fatal:|.*UNREACHABLE!)/ {
-        print "     ERROR: " $0
-        fflush()
-        next
-      }
-      /^(NO MORE HOSTS LEFT|PLAY RECAP)/ {
-        print $0
-        fflush()
-        next
-      }
-      /^(\[WARNING\]|\[DEPRECATION WARNING\])/ {
-        print "     " $0
-        fflush()
-        next
-      }
-      /^(ok|changed|skipping|included): \[/ {
-        if ($0 ~ /=> \{$/) {
-          suppress_result = 1
-        }
-        next
-      }
-      suppress_result { next }
-      /^[[:space:]]*$/ { next }
-      {
-        print
-        fflush()
-      }
-    '
+  | "$SYNTHRAN_PYTHON" -u deployment/scripts/filter_ansible_output.py
 ANSIBLE_RC=${PIPESTATUS[0]}
 set -e
 if (( ANSIBLE_RC != 0 )); then
