@@ -19,7 +19,7 @@
   ],
   "notes": [
     "Files under amber/ are intended to remain a faithful mirror of upstream Amber.",
-    "Do not add SynthRAN-specific logic here; SynthRAN-specific integration code belongs under synthran/amber/ (see docs/amber-integration-plan.md).",
+    "Do not add SynthRAN-specific logic here; SynthRAN-specific integration code belongs under synthran/amber/ (see docs/amber-integration.md).",
     "Re-vendoring: update vendored_commit/vendored_commit_date above and re-apply local_patches after copying fresh files from the source_repo."
   ]
 }

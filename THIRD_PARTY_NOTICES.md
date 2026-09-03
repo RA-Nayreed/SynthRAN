@@ -20,9 +20,9 @@ The 6G ambient-IoT simulation primitives previously copied into
 `controller.py`, `packet_analysis.py`, `propagation.py`, `radiodevices.py`)
 also derive from Amber and remain redistributed under the same license below.
 These copies are being consolidated onto the single `amber/` copy above; see
-`docs/amber-integration-plan.md` for the migration plan. `synthran.model.energy`
-and `synthran.model.engine` are SynthRAN-original and are not derived from
-Amber.
+`docs/amber-integration.md` for the integration architecture. Modules under
+`synthran.model` are deprecated import shims and contain no independent Amber
+implementation.
 
 Copyright and license conditions are preserved below.
 
