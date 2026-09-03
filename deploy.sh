@@ -420,22 +420,12 @@ ANSIBLE_COMMAND=(ansible-playbook -i "$RUN_DIR/inventory.ini"
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
-printf -v ANSIBLE_SHELL_COMMAND '%q ' "${ANSIBLE_COMMAND[@]}"
 echo "Showing deployment stages, retries, warnings, and failures; full host results are saved to $RUN_DIR/ansible.log"
 echo
 set +e
-{
-  if command -v script >/dev/null 2>&1; then
-    # A pseudo-terminal makes Ansible flush callback output as each event is
-    # emitted. Python unbuffering alone does not prevent callback batching
-    # when Ansible detects an ordinary pipeline.
-    script -qefc "$ANSIBLE_SHELL_COMMAND" /dev/null
-  else
-    stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}"
-  fi
-} 2>&1 \
+stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}" 2>&1 \
   | tee "$RUN_DIR/ansible.log" \
-  | awk '{ sub(/\r$/, "") }
+  | awk '
       function important(line) {
         return line ~ /^(PLAY|TASK|RUNNING HANDLER|FAILED - RETRYING|fatal:|UNREACHABLE!|NO MORE HOSTS LEFT|PLAY RECAP|\[WARNING\]|\[DEPRECATION WARNING\])/
       }

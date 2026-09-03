@@ -6,12 +6,14 @@
 - name: Power off selected QHAT devices
   ansible.builtin.command: "rhubarbe pdu off {{ item }}"
   loop: "{{ groups['qhats'] | default([]) }}"
-  changed_when: true
+  changed_when: false
+  failed_when: false
 
 - name: Power off selected QFIT devices
   ansible.builtin.command: "qfit off {{ groups['qfits'] | join(' ') }}"
   when: groups['qfits'] | default([]) | length > 0
-  changed_when: true
+  changed_when: false
+  failed_when: false
 
 - name: Allow physical modems to power down
   ansible.builtin.pause:
