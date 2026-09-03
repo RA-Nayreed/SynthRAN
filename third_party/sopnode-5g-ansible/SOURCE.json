@@ -1,0 +1,22 @@
+{
+  "project": "SOPNode 5G Ansible",
+  "source_repo": "https://github.com/sopnode/5g_ansible",
+  "source_commit": "a0149fc0dde39e2872945a0f3c91e804ece52d4f",
+  "source_commit_date": "2026-07-21T08:58:52+02:00",
+  "upstream_parent_repo": "https://github.com/yassir63/5g_ansible",
+  "derived_path": "deployment/",
+  "license": null,
+  "license_status": "No repository-level license was declared by the SOPNode fork or its parent at the comparison reference. Attribution does not imply permission to redistribute or modify.",
+  "principal_upstream_contributors": [
+    "Thierry Turletti",
+    "Ziyad Mabrouk",
+    "Samuel DeLaughter"
+  ],
+  "modifications": [
+    "Reorganized selected upstream Ansible content beneath deployment/.",
+    "Removed upstream roles and supporting content outside SynthRAN's supported deployment matrix.",
+    "Adapted Kubernetes, networking, OAI, Open5GS, free5GC, srsRAN, UERANSIM, R2Lab, and radio-unit roles for scenario-driven SynthRAN orchestration.",
+    "Added SynthRAN-specific network playbooks, reservation and provisioning automation, MQTT transport, UE-bound replay, physical-UE support, evidence collection, logging, and reconciliation."
+  ],
+  "comparison_note": "The source_commit identifies the SOPNode main revision used for the provenance comparison. SynthRAN's deployment tree has continued to diverge through subsequent local modifications."
+}
