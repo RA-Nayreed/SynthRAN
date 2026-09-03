@@ -18,6 +18,9 @@ if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be 
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 mkdir -p .synthran
+mkdir -p .synthran/r2lab
+R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
+export R2LAB_FARADAY_KNOWN_HOSTS
 command -v flock >/dev/null || { echo "flock is required to protect deployments from overlapping runs" >&2; exit 1; }
 exec 9>.synthran/deploy.lock
 if ! flock -n 9; then
@@ -400,15 +403,18 @@ if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit
 if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
+    faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
     jump_identity = f" -i {identity}" if identity else ''
     proxy_command = (
-        f'ssh{jump_identity} -o BatchMode=yes -o ConnectTimeout=10 '
+        f'ssh -F /dev/null{jump_identity} -o BatchMode=yes -o ConnectTimeout=10 '
+        f'-o UserKnownHostsFile={faraday_known_hosts} -o StrictHostKeyChecking=accept-new '
         f'-W %h:%p {r2user}@faraday.inria.fr'
     )
     r2_common = (
         f"ansible_user=root ansible_python_interpreter=/usr/bin/python3{key_arg} "
-        f"ansible_ssh_common_args='-o ProxyCommand=\"{proxy_command}\"'"
+        f"ansible_ssh_common_args='-F /dev/null -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null -o ProxyCommand=\"{proxy_command}\"'"
     )
     qhats, qfits = [], []
     for ue in ues:
@@ -433,8 +439,10 @@ def host_entry(name):
     return f'{name} ip={socket.gethostbyname(name)} ansible_python_interpreter=/usr/bin/python3'
 if d['platform'] == 'r2lab':
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
+    faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))} ansible_python_interpreter=/usr/bin/python3{key_arg}"]
+    common_arg = f" ansible_ssh_common_args='-F /dev/null -o UserKnownHostsFile={faraday_known_hosts} -o StrictHostKeyChecking=accept-new'"
+    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))} ansible_python_interpreter=/usr/bin/python3{key_arg}{common_arg}"]
 else:
     faraday = []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
@@ -586,7 +594,9 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   # Match the original 5g_ansible flow: use the operator's normal SSH
   # configuration and run rhubarbe directly on Faraday. Select Duckburg's
   # non-standard R2Lab identity explicitly when it is present.
-  R2LAB_SSH=(ssh)
+  # Faraday is reached directly. Ignore personal Host/ProxyJump entries so an
+  # old ephemeral SOP-node key cannot hijack or block the R2Lab control path.
+  R2LAB_SSH=(ssh -F /dev/null -o "UserKnownHostsFile=$R2LAB_FARADAY_KNOWN_HOSTS" -o StrictHostKeyChecking=accept-new)
   if [[ -n "${R2LAB_IDENTITY_FILE:-}" ]]; then
     R2LAB_SSH+=(-i "$R2LAB_IDENTITY_FILE" -o IdentitiesOnly=yes)
     echo "Using R2Lab SSH identity: $R2LAB_IDENTITY_FILE"
