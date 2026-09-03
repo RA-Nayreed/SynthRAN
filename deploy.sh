@@ -340,7 +340,15 @@ if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    r2_common = f"ansible_user=root ansible_python_interpreter=/usr/bin/python3{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'"
+    jump_identity = f" -i {identity}" if identity else ''
+    proxy_command = (
+        f'ssh{jump_identity} -o BatchMode=yes -o ConnectTimeout=10 '
+        f'-W %h:%p {r2user}@faraday.inria.fr'
+    )
+    r2_common = (
+        f"ansible_user=root ansible_python_interpreter=/usr/bin/python3{key_arg} "
+        f"ansible_ssh_common_args='-o ProxyCommand=\"{proxy_command}\"'"
+    )
     qhats, qfits = [], []
     for ue in ues:
         mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22', 'qhat23'} else 'mbim'
