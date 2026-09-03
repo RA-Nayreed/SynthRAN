@@ -156,7 +156,12 @@ BANNER
         else
           printf -v experiment_node 'pc%02d' "$((index - 37))"
         fi
-        printf '%2d) %-6s%s' "$index" "$experiment_node" "$([[ $((index % 4)) -eq 0 ]] && printf '\n' || printf '  ')"
+        printf '%2d) %-6s' "$index" "$experiment_node"
+        if (( index % 4 == 0 )); then
+          echo
+        else
+          printf '  '
+        fi
       done
       (( 41 % 4 == 0 )) || echo
       echo "Use numbers and ranges, for example: 1,4,12-15,38"
@@ -182,7 +187,8 @@ print('\n'.join(chosen))
 PY
       )
       [[ -n "$R2LAB_SELECTED_HOSTS" ]] || { echo "No experiment hosts selected" >&2; exit 2; }
-      while IFS= read -r experiment_node; do
+      mapfile -t R2LAB_SELECTED_HOST_ARRAY <<< "$R2LAB_SELECTED_HOSTS"
+      for experiment_node in "${R2LAB_SELECTED_HOST_ARRAY[@]}"; do
         echo
         echo "Role for $experiment_node"
         echo "1) Sensor or workload host"
@@ -197,7 +203,7 @@ PY
         esac
         current_value=${!target_variable}
         printf -v "$target_variable" '%s%s%s' "$current_value" "$([[ -n "$current_value" ]] && printf ',' || true)" "$experiment_node"
-      done <<< "$R2LAB_SELECTED_HOSTS"
+      done
       read -r -p "R2Lab node image [ubuntu]: " SELECTED_R2LAB_NODE_IMAGE
       SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-ubuntu}
     else
