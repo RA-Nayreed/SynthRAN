@@ -1,4 +1,4 @@
-"""Build and execute a complete embedded-Amber experiment."""
+"""Build and execute SynthRAN's native Ambient-IoT model."""
 from __future__ import annotations
 
 import random
@@ -6,14 +6,14 @@ from typing import Any
 
 import numpy as np
 import simpy
-from amber import backscatter, bsengine, capacitor, controller, propagation, radiodevices
+from synthran.model import backscatter, bsengine, capacitor, controller, propagation, radiodevices
 
 from .config import TraceEnergySource, duration_ms, threshold
 from .protocols import resolve
 
 
 class ConfiguredBSBehavior(bsengine.BSBehavior):
-    """Keep Amber's receiver authoritative while exposing its collision window."""
+    """Keep receiver outcomes authoritative while exposing the collision window."""
 
     def __init__(self, *args, collision_window_ms: float = 5.0, **kwargs):
         self.collision_window_ms = collision_window_ms
@@ -25,14 +25,14 @@ class ConfiguredBSBehavior(bsengine.BSBehavior):
         )
 
 
-class AmberRunner:
-    """Turn a SynthRAN scenario into native Amber simulation objects."""
+class AmbientIoTRunner:
+    """Turn a SynthRAN scenario into native Ambient-IoT simulation objects."""
 
     def __init__(self, scenario: dict[str, Any]):
         self.scenario = scenario
         self.model = scenario["model"]
-        if str(self.model.get("engine", "amber")).lower() != "amber":
-            raise ValueError("model.engine must be amber")
+        if str(self.model.get("engine", "ambient_iot")).lower() != "ambient_iot":
+            raise ValueError("model.engine must be ambient_iot")
 
     def run(self) -> dict[str, Any]:
         seed = int(self.model.get("seed", 1))
@@ -122,7 +122,7 @@ class AmberRunner:
                 initial_voltage=float(device_config.get("initial_voltage_v", cap_config.get("initial_voltage_v", 0))),
                 voltage_max=float(cap_config.get("maximum_voltage_v", 2)),
             )
-            # Amber Controller supports this public compatibility attribute and
+            # The controller exposes this public attribute and
             # otherwise falls back to 5 kohm; make scenario control explicit.
             cap.R_series = cap_params.R_series
             module = protocol["module_class"](env, node, [], uplink, downlink)

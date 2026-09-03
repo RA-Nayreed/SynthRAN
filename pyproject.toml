@@ -20,5 +20,5 @@ deployment = ["ansible-core>=2.19,<2.20"]
 synthran = ["data/*.csv"]
 
 [tool.setuptools.packages.find]
-include = ["synthran", "synthran.*", "amber", "amber.*"]
+include = ["synthran", "synthran.*"]
 exclude = ["deployment*", "scenarios*", "results*", "third_party*"]

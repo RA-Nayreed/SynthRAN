@@ -14,7 +14,7 @@ deployment:
     rf_measurement: [pc01]
     image: ubuntu
 model:
-  engine: amber
+  engine: ambient_iot
   seed: 21
   duration_ms: 60000
   energy: {mode: hybrid, trace: "builtin:stable", units: uw, repeat: true, wpt_power_w: 0.000025}

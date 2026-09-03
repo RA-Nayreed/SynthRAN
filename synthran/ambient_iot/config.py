@@ -1,4 +1,4 @@
-"""Configuration adapters for Amber without modifying vendored source."""
+"""Configuration adapters for SynthRAN's Ambient-IoT model."""
 from __future__ import annotations
 
 import csv
@@ -18,7 +18,7 @@ def threshold(config: dict[str, Any], modern: str, legacy: str, default: float) 
 
 
 class TraceEnergySource:
-    """Expose CSV or built-in power traces through Amber's ext_power contract."""
+    """Expose CSV or built-in power traces through the model's power contract."""
 
     def __init__(self, env, config: dict[str, Any], source_directory: str | None = None):
         self.env = env

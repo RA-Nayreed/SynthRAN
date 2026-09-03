@@ -25,7 +25,7 @@ and R2Lab resource in the file is already reserved, imaged, and reachable.
 
 Software UE sidecars apply only to RF-simulated UEs. Physical R2Lab QHAT/QFIT
 workloads run directly on their hosts and bind MQTT to `wwan0`. Extra sensor,
-edge, and RF-measurement nodes receive the frozen Amber event trace and collect
+edge, and RF-measurement nodes receive the frozen Ambient-IoT event trace and collect
 host/SDR evidence, but they do not automatically gain a routed 5G user-plane.
 
 `pc01` and `pc02` are used for RF measurement because the deployment roles have

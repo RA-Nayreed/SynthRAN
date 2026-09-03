@@ -1,28 +1,17 @@
 # Third-party notices
 
-## Amber (`amber/`)
+## Amber-derived Ambient-IoT model (`synthran/model/`)
 
-The `amber/` package is the upstream [Amber](https://github.com/RA-Nayreed/Amber)
-6G Ambient-IoT discrete-event simulator by Mirana Manafova, vendored in full
-and kept as close to upstream as possible. It is redistributed under the BSD
-3-Clause License; the unmodified upstream license text is preserved below and
-also duplicated at `third_party/amber/LICENSE`. Exact provenance (source
-commit and the one local compatibility patch applied) is recorded in
-`third_party/amber/SOURCE.json`.
+SynthRAN's native Ambient-IoT scientific primitives in `synthran/model/`
+originated from the [Amber](https://github.com/RA-Nayreed/Amber) 6G Ambient-IoT
+discrete-event simulator by Mirana Manafova. They were imported from the exact
+commit recorded in `third_party/amber/SOURCE.json` and are now maintained and
+modified as part of SynthRAN rather than as an upstream-compatible package.
 
-SynthRAN's own Amber integration/orchestration code lives under
-`synthran/amber/` and is SynthRAN-original, not derived from Amber.
-
-## `synthran.model` compatibility imports
-
-The 6G ambient-IoT simulation primitives previously copied into
-`synthran.model` (`backscatter.py`, `bsengine.py`, `capacitor.py`,
-`controller.py`, `packet_analysis.py`, `propagation.py`, `radiodevices.py`)
-also derive from Amber and remain redistributed under the same license below.
-These copies are being consolidated onto the single `amber/` copy above; see
-`docs/amber-integration.md` for the integration architecture. Modules under
-`synthran.model` are deprecated import shims and contain no independent Amber
-implementation.
+The derived files remain redistributed under the BSD 3-Clause License. The
+unmodified upstream license is preserved below and at
+`third_party/amber/LICENSE`. SynthRAN-original orchestration, configuration,
+protocol, evidence, and bridge code lives under `synthran/ambient_iot/`.
 
 Copyright and license conditions are preserved below.
 
@@ -63,7 +52,7 @@ SynthRAN reorganized the selected upstream files beneath `deployment/`, removed
 unneeded upstream components, and substantially adapted the retained roles for
 scenario-driven multi-core/multi-RAN deployment. SynthRAN also added its own
 network playbooks, POS and R2Lab reservation/provisioning, MQTT broker and UE
-publisher roles, physical-UE handling, immutable Amber trace replay, evidence
+publisher roles, physical-UE handling, immutable Ambient-IoT trace replay, evidence
 collection, logging, and result reconciliation.
 
 **License status:** neither `sopnode/5g_ansible` nor its parent repository

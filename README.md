@@ -1,10 +1,11 @@
 # SynthRAN
 
-SynthRAN runs the complete, embedded Amber Ambient-IoT engine deterministically,
-freezes packets decoded by Amber into JSONL, and replays only those packets as
-MQTT traffic through real 5G UE interfaces. The canonical Amber source lives in
-`amber/`; SynthRAN-specific configuration, protocols, evidence, and event
-bridging live in `synthran/amber/`.
+SynthRAN runs its native Ambient-IoT model deterministically, freezes decoded
+packets into JSONL, and replays only those packets as MQTT traffic through real
+5G UE interfaces. Scientific model primitives live in `synthran/model/`, while
+configuration, protocols, evidence, and event bridging live in
+`synthran/ambient_iot/`. The model originated from Amber; its provenance and
+license are preserved under `third_party/amber/`.
 
 The primary interface is one interactive command. It prompts for the core, RAN,
 platform, radio unit, currently available nodes, profile, UEs, POS reservation

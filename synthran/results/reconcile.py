@@ -27,15 +27,15 @@ def reconcile(expected, publisher, broker, output="summary.json") -> dict:
     for device in devices:
         model_ids = {row["event_id"] for row in expected_rows if row.get("device") == device}
         per_device[device] = {
-            "amber_decoded": len(model_ids),
+            "ambient_iot_decoded": len(model_ids),
             "published": len(model_ids & published_ids),
             "broker_received": len(model_ids & received_ids),
             "transport_lost": len((model_ids & published_ids) - received_ids),
         }
-    amber_summary_path = Path(expected).parent / "amber" / "summary.json"
-    amber = json.loads(amber_summary_path.read_text(encoding="utf-8")) if amber_summary_path.exists() else {"decoded": len(expected_ids)}
+    ambient_summary_path = Path(expected).parent / "ambient_iot" / "summary.json"
+    ambient = json.loads(ambient_summary_path.read_text(encoding="utf-8")) if ambient_summary_path.exists() else {"decoded": len(expected_ids)}
     summary = {
-        "ambient_iot": amber,
+        "ambient_iot": ambient,
         "five_g": {
             "input": len(expected_ids),
             "published": len(expected_ids & published_ids),

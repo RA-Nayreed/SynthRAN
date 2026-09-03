@@ -1,10 +1,10 @@
-"""Reusable protocol definitions for Amber simulations."""
+"""Reusable protocol definitions for Ambient-IoT simulations."""
 from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
 
-from amber.backscatter import BackscatterModule
+from synthran.model.backscatter import BackscatterModule
 
 
 def broadcast(node_ids: list[int], config: dict[str, Any]) -> list[tuple]:
@@ -33,7 +33,7 @@ def unicast(node_ids: list[int], config: dict[str, Any]) -> list[tuple]:
 
 
 def with_registration(schedule: list[tuple], node_ids: list[int], config: dict[str, Any]) -> list[tuple]:
-    """Optionally prepend Amber's native ID/ACK registration exchange."""
+    """Optionally prepend the native ID/ACK registration exchange."""
     if bool(config.get("pre_registered", True)):
         return schedule
     tx_ms = int(config.get("tx_duration_ms", 5))
@@ -48,7 +48,7 @@ def with_registration(schedule: list[tuple], node_ids: list[int], config: dict[s
 
 
 class AdaptiveAlohaNode(BackscatterModule):
-    """Amber node using an adaptive framed-slotted ALOHA command."""
+    """Ambient-IoT node using an adaptive framed-slotted ALOHA command."""
 
     def handle_command(self, cmd: str, bs_id: int, data: dict) -> None:
         if cmd != "aloha_frame":
@@ -63,7 +63,7 @@ class AdaptiveAlohaNode(BackscatterModule):
 
 
 def adaptive_aloha(config: dict[str, Any]):
-    """Return an Amber policy that adapts frame size from native outcomes."""
+    """Return a policy that adapts frame size from native outcomes."""
     tx_ms = int(config.get("tx_duration_ms", 5))
     rx_ms = int(config.get("rx_duration_ms", 10))
     minimum = int(config.get("min_slots", 2))
@@ -99,4 +99,4 @@ def resolve(name: str, node_ids: list[int], config: dict[str, Any]) -> dict[str,
         return {"schedule": with_registration(unicast(node_ids, config), node_ids, config), "module_class": BackscatterModule}
     if normalized in {"adaptive_aloha", "custom_protocol"}:
         return {"policy": adaptive_aloha(config), "module_class": AdaptiveAlohaNode}
-    raise ValueError(f"unsupported Amber protocol: {name}")
+    raise ValueError(f"unsupported Ambient-IoT protocol: {name}")

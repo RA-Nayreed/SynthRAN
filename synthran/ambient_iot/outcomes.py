@@ -1,4 +1,4 @@
-"""Classify native Amber RX decisions without recalculating reception."""
+"""Classify native RX decisions without recalculating reception."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -6,10 +6,10 @@ from typing import Any
 
 
 def classify(packets: list[Any], collision_window_ms: float, sic_enabled: bool) -> dict[int, str]:
-    """Label packets after Amber has authoritatively set ``collided``.
+    """Label packets after the model has authoritatively set ``collided``.
 
     Grouping is used only to distinguish capture and SIC recovery among packets
-    Amber already decoded. It never changes Amber's success/failure decision.
+    the receiver already decoded. It never changes the model's decision.
     """
     labels: dict[int, str] = {}
     grouped: defaultdict[int, list[Any]] = defaultdict(list)

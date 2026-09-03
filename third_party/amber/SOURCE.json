@@ -2,24 +2,24 @@
   "project": "Amber",
   "description": "Discrete-event simulator for 6G Ambient IoT (Backscatter) networks",
   "source_repo": "https://github.com/RA-Nayreed/Amber",
-  "vendored_commit": "08dd6bd445e607ad3accf4e9a2dff51a499ebdf9",
-  "vendored_ref": "main",
-  "vendored_commit_date": "2026-08-28T11:16:01+02:00",
-  "vendored_on": "2026-09-03",
+  "imported_commit": "08dd6bd445e607ad3accf4e9a2dff51a499ebdf9",
+  "imported_ref": "main",
+  "imported_commit_date": "2026-08-28T11:16:01+02:00",
+  "imported_on": "2026-09-03",
   "license": "BSD-3-Clause",
   "license_file": "third_party/amber/LICENSE",
-  "vendored_path": "amber/",
+  "derived_path": "synthran/model/",
   "upstream_package_path": "amber/",
   "local_patches": [
     {
-      "file": "amber/propagation.py",
-      "summary": "Made the matplotlib import optional (try/except) so amber.propagation, and anything importing it transitively, can be imported in headless model-run environments that do not install matplotlib.",
+      "file": "synthran/model/propagation.py",
+      "summary": "Made the matplotlib import optional (try/except) so propagation and its transitive consumers can run in headless model environments without matplotlib.",
       "reason": "SynthRAN's model-run path (synthran.workload.trace.generate) must not require plotting dependencies at import time."
     }
   ],
   "notes": [
-    "Files under amber/ are intended to remain a faithful mirror of upstream Amber.",
-    "Do not add SynthRAN-specific logic here; SynthRAN-specific integration code belongs under synthran/amber/ (see docs/amber-integration.md).",
-    "Re-vendoring: update vendored_commit/vendored_commit_date above and re-apply local_patches after copying fresh files from the source_repo."
+    "The imported source is now maintained as SynthRAN-native code under synthran/model/.",
+    "This record preserves origin and licensing; it does not define an upstream synchronization workflow.",
+    "SynthRAN orchestration code lives under synthran/ambient_iot/ (see docs/ambient-iot.md)."
   ]
 }

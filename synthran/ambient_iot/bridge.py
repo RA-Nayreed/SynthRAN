@@ -1,4 +1,4 @@
-"""Translate authoritative Amber packet outcomes into replay events."""
+"""Translate authoritative Ambient-IoT outcomes into replay events."""
 from __future__ import annotations
 
 import hashlib
@@ -32,7 +32,7 @@ def decoded_events(result: dict[str, Any], scenario: dict[str, Any]) -> list[dic
         device = names[packet.node_id]
         sequence = sequences[device]
         sequences[device] += 1
-        event_id = hashlib.sha256(f"amber:{device}:{packet.start_ms}:{sequence}".encode()).hexdigest()[:20]
+        event_id = hashlib.sha256(f"ambient-iot:{device}:{packet.start_ms}:{sequence}".encode()).hexdigest()[:20]
         payload = {
             "event_id": event_id,
             "device": device,
@@ -52,7 +52,7 @@ def decoded_events(result: dict[str, Any], scenario: dict[str, Any]) -> list[dic
                 "topic": f"{prefix}/{device}",
                 "payload": encoded,
                 "event_id": event_id,
-                "amber": {
+                "ambient_iot": {
                     "rssi_dbm": packet.rssi_dbm,
                     "sector_idx": packet.sector_idx,
                     "subcarrier_shift": packet.subcarrier_shift,
