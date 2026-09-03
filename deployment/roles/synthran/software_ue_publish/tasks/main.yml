@@ -71,12 +71,21 @@
     /tmp/synthran-events.jsonl {{ item.pod }}:/opt/synthran-events.jsonl
   loop: "{{ synthran_software_pods }}"
   loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
-- name: Install SynthRAN inside publisher runtimes
+- name: Install the lightweight MQTT dependency inside publisher runtimes
   command: >-
     kubectl exec -n {{ item.namespace }} {{ item.pod }} -c synthran-runtime --
-    python3 -m pip install --disable-pip-version-check /opt/synthran-runtime
+    python3 -m pip install --disable-pip-version-check "paho-mqtt>=2"
   loop: "{{ synthran_software_pods }}"
   loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+
+- name: Verify publisher runtimes do not require the numerical model stack
+  command: >-
+    kubectl exec -n {{ item.namespace }} {{ item.pod }} -c synthran-runtime --
+    env PYTHONPATH=/opt/synthran-runtime python3 -c
+    "from synthran.workload.replay import replay"
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  changed_when: false
 
 - name: Configure source-policy routing for every assigned UE tunnel
   shell: >-
@@ -98,7 +107,7 @@
   command: >-
     kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
     {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
-    python3 -m synthran.cli workload replay
+    env PYTHONPATH=/opt/synthran-runtime python3 -m synthran.cli workload replay
     --trace /opt/synthran-events.jsonl --device {{ item.device }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --bind-address {{ synthran_assigned_tunnels[item.index - 1].address }}

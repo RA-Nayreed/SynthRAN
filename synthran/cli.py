@@ -1,7 +1,5 @@
 from __future__ import annotations
 import argparse, json
-from .results import reconcile
-from .workload import collect, generate, replay
 
 def parser():
     root = argparse.ArgumentParser(prog="synthran"); commands = root.add_subparsers(dest="area", required=True)
@@ -13,9 +11,21 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if (args.area, args.command) == ("model", "run"): print(generate(args.config, args.output))
-    elif (args.area, args.command) == ("workload", "replay"): replay(args.trace, args.broker, args.port, args.qos, args.interface, args.start_utc, args.output, args.device, args.bind_address)
-    elif (args.area, args.command) == ("workload", "collect"): collect(args.broker, args.topic, args.port, args.output)
-    else: print(json.dumps(reconcile(args.expected, args.publisher, args.broker, args.output), indent=2))
+    if (args.area, args.command) == ("model", "run"):
+        from .workload.trace import generate
+
+        print(generate(args.config, args.output))
+    elif (args.area, args.command) == ("workload", "replay"):
+        from .workload.replay import replay
+
+        replay(args.trace, args.broker, args.port, args.qos, args.interface, args.start_utc, args.output, args.device, args.bind_address)
+    elif (args.area, args.command) == ("workload", "collect"):
+        from .workload.replay import collect
+
+        collect(args.broker, args.topic, args.port, args.output)
+    else:
+        from .results import reconcile
+
+        print(json.dumps(reconcile(args.expected, args.publisher, args.broker, args.output), indent=2))
 
 if __name__ == "__main__": main()

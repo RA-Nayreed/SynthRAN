@@ -8,8 +8,13 @@
 - name: Create isolated publisher runtime
   command: python3 -m venv /opt/synthran-venv
   args: {creates: /opt/synthran-venv/bin/python}
-- name: Install SynthRAN runtime
-  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check /opt/synthran-source
+- name: Install the lightweight MQTT publisher dependency
+  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check "paho-mqtt>=2"
+- name: Verify the publisher does not require the numerical model runtime
+  command: /opt/synthran-venv/bin/python -c "from synthran.workload.replay import replay"
+  environment:
+    PYTHONPATH: /opt/synthran-source
+  changed_when: false
 - name: Require physical UE interface
   command: ip -4 -o addr show dev wwan0
   register: ue_tunnel
@@ -29,5 +34,7 @@
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --interface wwan0 --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
     --output /var/log/synthran-publisher.jsonl
+  environment:
+    PYTHONPATH: /opt/synthran-source
 - name: Fetch publisher records
   fetch: {src: /var/log/synthran-publisher.jsonl, dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl", flat: true}

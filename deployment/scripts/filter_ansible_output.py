@@ -18,28 +18,40 @@ def emit(line: str = "") -> None:
 
 def main() -> None:
     hiding_result = False
+    hiding_error_detail = False
     for raw in sys.stdin:
         line = raw.rstrip("\r\n")
 
         match = PLAY.match(line)
         if match:
             hiding_result = False
+            hiding_error_detail = False
             emit(f"\n== {match.group(1)} ==")
             continue
 
         match = TASK.match(line)
         if match:
             hiding_result = False
+            hiding_error_detail = False
             emit(f"  -> {match.group(1)}")
             continue
 
         if line.startswith("FAILED - RETRYING:"):
             hiding_result = False
+            hiding_error_detail = False
             emit("     retry:" + line.removeprefix("FAILED - RETRYING:"))
             continue
 
-        if line.startswith("fatal:") or "UNREACHABLE!" in line or line.startswith("[ERROR]"):
+        # Newer Ansible versions emit an [ERROR] diagnostic even when a task's
+        # failed_when expression deliberately converts the result to success.
+        # A following fatal: result is the authoritative terminal failure.
+        if line.startswith("[ERROR]"):
+            hiding_error_detail = True
+            continue
+
+        if line.startswith("fatal:") or "UNREACHABLE!" in line:
             hiding_result = False
+            hiding_error_detail = False
             emit(f"     ERROR: {line}")
             continue
 
@@ -54,10 +66,11 @@ def main() -> None:
             continue
 
         if ROUTINE_RESULT.match(line):
+            hiding_error_detail = False
             hiding_result = line.endswith("=> {")
             continue
 
-        if hiding_result or not line.strip():
+        if hiding_result or hiding_error_detail or not line.strip():
             continue
 
         emit(line)

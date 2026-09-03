@@ -10,8 +10,13 @@
 - name: Create isolated SynthRAN runtime
   command: python3 -m venv /opt/synthran-venv
   args: {creates: /opt/synthran-venv/bin/python}
-- name: Install SynthRAN runtime
-  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check /opt/synthran-source
+- name: Install the lightweight MQTT collector dependency
+  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check "paho-mqtt>=2"
+- name: Verify the collector does not require the numerical model runtime
+  command: /opt/synthran-venv/bin/python -c "from synthran.workload.replay import collect"
+  environment:
+    PYTHONPATH: /opt/synthran-source
+  changed_when: false
 - name: Configure N6-side MQTT listener
   copy:
     dest: /etc/mosquitto/conf.d/synthran.conf
@@ -37,6 +42,7 @@
       After=mosquitto.service
       Requires=mosquitto.service
       [Service]
+      Environment=PYTHONPATH=/opt/synthran-source
       ExecStart=/opt/synthran-venv/bin/python -m synthran.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts.jsonl
       Restart=on-failure
       [Install]
