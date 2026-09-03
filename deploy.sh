@@ -208,7 +208,17 @@ if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    physical_hosts = [f"{ue} ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'" for ue in ues]
+    qhats, qfits = [], []
+    for ue in ues:
+        mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22'} else 'mbim'
+        entry = f"{ue} ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr' mode={mode}"
+        if ue.startswith('qhat'):
+            qhats.append(entry)
+        elif ue.startswith('qfit'):
+            qfits.append(entry)
+        else:
+            raise SystemExit(f'Unsupported R2Lab physical UE: {ue}; expected qhat* or qfit*')
+    physical_hosts = []
 elif d['platform'] == 'physical':
     physical_hosts = ues
 else:
@@ -221,9 +231,14 @@ if d['platform'] == 'r2lab':
     faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}{key_arg}"]
 else:
     faraday = []
-lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core'])), '', '[physical_ues]']+physical_hosts+['', '[faraday]']+faraday+['', '[k8s_workers:children]','ran_node','', '[sopnodes:children]','core_node','ran_node']
+lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
+if d['platform'] == 'r2lab':
+    lines += ['', '[qhats]'] + qhats + ['', '[qfits]'] + qfits + ['', '[physical_ues:children]', 'qhats', 'qfits']
+else:
+    lines += ['', '[physical_ues]'] + physical_hosts
+lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
-ue_map=[{'device':name,'index':i+1,'interface':f'tun_srsue{i+1}'} for i,name in enumerate(ues)]
+ue_map=[{'device':name,'index':i+1} for i,name in enumerate(ues)]
 variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map}
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY

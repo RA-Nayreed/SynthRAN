@@ -4,26 +4,44 @@
   become: true
   any_errors_fatal: true
   roles: [synthran/broker]
-- name: Select a shared telemetry start time
+- name: Replay telemetry through software UE tunnels
+  hosts: ran_node
+  any_errors_fatal: true
+  tasks:
+    - name: Run the software UE publisher
+      ansible.builtin.include_role:
+        name: synthran/software_ue_publish
+      when:
+        - platform == 'rfsim'
+        - ran | lower in ['srsran', 'ueransim', 'oai']
+- name: Prepare physical UE interfaces
+  hosts: physical_ues
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Prepare and validate the physical UE session
+      ansible.builtin.include_role:
+        name: synthran/physical_ue
+      when: platform in ['r2lab', 'physical']
+
+- name: Select a shared physical telemetry start time
   hosts: localhost
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Choose one shared UTC start for physical UE publishers
-      set_fact:
+    - name: Choose one shared UTC start after every physical UE is ready
+      ansible.builtin.set_fact:
         synthran_physical_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
-- name: Replay telemetry through software UE tunnels
-  hosts: ran_node
-  any_errors_fatal: true
-  roles:
-    - role: synthran/software_ue_publish
-      when: platform == 'rfsim' and ran | lower in ['srsran', 'ueransim', 'oai']
+      when: platform in ['r2lab', 'physical']
+
 - name: Replay telemetry through physical UE interfaces
   hosts: physical_ues
   become: true
   any_errors_fatal: true
-  roles:
-    - role: synthran/publisher
+  tasks:
+    - name: Run the physical UE publisher
+      ansible.builtin.include_role:
+        name: synthran/publisher
       when: platform in ['r2lab', 'physical']
 - name: Collect MQTT receipt artifacts
   hosts: broker_node

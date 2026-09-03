@@ -1,7 +1,92 @@
 ---
-- name: Require supported physical IoT modem interface
-  command: ip link show wwan0
-  changed_when: false
-- name: Enable physical modem interface
-  command: ip link set wwan0 up
+- name: Load the active physical UE profile
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    name: synthran_fiveg
+
+- name: Require the physical UE in the active 5G profile
+  ansible.builtin.assert:
+    that:
+      - synthran_fiveg.ues[inventory_hostname] is defined
+    fail_msg: "{{ inventory_hostname }} is not defined in the active 5G profile"
+
+- name: Resolve the physical UE slice
+  ansible.builtin.set_fact:
+    synthran_physical_slice_name: "{{ synthran_fiveg.ues[inventory_hostname].slice }}"
+
+- name: Resolve the physical UE DNN and UPF address
+  ansible.builtin.set_fact:
+    synthran_physical_slice: >-
+      {{ synthran_fiveg.slices
+         | selectattr('name', 'equalto', synthran_physical_slice_name)
+         | first }}
+
+- name: Attach an MBIM physical UE
+  ansible.builtin.shell: "stop.sh; start.sh -F {{ synthran_physical_slice.dnn }}"
+  when: mode | default('mbim') == 'mbim'
   changed_when: true
+
+- name: Start the QMI connection manager
+  ansible.builtin.shell: >-
+    pgrep -x quectel-CM >/dev/null 2>&1 ||
+    (setsid /usr/local/bin/quectel-CM -s {{ synthran_physical_slice.dnn }} -4
+    </dev/null >/var/log/quectel-CM.log 2>&1 &)
+  when: mode | default('mbim') == 'qmi'
+  changed_when: true
+
+- name: Wake the QMI modem onto the selected network
+  ansible.builtin.shell: >-
+    for port in /dev/ttyUSB3 /dev/ttyUSB2; do
+    python3 /usr/local/bin/ci_ctl_qtel.py "$port" wup >/dev/null 2>&1 && exit 0;
+    done; exit 1
+  when: mode | default('mbim') == 'qmi'
+  changed_when: true
+
+- name: Require the supported physical modem interface
+  ansible.builtin.command: ip link show wwan0
+  changed_when: false
+
+- name: Enable the physical modem interface
+  ansible.builtin.command: ip link set wwan0 up
+  changed_when: true
+
+- name: Wait for the physical 5G session address
+  ansible.builtin.command: ip -4 -o addr show dev wwan0
+  register: synthran_physical_address
+  changed_when: false
+  retries: "{{ 60 if (mode | default('mbim')) == 'qmi' else 30 }}"
+  delay: 2
+  until: "' inet ' in synthran_physical_address.stdout"
+
+- name: Install the route to the assigned UPF
+  ansible.builtin.command: >-
+    ip route replace {{ synthran_physical_slice.ip_prefix }}.1 dev wwan0
+  changed_when: true
+
+- name: Prove physical user-plane reachability
+  ansible.builtin.command: >-
+    ping -I wwan0 -c 1 -W 3 {{ synthran_physical_slice.ip_prefix }}.1
+  register: synthran_physical_upf_ping
+  changed_when: false
+  retries: 15
+  delay: 4
+  until: synthran_physical_upf_ping.rc == 0
+
+- name: Collect physical UE session evidence
+  ansible.builtin.shell: |
+    echo "device={{ inventory_hostname }}"
+    echo "mode={{ mode | default('mbim') }}"
+    echo "dnn={{ synthran_physical_slice.dnn }}"
+    echo "upf={{ synthran_physical_slice.ip_prefix }}.1"
+    ip -4 -o addr show dev wwan0
+    ip route show
+    qhat-check 2>&1 || true
+  register: synthran_physical_evidence
+  changed_when: false
+
+- name: Save physical UE session evidence
+  ansible.builtin.copy:
+    content: "{{ synthran_physical_evidence.stdout }}\n"
+    dest: "{{ run_dir }}/physical-ue-{{ inventory_hostname }}.log"
+  delegate_to: localhost
+  become: false

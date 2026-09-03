@@ -1,0 +1,64 @@
+---
+- name: Build the selected R2Lab UE list
+  ansible.builtin.set_fact:
+    synthran_r2lab_ues: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}"
+
+- name: Power off selected QHAT devices
+  ansible.builtin.command: "rhubarbe pdu off {{ item }}"
+  loop: "{{ groups['qhats'] | default([]) }}"
+  changed_when: true
+
+- name: Power off selected QFIT devices
+  ansible.builtin.command: "qfit off {{ groups['qfits'] | join(' ') }}"
+  when: groups['qfits'] | default([]) | length > 0
+  changed_when: true
+
+- name: Allow physical modems to power down
+  ansible.builtin.pause:
+    seconds: 20
+  when: synthran_r2lab_ues | length > 0
+
+- name: Power on selected QHAT devices
+  ansible.builtin.command: "rhubarbe pdu on {{ item }}"
+  loop: "{{ groups['qhats'] | default([]) }}"
+  changed_when: true
+
+- name: Power on selected QFIT devices
+  ansible.builtin.command: "qfit on {{ groups['qfits'] | join(' ') }}"
+  when: groups['qfits'] | default([]) | length > 0
+  changed_when: true
+
+- name: Wait for selected physical UEs to answer
+  ansible.builtin.command: "ping -c 1 -W 1 {{ item }}"
+  loop: "{{ synthran_r2lab_ues }}"
+  changed_when: false
+  register: synthran_r2lab_ping
+  retries: 12
+  delay: 10
+  until: synthran_r2lab_ping.rc == 0
+
+- name: Initialize selected physical UEs
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }} qhat-init
+  loop: "{{ synthran_r2lab_ues }}"
+  changed_when: true
+
+- name: Stop MBIM UEs after initialization
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }} stop.sh
+  loop: "{{ synthran_r2lab_ues }}"
+  when: hostvars[item].mode | default('mbim') == 'mbim'
+  changed_when: true
+
+- name: Detach QMI UEs after initialization
+  ansible.builtin.shell: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }}
+    'for port in /dev/ttyUSB3 /dev/ttyUSB2; do
+    python3 /usr/local/bin/ci_ctl_qtel.py "$port" detach >/dev/null 2>&1 && exit 0;
+    done; exit 1'
+  loop: "{{ synthran_r2lab_ues }}"
+  when: hostvars[item].mode | default('mbim') == 'qmi'
+  changed_when: true

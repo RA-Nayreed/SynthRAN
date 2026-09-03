@@ -5,3 +5,5 @@
   roles:
     - role: r2lab/rru
       when: platform == 'r2lab'
+    - role: r2lab/ue_setup
+      when: platform == 'r2lab'
