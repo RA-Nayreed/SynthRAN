@@ -39,8 +39,13 @@ class TraceEnergySource:
             path = Path(trace)
             if not path.is_absolute() and source_directory:
                 path = Path(source_directory) / path
-        with path.open(encoding="utf-8-sig", newline="") as stream:
-            rows = list(csv.DictReader(stream))
+        if path.suffix.lower() in {".xlsx", ".xls"}:
+            import pandas as pd
+
+            rows = pd.read_excel(path).to_dict("records")
+        else:
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
         if not rows:
             raise ValueError(f"empty energy trace: {path}")
         column = self.config.get("column")
@@ -49,7 +54,11 @@ class TraceEnergySource:
         if not column:
             numeric = [key for key in rows[0] if key.lower() not in {"time", "time_s", "timestamp"}]
             column = numeric[-1]
-        return [max(0.0, float(row[column]) * factor) for row in rows]
+        values = [max(0.0, float(row[column]) * factor) for row in rows]
+        if str(self.config.get("trace_kind", "power")).lower() == "voltage":
+            resistance = float(self.config.get("resistance_ohm", 5000))
+            values = [value * value / resistance for value in values]
+        return values
 
     def run(self):
         repeat = bool(self.config.get("repeat", True))

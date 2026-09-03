@@ -16,3 +16,6 @@ jobs:
           cache: pip
       - run: python -m pip install . pytest
       - run: python -m pytest -q
+      - run: git clone https://github.com/RA-Nayreed/Amber.git /tmp/amber-upstream
+      - run: git -C /tmp/amber-upstream checkout 08dd6bd445e607ad3accf4e9a2dff51a499ebdf9
+      - run: python tools/verify_amber_vendor.py /tmp/amber-upstream

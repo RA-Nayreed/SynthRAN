@@ -40,12 +40,12 @@ class AmberRunner:
         np.random.seed(seed)
         env = simpy.Environment()
         nodes, names = self._nodes(seed)
-        base_station = self._base_station()
+        base_stations = self._base_stations()
         energy_config = self.model.get("energy", {})
         source = TraceEnergySource(env, energy_config, self.scenario.get("_source_directory"))
         mode = str(energy_config.get("mode", "hybrid")).lower()
         coverage = propagation.CoverageMap(
-            base_stations=[base_station],
+            base_stations=base_stations,
             nodes=nodes,
             freq_hz=float(self.model.get("propagation", self.model.get("topology", {})).get("frequency_hz", 924e6)),
             pathloss_model=str(self.model.get("propagation", {}).get("model", self.model.get("topology", {}).get("pathloss", "macro"))),
@@ -58,7 +58,25 @@ class AmberRunner:
             combine_mode=str(energy_config.get("combine_mode", "max")),
         )
         downlink = coverage.compute_bs_to_point(nodes)
-        coverage.calculate_node_power(nodes, downlink)
+        node_coverages = {}
+        for node in nodes:
+            device = self.scenario["devices"][names[node.id]]
+            node_mode = str(device.get("energy_mode", mode)).lower()
+            node_coverage = propagation.CoverageMap(
+                base_stations=base_stations,
+                nodes=[node],
+                freq_hz=coverage.freq_hz,
+                pathloss_model=coverage.pathloss_model,
+                los=coverage.los,
+                extra_np_per_m=coverage.extra_np_per_m,
+                bandwidth_hz=coverage.bandwidth_hz,
+                noise_figure_db=coverage.noise_figure_db,
+                node_energy_mode={"environmental": "external"}.get(node_mode, node_mode),
+                node_ext_power_fn=lambda _node: source.ext_power,
+                combine_mode=str(device.get("combine_mode", energy_config.get("combine_mode", "max"))),
+            )
+            node_coverage.calculate_node_power([node], downlink)
+            node_coverages[node.id] = node_coverage
         uplink = coverage.compute_point_to_bs(nodes)
         cap_config = self.model.get("capacitor", {})
         ctl_config = self.model.get("controller", {})
@@ -94,6 +112,7 @@ class AmberRunner:
         capacitors = []
         modules = []
         controllers = []
+        controller_transitions = []
         for node in nodes:
             device_config = self.scenario["devices"][names[node.id]]
             cap = capacitor.Capacitor(
@@ -109,9 +128,9 @@ class AmberRunner:
             module = protocol["module_class"](env, node, [], uplink, downlink)
             capacitors.append(cap)
             modules.append(module)
-            controllers.append(controller.Controller(env, cap, node, module, ctl_params, coverage, downlink))
+            controllers.append(controller.Controller(env, cap, node, module, ctl_params, node_coverages[node.id], downlink))
         receiver = self.model.get("receiver", {})
-        behavior = ConfiguredBSBehavior(
+        behaviors = [ConfiguredBSBehavior(
             env=env,
             base_station=base_station,
             schedule=protocol.get("schedule"),
@@ -124,25 +143,32 @@ class AmberRunner:
             noise_figure_db=float(receiver.get("noise_figure_db", 6)),
             bandwidth_hz=float(receiver.get("bandwidth_hz", 100e6)),
             collision_window_ms=float(receiver.get("collision_window_ms", 5)),
-        )
-        behavior.nodes_registered = [node.id for node in nodes]
+        ) for base_station in base_stations]
+        for behavior in behaviors:
+            behavior.nodes_registered = [node.id for node in nodes]
         for module in modules:
-            module.bs_processes = [behavior]
-            module.state = "registered"
+            module.bs_processes = behaviors
+            if bool(protocol_config.get("pre_registered", True)):
+                module.state = "registered"
+        env.process(self._monitor_controllers(env, controllers, controller_transitions))
         env.run(until=duration_ms(self.model))
         return {
             "environment": env,
             "nodes": nodes,
             "node_names": names,
-            "base_station": base_station,
+            "base_station": base_stations[0],
+            "base_stations": base_stations,
             "coverage": coverage,
+            "node_coverages": node_coverages,
             "downlink": downlink,
             "uplink": uplink,
             "energy_source": source,
             "capacitors": capacitors,
             "controllers": controllers,
             "backscatter_modules": modules,
-            "bs_behavior": behavior,
+            "bs_behavior": behaviors[0],
+            "bs_behaviors": behaviors,
+            "controller_transitions": controller_transitions,
         }
 
     def _nodes(self, seed: int):
@@ -163,23 +189,42 @@ class AmberRunner:
             names[node_id] = name
             nodes.append(radiodevices.Node(
                 id=node_id, x=float(x), y=float(y), height=float(device.get("height_m", 1.5)),
+                node_type=str(device.get("node_type", "passive")), radius=float(device.get("radius_m", 2)),
+                color=str(device.get("color", "")), label=bool(device.get("label", True)),
                 sensitivity_dbm=float(device.get("sensitivity_dbm", -100)),
                 efficiency=float(device.get("efficiency", 0.7)),
                 antenna_type=str(device.get("antenna_type", "omni")),
                 antenna_gain_dbi=float(device.get("antenna_gain_dbi", 0)),
+                azimuth_deg=float(device.get("azimuth_deg", 0)), beamwidth_deg=float(device.get("beamwidth_deg", 360)),
                 subcarrier_shift=int(device.get("subcarrier_shift", node_id)),
             ))
         return nodes, names
 
-    def _base_station(self):
-        config = self.model.get("topology", {}).get("base_station", {})
+    @staticmethod
+    def _monitor_controllers(env, controllers, transitions):
+        previous = {}
+        while True:
+            for item in controllers:
+                state = (item.state_name, item.is_active)
+                if previous.get(item.id) != state:
+                    transitions.append({"time_ms": env.now, "node_id": item.id, "state": item.state_name, "active": item.is_active, "voltage_v": item.capacitor_ctrl.voltage})
+                    previous[item.id] = state
+            yield env.timeout(1)
+
+    def _base_stations(self):
+        topology = self.model.get("topology", {})
+        configs = topology.get("base_stations") or [topology.get("base_station", {})]
+        return [self._base_station(config, index) for index, config in enumerate(configs)]
+
+    @staticmethod
+    def _base_station(config, default_id):
         sectors = config.get("sectors") or [
             {"azimuth_deg": 0, "beamwidth_deg": 65, "power_dbm": 46},
             {"azimuth_deg": 120, "beamwidth_deg": 65, "power_dbm": 46},
             {"azimuth_deg": 240, "beamwidth_deg": 65, "power_dbm": 46},
         ]
         return radiodevices.BaseStation(
-            id=int(config.get("id", 0)), x=float(config.get("x", 0)), y=float(config.get("y", 0)),
+            id=int(config.get("id", default_id)), x=float(config.get("x", 0)), y=float(config.get("y", 0)),
             site_radius=float(config.get("site_radius_m", 2)),
             sectors=[radiodevices.Sector(
                 azimuth_deg=float(item["azimuth_deg"]), beamwidth_deg=float(item["beamwidth_deg"]),

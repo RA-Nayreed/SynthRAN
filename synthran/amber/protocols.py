@@ -32,6 +32,21 @@ def unicast(node_ids: list[int], config: dict[str, Any]) -> list[tuple]:
     return schedule
 
 
+def with_registration(schedule: list[tuple], node_ids: list[int], config: dict[str, Any]) -> list[tuple]:
+    """Optionally prepend Amber's native ID/ACK registration exchange."""
+    if bool(config.get("pre_registered", True)):
+        return schedule
+    tx_ms = int(config.get("tx_duration_ms", 5))
+    rx_ms = int(config.get("rx_duration_ms", 10))
+    slots = int(config.get("registration_slots", max(1, len(node_ids))))
+    return [
+        ("tx", tx_ms, "discover", {"target": -1, "cmd": "send_id"}),
+        *(("rx", rx_ms, f"registration-{index}") for index in range(slots)),
+        ("tx", tx_ms, "ack", {"target": -1, "cmd": "ack"}),
+        *schedule,
+    ]
+
+
 class AdaptiveAlohaNode(BackscatterModule):
     """Amber node using an adaptive framed-slotted ALOHA command."""
 
@@ -72,11 +87,16 @@ def adaptive_aloha(config: dict[str, Any]):
 
 
 def resolve(name: str, node_ids: list[int], config: dict[str, Any]) -> dict[str, Any]:
+    if "schedule" in config:
+        schedule = []
+        for entry in config["schedule"]:
+            schedule.append((str(entry["mode"]), int(entry["duration_ms"]), str(entry["slot_id"]), dict(entry.get("payload", {}))))
+        return {"schedule": schedule, "module_class": BackscatterModule}
     normalized = name.lower().replace("-", "_")
     if normalized in {"broadcast", "broadcast_sic", "framed_aloha"}:
-        return {"schedule": broadcast(node_ids, config), "module_class": BackscatterModule}
+        return {"schedule": with_registration(broadcast(node_ids, config), node_ids, config), "module_class": BackscatterModule}
     if normalized == "unicast":
-        return {"schedule": unicast(node_ids, config), "module_class": BackscatterModule}
+        return {"schedule": with_registration(unicast(node_ids, config), node_ids, config), "module_class": BackscatterModule}
     if normalized in {"adaptive_aloha", "custom_protocol"}:
         return {"policy": adaptive_aloha(config), "module_class": AdaptiveAlohaNode}
     raise ValueError(f"unsupported Amber protocol: {name}")

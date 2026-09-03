@@ -6,6 +6,7 @@ from pathlib import Path
 from amber.capacitor import Capacitor as AmberCapacitor
 from synthran.amber import AmberRunner
 from synthran.amber.bridge import decoded_events
+from synthran.amber.evidence import write
 from synthran.model.capacitor import Capacitor as CompatibilityCapacitor
 
 
@@ -57,3 +58,27 @@ def test_protocols_construct_and_execute():
     for name in ("broadcast", "broadcast_sic", "unicast", "framed_aloha", "adaptive_aloha"):
         result = AmberRunner(scenario(name)).run()
         assert result["environment"].now == 80
+
+
+def test_multiple_base_stations_and_evidence(tmp_path):
+    configured = scenario("broadcast_sic")
+    station = configured["model"]["topology"].pop("base_station")
+    configured["model"]["topology"]["base_stations"] = [station, {**station, "id": 1, "x": 10}]
+    result = AmberRunner(configured).run()
+    bridge = write(result, configured, tmp_path)
+    assert len(result["bs_behaviors"]) == 2
+    assert (tmp_path / "amber" / "transitions.jsonl").exists()
+    assert (tmp_path / "amber" / "bs-rx.jsonl").exists()
+    assert bridge["summary"]["base_stations"] == 2
+
+
+def test_custom_static_schedule():
+    configured = scenario()
+    configured["model"]["protocol"] = {
+        "type": "custom",
+        "schedule": [
+            {"mode": "tx", "duration_ms": 2, "slot_id": "request", "payload": {"target": -1, "cmd": "send_data"}},
+            {"mode": "rx", "duration_ms": 5, "slot_id": "response"},
+        ],
+    }
+    assert AmberRunner(configured).run()["environment"].now == 80
