@@ -152,7 +152,7 @@ def main():
     try:
         for start, extension_nodes in sorted(extension_groups.items()):
             extension_minutes = max(1, math.ceil((end - start).total_seconds() / 60))
-            start_arg = "now" if start <= now else start.strftime("%Y-%m-%d %H:%M:%S")
+            start_arg = "now" if start <= now else start.strftime("%Y-%m-%d_%H:%M")
             result = run(
                 "pos", "calendar", "create", "--start", start_arg,
                 "--duration", str(extension_minutes), *extension_nodes,
