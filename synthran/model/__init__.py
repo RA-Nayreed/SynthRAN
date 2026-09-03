@@ -1,10 +1,9 @@
-"""6G model primitives and deterministic workload engine."""
-from .engine import EnergyWorkloadModel
-from .capacitor import Capacitor, CapacitorParams
-from .controller import Controller, ControllerParams
-from .radiodevices import BaseStation, Sector, Node
-from .propagation import CoverageMap
-from .backscatter import BackscatterModule
-from .bsengine import BSBehavior
+"""Compatibility exports backed by the single embedded Amber implementation."""
+from amber.capacitor import Capacitor, CapacitorParams
+from amber.controller import Controller, ControllerParams
+from amber.radiodevices import BaseStation, Sector, Node
+from amber.propagation import CoverageMap
+from amber.backscatter import BackscatterModule
+from amber.bsengine import BSBehavior
 
-__all__ = ["EnergyWorkloadModel", "Capacitor", "CapacitorParams", "Controller", "ControllerParams", "BaseStation", "Sector", "Node", "CoverageMap", "BackscatterModule", "BSBehavior"]
+__all__ = ["Capacitor", "CapacitorParams", "Controller", "ControllerParams", "BaseStation", "Sector", "Node", "CoverageMap", "BackscatterModule", "BSBehavior"]
