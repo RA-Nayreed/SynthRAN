@@ -18,6 +18,17 @@
          else ('edge' if inventory_hostname in (groups['r2lab_edge_nodes'] | default([]))
          else 'rf_measurement') }}
 
+- name: Validate an attached UHD-compatible SDR on RF-measurement hosts
+  ansible.builtin.shell: |
+    set -o pipefail
+    command -v uhd_find_devices >/dev/null
+    uhd_find_devices 2>&1 | tee /tmp/synthran-uhd-devices.txt
+    grep -qE 'Device Address|serial:' /tmp/synthran-uhd-devices.txt
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: synthran_experiment_role == 'rf_measurement'
+
 - name: Collect R2Lab experiment-node evidence
   ansible.builtin.shell: |
     echo "node={{ inventory_hostname }}"

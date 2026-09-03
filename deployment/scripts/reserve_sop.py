@@ -86,11 +86,30 @@ def main():
     events = calendars(); own_active = [e for e in events if e.get("owner") == owner and stamp(e["start_date"]) <= now < stamp(e["end_date"])]
     nodes = dict(deployment["nodes"]); requested = set(nodes.values())
     related = [e for e in own_active if requested.intersection(e["nodes"])]
-    old_nodes = set().union(*(set(e["nodes"]) for e in related)) if related else set()
+    active_nodes = set().union(*(set(e["nodes"]) for e in own_active)) if own_active else set()
+    own_events = [event for event in events if event.get("owner") == owner]
+
+    def continuous_coverage_end(node):
+        coverage_end = now
+        relevant = sorted(
+            (event for event in own_events if node in event["nodes"]),
+            key=lambda event: stamp(event["start_date"]),
+        )
+        advanced = True
+        while advanced:
+            advanced = False
+            for event in relevant:
+                event_start = stamp(event["start_date"])
+                event_end = stamp(event["end_date"])
+                if event_start <= coverage_end < event_end:
+                    coverage_end = event_end
+                    advanced = True
+        return coverage_end
+
     if related:
         print("\nActive reservation owned by you:")
         for event in related: print(f"  {', '.join(event['nodes'])}: {event['start_date']} to {event['end_date']}")
-        action = choice("How should SynthRAN handle it?", ["Change it to start now for the requested duration", "Keep its existing time", "Choose a different SOP-node reservation", "Abort deployment"])
+        action = choice("How should SynthRAN handle it?", ["Keep it and extend coverage to the requested end time", "Keep its existing time", "Choose a different SOP-node reservation", "Abort deployment"])
         if action == 4: raise SystemExit("Deployment aborted")
         if action == 3: nodes = manual_nodes(nodes); requested = set(nodes.values())
         if action == 2:
@@ -104,7 +123,10 @@ def main():
             Path(args.run_dir, "pos-selection.json").write_text(json.dumps({"nodes": nodes, "duration_minutes": duration, "reused": True}, indent=2) + "\n")
             return
     candidates = available(events, owner, now, end)
-    unavailable = sorted(requested - set(candidates) - old_nodes)
+    fully_covered_nodes = {
+        node for node in requested if continuous_coverage_end(node) >= end
+    }
+    unavailable = sorted(requested - set(candidates) - fully_covered_nodes)
     if unavailable:
         print("\nUnavailable SOP nodes: " + ", ".join(unavailable))
         action = choice("How should SynthRAN continue?", ["Automatically use available SOP nodes", "Choose replacement nodes manually", "Keep selected nodes and reserve the earliest available time", "Abort deployment"])
@@ -115,23 +137,45 @@ def main():
             result = run("pos", "calendar", "create", "--asap", "--duration", str(duration), *sorted(requested))
             print(result.stdout.strip()); raise SystemExit("Future reservation created; rerun deploy.sh when it becomes active")
     selected = list(dict.fromkeys(nodes.values()))
-    deleted = []
+
+    # POS has create/delete but no in-place calendar update. Preserve every
+    # active event and extend coverage with adjacent events only where needed.
+    coverage_ends = {node: continuous_coverage_end(node) for node in selected}
+
+    extension_groups = {}
+    for node in selected:
+        start = max(now, coverage_ends.get(node, now))
+        if start < end:
+            extension_groups.setdefault(start.replace(second=0, microsecond=0), []).append(node)
+
+    created_ids = []
     try:
-        for event in related:
-            run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
-            deleted.append(event)
-        result = run("pos", "calendar", "create", "--start", "now", "--duration", str(duration), *selected)
+        for start, extension_nodes in sorted(extension_groups.items()):
+            extension_minutes = max(1, math.ceil((end - start).total_seconds() / 60))
+            start_arg = "now" if start <= now else start.strftime("%Y-%m-%d %H:%M:%S")
+            result = run(
+                "pos", "calendar", "create", "--start", start_arg,
+                "--duration", str(extension_minutes), *extension_nodes,
+            )
+            created_ids.append(result.stdout.strip())
     except subprocess.CalledProcessError as error:
-        for event in deleted:
-            remaining = max(1, math.ceil((stamp(event["end_date"]) - dt.datetime.now().astimezone()).total_seconds() / 60))
-            run("pos", "calendar", "create", "--start", "now", "--duration", str(remaining), *event["nodes"], check=False)
         detail = (error.stderr or error.stdout or str(error)).strip()
-        raise SystemExit(f"Unable to replace the SOP calendar reservation; previous remaining coverage was restored where possible:\n{detail}")
-    reservation_id = result.stdout.strip()
-    print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
+        raise SystemExit(
+            "Unable to extend SOP calendar coverage; the original active "
+            f"reservation was left intact:\n{detail}"
+        )
+
+    if created_ids:
+        print(f"SOP calendar coverage extended without removing the active event ({', '.join(created_ids)})")
+    else:
+        print("The active SOP calendar event already covers the requested duration")
+    print(f"SOP calendar reservation ready for {', '.join(selected)}")
     newly_allocated = []
     for node in selected:
         print(f"Allocating {node} for this deployment", flush=True)
+        if node in active_nodes:
+            print(f"Reusing the active allocation for {node}", flush=True)
+            continue
         allocation = run_visible("pos", "allocations", "allocate", node, check=False)
         allocation_text = allocation.stdout
         allocation_lower = allocation_text.lower()
@@ -141,9 +185,9 @@ def main():
         )
         if allocation.returncode and not already_active:
             raise SystemExit(allocation_text.strip())
-        if allocation.returncode == 0 and node not in old_nodes:
+        if allocation.returncode == 0:
             newly_allocated.append(node)
-        elif node in old_nodes or already_active:
+        elif already_active:
             print(f"Reusing the active allocation for {node}", flush=True)
     for node in newly_allocated:
         print(f"Selecting image {image} on {node}", flush=True)

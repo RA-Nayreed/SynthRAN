@@ -15,6 +15,15 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+mkdir -p .synthran
+command -v flock >/dev/null || { echo "flock is required to protect deployments from overlapping runs" >&2; exit 1; }
+exec 9>.synthran/deploy.lock
+if ! flock -n 9; then
+  echo "Another SynthRAN deployment is still running. Stop it before starting a new deployment." >&2
+  echo "Inspect it with: pgrep -af 'deploy.sh|ansible-playbook|prepare-demo-oai'" >&2
+  exit 1
+fi
+printf '%s\n' "$$" 1>&9
 R2LAB_IDENTITY_FILE=${R2LAB_IDENTITY_FILE:-}
 if [[ -z "$R2LAB_IDENTITY_FILE" && -r "$HOME/.ssh/id_rsa_r2lab_duckburg" ]]; then
   R2LAB_IDENTITY_FILE="$HOME/.ssh/id_rsa_r2lab_duckburg"
@@ -36,7 +45,7 @@ else
   SYNTHRAN_PYTHON=.venv/bin/python
 fi
 deployment_section "Preparing the local SynthRAN runtime"
-if ! "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e . >"$RUN_DIR/bootstrap.log" 2>&1; then
+if ! "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e '.[deployment]' >"$RUN_DIR/bootstrap.log" 2>&1; then
   cat "$RUN_DIR/bootstrap.log" >&2
   echo "Runtime preparation failed; full output: $RUN_DIR/bootstrap.log" >&2
   exit 1
@@ -133,12 +142,62 @@ BANNER
       SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-120}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
+    SELECTED_R2LAB_SENSOR_NODES=""
+    SELECTED_R2LAB_EDGE_NODES=""
+    SELECTED_R2LAB_RF_NODES=""
     echo
-    echo "Optional R2Lab experiment nodes (leave blank for none)"
-    read -r -p "FIT/PC sensor or workload nodes, comma-separated: " SELECTED_R2LAB_SENSOR_NODES
-    read -r -p "FIT/PC edge-processing nodes, comma-separated: " SELECTED_R2LAB_EDGE_NODES
-    read -r -p "FIT/PC RF-measurement nodes, comma-separated: " SELECTED_R2LAB_RF_NODES
-    if [[ -n "$SELECTED_R2LAB_SENSOR_NODES$SELECTED_R2LAB_EDGE_NODES$SELECTED_R2LAB_RF_NODES" ]]; then
+    read -r -p "Add optional FIT/PC experiment nodes? [y/N]: " R2LAB_EXPERIMENT_CHOICE
+    if [[ "${R2LAB_EXPERIMENT_CHOICE:-n}" =~ ^[Yy]$ ]]; then
+      echo
+      echo "Available R2Lab experiment hosts"
+      for index in $(seq 1 41); do
+        if (( index <= 37 )); then
+          printf -v experiment_node 'fit%02d' "$index"
+        else
+          printf -v experiment_node 'pc%02d' "$((index - 37))"
+        fi
+        printf '%2d) %-6s%s' "$index" "$experiment_node" "$([[ $((index % 4)) -eq 0 ]] && printf '\n' || printf '  ')"
+      done
+      (( 41 % 4 == 0 )) || echo
+      echo "Use numbers and ranges, for example: 1,4,12-15,38"
+      read -r -p "Select experiment hosts: " R2LAB_EXPERIMENT_SELECTION
+      R2LAB_SELECTED_HOSTS=$("$SYNTHRAN_PYTHON" - "$R2LAB_EXPERIMENT_SELECTION" <<'PY'
+import sys
+chosen = []
+for part in sys.argv[1].replace(' ', '').split(','):
+    if not part:
+        continue
+    bounds = part.split('-', 1)
+    try:
+        values = range(int(bounds[0]), int(bounds[-1]) + 1)
+    except ValueError:
+        raise SystemExit(f'Invalid R2Lab host selection: {part}')
+    for value in values:
+        if not 1 <= value <= 41:
+            raise SystemExit(f'R2Lab host number is outside 1-41: {value}')
+        name = f'fit{value:02d}' if value <= 37 else f'pc{value - 37:02d}'
+        if name not in chosen:
+            chosen.append(name)
+print('\n'.join(chosen))
+PY
+      )
+      [[ -n "$R2LAB_SELECTED_HOSTS" ]] || { echo "No experiment hosts selected" >&2; exit 2; }
+      while IFS= read -r experiment_node; do
+        echo
+        echo "Role for $experiment_node"
+        echo "1) Sensor or workload host"
+        echo "2) Edge-processing or distributed-collection host"
+        echo "3) RF-measurement host (attached SDR is validated during provisioning)"
+        read -r -p "Enter choice [1-3]: " EXPERIMENT_ROLE
+        case "$EXPERIMENT_ROLE" in
+          1) target_variable=SELECTED_R2LAB_SENSOR_NODES ;;
+          2) target_variable=SELECTED_R2LAB_EDGE_NODES ;;
+          3) target_variable=SELECTED_R2LAB_RF_NODES ;;
+          *) echo "Invalid experiment role" >&2; exit 2 ;;
+        esac
+        current_value=${!target_variable}
+        printf -v "$target_variable" '%s%s%s' "$current_value" "$([[ -n "$current_value" ]] && printf ',' || true)" "$experiment_node"
+      done <<< "$R2LAB_SELECTED_HOSTS"
       read -r -p "R2Lab node image [ubuntu]: " SELECTED_R2LAB_NODE_IMAGE
       SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-ubuntu}
     else
@@ -441,7 +500,13 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
 fi
 
 deployment_section "Preparing Ansible dependencies"
-if ! ansible-galaxy collection install -r deployment/collections/requirements.yml >"$RUN_DIR/ansible-galaxy.log" 2>&1; then
+ANSIBLE_GALAXY="$PWD/.venv/bin/ansible-galaxy"
+ANSIBLE_PLAYBOOK="$PWD/.venv/bin/ansible-playbook"
+[[ -x "$ANSIBLE_GALAXY" && -x "$ANSIBLE_PLAYBOOK" ]] || {
+  echo "The isolated Ansible runtime was not installed correctly" >&2
+  exit 1
+}
+if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements.yml >"$RUN_DIR/ansible-galaxy.log" 2>&1; then
   cat "$RUN_DIR/ansible-galaxy.log" >&2
   echo "Ansible dependency preparation failed; full output: $RUN_DIR/ansible-galaxy.log" >&2
   exit 1
@@ -451,7 +516,7 @@ deployment_section "Provisioning nodes and deploying the selected 5G stack"
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
-ANSIBLE_COMMAND=(ansible-playbook -i "$RUN_DIR/inventory.ini"
+ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.ini"
   -e "@deployment/group_vars/all/all.yml"
   -e "@$RUN_DIR/deployment-vars.yml"
   deployment/playbooks/site.yml)
