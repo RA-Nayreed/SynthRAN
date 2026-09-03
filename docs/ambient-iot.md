@@ -20,3 +20,6 @@ publisher runtime.
 The implementation is not maintained as an upstream mirror. Changes are made
 directly in `synthran/model/` and `synthran/ambient_iot/`; the historical Amber
 record remains immutable provenance rather than an update mechanism.
+
+Runnable protocol scenarios live beside the integration code under
+`synthran/ambient_iot/examples/`.

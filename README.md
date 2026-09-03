@@ -6,6 +6,7 @@ packets into JSONL, and replays only those packets as MQTT traffic through real
 configuration, protocols, evidence, and event bridging live in
 `synthran/ambient_iot/`. The model originated from Amber; its provenance and
 license are preserved under `third_party/amber/`.
+Protocol examples are colocated at `synthran/ambient_iot/examples/`.
 
 The primary interface is one interactive command. It prompts for the core, RAN,
 platform, radio unit, currently available nodes, profile, UEs, POS reservation
