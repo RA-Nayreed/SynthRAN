@@ -233,8 +233,46 @@ PY
     read -r -p "POS image [ubuntu-jammy]: " SELECTED_POS_IMAGE; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
   fi
   SELECTED_DURATION=${SELECTED_DURATION:-120}; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
-  if [[ "$SELECTED_PLATFORM" == rfsim ]]; then DEFAULT_UES="uesim01,uesim02"; else DEFAULT_UES="qhat01"; fi
-  read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES; SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
+  if [[ "$SELECTED_PLATFORM" == rfsim ]]; then
+    DEFAULT_UES="uesim01,uesim02"
+    read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
+    SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
+  else
+    R2LAB_UE_NAMES=(qhat01 qhat02 qhat03 qhat10 qhat11 qhat20 qhat21 qhat22 qhat23 qfit07 qfit09 qfit18 qfit29 qfit32 qfit34)
+    echo
+    echo "Available R2Lab physical UEs"
+    for index in "${!R2LAB_UE_NAMES[@]}"; do
+      printf '%2d) %-7s' "$((index + 1))" "${R2LAB_UE_NAMES[index]}"
+      if (( (index + 1) % 3 == 0 )); then echo; else printf '  '; fi
+    done
+    (( ${#R2LAB_UE_NAMES[@]} % 3 == 0 )) || echo
+    echo "Use numbers and ranges, for example: 1,3,6-9"
+    read -r -p "Select physical UEs [1]: " R2LAB_UE_SELECTION
+    R2LAB_UE_SELECTION=${R2LAB_UE_SELECTION:-1}
+    SELECTED_UES=$("$SYNTHRAN_PYTHON" - "$R2LAB_UE_SELECTION" "${R2LAB_UE_NAMES[@]}" <<'PY'
+import sys
+selection, names = sys.argv[1], sys.argv[2:]
+chosen = []
+for part in selection.replace(' ', '').split(','):
+    if not part:
+        continue
+    bounds = part.split('-', 1)
+    try:
+        start, stop = int(bounds[0]), int(bounds[-1])
+    except ValueError:
+        raise SystemExit(f'Invalid physical UE selection: {part}')
+    if start > stop:
+        raise SystemExit(f'Physical UE range must be ascending: {part}')
+    for value in range(start, stop + 1):
+        if not 1 <= value <= len(names):
+            raise SystemExit(f'Physical UE number is outside 1-{len(names)}: {value}')
+        if names[value - 1] not in chosen:
+            chosen.append(names[value - 1])
+print(','.join(chosen))
+PY
+    )
+    [[ -n "$SELECTED_UES" ]] || { echo "At least one physical UE is required" >&2; exit 2; }
+  fi
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
   "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
@@ -302,7 +340,7 @@ if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    r2_common = f"ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'"
+    r2_common = f"ansible_user=root ansible_python_interpreter=/usr/bin/python3{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'"
     qhats, qfits = [], []
     for ue in ues:
         mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22', 'qhat23'} else 'mbim'
@@ -323,11 +361,11 @@ elif d['platform'] == 'physical':
 else:
     physical_hosts = []
 def host_entry(name):
-    return f'{name} ip={socket.gethostbyname(name)}'
+    return f'{name} ip={socket.gethostbyname(name)} ansible_python_interpreter=/usr/bin/python3'
 if d['platform'] == 'r2lab':
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))}{key_arg}"]
+    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))} ansible_python_interpreter=/usr/bin/python3{key_arg}"]
 else:
     faraday = []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
