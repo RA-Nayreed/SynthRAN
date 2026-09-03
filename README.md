@@ -29,6 +29,10 @@ or `--no-input` to run the default reference scenario without prompts. Use
 `--no-reservation` only when the selected SOP nodes are already allocated,
 imaged, booted, and reachable.
 
+Ready-to-edit combinations for software-UE sidecars, physical QHAT/QFIT UEs,
+N300/N320 and Benetel radios, network slices, and auxiliary R2Lab sensor, edge,
+and USRP nodes are listed in [`scenarios/README.md`](scenarios/README.md).
+
 Operational failures stop deployment and retain the run directory; delivery
 gaps are summarized as experiment results rather than deployment failures.
 
