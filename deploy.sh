@@ -133,10 +133,25 @@ BANNER
       SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-120}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
+    echo
+    echo "Optional R2Lab experiment nodes (leave blank for none)"
+    read -r -p "FIT/PC sensor or workload nodes, comma-separated: " SELECTED_R2LAB_SENSOR_NODES
+    read -r -p "FIT/PC edge-processing nodes, comma-separated: " SELECTED_R2LAB_EDGE_NODES
+    read -r -p "FIT/PC RF-measurement nodes, comma-separated: " SELECTED_R2LAB_RF_NODES
+    if [[ -n "$SELECTED_R2LAB_SENSOR_NODES$SELECTED_R2LAB_EDGE_NODES$SELECTED_R2LAB_RF_NODES" ]]; then
+      read -r -p "R2Lab node image [ubuntu]: " SELECTED_R2LAB_NODE_IMAGE
+      SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-ubuntu}
+    else
+      SELECTED_R2LAB_NODE_IMAGE=ubuntu
+    fi
   else
     SELECTED_R2LAB_USERNAME=""
     SELECTED_R2LAB_RESERVE=false
     SELECTED_R2LAB_DURATION=120
+    SELECTED_R2LAB_SENSOR_NODES=""
+    SELECTED_R2LAB_EDGE_NODES=""
+    SELECTED_R2LAB_RF_NODES=""
+    SELECTED_R2LAB_NODE_IMAGE=ubuntu
   fi
 
   choose_sop_node "core" "sopnode-f2"; SELECTED_CORE_NODE="$SELECTED_NODE"
@@ -157,18 +172,27 @@ BANNER
   read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES; SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
+  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
 import copy, sys, yaml
 from pathlib import Path
-source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration = sys.argv[1:]
+source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration, sensor_csv, edge_csv, rf_csv, r2_image = sys.argv[1:]
 scenario = yaml.safe_load(Path(source).read_text())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
+def r2nodes(value):
+    nodes = list(dict.fromkeys(name.strip() for name in value.split(',') if name.strip()))
+    invalid = [name for name in nodes if not ((name.startswith('fit') and name[3:].isdigit() and 1 <= int(name[3:]) <= 37) or (name.startswith('pc') and name[2:].isdigit() and 1 <= int(name[2:]) <= 4))]
+    if invalid: raise SystemExit('Unsupported R2Lab experiment node(s): ' + ', '.join(invalid))
+    return nodes
+sensor_nodes, edge_nodes, rf_nodes = map(r2nodes, (sensor_csv, edge_csv, rf_csv))
+duplicates = (set(sensor_nodes) & set(edge_nodes)) | (set(sensor_nodes) & set(rf_nodes)) | (set(edge_nodes) & set(rf_nodes))
+if duplicates: raise SystemExit('R2Lab nodes may have only one experiment role: ' + ', '.join(sorted(duplicates)))
 if not ues: raise SystemExit('At least one UE is required')
 if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUEs')
 if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
 scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 scenario['deployment']['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
+scenario['deployment']['r2lab_experiment_nodes'] = {'sensor': sensor_nodes, 'edge': edge_nodes, 'rf_measurement': rf_nodes, 'image': r2_image}
 if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
 defaults = list(scenario['devices'].values())
 scenario['devices'] = {name: copy.deepcopy(defaults[index % len(defaults)]) for index, name in enumerate(ues)}
@@ -185,6 +209,11 @@ PY
   echo "  Profile:  $SELECTED_PROFILE"
   echo "  POS:      $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
   [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:    $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
+  if [[ "$SELECTED_PLATFORM" == r2lab && -n "$SELECTED_R2LAB_SENSOR_NODES$SELECTED_R2LAB_EDGE_NODES$SELECTED_R2LAB_RF_NODES" ]]; then
+    echo "  Sensors:  ${SELECTED_R2LAB_SENSOR_NODES:-none}"
+    echo "  Edge:     ${SELECTED_R2LAB_EDGE_NODES:-none}"
+    echo "  RF nodes: ${SELECTED_R2LAB_RF_NODES:-none}"
+  fi
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
@@ -208,10 +237,11 @@ if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
+    r2_common = f"ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr'"
     qhats, qfits = [], []
     for ue in ues:
-        mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22'} else 'mbim'
-        entry = f"{ue} ansible_user=root{key_arg} ansible_ssh_common_args='-o ProxyJump={r2user}@faraday.inria.fr' mode={mode}"
+        mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22', 'qhat23'} else 'mbim'
+        entry = f"{ue} {r2_common} mode={mode}"
         if ue.startswith('qhat'):
             qhats.append(entry)
         elif ue.startswith('qfit'):
@@ -219,6 +249,10 @@ if d['platform'] == 'r2lab':
         else:
             raise SystemExit(f'Unsupported R2Lab physical UE: {ue}; expected qhat* or qfit*')
     physical_hosts = []
+    extra = d.get('r2lab_experiment_nodes', {})
+    sensor_hosts = [f"{name} {r2_common}" for name in extra.get('sensor', [])]
+    edge_hosts = [f"{name} {r2_common}" for name in extra.get('edge', [])]
+    rf_hosts = [f"{name} {r2_common}" for name in extra.get('rf_measurement', [])]
 elif d['platform'] == 'physical':
     physical_hosts = ues
 else:
@@ -234,12 +268,16 @@ else:
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
 if d['platform'] == 'r2lab':
     lines += ['', '[qhats]'] + qhats + ['', '[qfits]'] + qfits + ['', '[physical_ues:children]', 'qhats', 'qfits']
+    lines += ['', '[r2lab_sensor_nodes]'] + sensor_hosts + ['', '[r2lab_edge_nodes]'] + edge_hosts + ['', '[r2lab_rf_nodes]'] + rf_hosts
+    lines += ['', '[r2lab_experiment_nodes:children]', 'r2lab_sensor_nodes', 'r2lab_edge_nodes', 'r2lab_rf_nodes']
 else:
     lines += ['', '[physical_ues]'] + physical_hosts
+    lines += ['', '[r2lab_sensor_nodes]', '', '[r2lab_edge_nodes]', '', '[r2lab_rf_nodes]']
+    lines += ['', '[r2lab_experiment_nodes:children]', 'r2lab_sensor_nodes', 'r2lab_edge_nodes', 'r2lab_rf_nodes']
 lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
 ue_map=[{'device':name,'index':i+1} for i,name in enumerate(ues)]
-variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map}
+variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map}
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi

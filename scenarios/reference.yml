@@ -6,6 +6,13 @@ deployment:
   nodes: {core: sopnode-f2, ran: sopnode-f3, broker: sopnode-f2}
   ues: [uesim01, uesim02]
   reservation: {enabled: true, duration_minutes: 120, image: ubuntu-jammy}
+  # Optional R2Lab FIT/PC hosts. These are prepared as experiment resources;
+  # they do not gain a 5G user-plane path unless explicitly routed through a UE.
+  r2lab_experiment_nodes:
+    sensor: []
+    edge: []
+    rf_measurement: []
+    image: ubuntu
 model:
   seed: 1
   duration_seconds: 10

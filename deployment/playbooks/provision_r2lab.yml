@@ -7,3 +7,13 @@
       when: platform == 'r2lab'
     - role: r2lab/ue_setup
       when: platform == 'r2lab'
+    - role: r2lab/experiment_nodes
+      when: platform == 'r2lab'
+
+- name: Prepare selected R2Lab experiment hosts
+  hosts: r2lab_experiment_nodes
+  gather_facts: true
+  become: true
+  any_errors_fatal: true
+  roles:
+    - role: r2lab/experiment_host

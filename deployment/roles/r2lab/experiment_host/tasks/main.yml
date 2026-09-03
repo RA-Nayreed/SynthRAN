@@ -1,0 +1,36 @@
+---
+- name: Create the SynthRAN experiment directory
+  ansible.builtin.file:
+    path: /opt/synthran-experiment
+    state: directory
+    mode: '0755'
+
+- name: Stage the immutable energy-ready event trace
+  ansible.builtin.copy:
+    src: "{{ run_dir }}/model/events.jsonl"
+    dest: /opt/synthran-experiment/events.jsonl
+    mode: '0444'
+
+- name: Record the assigned extended-experiment role
+  ansible.builtin.set_fact:
+    synthran_experiment_role: >-
+      {{ 'sensor' if inventory_hostname in (groups['r2lab_sensor_nodes'] | default([]))
+         else ('edge' if inventory_hostname in (groups['r2lab_edge_nodes'] | default([]))
+         else 'rf_measurement') }}
+
+- name: Collect R2Lab experiment-node evidence
+  ansible.builtin.shell: |
+    echo "node={{ inventory_hostname }}"
+    echo "role={{ synthran_experiment_role }}"
+    uname -a
+    ip -brief address
+    if command -v uhd_find_devices >/dev/null 2>&1; then uhd_find_devices; fi
+  register: synthran_r2lab_node_evidence
+  changed_when: false
+
+- name: Save R2Lab experiment-node evidence
+  ansible.builtin.copy:
+    content: "{{ synthran_r2lab_node_evidence.stdout }}\n"
+    dest: "{{ run_dir }}/r2lab-{{ synthran_experiment_role }}-{{ inventory_hostname }}.log"
+  delegate_to: localhost
+  become: false

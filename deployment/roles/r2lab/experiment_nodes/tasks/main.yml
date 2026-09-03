@@ -1,0 +1,19 @@
+---
+- name: Build the selected R2Lab experiment-node list
+  ansible.builtin.set_fact:
+    synthran_r2lab_experiment_nodes: >-
+      {{ (groups['r2lab_sensor_nodes'] | default([]))
+         + (groups['r2lab_edge_nodes'] | default([]))
+         + (groups['r2lab_rf_nodes'] | default([])) }}
+
+- name: Load the selected image on R2Lab experiment nodes
+  ansible.builtin.command: >-
+    rhubarbe load -i {{ r2lab_experiment_image }} {{ synthran_r2lab_experiment_nodes | join(' ') }}
+  when: synthran_r2lab_experiment_nodes | length > 0
+  changed_when: true
+
+- name: Wait for R2Lab experiment nodes to finish imaging and boot
+  ansible.builtin.command: >-
+    rhubarbe wait {{ synthran_r2lab_experiment_nodes | join(' ') }}
+  when: synthran_r2lab_experiment_nodes | length > 0
+  changed_when: false

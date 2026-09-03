@@ -78,10 +78,6 @@
 
 - name: Determine HOST_AMF_UPF value
   ansible.builtin.set_fact:
-    host_amf_upf_value: "{{ '10.10.3.200' if core == 'open5gs' else (ran_node_name if fhi72 | bool else core_node_name) }}"
-
-- name: Determine HOST_AMF_UPF value
-  ansible.builtin.set_fact:
     host_amf_upf_value: >-
       {%- if core == 'open5gs' -%}
         10.10.3.200
@@ -198,11 +194,35 @@
   when: redcap is defined
  
 - name: Run prepare-demo-oai.sh to pull and configure OAI charts
-  ansible.builtin.shell: "./prepare-demo-oai.sh -a 2>&1 | tee /tmp/output-prepare-demo-oai.txt"
+  ansible.builtin.shell: |
+    set -o pipefail
+    timeout --signal=TERM 30m ./prepare-demo-oai.sh -a 2>&1 |
+      tee /tmp/output-prepare-demo-oai.txt
   args:
     chdir: "{{ dir_oai }}"
+    executable: /bin/bash
+  environment:
+    # GitHub's HTTP/2 smart-HTTP exchange can stall on SOP nodes even though
+    # ordinary HTTPS works. Apply these settings only to this preparation
+    # process and every git child process that it starts.
+    GIT_TERMINAL_PROMPT: "0"
+    GIT_CONFIG_COUNT: "3"
+    GIT_CONFIG_KEY_0: http.version
+    GIT_CONFIG_VALUE_0: HTTP/1.1
+    GIT_CONFIG_KEY_1: http.lowSpeedLimit
+    GIT_CONFIG_VALUE_1: "1024"
+    GIT_CONFIG_KEY_2: http.lowSpeedTime
+    GIT_CONFIG_VALUE_2: "60"
   register: prepare_script
   changed_when: "'OAI5G charts are now configured' in prepare_script.stdout"
+
+- name: Verify OAI preparation completed
+  ansible.builtin.assert:
+    that:
+      - "'OAI5G charts are now configured' in prepare_script.stdout"
+    fail_msg: >-
+      OAI chart preparation did not report completion. Inspect
+      /tmp/output-prepare-demo-oai.txt on {{ inventory_hostname }}.
 
 - name: Ensure Helm is installed, required for demo-oai.sh script
   ansible.builtin.shell: |
