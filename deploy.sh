@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; SOP_RESERVATION_DONE=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; SOP_RESERVATION_DONE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
+    -i|--interactive) INTERACTIVE=true; shift ;;
     -n|--no-input) NO_INPUT=true; shift ;;
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--no-input] [--no-reservation] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 mkdir -p .synthran
@@ -70,8 +72,22 @@ choose_sop_node() {
   esac
 }
 
-if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
+if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
+  BASE_CONFIG="$CONFIG"
+  mapfile -t SCENARIO_DEFAULTS < <("$SYNTHRAN_PYTHON" - "$BASE_CONFIG" <<'PY'
+import sys, yaml
+from pathlib import Path
+d = yaml.safe_load(Path(sys.argv[1]).read_text())['deployment']
+n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservation', {}); extra = d.get('r2lab_experiment_nodes', {})
+values = [d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'), n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')), d.get('profile','default'), ','.join(d.get('ues',[])), str(r.get('enabled',True)).lower(), str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''), str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120)), ','.join(extra.get('sensor',[])), ','.join(extra.get('edge',[])), ','.join(extra.get('rf_measurement',[])), extra.get('image','ubuntu')]
+print('\n'.join(str(value) for value in values))
+PY
+  )
+  DEFAULT_CORE=${SCENARIO_DEFAULTS[0]}; DEFAULT_RAN=${SCENARIO_DEFAULTS[1]}; DEFAULT_PLATFORM=${SCENARIO_DEFAULTS[2]}; DEFAULT_RU=${SCENARIO_DEFAULTS[3]}
+  DEFAULT_CORE_NODE=${SCENARIO_DEFAULTS[4]}; DEFAULT_RAN_NODE=${SCENARIO_DEFAULTS[5]}; DEFAULT_BROKER_NODE=${SCENARIO_DEFAULTS[6]}; DEFAULT_PROFILE=${SCENARIO_DEFAULTS[7]}; DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
+  DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}; DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}; DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}; DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
+  DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}; DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}; DEFAULT_SENSOR_NODES=${SCENARIO_DEFAULTS[15]}; DEFAULT_EDGE_NODES=${SCENARIO_DEFAULTS[16]}; DEFAULT_RF_NODES=${SCENARIO_DEFAULTS[17]}; DEFAULT_R2LAB_IMAGE=${SCENARIO_DEFAULTS[18]}
   echo
   printf '\033[1;36m'
   cat <<'BANNER'
@@ -86,44 +102,49 @@ if ! $CONFIG_EXPLICIT && ! $NO_INPUT; then
 BANNER
   printf '\033[0m'
   echo
-  echo "Which CORE do you want to deploy? (default: Open5GS)"
+  case "$DEFAULT_CORE" in oai) DEFAULT_CORE_CHOICE=1;; open5gs) DEFAULT_CORE_CHOICE=2;; free5gc) DEFAULT_CORE_CHOICE=3;; esac
+  echo "Which CORE do you want to deploy? (default: $DEFAULT_CORE)"
   echo "1) OAI"
   echo "2) Open5GS"
   echo "3) Free5GC"
   read -r -p "Enter choice [1-3]: " CORE_CHOICE
-  case "${CORE_CHOICE:-2}" in 1) SELECTED_CORE=oai;; 2) SELECTED_CORE=open5gs;; 3) SELECTED_CORE=free5gc;; *) echo "Invalid core choice" >&2; exit 2;; esac
+  case "${CORE_CHOICE:-$DEFAULT_CORE_CHOICE}" in 1) SELECTED_CORE=oai;; 2) SELECTED_CORE=open5gs;; 3) SELECTED_CORE=free5gc;; *) echo "Invalid core choice" >&2; exit 2;; esac
 
   echo
-  echo "Which RAN do you want to deploy? (default: srsRAN)"
+  case "$DEFAULT_RAN" in oai) DEFAULT_RAN_CHOICE=1;; srsran) DEFAULT_RAN_CHOICE=2;; ueransim) DEFAULT_RAN_CHOICE=3;; esac
+  echo "Which RAN do you want to deploy? (default: $DEFAULT_RAN)"
   echo "1) OAI"
   echo "2) srsRAN"
   echo "3) UERANSIM"
   read -r -p "Enter choice [1-3]: " RAN_CHOICE
-  case "${RAN_CHOICE:-2}" in 1) SELECTED_RAN=oai;; 2) SELECTED_RAN=srsran;; 3) SELECTED_RAN=ueransim;; *) echo "Invalid RAN choice" >&2; exit 2;; esac
+  case "${RAN_CHOICE:-$DEFAULT_RAN_CHOICE}" in 1) SELECTED_RAN=oai;; 2) SELECTED_RAN=srsran;; 3) SELECTED_RAN=ueransim;; *) echo "Invalid RAN choice" >&2; exit 2;; esac
 
   echo
-  echo "Which platform do you want to use? (default: RFSIM)"
+  [[ "$DEFAULT_PLATFORM" == r2lab ]] && DEFAULT_PLATFORM_CHOICE=2 || DEFAULT_PLATFORM_CHOICE=1
+  echo "Which platform do you want to use? (default: $DEFAULT_PLATFORM)"
   echo "1) RFSIM"
   echo "2) R2Lab physical radio"
   read -r -p "Enter choice [1-2]: " PLATFORM_CHOICE
-  case "${PLATFORM_CHOICE:-1}" in 1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim;; 2) SELECTED_PLATFORM=r2lab;; *) echo "Invalid platform choice" >&2; exit 2;; esac
+  case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in 1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim;; 2) SELECTED_PLATFORM=r2lab;; *) echo "Invalid platform choice" >&2; exit 2;; esac
 
   if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
     echo
-    echo "Which radio unit do you want to use? (default: n300)"
+    case "$DEFAULT_RU" in n300) DEFAULT_RU_CHOICE=1;; n320) DEFAULT_RU_CHOICE=2;; benetel1) DEFAULT_RU_CHOICE=3;; benetel2) DEFAULT_RU_CHOICE=4;; *) DEFAULT_RU_CHOICE=1;; esac
+    echo "Which radio unit do you want to use? (default: $DEFAULT_RU)"
     echo "1) n300"
     echo "2) n320"
     echo "3) benetel1"
     echo "4) benetel2"
     read -r -p "Enter choice [1-4]: " RU_CHOICE
-    case "${RU_CHOICE:-1}" in 1) SELECTED_RU=n300;; 2) SELECTED_RU=n320;; 3) SELECTED_RU=benetel1;; 4) SELECTED_RU=benetel2;; *) echo "Invalid RU choice" >&2; exit 2;; esac
+    case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in 1) SELECTED_RU=n300;; 2) SELECTED_RU=n320;; 3) SELECTED_RU=benetel1;; 4) SELECTED_RU=benetel2;; *) echo "Invalid RU choice" >&2; exit 2;; esac
     if [[ -f .r2lab_config ]]; then
       # shellcheck disable=SC1091
       source .r2lab_config
-      SELECTED_R2LAB_USERNAME=${R2LAB_USERNAME:-}
+      SELECTED_R2LAB_USERNAME=${R2LAB_USERNAME:-$DEFAULT_R2LAB_USERNAME}
       echo "Using saved R2Lab credentials for ${SELECTED_R2LAB_USERNAME:-unknown}"
     else
-      read -r -p "R2Lab username (slice name): " SELECTED_R2LAB_USERNAME
+      read -r -p "R2Lab username (slice name) [$DEFAULT_R2LAB_USERNAME]: " SELECTED_R2LAB_USERNAME
+      SELECTED_R2LAB_USERNAME=${SELECTED_R2LAB_USERNAME:-$DEFAULT_R2LAB_USERNAME}
       read -r -p "R2Lab account email: " R2LAB_EMAIL
       read -r -s -p "R2Lab password: " R2LAB_PASSWORD
       echo
@@ -133,82 +154,26 @@ BANNER
       )
     fi
     [[ -n "$SELECTED_R2LAB_USERNAME" ]] || { echo "R2Lab username is required" >&2; exit 2; }
-    read -r -p "Reserve the R2Lab testbed? [Y/n]: " R2LAB_RESERVE_CHOICE
-    SELECTED_R2LAB_RESERVE=true
-    SELECTED_R2LAB_DURATION=120
-    [[ "${R2LAB_RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]] && SELECTED_R2LAB_RESERVE=false
+    [[ "$DEFAULT_R2LAB_RESERVE" == true ]] && R2LAB_RESERVE_PROMPT="Y/n" || R2LAB_RESERVE_PROMPT="y/N"
+    read -r -p "Reserve the R2Lab testbed? [$R2LAB_RESERVE_PROMPT]: " R2LAB_RESERVE_CHOICE
+    SELECTED_R2LAB_RESERVE=$DEFAULT_R2LAB_RESERVE
+    SELECTED_R2LAB_DURATION=$DEFAULT_R2LAB_DURATION
+    [[ "${R2LAB_RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_R2LAB_RESERVE=true
+    [[ "${R2LAB_RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_R2LAB_RESERVE=false
     if $SELECTED_R2LAB_RESERVE; then
-      read -r -p "R2Lab reservation duration in minutes [120]: " SELECTED_R2LAB_DURATION
-      SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-120}
+      read -r -p "R2Lab reservation duration in minutes [$DEFAULT_R2LAB_DURATION]: " SELECTED_R2LAB_DURATION
+      SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-$DEFAULT_R2LAB_DURATION}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
-    SELECTED_R2LAB_SENSOR_NODES=""
-    SELECTED_R2LAB_EDGE_NODES=""
-    SELECTED_R2LAB_RF_NODES=""
     echo
-    read -r -p "Add optional FIT/PC experiment nodes? [y/N]: " R2LAB_EXPERIMENT_CHOICE
-    if [[ "${R2LAB_EXPERIMENT_CHOICE:-n}" =~ ^[Yy]$ ]]; then
-      echo
-      echo "Available R2Lab experiment hosts"
-      for index in $(seq 1 41); do
-        if (( index <= 37 )); then
-          printf -v experiment_node 'fit%02d' "$index"
-        else
-          printf -v experiment_node 'pc%02d' "$((index - 37))"
-        fi
-        printf '%2d) %-6s' "$index" "$experiment_node"
-        if (( index % 4 == 0 )); then
-          echo
-        else
-          printf '  '
-        fi
-      done
-      (( 41 % 4 == 0 )) || echo
-      echo "Use numbers and ranges, for example: 1,4,12-15,38"
-      read -r -p "Select experiment hosts: " R2LAB_EXPERIMENT_SELECTION
-      R2LAB_SELECTED_HOSTS=$("$SYNTHRAN_PYTHON" - "$R2LAB_EXPERIMENT_SELECTION" <<'PY'
-import sys
-chosen = []
-for part in sys.argv[1].replace(' ', '').split(','):
-    if not part:
-        continue
-    bounds = part.split('-', 1)
-    try:
-        values = range(int(bounds[0]), int(bounds[-1]) + 1)
-    except ValueError:
-        raise SystemExit(f'Invalid R2Lab host selection: {part}')
-    for value in values:
-        if not 1 <= value <= 41:
-            raise SystemExit(f'R2Lab host number is outside 1-41: {value}')
-        name = f'fit{value:02d}' if value <= 37 else f'pc{value - 37:02d}'
-        if name not in chosen:
-            chosen.append(name)
-print('\n'.join(chosen))
-PY
-      )
-      [[ -n "$R2LAB_SELECTED_HOSTS" ]] || { echo "No experiment hosts selected" >&2; exit 2; }
-      mapfile -t R2LAB_SELECTED_HOST_ARRAY <<< "$R2LAB_SELECTED_HOSTS"
-      for experiment_node in "${R2LAB_SELECTED_HOST_ARRAY[@]}"; do
-        echo
-        echo "Role for $experiment_node"
-        echo "1) Sensor or workload host"
-        echo "2) Edge-processing or distributed-collection host"
-        echo "3) RF-measurement host (attached SDR is validated during provisioning)"
-        read -r -p "Enter choice [1-3]: " EXPERIMENT_ROLE
-        case "$EXPERIMENT_ROLE" in
-          1) target_variable=SELECTED_R2LAB_SENSOR_NODES ;;
-          2) target_variable=SELECTED_R2LAB_EDGE_NODES ;;
-          3) target_variable=SELECTED_R2LAB_RF_NODES ;;
-          *) echo "Invalid experiment role" >&2; exit 2 ;;
-        esac
-        current_value=${!target_variable}
-        printf -v "$target_variable" '%s%s%s' "$current_value" "$([[ -n "$current_value" ]] && printf ',' || true)" "$experiment_node"
-      done
-      read -r -p "R2Lab node image [ubuntu]: " SELECTED_R2LAB_NODE_IMAGE
-      SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-ubuntu}
-    else
-      SELECTED_R2LAB_NODE_IMAGE=ubuntu
-    fi
+    read -r -p "Sensor/workload nodes, comma-separated [$DEFAULT_SENSOR_NODES]: " SELECTED_R2LAB_SENSOR_NODES
+    SELECTED_R2LAB_SENSOR_NODES=${SELECTED_R2LAB_SENSOR_NODES:-$DEFAULT_SENSOR_NODES}
+    read -r -p "Edge/collector nodes, comma-separated [$DEFAULT_EDGE_NODES]: " SELECTED_R2LAB_EDGE_NODES
+    SELECTED_R2LAB_EDGE_NODES=${SELECTED_R2LAB_EDGE_NODES:-$DEFAULT_EDGE_NODES}
+    read -r -p "RF-measurement nodes, comma-separated [$DEFAULT_RF_NODES]: " SELECTED_R2LAB_RF_NODES
+    SELECTED_R2LAB_RF_NODES=${SELECTED_R2LAB_RF_NODES:-$DEFAULT_RF_NODES}
+    read -r -p "R2Lab node image [$DEFAULT_R2LAB_IMAGE]: " SELECTED_R2LAB_NODE_IMAGE
+    SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-$DEFAULT_R2LAB_IMAGE}
   else
     SELECTED_R2LAB_USERNAME=""
     SELECTED_R2LAB_RESERVE=false
@@ -219,67 +184,42 @@ PY
     SELECTED_R2LAB_NODE_IMAGE=ubuntu
   fi
 
-  choose_sop_node "core" "sopnode-f2"; SELECTED_CORE_NODE="$SELECTED_NODE"
-  choose_sop_node "RAN" "sopnode-f3"; SELECTED_RAN_NODE="$SELECTED_NODE"
-  choose_sop_node "broker" "$SELECTED_CORE_NODE"; SELECTED_BROKER_NODE="$SELECTED_NODE"
-  read -r -p "5G profile [default]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-default}
-  read -r -p "Ensure selected SOP nodes are reserved? [Y/n]: " RESERVE_CHOICE
-  if [[ "${RESERVE_CHOICE:-y}" =~ ^[Nn]$ ]]; then
-    SELECTED_RESERVE=false
-  else
-    SELECTED_RESERVE=true
-    read -r -p "Reservation duration in minutes [120]: " SELECTED_DURATION; SELECTED_DURATION=${SELECTED_DURATION:-120}
+  choose_sop_node "core" "$DEFAULT_CORE_NODE"; SELECTED_CORE_NODE="$SELECTED_NODE"
+  choose_sop_node "RAN" "$DEFAULT_RAN_NODE"; SELECTED_RAN_NODE="$SELECTED_NODE"
+  choose_sop_node "broker" "$DEFAULT_BROKER_NODE"; SELECTED_BROKER_NODE="$SELECTED_NODE"
+  read -r -p "5G profile [$DEFAULT_PROFILE]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-$DEFAULT_PROFILE}
+  [[ "$DEFAULT_RESERVE" == true ]] && RESERVE_PROMPT="Y/n" || RESERVE_PROMPT="y/N"
+  read -r -p "Ensure selected SOP nodes are reserved? [$RESERVE_PROMPT]: " RESERVE_CHOICE
+  SELECTED_RESERVE=$DEFAULT_RESERVE
+  [[ "${RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_RESERVE=true
+  [[ "${RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_RESERVE=false
+  if $SELECTED_RESERVE; then
+    read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION; SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
     [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
-    read -r -p "POS image [ubuntu-jammy]: " SELECTED_POS_IMAGE; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
+    read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
   fi
-  SELECTED_DURATION=${SELECTED_DURATION:-120}; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-ubuntu-jammy}
+  SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
   if [[ "$SELECTED_PLATFORM" == rfsim ]]; then
-    DEFAULT_UES="uesim01,uesim02"
+    [[ "$DEFAULT_PLATFORM" == rfsim ]] || DEFAULT_UES="uesim01,uesim02"
     read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
     SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
   else
-    R2LAB_UE_NAMES=(qhat01 qhat02 qhat03 qhat10 qhat11 qhat20 qhat21 qhat22 qhat23 qfit07 qfit09 qfit18 qfit29 qfit32 qfit34)
-    echo
-    echo "Available R2Lab physical UEs"
-    for index in "${!R2LAB_UE_NAMES[@]}"; do
-      printf '%2d) %-7s' "$((index + 1))" "${R2LAB_UE_NAMES[index]}"
-      if (( (index + 1) % 3 == 0 )); then echo; else printf '  '; fi
-    done
-    (( ${#R2LAB_UE_NAMES[@]} % 3 == 0 )) || echo
-    echo "Use numbers and ranges, for example: 1,3,6-9"
-    read -r -p "Select physical UEs [1]: " R2LAB_UE_SELECTION
-    R2LAB_UE_SELECTION=${R2LAB_UE_SELECTION:-1}
-    SELECTED_UES=$("$SYNTHRAN_PYTHON" - "$R2LAB_UE_SELECTION" "${R2LAB_UE_NAMES[@]}" <<'PY'
-import sys
-selection, names = sys.argv[1], sys.argv[2:]
-chosen = []
-for part in selection.replace(' ', '').split(','):
-    if not part:
-        continue
-    bounds = part.split('-', 1)
-    try:
-        start, stop = int(bounds[0]), int(bounds[-1])
-    except ValueError:
-        raise SystemExit(f'Invalid physical UE selection: {part}')
-    if start > stop:
-        raise SystemExit(f'Physical UE range must be ascending: {part}')
-    for value in range(start, stop + 1):
-        if not 1 <= value <= len(names):
-            raise SystemExit(f'Physical UE number is outside 1-{len(names)}: {value}')
-        if names[value - 1] not in chosen:
-            chosen.append(names[value - 1])
-print(','.join(chosen))
-PY
-    )
+    [[ "$DEFAULT_PLATFORM" == r2lab ]] || DEFAULT_UES="qhat01"
+    echo "Supported physical UEs: qhat01 qhat02 qhat03 qhat10 qhat11 qhat20 qhat21 qhat22 qhat23 qfit07 qfit09 qfit18 qfit29 qfit32 qfit34"
+    read -r -p "Physical UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
+    SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
     [[ -n "$SELECTED_UES" ]] || { echo "At least one physical UE is required" >&2; exit 2; }
   fi
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - scenarios/reference.yml "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
 import copy, sys, yaml
 from pathlib import Path
 source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration, sensor_csv, edge_csv, rf_csv, r2_image = sys.argv[1:]
 scenario = yaml.safe_load(Path(source).read_text())
+trace = scenario.get('model', {}).get('energy', {}).get('trace')
+if trace and not str(trace).startswith('builtin:'):
+    scenario['model']['energy']['trace'] = str((Path(source).resolve().parent / trace).resolve())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 def r2nodes(value):
     nodes = list(dict.fromkeys(name.strip() for name in value.split(',') if name.strip()))
@@ -290,6 +230,8 @@ sensor_nodes, edge_nodes, rf_nodes = map(r2nodes, (sensor_csv, edge_csv, rf_csv)
 duplicates = (set(sensor_nodes) & set(edge_nodes)) | (set(sensor_nodes) & set(rf_nodes)) | (set(edge_nodes) & set(rf_nodes))
 if duplicates: raise SystemExit('R2Lab nodes may have only one experiment role: ' + ', '.join(sorted(duplicates)))
 if not ues: raise SystemExit('At least one UE is required')
+physical_ues = {'qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34'}
+if platform == 'r2lab' and not set(ues) <= physical_ues: raise SystemExit('Unsupported R2Lab physical UE(s): ' + ', '.join(sorted(set(ues) - physical_ues)))
 if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUEs')
 if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})

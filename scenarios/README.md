@@ -18,6 +18,16 @@ Run a selected scenario non-interactively:
 ./deploy.sh --config scenarios/r2lab-n300-qhats-sdr.yml --no-input
 ```
 
+Load a scenario and adjust only selected deployment values interactively:
+
+```sh
+./deploy.sh --config scenarios/r2lab-n300-qhats-sdr.yml --interactive
+```
+
+Each prompt defaults to the loaded file. Press Enter to keep its value. The
+source scenario is never overwritten; the resolved copy is stored beneath the
+new run directory.
+
 Set `R2LAB_USERNAME`, or create `.r2lab_config` through the interactive launcher,
 before using an R2Lab scenario. Remove `--no-input` when you want the launcher to
 select currently available resources. Use `--no-reservation` only when every SOP

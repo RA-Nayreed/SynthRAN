@@ -34,6 +34,16 @@ Ready-to-edit combinations for software-UE sidecars, physical QHAT/QFIT UEs,
 N300/N320 and Benetel radios, network slices, and auxiliary R2Lab sensor, edge,
 and USRP nodes are listed in [`scenarios/README.md`](scenarios/README.md).
 
+Load any scenario as editable interactive defaults without modifying the source
+file:
+
+```sh
+./deploy.sh --config scenarios/r2lab-n300-qhats-sdr.yml --interactive
+```
+
+Press Enter to retain a value or enter a replacement. The resolved selection is
+saved as `interactive-scenario.yml` in the run directory.
+
 Operational failures stop deployment and retain the run directory; delivery
 gaps are summarized as experiment results rather than deployment failures.
 
