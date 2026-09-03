@@ -13,12 +13,12 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 dependencies = ["numpy>=1.24", "pandas>=2", "simpy>=4", "PyYAML>=6", "paho-mqtt>=2"]
 
 [project.optional-dependencies]
-analysis = ["matplotlib>=3.7"]
+analysis = ["matplotlib>=3.7", "openpyxl>=3.0"]
 deployment = ["ansible-core>=2.19,<2.20"]
 
 [tool.setuptools.package-data]
 synthran = ["data/*.csv"]
 
 [tool.setuptools.packages.find]
-include = ["synthran", "synthran.*"]
-exclude = ["deployment*", "scenarios*", "results*"]
+include = ["synthran", "synthran.*", "amber", "amber.*"]
+exclude = ["deployment*", "scenarios*", "results*", "third_party*"]
