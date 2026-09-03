@@ -28,6 +28,11 @@ Each prompt defaults to the loaded file. Press Enter to keep its value. The
 source scenario is never overwritten; the resolved copy is stored beneath the
 new run directory.
 
+Auxiliary sensor, edge, and RF-measurement hosts are optional and are not needed
+for the core RAN-to-UE transport experiment. The interactive launcher displays
+all `fit01`-`fit37` and `pc01`-`pc04` choices and accepts either host names or
+menu numbers/ranges. Enter `none` to remove a role inherited from an example.
+
 Set `R2LAB_USERNAME`, or create `.r2lab_config` through the interactive launcher,
 before using an R2Lab scenario. Remove `--no-input` when you want the launcher to
 select currently available resources. Use `--no-reservation` only when every SOP

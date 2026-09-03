@@ -72,6 +72,50 @@ choose_sop_node() {
   esac
 }
 
+show_r2lab_hosts() {
+  local index experiment_node
+  echo "R2Lab auxiliary hosts (optional)"
+  for index in $(seq 1 41); do
+    if (( index <= 37 )); then
+      printf -v experiment_node 'fit%02d' "$index"
+    else
+      printf -v experiment_node 'pc%02d' "$((index - 37))"
+    fi
+    printf '%2d) %-6s' "$index" "$experiment_node"
+    if (( index % 4 == 0 )); then echo; else printf '  '; fi
+  done
+  (( 41 % 4 == 0 )) || echo
+  echo "Enter names or numbers/ranges (for example fit01,pc01 or 1,38-39)."
+  echo "Enter 'none' to clear a role. Press Enter to keep its loaded default."
+}
+
+expand_r2lab_selection() {
+  "$SYNTHRAN_PYTHON" - "$1" <<'PY'
+import re, sys
+value = sys.argv[1].strip().lower()
+if value in {'', 'none', '-'}:
+    print('')
+    raise SystemExit
+chosen = []
+for part in value.replace(' ', '').split(','):
+    if re.fullmatch(r'(fit(?:0[1-9]|[12][0-9]|3[0-7])|pc0[1-4])', part):
+        names = [part]
+    else:
+        bounds = part.split('-', 1)
+        try:
+            start, stop = int(bounds[0]), int(bounds[-1])
+        except ValueError:
+            raise SystemExit(f'Invalid R2Lab host selection: {part}')
+        if start > stop or start < 1 or stop > 41:
+            raise SystemExit(f'R2Lab host range must be ascending and within 1-41: {part}')
+        names = [f'fit{number:02d}' if number <= 37 else f'pc{number - 37:02d}' for number in range(start, stop + 1)]
+    for name in names:
+        if name not in chosen:
+            chosen.append(name)
+print(','.join(chosen))
+PY
+}
+
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   BASE_CONFIG="$CONFIG"
@@ -166,14 +210,29 @@ BANNER
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
     echo
-    read -r -p "Sensor/workload nodes, comma-separated [$DEFAULT_SENSOR_NODES]: " SELECTED_R2LAB_SENSOR_NODES
-    SELECTED_R2LAB_SENSOR_NODES=${SELECTED_R2LAB_SENSOR_NODES:-$DEFAULT_SENSOR_NODES}
-    read -r -p "Edge/collector nodes, comma-separated [$DEFAULT_EDGE_NODES]: " SELECTED_R2LAB_EDGE_NODES
-    SELECTED_R2LAB_EDGE_NODES=${SELECTED_R2LAB_EDGE_NODES:-$DEFAULT_EDGE_NODES}
-    read -r -p "RF-measurement nodes, comma-separated [$DEFAULT_RF_NODES]: " SELECTED_R2LAB_RF_NODES
-    SELECTED_R2LAB_RF_NODES=${SELECTED_R2LAB_RF_NODES:-$DEFAULT_RF_NODES}
-    read -r -p "R2Lab node image [$DEFAULT_R2LAB_IMAGE]: " SELECTED_R2LAB_NODE_IMAGE
-    SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-$DEFAULT_R2LAB_IMAGE}
+    echo "Extra sensor, edge, and measurement hosts are not required for the 5G/UE experiment."
+    [[ -n "$DEFAULT_SENSOR_NODES$DEFAULT_EDGE_NODES$DEFAULT_RF_NODES" ]] && EXTRA_PROMPT="Y/n" || EXTRA_PROMPT="y/N"
+    read -r -p "Configure optional auxiliary R2Lab hosts? [$EXTRA_PROMPT]: " R2LAB_EXPERIMENT_CHOICE
+    if [[ "${R2LAB_EXPERIMENT_CHOICE:-}" =~ ^[Nn]$ ]]; then
+      SELECTED_R2LAB_SENSOR_NODES=""; SELECTED_R2LAB_EDGE_NODES=""; SELECTED_R2LAB_RF_NODES=""
+      SELECTED_R2LAB_NODE_IMAGE=$DEFAULT_R2LAB_IMAGE
+    elif [[ -n "$DEFAULT_SENSOR_NODES$DEFAULT_EDGE_NODES$DEFAULT_RF_NODES" || "${R2LAB_EXPERIMENT_CHOICE:-}" =~ ^[Yy]$ ]]; then
+      show_r2lab_hosts
+      echo "Sensor/workload: runs auxiliary workloads and receives the frozen event trace."
+      read -r -p "Sensor/workload hosts [$DEFAULT_SENSOR_NODES]: " R2LAB_SENSOR_INPUT
+      [[ -z "$R2LAB_SENSOR_INPUT" ]] && SELECTED_R2LAB_SENSOR_NODES=$DEFAULT_SENSOR_NODES || SELECTED_R2LAB_SENSOR_NODES=$(expand_r2lab_selection "$R2LAB_SENSOR_INPUT")
+      echo "Edge/collector: auxiliary processing and evidence collection; no automatic 5G route."
+      read -r -p "Edge/collector hosts [$DEFAULT_EDGE_NODES]: " R2LAB_EDGE_INPUT
+      [[ -z "$R2LAB_EDGE_INPUT" ]] && SELECTED_R2LAB_EDGE_NODES=$DEFAULT_EDGE_NODES || SELECTED_R2LAB_EDGE_NODES=$(expand_r2lab_selection "$R2LAB_EDGE_INPUT")
+      echo "RF measurement: powers and validates an attached SDR; pc01/pc02 have explicit support."
+      read -r -p "RF-measurement hosts [$DEFAULT_RF_NODES]: " R2LAB_RF_INPUT
+      [[ -z "$R2LAB_RF_INPUT" ]] && SELECTED_R2LAB_RF_NODES=$DEFAULT_RF_NODES || SELECTED_R2LAB_RF_NODES=$(expand_r2lab_selection "$R2LAB_RF_INPUT")
+      read -r -p "R2Lab auxiliary-node image [$DEFAULT_R2LAB_IMAGE]: " SELECTED_R2LAB_NODE_IMAGE
+      SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-$DEFAULT_R2LAB_IMAGE}
+    else
+      SELECTED_R2LAB_SENSOR_NODES=""; SELECTED_R2LAB_EDGE_NODES=""; SELECTED_R2LAB_RF_NODES=""
+      SELECTED_R2LAB_NODE_IMAGE=$DEFAULT_R2LAB_IMAGE
+    fi
   else
     SELECTED_R2LAB_USERNAME=""
     SELECTED_R2LAB_RESERVE=false
