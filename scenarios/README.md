@@ -32,6 +32,9 @@ Auxiliary sensor, edge, and RF-measurement hosts are optional and are not needed
 for the core RAN-to-UE transport experiment. The interactive launcher displays
 all `fit01`-`fit37` and `pc01`-`pc04` choices and accepts either host names or
 menu numbers/ranges. Enter `none` to remove a role inherited from an example.
+It also displays the complete SynthRAN-supported R2Lab radio and UE matrix with
+modem and interface details, followed by official R2Lab resources that are
+visible but do not yet have a SynthRAN transport adapter.
 
 Set `R2LAB_USERNAME`, or create `.r2lab_config` through the interactive launcher,
 before using an R2Lab scenario. Remove `--no-input` when you want the launcher to

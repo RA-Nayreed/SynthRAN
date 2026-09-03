@@ -89,6 +89,65 @@ show_r2lab_hosts() {
   echo "Enter 'none' to clear a role. Press Enter to keep its loaded default."
 }
 
+show_r2lab_matrix() {
+  cat <<'MATRIX'
+
+R2Lab resource matrix
+---------------------
+5G radio units selectable by SynthRAN
+  1) n300      USRP N300, SophiaNode fiber, 2x2 antenna
+  2) n320      USRP N320, SophiaNode fiber, 4x4 antenna
+  3) benetel1  RAN550 O-RU, band n78, 4T4R, 100 MHz
+  4) benetel2  RAN550 O-RU, band n78, 4T4R, 100 MHz
+
+Physical 5G UEs selectable by SynthRAN
+  1) qhat01  RM500Q-GL FR1 / MBIM       6) qhat20  RG255C-GL RedCap / QMI
+  2) qhat02  RM500Q-GL FR1 / MBIM       7) qhat21  RG255C-GL RedCap / QMI
+  3) qhat03  RM500Q-GL FR1 / MBIM       8) qhat22  RG255C-GL RedCap / QMI
+  4) qhat10  RM520N-GL FR1 / MBIM       9) qhat23  RG255C-GL RedCap / QMI
+  5) qhat11  RM520N-GL FR1 / MBIM      10) qfit07  RM500Q-GL FR1 / MBIM
+ 11) qfit09  RM500Q-GL FR1 / MBIM      12) qfit18  RM500Q-GL FR1 / MBIM
+ 13) qfit29  RM500Q-GL FR1 / MBIM      14) qfit32  RM500Q-GL FR1 / MBIM
+ 15) qfit34  RM500Q-GL FR1 / MBIM
+
+Auxiliary hosts selectable by SynthRAN
+  fit01-fit37  General compute, Wi-Fi, sensor/workload, edge, or collection
+  pc01-pc02    Ryzen/32 GB compute with controllable USRP B210 (RF eligible)
+  pc03-pc04    MiniPC with RG530F FR2 device (compute roles only)
+
+R2Lab hardware not yet integrated as a SynthRAN transport endpoint
+  Jaguar/Panther AW2S RUs, LITEON FlexFi O-RU, phone1/phone2,
+  rg530f-01/rg530f-02 FR2 UEs, and arbitrary FIT-attached legacy SDRs.
+
+Availability/health is live testbed state and is verified during reservation and provisioning.
+MATRIX
+}
+
+expand_r2lab_ue_selection() {
+  "$SYNTHRAN_PYTHON" - "$1" <<'PY'
+import sys
+names = ['qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34']
+value = sys.argv[1].strip().lower()
+chosen = []
+for part in value.replace(' ', '').split(','):
+    if part in names:
+        selected = [part]
+    else:
+        bounds = part.split('-', 1)
+        try:
+            start, stop = int(bounds[0]), int(bounds[-1])
+        except ValueError:
+            raise SystemExit(f'Invalid physical UE selection: {part}')
+        if start > stop or start < 1 or stop > len(names):
+            raise SystemExit(f'Physical UE range must be ascending and within 1-{len(names)}: {part}')
+        selected = names[start - 1:stop]
+    for name in selected:
+        if name not in chosen:
+            chosen.append(name)
+print(','.join(chosen))
+PY
+}
+
 expand_r2lab_selection() {
   "$SYNTHRAN_PYTHON" - "$1" <<'PY'
 import re, sys
@@ -172,6 +231,7 @@ BANNER
   case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in 1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim;; 2) SELECTED_PLATFORM=r2lab;; *) echo "Invalid platform choice" >&2; exit 2;; esac
 
   if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
+    show_r2lab_matrix
     echo
     case "$DEFAULT_RU" in n300) DEFAULT_RU_CHOICE=1;; n320) DEFAULT_RU_CHOICE=2;; benetel1) DEFAULT_RU_CHOICE=3;; benetel2) DEFAULT_RU_CHOICE=4;; *) DEFAULT_RU_CHOICE=1;; esac
     echo "Which radio unit do you want to use? (default: $DEFAULT_RU)"
@@ -264,9 +324,9 @@ BANNER
     SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
   else
     [[ "$DEFAULT_PLATFORM" == r2lab ]] || DEFAULT_UES="qhat01"
-    echo "Supported physical UEs: qhat01 qhat02 qhat03 qhat10 qhat11 qhat20 qhat21 qhat22 qhat23 qfit07 qfit09 qfit18 qfit29 qfit32 qfit34"
-    read -r -p "Physical UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
-    SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
+    echo "Choose physical UEs by name or number/range, for example qhat01,qfit07 or 1-3,10."
+    read -r -p "Physical UEs [$DEFAULT_UES]: " R2LAB_UE_INPUT
+    [[ -z "$R2LAB_UE_INPUT" ]] && SELECTED_UES=$DEFAULT_UES || SELECTED_UES=$(expand_r2lab_ue_selection "$R2LAB_UE_INPUT")
     [[ -n "$SELECTED_UES" ]] || { echo "At least one physical UE is required" >&2; exit 2; }
   fi
 
