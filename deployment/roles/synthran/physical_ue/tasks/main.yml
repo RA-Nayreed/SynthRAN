@@ -72,12 +72,49 @@
   delay: 4
   until: synthran_physical_upf_ping.rc == 0
 
+- name: Resolve the broker endpoint for the physical user plane
+  ansible.builtin.set_fact:
+    synthran_physical_broker_address: >-
+      {{ mqtt_broker_address if mqtt_broker_address else
+         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+
+- name: Resolve the broker endpoint to IPv4
+  ansible.builtin.command:
+    argv: [getent, ahostsv4, "{{ synthran_physical_broker_address }}"]
+  register: synthran_physical_broker_lookup
+  changed_when: false
+
+- name: Record the physical broker IPv4 address
+  ansible.builtin.set_fact:
+    synthran_physical_broker_ipv4: "{{ synthran_physical_broker_lookup.stdout_lines[0].split()[0] }}"
+
+- name: Route the broker endpoint through the physical UE session
+  ansible.builtin.command: >-
+    ip route replace {{ synthran_physical_broker_ipv4 }}/32 dev wwan0
+  changed_when: true
+
+- name: Prove MQTT TCP reachability through the physical UE
+  ansible.builtin.shell: |
+    ue_source="$(ip -4 -o addr show dev wwan0 | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    python3 -c 'import socket, sys
+    sock = socket.socket()
+    sock.settimeout(3)
+    sock.bind((sys.argv[3], 0))
+    sock.connect((sys.argv[1], int(sys.argv[2])))
+    sock.close()' "{{ synthran_physical_broker_ipv4 }}" "{{ mqtt_port }}" "$ue_source"
+  register: synthran_physical_broker_check
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: synthran_physical_broker_check.rc == 0
+
 - name: Collect physical UE session evidence
   ansible.builtin.shell: |
     echo "device={{ inventory_hostname }}"
     echo "mode={{ mode | default('mbim') }}"
     echo "dnn={{ synthran_physical_slice.dnn }}"
     echo "upf={{ synthran_physical_slice.ip_prefix }}.1"
+    echo "broker={{ synthran_physical_broker_ipv4 }}:{{ mqtt_port }}"
     ip -4 -o addr show dev wwan0
     ip route show
     qhat-check 2>&1 || true

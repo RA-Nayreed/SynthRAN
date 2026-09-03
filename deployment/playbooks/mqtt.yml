@@ -24,6 +24,17 @@
         name: synthran/physical_ue
       when: platform in ['r2lab', 'physical']
 
+- name: Prepare physical publisher runtimes
+  hosts: physical_ues
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Prepare the physical UE publisher
+      ansible.builtin.include_role:
+        name: synthran/publisher
+        tasks_from: prepare.yml
+      when: platform in ['r2lab', 'physical']
+
 - name: Select a shared physical telemetry start time
   hosts: localhost
   gather_facts: false
@@ -42,6 +53,7 @@
     - name: Run the physical UE publisher
       ansible.builtin.include_role:
         name: synthran/publisher
+        tasks_from: replay.yml
       when: platform in ['r2lab', 'physical']
 - name: Collect MQTT receipt artifacts
   hosts: broker_node

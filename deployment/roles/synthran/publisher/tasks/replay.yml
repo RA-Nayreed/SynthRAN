@@ -1,0 +1,12 @@
+---
+- name: Replay through physical UE
+  command: >-
+    /opt/synthran-venv/bin/python -m synthran.cli workload replay
+    --trace /tmp/synthran-events.jsonl --device {{ inventory_hostname }}
+    --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --interface wwan0 --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
+    --output /var/log/synthran-publisher.jsonl
+  environment:
+    PYTHONPATH: /opt/synthran-source
+- name: Fetch publisher records
+  fetch: {src: /var/log/synthran-publisher.jsonl, dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl", flat: true}

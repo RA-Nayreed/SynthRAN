@@ -1,40 +1,5 @@
 ---
-- name: Install physical publisher Python runtime
-  package: {name: [python3, python3-pip, python3-venv], state: present}
-- name: Copy SynthRAN package
-  copy: {src: "{{ playbook_dir }}/../../synthran", dest: /opt/synthran-source/}
-- name: Copy package metadata
-  copy: {src: "{{ playbook_dir }}/../../pyproject.toml", dest: /opt/synthran-source/pyproject.toml}
-- name: Create isolated publisher runtime
-  command: python3 -m venv /opt/synthran-venv
-  args: {creates: /opt/synthran-venv/bin/python}
-- name: Install the lightweight MQTT publisher dependency
-  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check "paho-mqtt>=2"
-- name: Verify the publisher does not require the numerical model runtime
-  command: /opt/synthran-venv/bin/python -c "from synthran.workload.replay import replay"
-  environment:
-    PYTHONPATH: /opt/synthran-source
-  changed_when: false
-- name: Require physical UE interface
-  command: ip -4 -o addr show dev wwan0
-  register: ue_tunnel
-  changed_when: false
-  failed_when: "' inet ' not in ue_tunnel.stdout"
-- name: Copy immutable trace
-  copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
-- name: Resolve N6-reachable broker address
-  set_fact:
-    synthran_effective_broker_address: >-
-      {{ mqtt_broker_address if mqtt_broker_address else
-         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
-- name: Replay through physical UE
-  command: >-
-    /opt/synthran-venv/bin/python -m synthran.cli workload replay
-    --trace /tmp/synthran-events.jsonl --device {{ inventory_hostname }}
-    --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
-    --interface wwan0 --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
-    --output /var/log/synthran-publisher.jsonl
-  environment:
-    PYTHONPATH: /opt/synthran-source
-- name: Fetch publisher records
-  fetch: {src: /var/log/synthran-publisher.jsonl, dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl", flat: true}
+- name: Prepare the physical publisher runtime
+  ansible.builtin.include_tasks: prepare.yml
+- name: Publish the physical telemetry
+  ansible.builtin.include_tasks: replay.yml
