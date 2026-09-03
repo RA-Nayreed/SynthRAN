@@ -571,18 +571,42 @@ echo "Showing deployment stages, retries, warnings, and failures; full host resu
 echo
 set +e
 stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}" 2>&1 \
-  | tee "$RUN_DIR/ansible.log" \
-  | awk '
-      function important(line) {
-        return line ~ /^(PLAY|TASK|RUNNING HANDLER|FAILED - RETRYING|fatal:|UNREACHABLE!|NO MORE HOSTS LEFT|PLAY RECAP|\[WARNING\]|\[DEPRECATION WARNING\])/
-      }
-      important($0) {
+  | stdbuf -oL -eL tee "$RUN_DIR/ansible.log" \
+  | stdbuf -oL -eL awk '
+      /^(PLAY|TASK|RUNNING HANDLER)/ {
         suppress_result = 0
         line = $0
-        if (line ~ /^(PLAY|TASK|RUNNING HANDLER)/) {
-          sub(/[[:space:]]+\*+$/, "", line)
+        sub(/[[:space:]]+\*+$/, "", line)
+        if (line ~ /^PLAY/) {
+          sub(/^PLAY \[/, "\n== ", line)
+          sub(/\]$/, " ==", line)
+        } else {
+          sub(/^(TASK|RUNNING HANDLER) \[/, "  -> ", line)
+          sub(/\]$/, "", line)
         }
         print line
+        fflush()
+        next
+      }
+      /^FAILED - RETRYING:/ {
+        line = $0
+        sub(/^FAILED - RETRYING:/, "     retry:", line)
+        print line
+        fflush()
+        next
+      }
+      /^(fatal:|.*UNREACHABLE!)/ {
+        print "     ERROR: " $0
+        fflush()
+        next
+      }
+      /^(NO MORE HOSTS LEFT|PLAY RECAP)/ {
+        print $0
+        fflush()
+        next
+      }
+      /^(\[WARNING\]|\[DEPRECATION WARNING\])/ {
+        print "     " $0
         fflush()
         next
       }

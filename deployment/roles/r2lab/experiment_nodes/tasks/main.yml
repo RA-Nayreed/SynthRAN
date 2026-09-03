@@ -17,3 +17,28 @@
     rhubarbe wait {{ synthran_r2lab_experiment_nodes | join(' ') }}
   when: synthran_r2lab_experiment_nodes | length > 0
   changed_when: false
+
+- name: Validate miniPC RF-measurement selections
+  ansible.builtin.assert:
+    that:
+      - item in ['pc01', 'pc02']
+    fail_msg: >-
+      {{ item }} has no documented attached USRP. Select pc01, pc02, or a FIT
+      node whose R2Lab hardware entry lists an SDR.
+  loop: "{{ groups['r2lab_rf_nodes'] | default([]) | select('match', '^pc') | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Power on SDRs attached to selected FIT RF-measurement nodes
+  ansible.builtin.command: "uon {{ item | regex_replace('^fit', '') | int }}"
+  loop: "{{ groups['r2lab_rf_nodes'] | default([]) | select('match', '^fit') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: true
+
+- name: Power on SDRs attached to selected miniPC RF-measurement nodes
+  ansible.builtin.command: "rhubarbe pdu on usrp{{ item | regex_replace('^pc', '') }}"
+  loop: "{{ groups['r2lab_rf_nodes'] | default([]) | select('match', '^pc0[12]$') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: true
