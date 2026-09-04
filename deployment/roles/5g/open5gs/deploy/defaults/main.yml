@@ -6,7 +6,7 @@ open5gs_ns: open5gs
 open5gs_webui_enabled: false
 
 # Open5gs repo directory
-repo_dest: "~/open5gs-k8s"
+repo_dest: "/root/open5gs-k8s"
 
 # Deployment option, can be overrided with -e deployment_option
 deployment_option: "msd/overlays/open5gs-metrics"
