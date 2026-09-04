@@ -2,6 +2,9 @@
 # Open5GS namespace
 open5gs_ns: open5gs
 
+# The automated experiment uses MongoDB scripts directly; the UI is opt-in.
+open5gs_webui_enabled: false
+
 # Open5gs repo directory
 repo_dest: "~/open5gs-k8s"
 
@@ -23,4 +26,3 @@ nad_list:
   - n2network
   - n3network
   - n4network
-  

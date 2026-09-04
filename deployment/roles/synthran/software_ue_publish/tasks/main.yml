@@ -17,7 +17,7 @@
 - name: Decode discovered UE tunnels
   set_fact:
     synthran_software_tunnels: "{{ synthran_discovery.stdout | from_json }}"
-- name: Require one real tunnel per modeled device
+- name: Require one real tunnel per configured UE
   assert:
     that:
       - synthran_software_tunnels | length >= synthran_ue_map | length
@@ -26,12 +26,45 @@
       requires {{ synthran_ue_map | length }}: {{ synthran_discovery.stdout }}.
       This indicates that a tunnel disappeared after the RAN readiness gate;
       inspect the per-UE logs printed during the srsRAN deployment stage.
-- name: Select only the tunnels assigned to modeled devices
+- name: Select the tunnels assigned to configured UEs
   set_fact:
     synthran_assigned_tunnels: "{{ synthran_software_tunnels[:synthran_ue_map | length] }}"
 - name: Build unique UE pod list
   set_fact:
     synthran_software_pods: "{{ synthran_assigned_tunnels | unique(attribute='pod') | list }}"
+
+- name: Inspect existing publisher runtime containers
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} get pod -n {{ item.namespace }} {{ item.pod }}
+    -o jsonpath='{.spec.ephemeralContainers[?(@.name=="synthran-runtime")].name}'
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  register: synthran_runtime_specs
+  changed_when: false
+
+- name: Inspect publisher runtime running state
+  command: >-
+    {{ kubectl_bin | default('/usr/bin/kubectl') }} get pod -n {{ item.namespace }} {{ item.pod }}
+    -o jsonpath='{.status.ephemeralContainerStatuses[?(@.name=="synthran-runtime")].state.running.startedAt}'
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  register: synthran_runtime_states
+  changed_when: false
+
+- name: Require any existing publisher runtime to still be running
+  ansible.builtin.assert:
+    that:
+      - >-
+        (synthran_runtime_specs.results[item_index].stdout | trim == '') or
+        (synthran_runtime_states.results[item_index].stdout | trim != '')
+    fail_msg: >-
+      The existing synthran-runtime ephemeral container in
+      {{ item.namespace }}/{{ item.pod }} has stopped and Kubernetes cannot
+      restart ephemeral containers. Recreate the UE pod before workload-only replay.
+  loop: "{{ synthran_software_pods }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.pod }}"
+    index_var: item_index
 
 - name: Add isolated publisher runtime to each UE pod network namespace
   command: >-
@@ -39,7 +72,10 @@
     --image={{ synthran_runtime_image | default('python:3.13-slim') }}
     --container=synthran-runtime -- sleep infinity
   loop: "{{ synthran_software_pods }}"
-  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.pod }}"
+    index_var: item_index
+  when: synthran_runtime_specs.results[item_index].stdout | trim == ''
   changed_when: true
 - name: Wait for publisher runtime containers
   shell: >-

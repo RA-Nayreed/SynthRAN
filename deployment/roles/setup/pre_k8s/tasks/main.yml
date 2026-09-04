@@ -1,6 +1,10 @@
 ---
 # To avoid Pod eviction issues on live and persistent systems
 
+- name: Recheck destructive-reset authorization before storage preparation
+  ansible.builtin.include_role:
+    name: setup/destructive_guard
+
 # --- Detect if running from a live Ubuntu image ---
 - name: Detect live Ubuntu system
   ansible.builtin.shell: |

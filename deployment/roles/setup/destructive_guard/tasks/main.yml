@@ -1,0 +1,14 @@
+---
+- name: Authorize destructive reset operations on this allocated SOP node
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_destructive_reset_authorized | default(false) | bool
+      - inventory_hostname in (synthran_authorized_reset_nodes | default([]))
+      - inventory_hostname in groups['sopnodes']
+      - inventory_hostname is match('^sopnode-(f[1-3]|w3)$')
+    fail_msg: >-
+      Refusing to reset Kubernetes, CNI, or containerd state on
+      {{ inventory_hostname }}. A reservation verified by this SynthRAN run is
+      required. For a separately managed disposable lab node, set
+      deployment.allow_destructive_node_reset: true explicitly in the scenario.

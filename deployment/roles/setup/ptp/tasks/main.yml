@@ -111,9 +111,9 @@
   changed_when: false
   become: yes
 
-- name: Set timezone to Europe/Paris
+- name: Set timezone to UTC
   community.general.timezone:
-    name: Europe/Paris
+    name: Etc/UTC
   become: yes
 
 - name: Reload systemd daemon

@@ -109,16 +109,16 @@
   become: true
   changed_when: false
 
-# ptp on ran-node will use Etc/UTC time zone, core-node must do the same
+# Keep every infrastructure timestamp in UTC for reproducible correlation.
 - name: Read the configured timezone
   command: timedatectl show --property=Timezone --value
   register: configured_timezone
   changed_when: false
 
-- name: Set time zone to Europe/Paris
-  command: timedatectl set-timezone Europe/Paris
+- name: Set the infrastructure time zone to UTC
+  command: timedatectl set-timezone Etc/UTC
   become: true
-  when: configured_timezone.stdout | trim != 'Europe/Paris'
+  when: configured_timezone.stdout | trim != 'Etc/UTC'
   
 - name: Read clock synchronization status
   command: timedatectl show --property=Timezone --property=NTPSynchronized

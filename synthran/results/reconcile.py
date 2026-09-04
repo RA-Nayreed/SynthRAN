@@ -5,6 +5,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import yaml
+
 
 def _read(path: str | Path) -> list[dict]:
     source = Path(path)
@@ -13,7 +15,19 @@ def _read(path: str | Path) -> list[dict]:
     return [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def reconcile(expected, publisher, broker, output="summary.json") -> dict:
+def _configured_devices(expected: str | Path, scenario: str | Path | None) -> list[str]:
+    """Return the scenario device order, including devices with no decoded events."""
+    source = Path(scenario) if scenario else Path(expected).parent / "resolved-scenario.yml"
+    if not source.exists():
+        return []
+    data = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    deployment_devices = data.get("deployment", {}).get("ues", [])
+    if deployment_devices:
+        return list(dict.fromkeys(str(device) for device in deployment_devices))
+    return list(dict.fromkeys(str(device) for device in data.get("devices", {})))
+
+
+def reconcile(expected, publisher, broker, output="summary.json", scenario=None) -> dict:
     expected_rows = _read(expected)
     publisher_rows = _read(publisher)
     broker_rows = _read(broker)
@@ -22,7 +36,14 @@ def reconcile(expected, publisher, broker, output="summary.json") -> dict:
     received_counts = Counter(row["event_id"] for row in broker_rows)
     received_ids = set(received_counts)
     acknowledged_ids = {row["event_id"] for row in publisher_rows if row.get("acknowledged")}
-    devices = sorted({row.get("device", "unknown") for row in expected_rows})
+    configured_devices = _configured_devices(expected, scenario)
+    observed_devices = {
+        row.get("device", "unknown")
+        for row in expected_rows + publisher_rows + broker_rows
+    }
+    if not configured_devices:
+        configured_devices = sorted(observed_devices)
+    devices = configured_devices + sorted(observed_devices - set(configured_devices))
     per_device = {}
     for device in devices:
         model_ids = {row["event_id"] for row in expected_rows if row.get("device") == device}
@@ -34,6 +55,11 @@ def reconcile(expected, publisher, broker, output="summary.json") -> dict:
         }
     ambient_summary_path = Path(expected).parent / "ambient_iot" / "summary.json"
     ambient = json.loads(ambient_summary_path.read_text(encoding="utf-8")) if ambient_summary_path.exists() else {"decoded": len(expected_ids)}
+    suppression_count = int(ambient.get("energy_or_protocol_suppressed", 0))
+    opportunity_count = int(ambient.get("opportunities", 0))
+    rf_loss_count = int(ambient.get("radio_collision_loss", 0)) + int(
+        ambient.get("below_sensitivity_or_unheard", 0)
+    )
     summary = {
         "ambient_iot": ambient,
         "five_g": {
@@ -47,6 +73,24 @@ def reconcile(expected, publisher, broker, output="summary.json") -> dict:
             "duplicate_receipts": sum(max(0, count - 1) for count in received_counts.values()),
         },
         "per_device": per_device,
+        "experimental_coverage": {
+            "configured_devices": configured_devices,
+            "devices_with_decoded_events": [
+                device
+                for device in configured_devices
+                if per_device[device]["ambient_iot_decoded"] > 0
+            ],
+            "all_configured_devices_exercised": all(
+                per_device[device]["ambient_iot_decoded"] > 0
+                for device in configured_devices
+            ),
+            "rf_loss_observed": rf_loss_count > 0,
+            "transport_loss_observed": bool((expected_ids & published_ids) - received_ids),
+            "suppression_fraction": (
+                suppression_count / opportunity_count if opportunity_count else 0.0
+            ),
+        },
     }
-    Path(output).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if output is not None:
+        Path(output).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary

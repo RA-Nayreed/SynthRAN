@@ -49,10 +49,10 @@
         gnb_startup_success: false
         max_attempts: 2
 
-    - name: Deploy and Monitor srsRAN gNB
+    - name: Deploy and monitor srsRAN gNB with bounded retries
       block:
-        - name: "Attempt gNB deployment (attempt {{ gnb_attempt }})"
-          include_tasks: deploy_with_check.yml
+        - name: Run a gNB deployment attempt
+          ansible.builtin.include_tasks: deploy_with_check.yml
           loop: "{{ range(1, max_attempts + 1) | list }}"
           loop_control:
             loop_var: gnb_attempt

@@ -64,10 +64,10 @@ data:
   wrapper.sh: |
     #!/bin/bash
 
-    # Wait for Multus to assign the IP 10.10.3.200 to the n3 interface
+    # Wait for Multus to assign the NGAP endpoint to the dedicated N2 interface.
     # This prevents the "Cannot assign requested address" error during SCTP bind
-    echo "Waiting for interface n3 to be ready with IP 10.10.3.200..."
-    while ! ip addr show dev n3 | grep -q "10.10.3.200"; do
+    echo "Waiting for interface n2 to be ready with IP 10.10.2.200..."
+    while ! ip addr show dev n2 | grep -q "10.10.2.200"; do
       sleep 2
     done
 

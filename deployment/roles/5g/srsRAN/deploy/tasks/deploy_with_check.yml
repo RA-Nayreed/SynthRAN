@@ -1,6 +1,10 @@
 ---
 - name: "Execute deployment attempt"
   block:
+  - name: Report the current gNB deployment attempt
+    ansible.builtin.debug:
+      msg: "Starting gNB deployment attempt {{ gnb_attempt }} of {{ max_attempts }}"
+
   - name: Ensure values file has node constraints
     ansible.builtin.blockinfile:
       path: "{{ values_file }}"
@@ -101,11 +105,10 @@
         release_namespace: "{{ ran_ns }}"
         state: absent
         wait: true
-      when: item | int < max_attempts | int
+      when: gnb_attempt | int < max_attempts | int
 
     when: 
       - not gnb_startup_success | bool
       - rru in ['n300', 'n320']
 
   when: not gnb_startup_success | bool
-  

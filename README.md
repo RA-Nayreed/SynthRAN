@@ -29,7 +29,23 @@ run is available without deploying infrastructure:
 Use `--config scenarios/<name>.yml` for reproducible non-interactive execution,
 or `--no-input` to run the default reference scenario without prompts. Use
 `--no-reservation` only when the selected SOP nodes are already allocated,
-imaged, booted, and reachable.
+imaged, booted, and reachable. A full deployment without SynthRAN reservation
+evidence also requires the deliberate scenario setting
+`deployment.allow_destructive_node_reset: true`; otherwise the Kubernetes/CNI/
+containerd reset is refused before any destructive task runs.
+
+After one healthy deployment, run additional immutable traces without rebuilding
+the cluster or 5G stack:
+
+```sh
+./deploy.sh --config scenarios/rfsim-sidecars-3ue.yml --workload-only
+```
+
+The workload-only path revalidates all configured UE tunnels, resets the MQTT
+receipt artifact, replays the new trace, and performs normal reconciliation.
+Open5GS WebUI and its administrator account are disabled by default because the
+experiment loads subscribers directly; set
+`deployment.open5gs_webui_enabled: true` only when interactive UI access is needed.
 
 Ready-to-edit combinations for software-UE sidecars, physical QHAT/QFIT UEs,
 N300/N320 and Benetel radios, network slices, and auxiliary R2Lab sensor, edge,

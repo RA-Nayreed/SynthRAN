@@ -60,9 +60,12 @@
   vars:
     slice_entry:
       sst: "{{ sl_item.sst | int }}"
-      sd: "{{ lookup('template', 'slice_sd.j2') | trim }}"
+      sd: >-
+        {{ 16777215
+           if (sl_item.sd | string | upper) == 'EMPTY'
+           else (sl_item.sd | string | regex_replace('^0x', '') | int(base=16)) }}
 
-- name: Update gNB configurations (Structure only)
+- name: Write typed slice values into the gNB configuration
   ansible.builtin.shell: >
     {{ yq_bin_path }} eval -i '
       .gnbConfig.cu_cp.amf.supported_tracking_areas[0].plmn_list[0].tai_slice_support_list = {{ amf_slices | to_json }} |
@@ -70,18 +73,6 @@
       .gnbConfig.cell_cfg.tac = {{ fiveg.plmn.tac | int }} |
       .gnbConfig.cell_cfg.slicing = {{ gnb_slices | to_json }}
     ' "{{ values_file }}"
-
-- name: Force remove quotes on SD values (Post-processing)
-  replace:
-    path: "{{ values_file }}"
-    regexp: 'sd: "(0x[0-9A-Fa-f]+)"'
-    replace: 'sd: \1'
-
-- name: Force remove quotes on SST values (Post-processing)
-  replace:
-    path: "{{ values_file }}"
-    regexp: 'sst: "([0-9]+)"'
-    replace: 'sst: \1'
 
 - name: Ensure values file has node constraints
   blockinfile:

@@ -1,0 +1,24 @@
+---
+- name: Deploy Open5GS WebUI
+  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/open5gs-webui" -n {{ open5gs_ns }}
+  register: open5gs_webui_apply
+  changed_when: "'configured' in open5gs_webui_apply.stdout or 'created' in open5gs_webui_apply.stdout"
+
+- name: Wait for the Open5GS WebUI pod
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ open5gs_ns }}"
+    label_selectors:
+      - "nf=webui"
+  register: webui_pod
+  until: >
+    webui_pod.resources | length > 0 and
+    (webui_pod.resources[0].status.containerStatuses[0].ready | default(false))
+  retries: 30
+  delay: 5
+
+- name: Create the Open5GS WebUI administrator account
+  ansible.builtin.command: >
+    {{ repo_dest }}/venv/bin/python mongo-tools/add-admin-account.py
+  args:
+    chdir: "{{ repo_dest }}"

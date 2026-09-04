@@ -122,41 +122,6 @@
   changed_when: false
   failed_when: false
 
-- name: Install OVS CNI via Cluster Network Addons Operator (single-node)
-  block:
-    - name: Apply Cluster Network Addons Operator namespace
-      ansible.builtin.shell: |
-        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/namespace.yaml
-
-    - name: Apply Cluster Network Addons CRDs
-      ansible.builtin.shell: |
-        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/network-addons-config.crd.yaml
-
-    - name: Apply Cluster Network Addons Operator
-      ansible.builtin.shell: |
-        kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.98.1/operator.yaml
-
-    - name: Create NetworkAddonsConfig for OVS
-      ansible.builtin.copy:
-        dest: /tmp/netaddonsconf.yaml
-        content: |
-          apiVersion: networkaddonsoperator.network.kubevirt.io/v1
-          kind: NetworkAddonsConfig
-          metadata:
-            name: cluster
-          spec:
-            ovs: {}
-
-    - name: Apply NetworkAddonsConfig
-      ansible.builtin.shell: |
-        kubectl apply -f /tmp/netaddonsconf.yaml
-
-    - name: Wait for NetworkAddonsConfig to become Available
-      ansible.builtin.shell: |
-        kubectl wait networkaddonsconfig cluster --for condition=Available --timeout=300s
-  when: core_node_name == ran_node_name and core == "open5gs"
-  become: yes
-
 - name: Patch NADs to use unique interface names
   shell: |
     set -eu
@@ -282,12 +247,12 @@
   retries: 40
   delay: 5
 
-- name: Verify Multus N3 interface inside AMF pod
+- name: Verify the AMF Multus N2 interface and NGAP address
   ansible.builtin.shell: |
     AMF_POD=$(kubectl get pods -n {{ open5gs_ns }} -l nf=amf -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n3 | grep "inet 10.10.3.200"
-  register: amf_n3_check
-  until: amf_n3_check.rc == 0
+    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n2 | grep "inet 10.10.2.200"
+  register: amf_n2_check
+  until: amf_n2_check.rc == 0
   retries: 15
   delay: 5
   when: core == "open5gs"
@@ -324,31 +289,6 @@
     cmd: "{{ repo_dest }}/venv/bin/pip install -r {{ repo_dest }}/requirements.txt"
   become: yes
 
-- name: Deploy Open5GS Web UI
-  ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/open5gs-webui" -n {{ open5gs_ns }}
-
-- name: Wait for WebUI pod Ready
-  kubernetes.core.k8s_info:
-    kind: Pod
-    namespace: "{{ open5gs_ns }}"
-    label_selectors:
-      - "nf=webui"
-  register: webui_pod
-  until: >
-    webui_pod.resources | length > 0 and
-    (webui_pod.resources[0].status.containerStatuses[0].ready | default(false))
-  retries: 30
-  delay: 5
-  failed_when: false
-  changed_when: false
-
-- name: Warn if WebUI not ready
-  ansible.builtin.debug:
-    msg: "WebUI pod not Ready — continuing (optional component)"
-  when: webui_pod is failed or
-        webui_pod.resources | length == 0 or
-        not (webui_pod.resources[0].status.containerStatuses[0].ready | default(false))
-
 - name: Run Python scripts to generate and add subscribers
   ansible.builtin.shell: |
     {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
@@ -356,11 +296,9 @@
   args:
     chdir: "{{ repo_dest }}"
 
-- name: Run add-admin-account.py
-  ansible.builtin.command: >
-    {{ repo_dest }}/venv/bin/python mongo-tools/add-admin-account.py
-  args:
-    chdir: "{{ repo_dest }}"
+- name: Provision the optional Open5GS WebUI and administrator account
+  ansible.builtin.include_tasks: webui.yml
+  when: open5gs_webui_enabled | bool
 
 - name: Check Open5GS deployment
   ansible.builtin.include_role:

@@ -1,4 +1,8 @@
 ---
+- name: Recheck destructive-reset authorization before control-plane cleanup
+  ansible.builtin.include_role:
+    name: setup/destructive_guard
+
 - name: Normalize booleans for current host
   ansible.builtin.set_fact:
     fhi72: "{{ fhi72 | default(false) | bool }}"
@@ -140,9 +144,13 @@
     state: restarted
   become: true
 
-- name: Wait 5 seconds for containerd to settle
-  ansible.builtin.pause:
-    seconds: 5
+- name: Wait for containerd to accept requests
+  ansible.builtin.command: ctr version
+  register: containerd_ready_before_wipe
+  changed_when: false
+  retries: 30
+  delay: 1
+  until: containerd_ready_before_wipe.rc == 0
 
 # FIX: full containerd data wipe — partial purges leave metadata/snapshots that
 #      reference deleted blobs, causing kubeadm init to fail with "blob not found".
@@ -172,9 +180,13 @@
     state: started
   become: true
 
-- name: Wait 5 seconds for containerd to settle after wipe
-  ansible.builtin.pause:
-    seconds: 5
+- name: Wait for containerd to accept requests after the wipe
+  ansible.builtin.command: ctr version
+  register: containerd_ready_after_wipe
+  changed_when: false
+  retries: 30
+  delay: 1
+  until: containerd_ready_after_wipe.rc == 0
 
 # FIX: bind-mount overlayfs snapshotter dir so containerd 1.7 reports capacityBytes via CRI
 - name: Create overlayfs snapshotter directory

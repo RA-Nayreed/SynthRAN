@@ -3,7 +3,7 @@
   hosts: sopnodes
   become: true
   any_errors_fatal: true
-  roles: [setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/k8s/k8s_env, setup/ovs]
+  roles: [setup/destructive_guard, setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/ovs]
 - name: Create the Kubernetes control plane
   hosts: core_node
   become: true
@@ -20,13 +20,13 @@
   become: true
   any_errors_fatal: true
   roles:
-    - {role: setup/gre_tunnel, when: bridge_enabled}
+    - {role: setup/gre_tunnel, when: "bridge_enabled and core_node_name != ran_node_name"}
 - name: Configure RAN-side transport
   hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
-    - {role: setup/gre_tunnel, when: bridge_enabled}
+    - {role: setup/gre_tunnel, when: "bridge_enabled and core_node_name != ran_node_name"}
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
   any_errors_fatal: true

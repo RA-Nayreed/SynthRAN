@@ -1,4 +1,8 @@
 ---
+- name: Recheck destructive-reset authorization before worker cleanup
+  ansible.builtin.include_role:
+    name: setup/destructive_guard
+
 # Cleanup if node already joined a k8s cluster
 - name: Check if node has leftover Kubernetes data
   ansible.builtin.stat:
@@ -54,9 +58,13 @@
     state: started
   become: true
 
-- name: Wait for containerd to settle
-  ansible.builtin.pause:
-    seconds: 5
+- name: Wait for containerd to accept requests after the wipe
+  ansible.builtin.command: ctr version
+  register: worker_containerd_ready
+  changed_when: false
+  retries: 30
+  delay: 1
+  until: worker_containerd_ready.rc == 0
 
 # === INSTALLATION DES PLUGINS CNI DE BASE ====================================
 - name: Ensure CNI directories exist

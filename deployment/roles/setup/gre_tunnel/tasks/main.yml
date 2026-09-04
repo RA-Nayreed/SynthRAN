@@ -1,14 +1,25 @@
 ---
-- name: Define GRE bridges configuration for non-free5gc core
+- name: Define GRE bridges for the Open5GS N2 and N3 paths
+  ansible.builtin.set_fact:
+    gre_bridges:
+      - name: n2br
+        local_ip_core: 10.10.2.254/24
+        local_ip_ran:  10.10.2.253/24
+        gre_key: 2
+      - name: n3br
+        local_ip_core: 10.10.3.254/24
+        local_ip_ran:  10.10.3.253/24
+        gre_key: 3
+  when: core == 'open5gs'
+
+- name: Define the OAI inter-host N3 bridge
   ansible.builtin.set_fact:
     gre_bridges:
       - name: n3br
         local_ip_core: 192.168.3.254/24
         local_ip_ran:  192.168.3.253/24
-      - name: n4br
-        local_ip_core: 192.168.4.254/24
-        local_ip_ran:  192.168.4.253/24
-  when: core != 'free5gc'
+        gre_key: 3
+  when: core == 'oai'
 
 - name: Define GRE bridges configuration for free5gc core
   ansible.builtin.set_fact:
@@ -16,12 +27,26 @@
       - name: n3br
         local_ip_core: 10.100.50.238/29
         local_ip_ran:  10.100.50.237/29
+        gre_key: 3
       - name: n4br
         local_ip_core: 192.168.4.254/24
         local_ip_ran:  192.168.4.253/24
+        gre_key: 4
   when: core == 'free5gc'
 
-- name: Configure GRE tunnels for N3 and N4
+- name: Remove the legacy inter-host N4 GRE port
+  ansible.builtin.shell: |
+    if ovs-vsctl port-to-br gre-n4br >/dev/null 2>&1; then
+      ovs-vsctl --if-exists del-port n4br gre-n4br
+      echo removed
+    else
+      echo absent
+    fi
+  register: legacy_n4_gre_cleanup
+  changed_when: legacy_n4_gre_cleanup.stdout | trim == 'removed'
+  when: core != 'free5gc'
+
+- name: Configure the required inter-host 5G transport bridges
   ansible.builtin.include_tasks: gre_loop.yml
   loop: "{{ gre_bridges }}"
   loop_control:

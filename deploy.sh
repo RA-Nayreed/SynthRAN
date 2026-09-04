@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; SOP_RESERVATION_DONE=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; SOP_RESERVATION_DONE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
@@ -9,12 +9,15 @@ while [[ $# -gt 0 ]]; do
     -n|--no-input) NO_INPUT=true; shift ;;
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
     -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
+if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed scenario and cannot be interactive" >&2; exit 2; fi
+if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 mkdir -p .synthran
@@ -457,7 +460,9 @@ else:
 lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
 ue_map=[{'device':name,'index':i+1} for i,name in enumerate(ues)]
-variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map}
+reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
+destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
+variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
@@ -635,14 +640,24 @@ if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements
   exit 1
 fi
 
-deployment_section "Provisioning nodes and deploying the selected 5G stack"
+if $WORKLOAD_ONLY; then
+  deployment_section "Replaying telemetry on the existing 5G stack"
+else
+  deployment_section "Provisioning nodes and deploying the selected 5G stack"
+fi
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
+if $WORKLOAD_ONLY; then
+  DEPLOYMENT_PLAYBOOK=deployment/playbooks/mqtt.yml
+  echo "Only broker setup, telemetry replay, and collection will run"
+else
+  DEPLOYMENT_PLAYBOOK=deployment/playbooks/site.yml
+fi
 ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.ini"
   -e "@deployment/group_vars/all/all.yml"
   -e "@$RUN_DIR/deployment-vars.yml"
-  deployment/playbooks/site.yml)
+  "$DEPLOYMENT_PLAYBOOK")
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
@@ -667,5 +682,5 @@ run=Path(sys.argv[1]); rows=[]
 for source in sorted(run.glob('publisher-*.jsonl')): rows.extend(source.read_text().splitlines())
 (run/'publisher.jsonl').write_text('\n'.join(rows)+('\n' if rows else ''))
 PY
-"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --output "$RUN_DIR/summary.json"
+"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" --output "$RUN_DIR/summary.json"
 echo "Artifacts retained in $RUN_DIR"

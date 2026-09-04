@@ -65,6 +65,15 @@ def main() -> None:
             emit(f"     {line}")
             continue
 
+        # A task heading is printed before Ansible reveals that its condition
+        # evaluated false. Preserve that result so inactive backend tasks are
+        # never mistaken for executed work in the condensed stream.
+        if line.startswith("skipping:"):
+            hiding_error_detail = False
+            hiding_result = line.endswith("=> {")
+            emit(f"     {line.split(' =>', 1)[0]}")
+            continue
+
         if ROUTINE_RESULT.match(line):
             hiding_error_detail = False
             hiding_result = line.endswith("=> {")

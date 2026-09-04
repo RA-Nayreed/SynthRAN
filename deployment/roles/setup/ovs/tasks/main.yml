@@ -18,10 +18,9 @@
 
 - name: Define OVS bridges
   set_fact:
-    ovs_bridges:
-      - n2br
-      - n3br
-      - n4br
+    ovs_bridges: >-
+      {{ ['n2br', 'n3br'] +
+         (['n4br'] if inventory_hostname in groups['core_node'] or core == 'free5gc' else []) }}
 
 - name: Create OVS bridges
   ansible.builtin.shell: |
@@ -35,6 +34,21 @@
   register: ovs_bridge_create
   changed_when: ovs_bridge_create.stdout | trim == 'created'
   become: true
+
+- name: Remove a legacy N4 bridge from the RAN host
+  ansible.builtin.shell: |
+    if ovs-vsctl br-exists n4br; then
+      ovs-vsctl del-br n4br
+      echo removed
+    else
+      echo absent
+    fi
+  register: legacy_ran_n4_cleanup
+  changed_when: legacy_ran_n4_cleanup.stdout | trim == 'removed'
+  become: true
+  when:
+    - inventory_hostname not in groups['core_node']
+    - core != 'free5gc'
 
 # following unused now
 - name: Pin ovs-vswitchd on cores 0-5 (RAN node only)

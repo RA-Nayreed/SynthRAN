@@ -173,14 +173,6 @@
                   name: {{ '{{' }} include "srsran-ue.fullname" . {{ '}}' }}-{{ '{{' }} .Release.Name {{ '}}' }}-ue-config
                   defaultMode: 0755
 
-# --- Patch gNB deployment - n3network name ---
-
-- name: Patch gNB deployment - parameterize n3network name
-  ansible.builtin.replace:
-    path: "{{ repo_dest_abs }}/charts/srsran-gnb/values-rfsim.yaml"
-    regexp: '"name":\s*"n3network"'
-    replace: '"name": "{{ ''{{'' }} .Values.n3networkName {{ ''}}'' }}"'
-
 - name: Patch gNB configmap - set log level to info
   ansible.builtin.replace:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/values-rfsim.yaml"

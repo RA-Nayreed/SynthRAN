@@ -1,0 +1,3 @@
+---
+# Pin the operator so cluster creation and later core deployment cannot drift.
+cnao_version: v0.89.1
