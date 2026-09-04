@@ -17,10 +17,20 @@
   when: core == 'free5gc'
 
 - name: Create GRE tunnel on {{ item.name }} [non-free5gc or n3br only]
-  ansible.builtin.shell: >
-    ovs-vsctl --may-exist add-port {{ item.name }} gre-{{ item.name }} \
-      -- set interface gre-{{ item.name }} type=gre
-      options:remote_ip={{ remote_ip }} options:key={{ item.gre_key }}
+  ansible.builtin.command:
+    argv:
+      - ovs-vsctl
+      - --may-exist
+      - add-port
+      - "{{ item.name }}"
+      - "gre-{{ item.name }}"
+      - --
+      - set
+      - interface
+      - "gre-{{ item.name }}"
+      - type=gre
+      - "options:remote_ip={{ remote_ip }}"
+      - "options:key={{ item.gre_key }}"
   when: core != 'free5gc' or item.name == 'n3br'
 
 - name: Create patch ports between n3br and n4br [free5gc n4br only]
