@@ -31,7 +31,9 @@
 
 - name: Load active 5G profile
   ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    file: >-
+      {{ fiveg_profile_file |
+         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
     name: fiveg
 
 - name: Validate PLMN

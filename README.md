@@ -18,9 +18,12 @@ UE tunnels; replays MQTT; and reconciles the JSONL artifacts:
 ./deploy.sh
 ```
 
-For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly
-to `tun_srsue1`, `tun_srsue2`, and `tun_srsue3` inside the srsUE pod. A preparation-only
-run is available without deploying infrastructure:
+For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly to
+`tun_srsue1` through `tun_srsueN` inside the srsUE pod. `deployment.ues` is the
+source of truth: known devices use the selected 5G profile, while additional
+names such as `uesim04` receive a deterministic IMSI and the profile's first
+slice. A scenario can override either value under `deployment.ue_profiles`.
+A preparation-only run is available without deploying infrastructure:
 
 ```sh
 ./deploy.sh --dry-run
@@ -43,6 +46,8 @@ the cluster or 5G stack:
 
 The workload-only path revalidates all configured UE tunnels, resets the MQTT
 receipt artifact, replays the new trace, and performs normal reconciliation.
+Full deployment replaces only the selected Open5GS subscriber records, which
+resets stale authentication state retained by MongoDB across repeat runs.
 Open5GS WebUI and its administrator account are disabled by default because the
 experiment loads subscribers directly; set
 `deployment.open5gs_webui_enabled: true` only when interactive UI access is needed.

@@ -1,7 +1,9 @@
 ---
 - name: Include 5G profile variables
   ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    file: >-
+      {{ fiveg_profile_file |
+         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
     name: fiveg
 
 - name: Ensure data directory exists
@@ -9,6 +11,12 @@
     path: "{{ repo_dest }}/data"
     state: directory
     mode: "0755"
+
+- name: Stage the effective 5G profile for subscriber generation
+  ansible.builtin.copy:
+    dest: "{{ repo_dest }}/data/effective-5g-profile.yaml"
+    content: "{{ fiveg | to_nice_yaml(indent=2, sort_keys=false) }}"
+    mode: "0600"
 
 - name: Write generate-data-fiveg.py script on the server
   ansible.builtin.copy:
@@ -83,7 +91,9 @@
 
 - name: Generate subscribers YAML from 5G profile
   ansible.builtin.command:
-    cmd: python3 mongo-tools/generate-data-fiveg.py
+    cmd: >-
+      python3 mongo-tools/generate-data-fiveg.py
+      --profile data/effective-5g-profile.yaml
     chdir: "{{ repo_dest }}"
   register: generate_result
 
@@ -91,9 +101,19 @@
   ansible.builtin.debug:
     msg: "{{ generate_result.stdout }}"
 
-- name: Add subscribers into MongoDB
+- name: Remove stale records for the selected subscribers
   ansible.builtin.command:
-    cmd: python3 mongo-tools/add-subscribers.py
+    argv: >-
+      {{ ['python3', 'mongo-tools/delete-subscribers.py']
+         + (fiveg.ues | list) }}
+    chdir: "{{ repo_dest }}"
+  register: delete_result
+
+- name: Add selected subscribers into MongoDB
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', 'mongo-tools/add-subscribers.py']
+         + (fiveg.ues | list) }}
     chdir: "{{ repo_dest }}"
   register: add_result
 

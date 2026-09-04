@@ -30,11 +30,13 @@
 
 - name: Resolve 5G profile file
   set_fact:
-    fiveg_profile_file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    resolved_fiveg_profile_file: >-
+      {{ fiveg_profile_file |
+         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
 
 - name: Load 5G profile
   include_vars:
-    file: "{{ fiveg_profile_file }}"
+    file: "{{ resolved_fiveg_profile_file }}"
     name: fiveg
 
 - name: Report the active 5G profile

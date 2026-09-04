@@ -241,7 +241,7 @@
           -o jsonpath='{range .items[*]}{range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}{end}' \
           2>/dev/null || true
       )
-      if ! printf '%s\n' "$ready" | grep -qx True; then
+      if [ -z "$ready" ] || printf '%s\n' "$ready" | grep -qvx True; then
         missing="${missing} ${nf}"
       fi
     done
@@ -323,12 +323,63 @@
     cmd: "{{ repo_dest }}/venv/bin/pip install -r {{ repo_dest }}/requirements.txt"
   become: yes
 
-- name: Run Python scripts to generate and add subscribers
-  ansible.builtin.shell: |
-    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/generate-data-fiveg.py
-    {{ repo_dest }}/venv/bin/python {{ repo_dest }}/mongo-tools/add-subscribers.py
-  args:
+- name: Generate the selected Open5GS subscriber records
+  ansible.builtin.command:
+    argv:
+      - "{{ repo_dest }}/venv/bin/python"
+      - "{{ repo_dest }}/mongo-tools/generate-data-fiveg.py"
     chdir: "{{ repo_dest }}"
+  register: open5gs_subscriber_generation
+  changed_when: true
+
+# The upstream add-subscribers.py deliberately skips IMSIs that already exist.
+# MongoDB is persistent, so a repeated full deployment would otherwise retain
+# stale authentication sequence/profile state and every freshly started srsUE
+# could be rejected. Replace only this run's selected subscribers; do not wipe
+# unrelated records from a shared database.
+- name: Remove stale records for the selected Open5GS subscribers
+  ansible.builtin.command:
+    argv: >-
+      {{ [repo_dest ~ '/venv/bin/python',
+          repo_dest ~ '/mongo-tools/delete-subscribers.py']
+         + (fiveg.ues | list) }}
+    chdir: "{{ repo_dest }}"
+  register: open5gs_subscriber_removal
+  changed_when: true
+
+- name: Insert the selected Open5GS subscribers from the effective profile
+  ansible.builtin.command:
+    argv: >-
+      {{ [repo_dest ~ '/venv/bin/python',
+          repo_dest ~ '/mongo-tools/add-subscribers.py']
+         + (fiveg.ues | list) }}
+    chdir: "{{ repo_dest }}"
+  register: open5gs_subscriber_insertion
+  changed_when: true
+
+- name: Confirm every selected Open5GS subscriber was inserted
+  ansible.builtin.command:
+    argv:
+      - "{{ repo_dest }}/venv/bin/python"
+      - "{{ repo_dest }}/mongo-tools/list-subscribers.py"
+    chdir: "{{ repo_dest }}"
+  register: open5gs_subscriber_listing
+  changed_when: false
+
+- name: Require every selected Open5GS subscriber in the database
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        item in ((open5gs_subscriber_listing.stdout | default(''))
+                 ~ (open5gs_subscriber_listing.stderr | default('')))
+    fail_msg: >-
+      Open5GS subscriber {{ item }} was not found after database reconciliation.
+      {{ open5gs_subscriber_listing.stdout | default('') }}
+      {{ open5gs_subscriber_listing.stderr | default('') }}
+  loop: "{{ fiveg.ues | list }}"
+  loop_control:
+    label: "{{ item }}"
 
 - name: Provision the optional Open5GS WebUI and administrator account
   ansible.builtin.include_tasks: webui.yml

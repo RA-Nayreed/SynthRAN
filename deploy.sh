@@ -357,7 +357,6 @@ if duplicates: raise SystemExit('R2Lab nodes may have only one experiment role: 
 if not ues: raise SystemExit('At least one UE is required')
 physical_ues = {'qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34'}
 if platform == 'r2lab' and not set(ues) <= physical_ues: raise SystemExit('Unsupported R2Lab physical UE(s): ' + ', '.join(sorted(set(ues) - physical_ues)))
-if ran == 'srsran' and platform == 'rfsim' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUEs')
 if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
 scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
 scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
@@ -398,10 +397,14 @@ fi
 deployment_section "Generating the energy-aware sensor trace"
 "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
 "$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" <<'PY'
-import os, socket, sys, yaml
+import copy, os, re, socket, sys, yaml
 from pathlib import Path
 c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
-if d['ran'].lower() == 'srsran' and len(ues) > 3: raise SystemExit('srsRAN RFSIM supports at most three srsUE devices')
+if len(ues) != len(set(ues)): raise SystemExit('UE names must be unique: ' + ', '.join(ues))
+# Preserve the upstream 100-port spacing while allowing every representable
+# pair. This is a TCP port-space guard, not the inherited three-UE policy.
+if d['ran'].lower() == 'srsran' and d['platform'] == 'rfsim' and len(ues) > 635:
+    raise SystemExit('srsRAN RFSIM exceeds the available TCP port range (maximum 635 UEs)')
 if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit('UERANSIM cannot be combined with an R2Lab physical radio')
 if d['platform'] == 'r2lab':
     r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
@@ -460,9 +463,66 @@ else:
 lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
 ue_map=[{'device':name,'index':i+1} for i,name in enumerate(ues)]
+profile_name=d.get('profile','default')
+profile_source=Path('deployment/group_vars/all', f'5g_profile_{profile_name}.yaml')
+if not profile_source.is_file():
+    raise SystemExit(f'5G profile not found: {profile_source}')
+profile=yaml.safe_load(profile_source.read_text())
+available_ues=profile.get('ues', {})
+overrides=d.get('ue_profiles', {})
+slice_names=[entry['name'] for entry in profile.get('slices', [])]
+if not slice_names:
+    raise SystemExit(f'5G profile {profile_name!r} defines no slices')
+selected_ues={}
+if not isinstance(overrides, dict):
+    raise SystemExit('deployment.ue_profiles must be a mapping when provided')
+for name in ues:
+    if name in available_ues:
+        ue_profile=copy.deepcopy(available_ues[name])
+    elif name in overrides:
+        ue_profile={}
+    elif d['platform'] == 'rfsim' and d['ran'].lower() == 'srsran':
+        match=re.fullmatch(r'uesim([0-9]+)', name)
+        if not match or int(match.group(1)) < 1:
+            raise SystemExit(
+                f"Software UE {name!r} is absent from {profile_source}; "
+                "define it there or use a name such as uesim04"
+            )
+        suffix_value=1120 + int(match.group(1))
+        if suffix_value > 9_999_999_999:
+            raise SystemExit(f'Cannot derive a 10-digit IMSI suffix for {name!r}')
+        ue_profile={'imsi_suffix': f'{suffix_value:010d}', 'slice': slice_names[0]}
+    elif d['platform'] == 'r2lab':
+        raise SystemExit(f'Physical UE {name!r} is absent from {profile_source}')
+    else:
+        raise SystemExit(
+            f"Software UE {name!r} is absent from {profile_source}; "
+            f"automatic UE generation is supported by the srsRAN RFSIM backend, not {d['ran']}"
+        )
+    ue_profile.update(copy.deepcopy(overrides.get(name, {})))
+    suffix=str(ue_profile.get('imsi_suffix', ''))
+    if not re.fullmatch(r'[0-9]{10}', suffix):
+        raise SystemExit(f'UE {name!r} must have a 10-digit imsi_suffix, got {suffix!r}')
+    if ue_profile.get('slice') not in slice_names:
+        raise SystemExit(
+            f"UE {name!r} references unknown slice {ue_profile.get('slice')!r}; "
+            f"available slices: {', '.join(slice_names)}"
+        )
+    ue_profile['imsi_suffix']=suffix
+    selected_ues[name]=ue_profile
+suffix_owners={}
+for name, ue_profile in selected_ues.items():
+    suffix_owners.setdefault(ue_profile['imsi_suffix'], []).append(name)
+duplicates={suffix:names for suffix,names in suffix_owners.items() if len(names) > 1}
+if duplicates:
+    raise SystemExit('Selected UEs have duplicate IMSI suffixes: ' + repr(duplicates))
+profile=copy.deepcopy(profile)
+profile['ues']=selected_ues
+effective_profile_path=Path(sys.argv[2], 'fiveg-profile.yml')
+effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
 reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
 destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
-variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':d.get('profile','default'),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
+variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi

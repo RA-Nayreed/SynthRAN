@@ -21,6 +21,8 @@ nfs:
   - nssf
   - pcf
   - udm
+  - smf
+  - upf
 
 nad_list:
   - n2network

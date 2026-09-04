@@ -92,21 +92,26 @@
       The gNB did not establish its logical N2/NGAP association with the AMF.
       {{ ngap_failure_diagnostics.stdout | default('No control-plane diagnostics were available.') }}
 
-- name: Start each UE in its own tmux window
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} --
-    /bin/sh -lc "
-      tmux list-windows -t ran | grep -q 'ue{{ item.index }}' \
-        && tmux kill-window -t ran:ue{{ item.index }} || true;
-      tmux new-window -t ran -n ue{{ item.index }} \
-        'bash -lc \"/srsran/config/start_ue.sh {{ item.index }} 2>&1 | tee /var/log/ue{{ item.index }}.log\"';
-      sleep 3
-    "
-  loop: "{{ ue_list }}"
-  loop_control:
-    label: "ue{{ item.index }}"
+- name: Start every configured UE in its own tmux window
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/sh
+      - -lc
+      - |
+        for i in {{ ue_indices | join(" ") }}; do
+          tmux kill-window -t "ran:ue${i}" 2>/dev/null || true
+          rm -f "/var/log/ue${i}.log"
+          tmux new-window -t ran -n "ue${i}" \
+            "bash -lc \"/srsran/config/start_ue.sh ${i} 2>&1 | tee /var/log/ue${i}.log\""
+          sleep {{ srsue_start_stagger_seconds | int }}
+        done
   changed_when: true
-  failed_when: false
 
 - name: Wait until each UE process is up
   ansible.builtin.command: >
@@ -125,10 +130,36 @@
   delay: 2
   until: ue_up_check.rc == 0
 
-- name: Warn if UE processes did not start
-  ansible.builtin.debug:
-    msg: "WARNING: not all UE processes started"
+- name: Collect startup logs when an srsUE process exits early
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/sh
+      - -lc
+      - |
+        for i in {{ ue_indices | join(' ') }}; do
+          echo "=== UE ${i} launcher ==="
+          tail -n 80 "/var/log/ue${i}.log" 2>/dev/null || true
+          echo "=== UE ${i} native log ==="
+          tail -n 160 "/tmp/ue${i}.log" 2>/dev/null || true
+        done
+  register: ue_start_failure_logs
+  changed_when: false
   when: ue_up_check.rc != 0
+
+- name: Require every srsUE process to remain running
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ue_up_check.rc == 0
+    fail_msg: |-
+      One or more srsUE processes exited before registration. Tunnel polling was not started.
+      {{ ue_start_failure_logs.stdout | default('No UE startup log was produced.') }}
 
 - name: Wait for all configured UE tunnels
   ansible.builtin.command: >
@@ -239,15 +270,32 @@
   loop_control:
     label: "{{ item.item.name }}"
 
+- name: Collect radio and core diagnostics when UE establishment fails
+  ansible.builtin.shell: |
+    echo '--- GNU Radio broker ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- tail -n 120 /var/log/gnu_multi_ue.log 2>&1 || true
+    echo '--- gNB ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- tail -n 200 /var/log/gnb.log 2>&1 || true
+    echo '--- AMF ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=amf --all-containers=true --tail=200 2>&1 || true
+    echo '--- SMF ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=smf --all-containers=true --tail=200 2>&1 || true
+  register: failed_ue_control_plane_logs
+  changed_when: false
+  when: failed_ue_retries | length > 0
+
 - name: Require every configured UE to establish a PDU-session tunnel
   ansible.builtin.assert:
     that:
       - failed_ue_retries | length == 0
-    fail_msg: >-
+    fail_msg: |-
       {{ failed_ue_retries | length }} UE(s) failed registration or PDU-session
-      establishment after one clean retry. Their IMSI, DNN, tunnel name, and
-      last 200 log lines are printed immediately above. Telemetry replay was
-      not started.
+      establishment after one clean retry. Telemetry replay was not started.
+      {% for result in failed_ue_logs.results | default([]) %}
+      === {{ result.item.name }} / IMSI {{ result.item.imsi }} / DNN {{ result.item.dnn }} / tun_srsue{{ result.item.index }} ===
+      {{ result.stdout | default('No UE log was produced.') }}
+      {% endfor %}
+      {{ failed_ue_control_plane_logs.stdout | default('No radio/core diagnostics were produced.') }}
 
 # --- Routes ---
 

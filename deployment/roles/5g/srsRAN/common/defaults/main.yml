@@ -11,7 +11,10 @@ srs_gnb_label_selectors:
 srs_ue_label_selectors:
   - "app=srsran"
   - "component=ue"
-ue_count: 3 # max is 3
+# Standalone role default. SynthRAN overrides this from deployment.ues.
+ue_count: 3
+# Stagger initial access attempts instead of making every UE hit PRACH at once.
+srsue_start_stagger_seconds: 3
 kubectl_bin: "/usr/bin/kubectl"
 
 yq_version: "v4.45.1"

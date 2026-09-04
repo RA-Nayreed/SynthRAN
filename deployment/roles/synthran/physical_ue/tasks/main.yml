@@ -1,7 +1,9 @@
 ---
 - name: Load the active physical UE profile
   ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    file: >-
+      {{ fiveg_profile_file |
+         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
     name: synthran_fiveg
 
 - name: Require the physical UE in the active 5G profile
