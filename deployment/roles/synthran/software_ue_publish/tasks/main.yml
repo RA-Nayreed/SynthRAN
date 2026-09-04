@@ -23,7 +23,9 @@
       - synthran_software_tunnels | length >= synthran_ue_map | length
     fail_msg: >-
       Found {{ synthran_software_tunnels | length }} UE tunnel(s), but the scenario
-      requires {{ synthran_ue_map | length }}: {{ synthran_discovery.stdout }}
+      requires {{ synthran_ue_map | length }}: {{ synthran_discovery.stdout }}.
+      This indicates that a tunnel disappeared after the RAN readiness gate;
+      inspect the per-UE logs printed during the srsRAN deployment stage.
 - name: Select only the tunnels assigned to modeled devices
   set_fact:
     synthran_assigned_tunnels: "{{ synthran_software_tunnels[:synthran_ue_map | length] }}"

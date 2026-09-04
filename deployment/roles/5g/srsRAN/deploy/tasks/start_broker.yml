@@ -53,11 +53,6 @@
     msg: "WARNING: gNB cell did not activate within timeout"
   when: gnb_cell_wait.rc != 0
 
-- name: Warn if gNB cell did not activate
-  ansible.builtin.debug:
-    msg: "WARNING: gNB cell did not activate within timeout"
-  when: gnb_cell_wait.rc != 0
-
 - name: Warn if GNU Radio did not start
   ansible.builtin.debug:
     msg: "WARNING: GNU Radio broker did not start"
@@ -70,7 +65,8 @@
       tmux list-windows -t ran | grep -q 'ue{{ item.index }}' \
         && tmux kill-window -t ran:ue{{ item.index }} || true;
       tmux new-window -t ran -n ue{{ item.index }} \
-        'bash -lc \"/srsran/config/start_ue.sh {{ item.index }} 2>&1 | tee /var/log/ue{{ item.index }}.log\"'
+        'bash -lc \"/srsran/config/start_ue.sh {{ item.index }} 2>&1 | tee /var/log/ue{{ item.index }}.log\"';
+      sleep 3
     "
   loop: "{{ ue_list }}"
   loop_control:
@@ -99,6 +95,96 @@
   ansible.builtin.debug:
     msg: "WARNING: not all UE processes started"
   when: ue_up_check.rc != 0
+
+- name: Wait for every configured UE tunnel
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
+  loop: "{{ ue_list }}"
+  loop_control:
+    label: "{{ item.name }} / tun_srsue{{ item.index }}"
+  register: initial_ue_tunnels
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: initial_ue_tunnels.rc == 0
+
+- name: Identify UEs that did not establish a tunnel
+  ansible.builtin.set_fact:
+    failed_ue_starts: >-
+      {{ initial_ue_tunnels.results
+         | selectattr('rc', 'ne', 0)
+         | map(attribute='item')
+         | list }}
+
+- name: Restart UEs that did not establish a tunnel
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    "pkill -f '^/opt/srsRAN_4G/build/srsue/src/srsue /tmp/ue_{{ item.index }}\\.conf' || true;
+     tmux kill-window -t ran:ue{{ item.index }} 2>/dev/null || true;
+     rm -f /var/log/ue{{ item.index }}.log;
+     tmux new-window -t ran -n ue{{ item.index }}
+       'bash -lc \"/srsran/config/start_ue.sh {{ item.index }} 2>&1 | tee /var/log/ue{{ item.index }}.log\"';
+     sleep 3"
+  loop: "{{ failed_ue_starts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+
+- name: Wait for retried UE tunnels
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
+  loop: "{{ failed_ue_starts }}"
+  loop_control:
+    label: "{{ item.name }} / tun_srsue{{ item.index }}"
+  register: retried_ue_tunnels
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: retried_ue_tunnels.rc == 0
+
+- name: Identify UEs still missing after retry
+  ansible.builtin.set_fact:
+    failed_ue_retries: >-
+      {{ retried_ue_tunnels.results | default([])
+         | selectattr('rc', 'ne', 0)
+         | map(attribute='item')
+         | list }}
+
+- name: Read logs for UEs still missing after retry
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    "echo '--- launcher log ---';
+     tail -n 80 /var/log/ue{{ item.index }}.log 2>/dev/null || true;
+     echo '--- native srsUE log ---';
+     tail -n 200 /tmp/ue{{ item.index }}.log 2>/dev/null || true"
+  loop: "{{ failed_ue_retries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: failed_ue_logs
+  changed_when: false
+
+- name: Report logs for UEs still missing after retry
+  ansible.builtin.debug:
+    msg: |-
+      {{ item.item.name }} (IMSI {{ item.item.imsi }}, DNN {{ item.item.dnn }}) did not establish tun_srsue{{ item.item.index }}.
+      {{ item.stdout | default('No UE log was produced.') }}
+  loop: "{{ failed_ue_logs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Require every configured UE to establish a PDU-session tunnel
+  ansible.builtin.assert:
+    that:
+      - failed_ue_retries | length == 0
+    fail_msg: >-
+      {{ failed_ue_retries | length }} UE(s) failed registration or PDU-session
+      establishment after one clean retry. Their IMSI, DNN, tunnel name, and
+      last 200 log lines are printed immediately above. Telemetry replay was
+      not started.
 
 # --- Routes ---
 
