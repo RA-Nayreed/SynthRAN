@@ -48,15 +48,49 @@
   delay: 5
   until: gnb_cell_wait.rc == 0
 
-- name: Warn if gNB cell did not activate
-  ansible.builtin.debug:
-    msg: "WARNING: gNB cell did not activate within timeout"
-  when: gnb_cell_wait.rc != 0
+- name: Require the gNB cell to activate
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - gnb_cell_wait.rc == 0
+    fail_msg: "The gNB cell did not activate within the five-minute timeout."
 
-- name: Warn if GNU Radio did not start
-  ansible.builtin.debug:
-    msg: "WARNING: GNU Radio broker did not start"
-  when: gnu_log_wait.rc != 0
+- name: Require the GNU Radio broker to start
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - gnu_log_wait.rc == 0
+    fail_msg: "The RFSIM GNU Radio broker did not become ready."
+
+- name: Wait for the gNB NGAP association with the AMF
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- /bin/sh -lc
+    "grep -Eq 'N2: Connection to AMF .* (completed|was established)|AMF connection established|Connected to AMF' /var/log/gnb.log"
+  register: gnb_amf_wait
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: gnb_amf_wait.rc == 0
+
+- name: Collect control-plane diagnostics when NGAP is unavailable
+  ansible.builtin.shell: |
+    echo '--- gNB log ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- tail -n 120 /var/log/gnb.log 2>&1 || true
+    echo '--- AMF log ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=amf --all-containers=true --tail=120 2>&1 || true
+  register: ngap_failure_diagnostics
+  changed_when: false
+  when: gnb_amf_wait.rc != 0
+
+- name: Require the gNB to establish NGAP with the AMF
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - gnb_amf_wait.rc == 0
+    fail_msg: |-
+      The gNB did not establish its logical N2/NGAP association with the AMF.
+      {{ ngap_failure_diagnostics.stdout | default('No control-plane diagnostics were available.') }}
 
 - name: Start each UE in its own tmux window
   ansible.builtin.command: >
@@ -96,7 +130,24 @@
     msg: "WARNING: not all UE processes started"
   when: ue_up_check.rc != 0
 
-- name: Wait for every configured UE tunnel
+- name: Wait for all configured UE tunnels
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    'missing="";
+     for i in {{ ue_indices | join(" ") }}; do
+       if ! ip -4 -o addr show dev "tun_srsue${i}" | grep -q "inet "; then
+         missing="${missing} tun_srsue${i}";
+       fi;
+     done;
+     if [ -n "$missing" ]; then echo "Missing:${missing}"; exit 1; fi'
+  register: all_ue_tunnels_wait
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: all_ue_tunnels_wait.rc == 0
+
+- name: Inspect each configured UE tunnel after the initial wait
   ansible.builtin.command: >
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
     "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
@@ -106,9 +157,6 @@
   register: initial_ue_tunnels
   changed_when: false
   failed_when: false
-  retries: 30
-  delay: 2
-  until: initial_ue_tunnels.rc == 0
 
 - name: Identify UEs that did not establish a tunnel
   ansible.builtin.set_fact:
@@ -132,7 +180,25 @@
     label: "{{ item.name }}"
   changed_when: true
 
-- name: Wait for retried UE tunnels
+- name: Wait for all restarted UE tunnels
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
+    'missing="";
+     for i in {{ failed_ue_starts | map(attribute="index") | join(" ") }}; do
+       if ! ip -4 -o addr show dev "tun_srsue${i}" | grep -q "inet "; then
+         missing="${missing} tun_srsue${i}";
+       fi;
+     done;
+     if [ -n "$missing" ]; then echo "Missing:${missing}"; exit 1; fi'
+  register: restarted_ue_tunnels_wait
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: restarted_ue_tunnels_wait.rc == 0
+  when: failed_ue_starts | length > 0
+
+- name: Inspect each restarted UE tunnel
   ansible.builtin.command: >
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
     "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
@@ -142,9 +208,6 @@
   register: retried_ue_tunnels
   changed_when: false
   failed_when: false
-  retries: 30
-  delay: 2
-  until: retried_ue_tunnels.rc == 0
 
 - name: Identify UEs still missing after retry
   ansible.builtin.set_fact:

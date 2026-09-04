@@ -1,11 +1,7 @@
 ---
-- name: Define GRE bridges for the Open5GS N2 and N3 paths
+- name: Define the shared Open5GS and srsRAN access transport bridge
   ansible.builtin.set_fact:
     gre_bridges:
-      - name: n2br
-        local_ip_core: 10.10.2.254/24
-        local_ip_ran:  10.10.2.253/24
-        gre_key: 2
       - name: n3br
         local_ip_core: 10.10.3.254/24
         local_ip_ran:  10.10.3.253/24
@@ -45,6 +41,29 @@
   register: legacy_n4_gre_cleanup
   changed_when: legacy_n4_gre_cleanup.stdout | trim == 'removed'
   when: core != 'free5gc'
+
+- name: Check for the unsupported Open5GS N2 GRE port
+  ansible.builtin.command:
+    argv:
+      - ovs-vsctl
+      - port-to-br
+      - gre-n2br
+  register: legacy_n2_gre_check
+  changed_when: false
+  failed_when: false
+  when: core == 'open5gs'
+
+- name: Remove the unsupported Open5GS N2 GRE port
+  ansible.builtin.command:
+    argv:
+      - ovs-vsctl
+      - --if-exists
+      - del-port
+      - n2br
+      - gre-n2br
+  when:
+    - core == 'open5gs'
+    - legacy_n2_gre_check.rc == 0
 
 - name: Configure the required inter-host 5G transport bridges
   ansible.builtin.include_tasks: gre_loop.yml

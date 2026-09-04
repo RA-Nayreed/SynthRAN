@@ -33,10 +33,12 @@ srsran_network_map:
         - "10.100.50.253" # "10.100.50.237"
   open5gs:
     n2:
-      amf_ip: "10.10.2.200"
-      gnb_ip: "10.10.2.234"
+      # The upstream Open5GS+srsRAN integration carries logical N2/NGAP over
+      # the shared n3network attachment.
+      amf_ip: "10.10.3.200"
+      gnb_ip: "10.10.3.234"
       amf_port: 38412
-      gnb_bind_ip: "10.10.2.234"
+      gnb_bind_ip: "10.10.3.234"
     n3:
       gnb_ip: "10.10.3.234"
       ue_ips:
@@ -65,8 +67,3 @@ n3networkName_map:
   open5gs: "n3network"
   oai: "oai-5g-basic-n3"
 n3networkName: "{{ n3networkName_map[core] }}"
-
-# Open5GS uses a distinct N2 attachment for NGAP instead of sharing N3.
-n2networkName_map:
-  open5gs: "n2network"
-n2networkName: "{{ n2networkName_map.get(core, '') }}"

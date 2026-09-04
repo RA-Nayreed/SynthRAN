@@ -7,31 +7,6 @@
     update: yes
     force: yes
 
-- name: Attach the AMF to the dedicated N2 network
-  ansible.builtin.replace:
-    path: "{{ open5gs_root }}/common/amf/amf-deployment.yaml"
-    regexp: '\{ "name": "n3network", "interface": "n3", "ips": \[ "10\.10\.3\.200/24" \] \}'
-    replace: '{ "name": "n2network", "interface": "n2", "ips": [ "10.10.2.200/24" ] }'
-
-- name: Read the patched AMF deployment manifest
-  ansible.builtin.slurp:
-    src: "{{ open5gs_root }}/common/amf/amf-deployment.yaml"
-  register: open5gs_amf_deployment
-
-- name: Verify the AMF manifest uses only the dedicated N2 attachment
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - >-
-        '"name": "n2network", "interface": "n2", "ips": [ "10.10.2.200/24" ]'
-        in (open5gs_amf_deployment.content | b64decode)
-      - >-
-        '"name": "n3network"'
-        not in (open5gs_amf_deployment.content | b64decode)
-    fail_msg: >-
-      The Open5GS AMF manifest was not converted from the inherited N3
-      attachment to the dedicated N2 attachment.
-
 # Then apply the 5G profile settings on the repo
 
 - name: Load active 5G profile

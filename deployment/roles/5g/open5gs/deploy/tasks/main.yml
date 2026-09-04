@@ -232,27 +232,61 @@
 - name: Apply Open5GS NFs with Kustomize
   ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/{{ deployment_option }}" -n {{ open5gs_ns }}
 
-- name: Wait for Open5GS Core NFs pods Ready
-  kubernetes.core.k8s_info:
-    kind: Pod
-    namespace: "{{ open5gs_ns }}"
-    label_selectors:
-      - "nf={{ item }}"
-  register: nf_pod
-  until: >
-    nf_pod.resources | length > 0 and
-    (nf_pod.resources[0].status.containerStatuses is defined) and
-    (nf_pod.resources[0].status.containerStatuses[0].ready | default(false))
-  loop: "{{ nfs }}"
+- name: Wait for all Open5GS core NFs to be Ready
+  ansible.builtin.shell: |
+    missing=""
+    for nf in {{ nfs | join(' ') }}; do
+      ready=$(
+        kubectl get pods -n {{ open5gs_ns }} -l "nf=${nf}" \
+          -o jsonpath='{range .items[*]}{range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}{end}' \
+          2>/dev/null || true
+      )
+      if ! printf '%s\n' "$ready" | grep -qx True; then
+        missing="${missing} ${nf}"
+      fi
+    done
+    if [ -n "$missing" ]; then
+      echo "Not Ready:${missing}"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: open5gs_nf_wait
+  changed_when: false
+  failed_when: false
   retries: 40
   delay: 5
+  until: open5gs_nf_wait.rc == 0
 
-- name: Verify the AMF Multus N2 interface and NGAP address
+- name: Collect Open5GS pod diagnostics after a readiness timeout
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pods
+      - -n
+      - "{{ open5gs_ns }}"
+      - -o
+      - wide
+  register: open5gs_nf_diagnostics
+  changed_when: false
+  when: open5gs_nf_wait.rc != 0
+
+- name: Require all Open5GS core NFs to be Ready
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - open5gs_nf_wait.rc == 0
+    fail_msg: |-
+      Open5GS core readiness timed out. {{ open5gs_nf_wait.stdout | default('') }}
+      {{ open5gs_nf_diagnostics.stdout | default('No pod diagnostics were available.') }}
+
+- name: Verify the AMF NGAP endpoint on the shared srsRAN compatibility network
   ansible.builtin.shell: |
     AMF_POD=$(kubectl get pods -n {{ open5gs_ns }} -l nf=amf -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n2 | grep "inet 10.10.2.200"
-  register: amf_n2_check
-  until: amf_n2_check.rc == 0
+    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n3 | grep "inet 10.10.3.200"
+  register: amf_ngap_check
+  until: amf_ngap_check.rc == 0
   retries: 15
   delay: 5
   when: core == "open5gs"

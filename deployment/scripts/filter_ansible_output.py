@@ -19,6 +19,7 @@ def emit(line: str = "") -> None:
 def main() -> None:
     hiding_result = False
     hiding_error_detail = False
+    retry_reported = False
     for raw in sys.stdin:
         line = raw.rstrip("\r\n")
 
@@ -26,6 +27,7 @@ def main() -> None:
         if match:
             hiding_result = False
             hiding_error_detail = False
+            retry_reported = False
             emit(f"\n== {match.group(1)} ==")
             continue
 
@@ -33,13 +35,16 @@ def main() -> None:
         if match:
             hiding_result = False
             hiding_error_detail = False
+            retry_reported = False
             emit(f"  -> {match.group(1)}")
             continue
 
         if line.startswith("FAILED - RETRYING:"):
             hiding_result = False
             hiding_error_detail = False
-            emit("     retry:" + line.removeprefix("FAILED - RETRYING:"))
+            if not retry_reported:
+                emit("     waiting for readiness...")
+                retry_reported = True
             continue
 
         # Newer Ansible versions emit an [ERROR] diagnostic even when a task's

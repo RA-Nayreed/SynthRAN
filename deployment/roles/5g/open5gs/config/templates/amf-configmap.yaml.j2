@@ -64,10 +64,11 @@ data:
   wrapper.sh: |
     #!/bin/bash
 
-    # Wait for Multus to assign the NGAP endpoint to the dedicated N2 interface.
-    # This prevents the "Cannot assign requested address" error during SCTP bind
-    echo "Waiting for interface n2 to be ready with IP 10.10.2.200..."
-    while ! ip addr show dev n2 | grep -q "10.10.2.200"; do
+    # The upstream Open5GS+srsRAN integration carries logical N2/NGAP and N3
+    # over its shared n3network attachment. Wait for that compatibility
+    # interface before binding SCTP.
+    echo "Waiting for shared NGAP interface n3 with IP 10.10.3.200..."
+    while ! ip addr show dev n3 | grep -q "10.10.3.200"; do
       sleep 2
     done
 
