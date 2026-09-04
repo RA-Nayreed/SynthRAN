@@ -4,8 +4,19 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Wait for SSH after POS boot completion
-      wait_for_connection: {connect_timeout: 10, sleep: 5, timeout: 180}
+    - name: Probe SSH on every selected SOP node (up to 180 seconds)
+      ansible.builtin.wait_for_connection:
+        connect_timeout: 5
+        sleep: 1
+        timeout: 10
+      register: synthran_ssh_probe
+      until: synthran_ssh_probe is succeeded
+      retries: 12
+      delay: 5
+
+    - name: Confirm SSH access to the allocated SOP node
+      ansible.builtin.debug:
+        msg: "SSH is ready on {{ inventory_hostname }}"
     - name: Gather host facts
       ansible.builtin.setup:
     - name: Discover safe containerd storage

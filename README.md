@@ -37,6 +37,11 @@ evidence also requires the deliberate scenario setting
 `deployment.allow_destructive_node_reset: true`; otherwise the Kubernetes/CNI/
 containerd reset is refused before any destructive task runs.
 
+Keeping an existing SOP calendar reservation does not blindly assume that its
+nodes are still allocated. SynthRAN verifies each POS allocation first, reuses
+already-running nodes without a POS reset, and images/resets only nodes that it
+must newly allocate.
+
 After one healthy deployment, run additional immutable traces without rebuilding
 the cluster or 5G stack:
 
