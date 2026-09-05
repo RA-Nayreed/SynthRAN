@@ -3,6 +3,8 @@
   hosts: core_node
   gather_facts: false
   any_errors_fatal: true
+  vars:
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
   tasks:
     - name: Read the identity attested by the failed run
       kubernetes.core.k8s_info:
@@ -12,24 +14,43 @@
         namespace: "{{ synthran_resume_source_contract.deployment.topology.namespace }}"
       register: synthran_resume_live_identity
 
-    - name: Require the failed run's exact deployment to remain attested
+    - name: Require a readable live deployment identity
       ansible.builtin.assert:
         quiet: true
         that:
           - synthran_resume_live_identity.resources | length == 1
           - synthran_resume_live_identity.resources[0].data['manifest.json'] is defined
-          - >-
-            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).schema_version
-            == synthran_resume_source_contract.schema_version
-          - >-
-            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).deployment_hash
-            == synthran_resume_source_contract.deployment_hash
-          - >-
-            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).deployment
-            == synthran_resume_source_contract.deployment
         fail_msg: >-
-          --resume refused because the failed run is no longer the exact
-          deployment attested in the live Kubernetes cluster.
+          --resume refused because the failed run's deployment identity is no longer
+          present in the live Kubernetes cluster.
+
+    - name: Decode the live deployment identity
+      ansible.builtin.set_fact:
+        synthran_resume_live_contract: >-
+          {{ synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json }}
+
+    - name: Require the failed or already-normalized deployment to remain attested
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_resume_live_contract.schema_version == synthran_resume_source_contract.schema_version
+          - >-
+            (
+              synthran_resume_live_contract.deployment_hash
+              == synthran_resume_source_contract.deployment_hash
+              and synthran_resume_live_contract.deployment
+              == synthran_resume_source_contract.deployment
+            )
+            or
+            (
+              synthran_resume_live_contract.deployment_hash
+              == synthran_deployment_contract.deployment_hash
+              and synthran_resume_live_contract.deployment
+              == synthran_deployment_contract.deployment
+            )
+        fail_msg: >-
+          --resume refused because the live cluster matches neither the failed run's
+          attested deployment nor the narrowly corrected deployment candidate.
 
     - name: Read the live Kubernetes nodes before resuming
       kubernetes.core.k8s_info:

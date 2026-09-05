@@ -3,6 +3,8 @@
   hosts: core_node
   gather_facts: false
   any_errors_fatal: true
+  vars:
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
   tasks:
     - name: Store the exact deployment contract in Kubernetes
       kubernetes.core.k8s:
@@ -37,6 +39,8 @@
 
     - name: Retain cluster identity evidence with the run
       delegate_to: localhost
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
       ansible.builtin.copy:
         content: >-
           {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
