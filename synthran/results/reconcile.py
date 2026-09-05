@@ -27,7 +27,40 @@ def _configured_devices(expected: str | Path, scenario: str | Path | None) -> li
     return list(dict.fromkeys(str(device) for device in data.get("devices", {})))
 
 
-def reconcile(expected, publisher, broker, output="summary.json", scenario=None) -> dict:
+def _deployment_evidence(expected: str | Path) -> dict:
+    run = Path(expected).parent.parent
+    identity_path = run / "deployment-fingerprint.json"
+    evidence_path = run / "live-deployment-evidence.json"
+    try:
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"verified": False, "reason": "deployment identity evidence is missing or unreadable"}
+    matches = identity.get("deployment_hash") == evidence.get("deployment_hash")
+    cluster_verified = evidence.get("cluster_identity_verified") is True
+    deployment = identity.get("deployment", {})
+    bindings = evidence.get("bindings", [])
+    binding_fields = ("device", "index", "imsi", "slice", "dnn")
+    binding_verified = (
+        [tuple(item.get(field) for field in binding_fields) for item in bindings]
+        == [tuple(item.get(field) for field in binding_fields) for item in deployment.get("ues", [])]
+        if deployment.get("platform") == "rfsim"
+        else True
+    )
+    status_valid = identity.get("status") in {"active", "reused"}
+    verified = matches and cluster_verified and binding_verified and status_valid
+    return {
+        "verified": verified,
+        "status": identity.get("status"),
+        "deployment_hash": identity.get("deployment_hash"),
+        "scenario_hash": identity.get("scenario_hash"),
+        "cluster_identity_verified": cluster_verified,
+        "bindings": bindings,
+        "reason": None if verified else "live evidence does not completely match the deployment identity",
+    }
+
+
+def reconcile(expected, publisher, broker, output="summary.json", scenario=None, require_deployment_identity=False) -> dict:
     expected_rows = _read(expected)
     publisher_rows = _read(publisher)
     broker_rows = _read(broker)
@@ -61,6 +94,7 @@ def reconcile(expected, publisher, broker, output="summary.json", scenario=None)
         ambient.get("below_sensitivity_or_unheard", 0)
     )
     summary = {
+        "deployment_identity": _deployment_evidence(expected),
         "ambient_iot": ambient,
         "five_g": {
             "input": len(expected_ids),
@@ -91,6 +125,11 @@ def reconcile(expected, publisher, broker, output="summary.json", scenario=None)
             ),
         },
     }
+    if require_deployment_identity and not summary["deployment_identity"]["verified"]:
+        raise ValueError(
+            "result reconciliation refused: "
+            + summary["deployment_identity"].get("reason", "deployment identity was not proved")
+        )
     if output is not None:
         Path(output).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary

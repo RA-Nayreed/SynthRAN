@@ -1,0 +1,45 @@
+---
+- name: Attest the deployed 5G identity in the live cluster
+  hosts: core_node
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Store the exact deployment contract in Kubernetes
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: synthran-deployment-identity
+            namespace: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
+            labels:
+              app.kubernetes.io/name: synthran
+              app.kubernetes.io/component: deployment-identity
+          data:
+            manifest.json: "{{ lookup('ansible.builtin.file', synthran_deployment_contract_file) }}"
+
+    - name: Read back the live deployment contract
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: synthran-deployment-identity
+        namespace: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
+      register: synthran_identity_readback
+
+    - name: Require the live identity to match the deployed contract
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_identity_readback.resources | length == 1
+          - (synthran_identity_readback.resources[0].data['manifest.json'] | from_json).deployment_hash == synthran_deployment_contract.deployment_hash
+        fail_msg: The deployed 5G identity could not be attested in Kubernetes.
+
+    - name: Retain cluster identity evidence with the run
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: >-
+          {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
+               'cluster_identity_verified': true,
+               'bindings': []} | to_nice_json }}
+        dest: "{{ run_dir }}/live-deployment-evidence.json"

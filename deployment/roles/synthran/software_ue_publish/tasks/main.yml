@@ -10,25 +10,32 @@
     src: discover_ue_tunnels.py
     dest: /tmp/synthran-discover-ue-tunnels.py
     mode: '0755'
-- name: Discover software UE network namespaces and tunnels
-  command: python3 /tmp/synthran-discover-ue-tunnels.py
+- name: Stage the expected deployment identity on the RAN host
+  copy:
+    content: "{{ lookup('ansible.builtin.file', synthran_deployment_contract_file) }}\n"
+    dest: /tmp/synthran-expected-deployment.json
+    mode: '0600'
+- name: Prove the exact software UE identities and tunnels
+  command: >-
+    python3 /tmp/synthran-discover-ue-tunnels.py
+    --expected /tmp/synthran-expected-deployment.json
   register: synthran_discovery
   changed_when: false
-- name: Decode discovered UE tunnels
+- name: Decode proved UE tunnel bindings
   set_fact:
     synthran_software_tunnels: "{{ synthran_discovery.stdout | from_json }}"
-- name: Require one real tunnel per configured UE
-  assert:
-    that:
-      - synthran_software_tunnels | length >= synthran_ue_map | length
-    fail_msg: >-
-      Found {{ synthran_software_tunnels | length }} UE tunnel(s), but the scenario
-      requires {{ synthran_ue_map | length }}: {{ synthran_discovery.stdout }}.
-      This indicates that a tunnel disappeared after the RAN readiness gate;
-      inspect the per-UE logs printed during the srsRAN deployment stage.
-- name: Select the tunnels assigned to configured UEs
+- name: Use the exact proved tunnel order
   set_fact:
-    synthran_assigned_tunnels: "{{ synthran_software_tunnels[:synthran_ue_map | length] }}"
+    synthran_assigned_tunnels: "{{ synthran_software_tunnels }}"
+- name: Retain live deployment evidence with the run
+  delegate_to: localhost
+  become: false
+  copy:
+    content: >-
+      {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
+           'cluster_identity_verified': true,
+           'bindings': synthran_assigned_tunnels} | to_nice_json }}
+    dest: "{{ run_dir }}/live-deployment-evidence.json"
 - name: Build unique UE pod list
   set_fact:
     synthran_software_pods: "{{ synthran_assigned_tunnels | unique(attribute='pod') | list }}"

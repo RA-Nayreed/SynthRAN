@@ -107,13 +107,54 @@ def automatic_nodes(nodes, candidates):
     broker = nodes["broker"] if nodes["broker"] in candidates else core
     return {"core": core, "ran": ran, "broker": broker}
 
+def write_resolved_scenario(run_dir, scenario):
+    output = Path(run_dir, "resolved-scenario.yml")
+    temporary = output.with_name(output.name + ".tmp")
+    temporary.write_text(yaml.safe_dump(scenario, sort_keys=False))
+    os.replace(temporary, output)
+
+def classify_allocation(node, allocation):
+    output = allocation.stdout
+    output_lower = output.lower()
+    if "a command for allocation" in output_lower:
+        raise SystemExit(
+            f"POS is still processing an allocation command for {node}. "
+            "Wait for that command to finish, then rerun SynthRAN."
+        )
+    # Check semantic state before the return code: POS may report an
+    # idempotent already-active allocation with either success or failure.
+    if "already allocated" in output_lower:
+        return "already-active"
+    if allocation.returncode == 0:
+        return "new"
+    raise SystemExit(output.strip())
+
+def prepare_nodes(nodes, image):
+    allocation_states = {}
+    for node in nodes:
+        print(f"Allocating {node} for this deployment", flush=True)
+        allocation = run_visible("pos", "allocations", "allocate", node, check=False)
+        allocation_states[node] = classify_allocation(node, allocation)
+        if allocation_states[node] == "already-active":
+            print(f"Reusing the active allocation for {node}", flush=True)
+
+    for node in nodes:
+        print(f"Selecting image {image} on {node}", flush=True)
+        run_visible("pos", "nodes", "image", node, image)
+        print(f"Resetting {node}; waiting for POS to report boot completion", flush=True)
+        run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
+        print(f"{node} finished its POS reset", flush=True)
+    return allocation_states
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config"); parser.add_argument("run_dir")
     args = parser.parse_args(); path = Path(args.config)
     scenario = yaml.safe_load(path.read_text()); deployment = scenario["deployment"]
     reservation = deployment.get("reservation", {})
-    if not reservation.get("enabled", True): return
+    if not reservation.get("enabled", True):
+        write_resolved_scenario(args.run_dir, scenario)
+        return
     duration = int(reservation.get("duration_minutes", 120)); image = reservation.get("image", "ubuntu-jammy")
     owner = os.environ.get("USER") or run("id", "-un").stdout.strip()
     now = dt.datetime.now().astimezone(); end = now + dt.timedelta(minutes=duration)
@@ -130,7 +171,6 @@ def main():
         and requested.intersection(event["nodes"])
     ]
     replace_events = []
-    reuse_reservation = False
 
     if related:
         print("\nActive reservation owned by you:")
@@ -144,86 +184,58 @@ def main():
                 nodes = automatic_nodes(nodes, reserved_nodes)
                 print("Using the nodes covered by the active reservation:")
                 print(f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}")
-            requested = set(nodes.values())
-            reuse_reservation = True
+            selected = list(dict.fromkeys(nodes.values()))
+            print(f"Keeping the active SOP calendar reservation for {', '.join(selected)}")
+            allocation_states = prepare_nodes(selected, image)
+            deployment["nodes"] = nodes
+            write_resolved_scenario(args.run_dir, scenario)
+            Path(args.run_dir, "pos-selection.json").write_text(json.dumps({
+                "nodes": nodes, "duration_minutes": duration, "reused": True,
+                "allocation_states": allocation_states, "reset_nodes": selected,
+            }, indent=2) + "\n")
+            return
         if action == 1:
             replace_events = list({str(event["id"]): event for event in related + managed_events}.values())
 
-    if reuse_reservation:
-        selected = list(dict.fromkeys(nodes.values()))
-        print(f"Keeping the active SOP calendar reservation for {', '.join(selected)}")
-    else:
-        replace_ids = [event["id"] for event in replace_events]
-        candidates = available(events, now, end, replace_ids)
-        unavailable = sorted(requested - set(candidates))
-        if unavailable:
-            print("\nUnavailable SOP nodes: " + ", ".join(unavailable))
-            action = choice("How should SynthRAN continue?", ["Automatically use available SOP nodes", "Choose replacement nodes manually", "Keep selected nodes and reserve the earliest available time", "Abort deployment"])
-            if action == 4: raise SystemExit("Deployment aborted")
-            if action == 1: nodes = automatic_nodes(nodes, candidates)
-            elif action == 2: nodes = manual_nodes(nodes)
-            else:
-                result = run("pos", "calendar", "create", "--asap", "--duration", str(duration), *sorted(requested))
-                print(result.stdout.strip()); raise SystemExit("Future reservation created; rerun deploy.sh when it becomes active")
-        selected = list(dict.fromkeys(nodes.values()))
-        deleted = []
-        try:
-            for event in replace_events:
-                run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
-                deleted.append(event)
-            result = run(
-                "pos", "calendar", "create", "--start", "now",
-                "--duration", str(duration), *selected,
-            )
-        except subprocess.CalledProcessError as error:
-            for event in deleted:
-                restore_event(event)
-            detail = (error.stderr or error.stdout or str(error)).strip()
-            raise SystemExit(
-                "Unable to replace the SOP calendar reservation; previous remaining "
-                f"coverage was restored where possible:\n{detail}"
-            )
-        reservation_id = result.stdout.strip()
-        save_managed_state(reservation_id, selected, now, end)
-        print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
-
-    # Calendar ownership does not imply that POS has allocated and booted a
-    # node. Always ask POS to allocate each selected node. POS reports an
-    # already-active allocation without reprovisioning it, while a successful
-    # new allocation is imaged and reset below.
-    newly_allocated = []
-    for node in selected:
-        print(f"Verifying the POS allocation for {node}", flush=True)
-        allocation = run_visible("pos", "allocations", "allocate", node, check=False)
-        allocation_text = allocation.stdout
-        allocation_lower = allocation_text.lower()
-        already_active = "already allocated" in allocation_lower
-        allocation_in_progress = "a command for allocation" in allocation_lower
-        if allocation_in_progress:
-            raise SystemExit(
-                f"POS is still processing an allocation command for {node}. "
-                "Wait for that command to finish, then rerun SynthRAN."
-            )
-        if allocation.returncode and not already_active:
-            raise SystemExit(allocation_text.strip())
-        if allocation.returncode == 0:
-            newly_allocated.append(node)
-        elif already_active:
-            print(f"Reusing the active allocation for {node}", flush=True)
-    for node in newly_allocated:
-        print(f"Selecting image {image} on {node}", flush=True)
-        run_visible("pos", "nodes", "image", node, image)
-        print(f"Resetting {node}; waiting for POS to report boot completion", flush=True)
-        run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
-        print(f"{node} finished its POS reset", flush=True)
+    replace_ids = [event["id"] for event in replace_events]
+    candidates = available(events, now, end, replace_ids)
+    unavailable = sorted(requested - set(candidates))
+    if unavailable:
+        print("\nUnavailable SOP nodes: " + ", ".join(unavailable))
+        action = choice("How should SynthRAN continue?", ["Automatically use available SOP nodes", "Choose replacement nodes manually", "Keep selected nodes and reserve the earliest available time", "Abort deployment"])
+        if action == 4: raise SystemExit("Deployment aborted")
+        if action == 1: nodes = automatic_nodes(nodes, candidates)
+        elif action == 2: nodes = manual_nodes(nodes)
+        else:
+            result = run("pos", "calendar", "create", "--asap", "--duration", str(duration), *sorted(requested))
+            print(result.stdout.strip()); raise SystemExit("Future reservation created; rerun deploy.sh when it becomes active")
+    selected = list(dict.fromkeys(nodes.values()))
+    deleted = []
+    try:
+        for event in replace_events:
+            run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
+            deleted.append(event)
+        result = run(
+            "pos", "calendar", "create", "--start", "now",
+            "--duration", str(duration), *selected,
+        )
+    except subprocess.CalledProcessError as error:
+        for event in deleted:
+            restore_event(event)
+        detail = (error.stderr or error.stdout or str(error)).strip()
+        raise SystemExit(
+            "Unable to replace the SOP calendar reservation; previous remaining "
+            f"coverage was restored where possible:\n{detail}"
+        )
+    reservation_id = result.stdout.strip()
+    save_managed_state(reservation_id, selected, now, end)
+    print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
+    allocation_states = prepare_nodes(selected, image)
     deployment["nodes"] = nodes
-    path.write_text(yaml.safe_dump(scenario, sort_keys=False))
+    write_resolved_scenario(args.run_dir, scenario)
     Path(args.run_dir, "pos-selection.json").write_text(json.dumps({
-        "nodes": nodes,
-        "duration_minutes": duration,
-        "reused": reuse_reservation,
-        "reused_reservation": reuse_reservation,
-        "newly_allocated_nodes": newly_allocated,
+        "nodes": nodes, "duration_minutes": duration, "reused": False,
+        "allocation_states": allocation_states, "reset_nodes": selected,
     }, indent=2) + "\n")
 
 if __name__ == "__main__": main()

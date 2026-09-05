@@ -23,6 +23,8 @@ For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly to
 source of truth: known devices use the selected 5G profile, while additional
 names such as `uesim04` receive a deterministic IMSI and the profile's first
 slice. A scenario can override either value under `deployment.ue_profiles`.
+Missing model-device entries are materialized from the declared device templates
+in UE order, and the explicit result is retained in `resolved-scenario.yml`.
 A preparation-only run is available without deploying infrastructure:
 
 ```sh
@@ -37,10 +39,9 @@ evidence also requires the deliberate scenario setting
 `deployment.allow_destructive_node_reset: true`; otherwise the Kubernetes/CNI/
 containerd reset is refused before any destructive task runs.
 
-Keeping an existing SOP calendar reservation does not blindly assume that its
-nodes are still allocated. SynthRAN verifies each POS allocation first, reuses
-already-running nodes without a POS reset, and images/resets only nodes that it
-must newly allocate.
+A full deployment allocates the selected SOP nodes, selects the configured POS
+image, and resets them into a known state even when an existing calendar event
+is retained. Use `--workload-only` for repeated measurements without a reset.
 
 After one healthy deployment, run additional immutable traces without rebuilding
 the cluster or 5G stack:
@@ -49,8 +50,19 @@ the cluster or 5G stack:
 ./deploy.sh --config scenarios/rfsim-sidecars-3ue.yml --workload-only
 ```
 
-The workload-only path revalidates all configured UE tunnels, resets the MQTT
-receipt artifact, replays the new trace, and performs normal reconciliation.
+SynthRAN never rewrites the supplied scenario. Every run retains an immutable
+`resolved-scenario.yml` containing reservation-time node choices and materialized
+device settings.
+
+After a successful full run, SynthRAN stores a versioned deployment identity in
+both `.synthran/deployment-fingerprint.json` and the live Kubernetes cluster.
+The identity covers the core, RAN, platform, node mapping, effective profile,
+PLMN, slices, UE IMSIs, expected tunnels, and the asserted topology contract.
+The workload-only path fails closed unless the requested identity matches both
+records and the core/RAN nodes are Ready. Software UE replay additionally proves
+each declared pod/interface, slice address, and—for srsUE—its generated IMSI and
+DNN configuration, while rejecting unexpected stale UE tunnels. The evidence is
+retained as `live-deployment-evidence.json` and included in `summary.json`.
 Full deployment replaces only the selected Open5GS subscriber records, which
 resets stale authentication state retained by MongoDB across repeat runs.
 Open5GS WebUI and its administrator account are disabled by default because the

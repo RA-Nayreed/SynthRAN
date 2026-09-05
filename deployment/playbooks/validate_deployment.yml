@@ -1,0 +1,76 @@
+---
+- name: Prove the reusable 5G deployment identity
+  hosts: core_node
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the identity attested by the full deployment
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: synthran-deployment-identity
+        namespace: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
+      register: synthran_live_identity
+
+    - name: Require an attested live identity
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_live_identity.resources | length == 1
+          - synthran_live_identity.resources[0].data['manifest.json'] is defined
+        fail_msg: >-
+          --workload-only requires a live identity created by a successful full
+          SynthRAN deployment. Run the same scenario without --workload-only.
+
+    - name: Decode the attested live identity
+      ansible.builtin.set_fact:
+        synthran_live_contract: "{{ synthran_live_identity.resources[0].data['manifest.json'] | from_json }}"
+
+    - name: Require the exact requested deployment to be live
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_live_contract.schema_version == synthran_deployment_contract.schema_version
+          - synthran_live_contract.deployment_hash == synthran_deployment_contract.deployment_hash
+          - synthran_live_contract.deployment == synthran_deployment_contract.deployment
+        fail_msg: >-
+          --workload-only refused because the identity in Kubernetes does not
+          match the requested core, RAN, nodes, profile, PLMN, slices, UEs, or topology.
+
+    - name: Read the live Kubernetes nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: synthran_live_nodes
+
+    - name: Require the attested core and RAN nodes to be present
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - core_node_name in (synthran_live_nodes.resources | map(attribute='metadata.name') | list)
+          - ran_node_name in (synthran_live_nodes.resources | map(attribute='metadata.name') | list)
+        fail_msg: The core/RAN node mapping in the deployment identity is no longer present.
+
+    - name: Require the attested core and RAN nodes to be Ready
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - >-
+            (synthran_live_nodes.resources | selectattr('metadata.name', 'equalto', core_node_name) | first).status.conditions
+            | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+          - >-
+            (synthran_live_nodes.resources | selectattr('metadata.name', 'equalto', ran_node_name) | first).status.conditions
+            | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+        fail_msg: >-
+          The core/RAN node mapping in the deployment identity is no longer live and Ready.
+
+    - name: Retain reused cluster identity evidence with the run
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: >-
+          {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
+               'cluster_identity_verified': true,
+               'core_node': core_node_name,
+               'ran_node': ran_node_name,
+               'bindings': []} | to_nice_json }}
+        dest: "{{ run_dir }}/live-deployment-evidence.json"

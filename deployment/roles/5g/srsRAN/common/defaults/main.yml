@@ -21,52 +21,6 @@ yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
 yq_url: "https://github.com/mikefarah/yq/releases/download/{{ yq_version }}/yq_linux_amd64"
 
-# Network config for srsRAN and free5gc
-srsran_network_map:
-  free5gc:
-    n2:
-      amf_ip: "{% if core_node_name == ran_node_name %}10.100.50.249{% else %}10.100.50.234{% endif %}"
-      amf_port: 38412
-      gnb_bind_ip: "10.100.50.250"
-    n3:
-      gnb_ip: "10.100.50.250"
-      ue_ips:
-        - "10.100.50.251" # "10.100.50.235"
-        - "10.100.50.252" # "10.100.50.236"
-        - "10.100.50.253" # "10.100.50.237"
-  open5gs:
-    n2:
-      # The upstream Open5GS+srsRAN integration carries logical N2/NGAP over
-      # the shared n3network attachment.
-      amf_ip: "10.10.3.200"
-      gnb_ip: "10.10.3.234"
-      amf_port: 38412
-      gnb_bind_ip: "10.10.3.234"
-    n3:
-      gnb_ip: "10.10.3.234"
-      ue_ips:
-        - "10.10.3.235"
-        - "10.10.3.236"
-        - "10.10.3.237"
-  oai:
-    n2:
-      amf_ip: "192.168.3.201"
-      gnb_ip: "192.168.3.203"
-      amf_port: 38412
-      gnb_bind_ip: "192.168.3.203"
-    n3:
-      amf_ip: "192.168.3.201"
-      gnb_ip: "192.168.3.203"
-      ue_ips:
-        - "192.168.3.210"
-        - "192.168.3.211"
-        - "192.168.3.212"
-
-srsran_network: "{{ srsran_network_map[core] }}"
-
-# N3 network name
-n3networkName_map: 
-  free5gc: "n3network-free5gc-free5gc-upf"
-  open5gs: "n3network"
-  oai: "oai-5g-basic-n3"
-n3networkName: "{{ n3networkName_map[core] }}"
+# Selected from deployment/topology.yml and included in the deployment hash.
+srsran_network: "{{ synthran_topology.network }}"
+n3networkName: "{{ synthran_topology.n3network_name }}"

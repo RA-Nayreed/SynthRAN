@@ -60,6 +60,16 @@
   delay: 2
   until: "' inet ' in synthran_physical_address.stdout"
 
+- name: Require the physical UE address to match its selected slice
+  ansible.builtin.shell: >-
+    python3 -c 'import ipaddress, sys;
+    address=ipaddress.ip_address(sys.argv[1]);
+    network=ipaddress.ip_network(sys.argv[2], strict=False);
+    raise SystemExit(0 if address in network else 1)'
+    "$(ip -4 -o addr show dev wwan0 | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    "{{ synthran_physical_slice.ip_prefix }}.0/16"
+  changed_when: false
+
 - name: Install the route to the assigned UPF
   ansible.builtin.command: >-
     ip route replace {{ synthran_physical_slice.ip_prefix }}.1 dev wwan0

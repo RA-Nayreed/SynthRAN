@@ -20,6 +20,7 @@ if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed s
 if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran
 mkdir -p .synthran/r2lab
 R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
@@ -387,6 +388,15 @@ PY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
 
+SOURCE_CONFIG="$CONFIG"
+CONFIG="$RUN_DIR/resolved-scenario.yml"
+"$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
+  --source "$SOURCE_CONFIG" --output "$CONFIG"
+if ! $WORKLOAD_ONLY && ! $DRY_RUN; then
+  "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
+    --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
+fi
+
 if ! $NO_RESERVATION && ! $DRY_RUN; then
   deployment_section "Resolving the SOP reservation"
   command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
@@ -396,10 +406,12 @@ fi
 
 deployment_section "Generating the energy-aware sensor trace"
 "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
-"$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" <<'PY'
-import copy, os, re, socket, sys, yaml
+"$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" "$WORKLOAD_ONLY" <<'PY'
+import copy, json, os, re, socket, sys, yaml
 from pathlib import Path
+from synthran.deployment_state import build_manifest, build_ue_map
 c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
+workload_only=sys.argv[3] == 'true'
 if len(ues) != len(set(ues)): raise SystemExit('UE names must be unique: ' + ', '.join(ues))
 # Preserve the upstream 100-port spacing while allowing every representable
 # pair. This is a TCP port-space guard, not the inherited three-UE policy.
@@ -462,7 +474,6 @@ else:
     lines += ['', '[r2lab_experiment_nodes:children]', 'r2lab_sensor_nodes', 'r2lab_edge_nodes', 'r2lab_rf_nodes']
 lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
 Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
-ue_map=[{'device':name,'index':i+1} for i,name in enumerate(ues)]
 profile_name=d.get('profile','default')
 profile_source=Path('deployment/group_vars/all', f'5g_profile_{profile_name}.yaml')
 if not profile_source.is_file():
@@ -518,14 +529,37 @@ if duplicates:
     raise SystemExit('Selected UEs have duplicate IMSI suffixes: ' + repr(duplicates))
 profile=copy.deepcopy(profile)
 profile['ues']=selected_ues
+ue_map=build_ue_map(c, profile)
 effective_profile_path=Path(sys.argv[2], 'fiveg-profile.yml')
 effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
+topology_source=Path('deployment/topology.yml')
+topologies=yaml.safe_load(topology_source.read_text())
+try:
+    topology=copy.deepcopy(topologies['rans'][d['ran'].lower()][d['core'].lower()])
+except KeyError as error:
+    raise SystemExit(f"No asserted topology contract for {d['ran']} + {d['core']}") from error
+if d['ran'].lower() == 'srsran' and d['core'].lower() == 'free5gc':
+    n2=topology['network']['n2']
+    endpoint='amf_ip_colocated' if nodes['core'] == nodes['ran'] else 'amf_ip_split'
+    n2['amf_ip']=n2[endpoint]
+    n2.pop('amf_ip_colocated')
+    n2.pop('amf_ip_split')
+topology['contract_version']=topologies['schema_version']
+manifest=build_manifest(c, profile, ue_map, topology)
+manifest_path=Path(sys.argv[2], 'deployment-fingerprint.json')
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
 reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
 destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
-variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
+variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
+
+if $WORKLOAD_ONLY; then
+  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-reuse \
+    --candidate "$RUN_DIR/deployment-fingerprint.json" \
+    --active "$ACTIVE_DEPLOYMENT_STATE"
+fi
 
 if ! $NO_RESERVATION && ! $SOP_RESERVATION_DONE; then
   deployment_section "Preparing SOP node reservations"
@@ -709,8 +743,8 @@ export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
 if $WORKLOAD_ONLY; then
-  DEPLOYMENT_PLAYBOOK=deployment/playbooks/mqtt.yml
-  echo "Only broker setup, telemetry replay, and collection will run"
+  DEPLOYMENT_PLAYBOOK=deployment/playbooks/workload.yml
+  echo "The stored identity and exact live UE bindings will be proved before telemetry replay"
 else
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/site.yml
 fi
@@ -734,6 +768,16 @@ if (( ANSIBLE_RC != 0 )); then
   exit "$ANSIBLE_RC"
 fi
 
+if $WORKLOAD_ONLY; then
+  "$SYNTHRAN_PYTHON" -m synthran.deployment_state record-reuse \
+    --candidate "$RUN_DIR/deployment-fingerprint.json" \
+    --active "$ACTIVE_DEPLOYMENT_STATE"
+else
+  "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
+    --candidate "$RUN_DIR/deployment-fingerprint.json" \
+    --active "$ACTIVE_DEPLOYMENT_STATE"
+fi
+
 deployment_section "Reconciling model, publisher, and broker results"
 "$SYNTHRAN_PYTHON" - "$RUN_DIR" <<'PY'
 import sys
@@ -742,5 +786,5 @@ run=Path(sys.argv[1]); rows=[]
 for source in sorted(run.glob('publisher-*.jsonl')): rows.extend(source.read_text().splitlines())
 (run/'publisher.jsonl').write_text('\n'.join(rows)+('\n' if rows else ''))
 PY
-"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" --output "$RUN_DIR/summary.json"
+"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" --output "$RUN_DIR/summary.json" --require-deployment-identity
 echo "Artifacts retained in $RUN_DIR"

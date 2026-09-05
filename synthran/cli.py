@@ -6,7 +6,7 @@ def parser():
     model = commands.add_parser("model").add_subparsers(dest="command", required=True); run = model.add_parser("run"); run.add_argument("--config", required=True); run.add_argument("--output", required=True)
     workload = commands.add_parser("workload").add_subparsers(dest="command", required=True); rep = workload.add_parser("replay"); rep.add_argument("--trace", required=True); rep.add_argument("--broker", required=True); rep.add_argument("--port", type=int, default=1883); rep.add_argument("--qos", type=int, default=1); rep.add_argument("--interface"); rep.add_argument("--bind-address"); rep.add_argument("--start-utc"); rep.add_argument("--device"); rep.add_argument("--output", default="publisher.jsonl")
     col = workload.add_parser("collect"); col.add_argument("--broker", default="127.0.0.1"); col.add_argument("--port", type=int, default=1883); col.add_argument("--topic", default="synthran/#"); col.add_argument("--output", default="broker.jsonl")
-    results = commands.add_parser("results").add_subparsers(dest="command", required=True); rec = results.add_parser("reconcile"); rec.add_argument("--expected", required=True); rec.add_argument("--publisher", required=True); rec.add_argument("--broker", required=True); rec.add_argument("--scenario"); rec.add_argument("--output", default="summary.json")
+    results = commands.add_parser("results").add_subparsers(dest="command", required=True); rec = results.add_parser("reconcile"); rec.add_argument("--expected", required=True); rec.add_argument("--publisher", required=True); rec.add_argument("--broker", required=True); rec.add_argument("--scenario"); rec.add_argument("--output", default="summary.json"); rec.add_argument("--require-deployment-identity", action="store_true")
     return root
 
 def main(argv=None):
@@ -26,6 +26,6 @@ def main(argv=None):
     else:
         from .results import reconcile
 
-        print(json.dumps(reconcile(args.expected, args.publisher, args.broker, args.output, args.scenario), indent=2))
+        print(json.dumps(reconcile(args.expected, args.publisher, args.broker, args.output, args.scenario, args.require_deployment_identity), indent=2))
 
 if __name__ == "__main__": main()

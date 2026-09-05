@@ -1,0 +1,46 @@
+---
+# Versioned network endpoints consumed by deployment roles and embedded in the
+# deployment identity. Changing an endpoint therefore invalidates reuse.
+schema_version: 1
+rans:
+  srsran:
+    open5gs:
+      namespace: open5gs
+      n3network_name: n3network
+      network:
+        n2: {amf_ip: 10.10.3.200, amf_port: 38412, gnb_ip: 10.10.3.234, gnb_bind_ip: 10.10.3.234}
+        n3: {gnb_ip: 10.10.3.234, ue_ips: [10.10.3.235, 10.10.3.236, 10.10.3.237]}
+    free5gc:
+      namespace: free5gc
+      n3network_name: n3network-free5gc-free5gc-upf
+      network:
+        n2: {amf_ip_split: 10.100.50.234, amf_ip_colocated: 10.100.50.249, amf_port: 38412, gnb_ip: 10.100.50.250, gnb_bind_ip: 10.100.50.250}
+        n3: {gnb_ip: 10.100.50.250, ue_ips: [10.100.50.251, 10.100.50.252, 10.100.50.253]}
+    oai:
+      namespace: oai
+      n3network_name: oai-5g-basic-n3
+      network:
+        n2: {amf_ip: 192.168.3.201, amf_port: 38412, gnb_ip: 192.168.3.203, gnb_bind_ip: 192.168.3.203}
+        n3: {amf_ip: 192.168.3.201, gnb_ip: 192.168.3.203, ue_ips: [192.168.3.210, 192.168.3.211, 192.168.3.212]}
+  ueransim:
+    open5gs:
+      namespace: open5gs
+      network: {amf_ip: 10.10.3.200, gnb_ip: 10.10.3.231}
+    free5gc:
+      namespace: free5gc
+      network:
+        n2: {subnet_ip: 10.100.50.248, cidr: 29, gateway: 10.100.50.254, gnb_ip: 10.100.50.250, amf_ip: free5gc-free5gc-amf-amf-n2, amf_ngap_port: 38412}
+        n3: {subnet_ip: 10.100.50.232, cidr: 29, gateway: 10.100.50.238, gnb_ip: 10.100.50.236}
+    oai:
+      namespace: oai
+      network: {n2_bridge: n2br, amf_ip: 192.168.3.201, amf_port: 38412, gnb_n2_ip: 192.168.3.203, n3_bridge: n3br, gnb_n3_ip: 192.168.3.204}
+  oai:
+    open5gs:
+      namespace: open5gs
+      network: {amf_ip: 10.10.3.200, transport_bridge: n3br}
+    free5gc:
+      namespace: free5gc
+      network: {amf_ip: 10.100.50.234, transport_bridge: n3br}
+    oai:
+      namespace: oai
+      network: {amf_ip: deployment-node, transport_bridge: n3br}

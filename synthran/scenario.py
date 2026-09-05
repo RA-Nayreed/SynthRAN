@@ -16,7 +16,21 @@ def load_scenario(path: str | Path) -> dict:
     if dep.get("core") not in SUPPORTED_CORES: raise ValueError("unsupported core")
     if str(dep.get("ran", "")).lower() not in SUPPORTED_RANS: raise ValueError("unsupported RAN")
     if dep.get("platform") not in SUPPORTED_PLATFORMS: raise ValueError("unsupported platform")
-    if set(dep.get("ues", [])) != set(data["devices"]): raise ValueError("deployment.ues must match devices")
+    ues = dep.get("ues", [])
+    if not isinstance(ues, list) or not ues or not all(isinstance(name, str) and name for name in ues):
+        raise ValueError("deployment.ues must be a non-empty list of names")
+    if len(ues) != len(set(ues)):
+        raise ValueError("deployment.ues must contain unique names")
+    # deployment.ues controls the experiment membership and order.  Materialize
+    # missing model entries from the configured device templates so a resolved
+    # scenario has one authoritative, explicit representation.
+    templates = list(data["devices"].values())
+    if not templates:
+        raise ValueError("devices must define at least one model template")
+    data["devices"] = {
+        name: copy.deepcopy(data["devices"].get(name, templates[index % len(templates)]))
+        for index, name in enumerate(ues)
+    }
     data["_source_directory"] = str(source.parent)
     trace = data["model"].get("energy", {}).get("trace")
     if trace and not str(trace).startswith("builtin:"): data["model"]["energy"]["trace"] = str((source.parent / trace).resolve())
