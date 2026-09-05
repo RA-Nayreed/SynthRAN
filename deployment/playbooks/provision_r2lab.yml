@@ -1,4 +1,83 @@
 ---
+- name: Resolve the canonical R2Lab SSH identity
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the saved R2Lab slice username
+      ansible.builtin.shell: |
+        set -eu
+        source "{{ playbook_dir }}/../../.r2lab_config"
+        printf '%s' "$R2LAB_USERNAME"
+      args:
+        executable: /bin/bash
+      register: synthran_r2lab_username_result
+      changed_when: false
+      no_log: true
+      when: platform == 'r2lab'
+
+    - name: Require a saved R2Lab slice username
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_r2lab_username_result.stdout | default('') | trim | length > 0
+        fail_msg: R2Lab credentials are missing or do not define R2LAB_USERNAME.
+      when: platform == 'r2lab'
+
+    - name: Record the canonical R2Lab control identity
+      ansible.builtin.set_fact:
+        synthran_r2lab_username: "{{ synthran_r2lab_username_result.stdout | trim }}"
+        synthran_r2lab_identity_file: "{{ lookup('env', 'R2LAB_IDENTITY_FILE') }}"
+        synthran_r2lab_faraday_known_hosts: "{{ lookup('env', 'R2LAB_FARADAY_KNOWN_HOSTS') }}"
+      when: platform == 'r2lab'
+
+    - name: Override the generated Faraday inventory identity
+      ansible.builtin.add_host:
+        name: faraday_host
+        ansible_host: faraday.inria.fr
+        ansible_user: "{{ synthran_r2lab_username }}"
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_common_args: >-
+          -F /dev/null
+          -o UserKnownHostsFile={{ synthran_r2lab_faraday_known_hosts }}
+          -o StrictHostKeyChecking=accept-new
+      when: platform == 'r2lab'
+
+    - name: Override R2Lab endpoint jump identities
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        ansible_ssh_common_args: >-
+          -F /dev/null
+          -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+          -o ProxyCommand="ssh -F /dev/null
+          {% if synthran_r2lab_identity_file %}-i {{ synthran_r2lab_identity_file }} -o IdentitiesOnly=yes{% endif %}
+          -o BatchMode=yes -o ConnectTimeout=10
+          -o UserKnownHostsFile={{ synthran_r2lab_faraday_known_hosts }}
+          -o StrictHostKeyChecking=accept-new
+          -W %h:%p {{ synthran_r2lab_username }}@faraday.inria.fr"
+      loop: >-
+        {{ (groups['physical_ues'] | default([]))
+           + (groups['r2lab_experiment_nodes'] | default([])) }}
+      when: platform == 'r2lab'
+
+- name: Prove R2Lab control access before physical provisioning
+  hosts: faraday
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Verify Faraday SSH access with the canonical slice identity
+      ansible.builtin.command: /bin/true
+      changed_when: false
+      when: platform == 'r2lab'
+
+    - name: Record successful R2Lab control preflight
+      ansible.builtin.set_fact:
+        synthran_r2lab_preflight_ok: true
+      delegate_to: localhost
+      delegate_facts: true
+      when: platform == 'r2lab'
+
 - name: Prepare the selected R2Lab radio unit
   hosts: faraday
   gather_facts: false

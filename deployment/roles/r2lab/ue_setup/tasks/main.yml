@@ -64,3 +64,22 @@
   loop: "{{ synthran_r2lab_ues }}"
   when: hostvars[item].mode | default('mbim') == 'qmi'
   changed_when: true
+
+- name: Capture post-initialization physical UE state
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }} qhat-check
+  loop: "{{ synthran_r2lab_ues }}"
+  register: synthran_r2lab_qhat_check
+  changed_when: false
+  failed_when: false
+
+- name: Report post-initialization physical UE state
+  ansible.builtin.debug:
+    msg:
+      - "UE={{ item.item }}"
+      - "{{ item.stdout_lines | default([]) }}"
+      - "stderr={{ item.stderr | default('') | trim }}"
+  loop: "{{ synthran_r2lab_qhat_check.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"

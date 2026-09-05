@@ -41,7 +41,7 @@
       namespace: "{{ ran_ns }}"
       label_selectors: "{{ srs_gnb_label_selectors }}"
     register: pod_initial
-    until: 
+    until:
       - pod_initial.resources | length > 0
       - (pod_initial.resources[0].status.containerStatuses | default([{'ready':false}]) | selectattr('name', 'equalto', 'gnb') | first).ready | bool
     retries: 3
@@ -52,7 +52,7 @@
   - name: Stability window
     ansible.builtin.pause:
       seconds: 45
-    when: 
+    when:
       - helm_result is succeeded
       - pod_initial.resources is defined and pod_initial.resources | length > 0
 
@@ -64,6 +64,23 @@
     register: pod_final
     when: helm_result is succeeded
 
+  - name: Read complete gNB logs after the stability window
+    ansible.builtin.command:
+      argv:
+        - kubectl
+        - logs
+        - -n
+        - "{{ ran_ns }}"
+        - "{{ pod_final.resources[0].metadata.name }}"
+        - -c
+        - gnb
+    register: gnb_runtime_log
+    changed_when: false
+    failed_when: false
+    when:
+      - helm_result is succeeded
+      - pod_final.resources | default([]) | length > 0
+
   - name: Evaluate deployment success
     ansible.builtin.set_fact:
       gnb_startup_success: >-
@@ -71,11 +88,32 @@
           helm_result is succeeded and
           pod_final.resources | default([]) | length > 0 and
           (pod_final.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).ready | bool and
-          (pod_final.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int == 
-          (pod_initial.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int
+          (pod_final.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int ==
+          (pod_initial.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int and
+          gnb_runtime_log is defined and
+          gnb_runtime_log.rc | default(1) | int == 0 and
+          (gnb_runtime_log.stdout | default('') | regex_search('Connected to AMF', ignorecase=True)) is not none and
+          (gnb_runtime_log.stdout | default('') | regex_search('Cell was activated', ignorecase=True)) is not none and
+          (
+            gnb_runtime_log.stdout | default('') |
+            regex_search(
+              'Unable to create radio session|Failure to create rfnoc_graph|RFNOC::MGMT.*Connection refused|Failed to open device|RfnocError:.*OpTimeout|Control operation timed out waiting for ACK',
+              ignorecase=True
+            )
+          ) is none
         }}
 
-  - name: Handle IP Swap
+  - name: Report failed physical gNB health evidence
+    ansible.builtin.debug:
+      msg:
+        - "Physical gNB health check failed on attempt {{ gnb_attempt }}."
+        - "Required evidence: Connected to AMF + Cell was activated."
+        - "Rejected evidence includes UHD/RFNoC session/open/control timeout failures."
+    when:
+      - not gnb_startup_success | bool
+      - rru in ['n300', 'n320']
+
+  - name: Swap alternate UHD address for N320 only
     block:
     - name: Extract current IP
       ansible.builtin.shell: |
@@ -88,9 +126,7 @@
         new_ip: >-
           {%- if current_ip_cmd.stdout == '192.168.235.105' -%}192.168.235.106
           {%- elif current_ip_cmd.stdout == '192.168.235.106' -%}192.168.235.105
-          {%- elif current_ip_cmd.stdout == '192.168.235.103' -%}192.168.235.104
-          {%- elif current_ip_cmd.stdout == '192.168.235.104' -%}192.168.235.103
-          {%- else -%}{{ current_ip_cmd.stdout }}{%- endif -%}
+          {%- else -%}{{ current_ip_cmd.stdout }}{%- endif %}
 
     - name: Apply IP swap
       ansible.builtin.replace:
@@ -99,16 +135,20 @@
         replace: "{{ new_ip }}"
       when: new_ip != current_ip_cmd.stdout
 
-    - name: Remove failed Helm release
-      kubernetes.core.helm:
-        name: srsran-gnb
-        release_namespace: "{{ ran_ns }}"
-        state: absent
-        wait: true
-      when: gnb_attempt | int < max_attempts | int
+    when:
+      - not gnb_startup_success | bool
+      - rru == 'n320'
+      - gnb_attempt | int < max_attempts | int
 
-    when: 
+  - name: Remove failed Helm release before another physical retry
+    kubernetes.core.helm:
+      name: srsran-gnb
+      release_namespace: "{{ ran_ns }}"
+      state: absent
+      wait: true
+    when:
       - not gnb_startup_success | bool
       - rru in ['n300', 'n320']
+      - gnb_attempt | int < max_attempts | int
 
   when: not gnb_startup_success | bool

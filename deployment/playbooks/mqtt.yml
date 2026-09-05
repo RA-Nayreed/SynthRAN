@@ -24,6 +24,41 @@
         name: synthran/physical_ue
       when: platform in ['r2lab', 'physical']
 
+- name: Retain structured physical UE bindings
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Initialize physical UE binding evidence
+      ansible.builtin.set_fact:
+        synthran_physical_bindings: []
+      when: platform in ['r2lab', 'physical']
+
+    - name: Collect every proved physical UE binding
+      ansible.builtin.set_fact:
+        synthran_physical_bindings: >-
+          {{ synthran_physical_bindings + [hostvars[item].synthran_physical_binding] }}
+      loop: "{{ groups['physical_ues'] | default([]) }}"
+      when: platform in ['r2lab', 'physical']
+
+    - name: Require complete physical UE binding evidence
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_physical_bindings | length > 0
+          - synthran_physical_bindings | length == synthran_deployment_contract.deployment.ues | length
+        fail_msg: Physical UE binding evidence does not cover the complete deployment contract.
+      when: platform in ['r2lab', 'physical']
+
+    - name: Retain physical UE bindings with the run
+      ansible.builtin.copy:
+        content: >-
+          {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
+               'cluster_identity_verified': true,
+               'bindings': synthran_physical_bindings} | to_nice_json }}
+        dest: "{{ run_dir }}/live-deployment-evidence.json"
+      when: platform in ['r2lab', 'physical']
+
 - name: Prepare physical publisher runtimes
   hosts: physical_ues
   become: true

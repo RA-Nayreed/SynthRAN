@@ -129,7 +129,7 @@ def classify_allocation(node, allocation):
         return "new"
     raise SystemExit(output.strip())
 
-def prepare_nodes(nodes, image):
+def prepare_nodes(nodes, image, *, preserve_state=False):
     allocation_states = {}
     for node in nodes:
         print(f"Allocating {node} for this deployment", flush=True)
@@ -137,6 +137,15 @@ def prepare_nodes(nodes, image):
         allocation_states[node] = classify_allocation(node, allocation)
         if allocation_states[node] == "already-active":
             print(f"Reusing the active allocation for {node}", flush=True)
+
+    if preserve_state:
+        for node in nodes:
+            print(
+                f"Preserving current image and node state on {node}; "
+                "skipping POS image selection and reset",
+                flush=True,
+            )
+        return allocation_states
 
     for node in nodes:
         print(f"Selecting image {image} on {node}", flush=True)
@@ -186,12 +195,13 @@ def main():
                 print(f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}")
             selected = list(dict.fromkeys(nodes.values()))
             print(f"Keeping the active SOP calendar reservation for {', '.join(selected)}")
-            allocation_states = prepare_nodes(selected, image)
+            allocation_states = prepare_nodes(selected, image, preserve_state=True)
             deployment["nodes"] = nodes
             write_resolved_scenario(args.run_dir, scenario)
             Path(args.run_dir, "pos-selection.json").write_text(json.dumps({
                 "nodes": nodes, "duration_minutes": duration, "reused": True,
-                "allocation_states": allocation_states, "reset_nodes": selected,
+                "allocation_states": allocation_states, "reset_nodes": [],
+                "preserved_nodes": selected,
             }, indent=2) + "\n")
             return
         if action == 1:

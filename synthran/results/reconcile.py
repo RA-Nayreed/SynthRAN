@@ -27,6 +27,22 @@ def _configured_devices(expected: str | Path, scenario: str | Path | None) -> li
     return list(dict.fromkeys(str(device) for device in data.get("devices", {})))
 
 
+def _binding_identity(item: dict) -> tuple:
+    """Normalize transport evidence before comparing it with the deployment contract."""
+    raw_index = item.get("index")
+    try:
+        index = int(raw_index) if raw_index is not None else None
+    except (TypeError, ValueError):
+        index = raw_index
+    return (
+        str(item.get("device")) if item.get("device") is not None else None,
+        index,
+        str(item.get("imsi")) if item.get("imsi") is not None else None,
+        str(item.get("slice")) if item.get("slice") is not None else None,
+        str(item.get("dnn")) if item.get("dnn") is not None else None,
+    )
+
+
 def _deployment_evidence(expected: str | Path) -> dict:
     run = Path(expected).parent.parent
     identity_path = run / "deployment-fingerprint.json"
@@ -40,11 +56,10 @@ def _deployment_evidence(expected: str | Path) -> dict:
     cluster_verified = evidence.get("cluster_identity_verified") is True
     deployment = identity.get("deployment", {})
     bindings = evidence.get("bindings", [])
-    binding_fields = ("device", "index", "imsi", "slice", "dnn")
     binding_verified = (
-        [tuple(item.get(field) for field in binding_fields) for item in bindings]
-        == [tuple(item.get(field) for field in binding_fields) for item in deployment.get("ues", [])]
-        if deployment.get("platform") == "rfsim"
+        [_binding_identity(item) for item in bindings]
+        == [_binding_identity(item) for item in deployment.get("ues", [])]
+        if deployment.get("platform") in {"rfsim", "r2lab", "physical"}
         else True
     )
     status_valid = identity.get("status") in {"active", "reused"}
