@@ -190,6 +190,23 @@
   delay: 2
   until: synthran_mqtt_path_probe.rc == 0
 
+- name: Measure immutable replay horizon
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import json; from pathlib import Path; events=[json.loads(line) for line in Path('/tmp/synthran-events.jsonl').read_text(encoding='utf-8').splitlines() if line]; print(max((float(event['time_offset_s']) for event in events), default=0.0))
+  register: synthran_replay_horizon
+  changed_when: false
+
+- name: Bound publisher wait to the immutable trace horizon
+  ansible.builtin.set_fact:
+    synthran_publish_timeout_seconds: >-
+      {{ (mqtt_start_delay_seconds | int) + (synthran_replay_horizon.stdout | float | int) + 61 }}
+    synthran_publish_poll_retries: >-
+      {{ (((mqtt_start_delay_seconds | int) + (synthran_replay_horizon.stdout | float | int) + 65) // 5) | int }}
+
 - name: Choose one shared UTC start after every UE is attached
   set_fact:
     synthran_replay_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
@@ -205,7 +222,7 @@
     --output /tmp/publisher-{{ item.device }}.jsonl
   loop: "{{ synthran_ue_map }}"
   loop_control: {label: "{{ item.device }}"}
-  async: "{{ (mqtt_start_delay_seconds | int) + 3600 }}"
+  async: "{{ synthran_publish_timeout_seconds }}"
   poll: 0
   register: synthran_publish_jobs
 - name: Wait for publishers
@@ -214,7 +231,7 @@
   loop_control: {label: "{{ item.item.device }}"}
   register: synthran_publish_status
   until: synthran_publish_status.finished
-  retries: 720
+  retries: "{{ synthran_publish_poll_retries }}"
   delay: 5
 
 - name: Read publisher JSONL
