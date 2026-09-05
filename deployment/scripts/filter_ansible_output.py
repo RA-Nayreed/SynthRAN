@@ -60,9 +60,13 @@ def main() -> None:
         if line.startswith("FAILED - RETRYING:"):
             hiding_result = False
             hiding_error_detail = False
+            retry_task = pending_task or ""
             emit_pending()
             if not retry_reported:
-                emit("     waiting for readiness...")
+                if retry_task.endswith("Wait for publishers"):
+                    emit("     publishers still running...")
+                else:
+                    emit("     waiting for readiness...")
                 retry_reported = True
             continue
 
