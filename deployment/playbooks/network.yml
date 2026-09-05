@@ -3,6 +3,15 @@
   hosts: sopnodes
   become: true
   any_errors_fatal: true
+  pre_tasks:
+    - name: Require successful R2Lab control preflight before mutating SOP nodes
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - platform != 'r2lab' or (hostvars['localhost'].synthran_r2lab_preflight_ok | default(false) | bool)
+        fail_msg: >-
+          R2Lab control access was not proved. Core/RAN mutation is blocked so a
+          Faraday authentication failure cannot fall through into SOP provisioning.
   roles: [setup/destructive_guard, setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/ovs]
 - name: Create the Kubernetes control plane
   hosts: core_node

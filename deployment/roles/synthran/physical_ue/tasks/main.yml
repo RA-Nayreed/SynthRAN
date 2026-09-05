@@ -25,8 +25,52 @@
 
 - name: Attach an MBIM physical UE
   ansible.builtin.shell: "stop.sh; start.sh -F {{ synthran_physical_slice.dnn }}"
+  register: synthran_mbim_attach
   when: mode | default('mbim') == 'mbim'
   changed_when: true
+  failed_when: false
+
+- name: Capture modem state after an MBIM attach failure
+  ansible.builtin.shell: |
+    echo "device={{ inventory_hostname }}"
+    echo "dnn={{ synthran_physical_slice.dnn }}"
+    echo "slice={{ synthran_physical_slice_name }}"
+    echo "attach_rc={{ synthran_mbim_attach.rc }}"
+    echo "--- qhat-check ---"
+    qhat-check 2>&1 || true
+    echo "--- wwan0 ---"
+    ip -4 -o addr show dev wwan0 2>&1 || true
+    ip link show wwan0 2>&1 || true
+  register: synthran_mbim_failure_evidence
+  changed_when: false
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_mbim_attach.rc | default(0) | int != 0
+
+- name: Save MBIM attach failure evidence
+  ansible.builtin.copy:
+    content: >-
+      {{ (synthran_mbim_attach.stdout | default('')) ~ '\n' ~
+         (synthran_mbim_attach.stderr | default('')) ~ '\n' ~
+         (synthran_mbim_failure_evidence.stdout | default('')) ~ '\n' }}
+    dest: "{{ run_dir }}/physical-ue-{{ inventory_hostname }}-attach-failure.log"
+  delegate_to: localhost
+  become: false
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_mbim_attach.rc | default(0) | int != 0
+
+- name: Require MBIM packet-service attachment
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_mbim_attach.rc | int == 0
+    fail_msg: >-
+      MBIM attachment failed for {{ inventory_hostname }} on DNN
+      {{ synthran_physical_slice.dnn }}. First-failure modem evidence was saved to
+      {{ run_dir }}/physical-ue-{{ inventory_hostname }}-attach-failure.log.
+      stderr={{ synthran_mbim_attach.stderr | default('') | trim }}
+  when: mode | default('mbim') == 'mbim'
 
 - name: Start the QMI connection manager
   ansible.builtin.shell: >-
@@ -120,11 +164,33 @@
   delay: 2
   until: synthran_physical_broker_check.rc == 0
 
+- name: Read the proved physical UE IPv4 address
+  ansible.builtin.shell: >-
+    ip -4 -o addr show dev wwan0 | awk '{print $4}' | cut -d/ -f1 | head -n1
+  register: synthran_physical_ipv4
+  changed_when: false
+  failed_when: synthran_physical_ipv4.stdout | trim == ''
+
+- name: Record the structured physical UE binding
+  ansible.builtin.set_fact:
+    synthran_physical_binding:
+      device: "{{ inventory_hostname }}"
+      index: "{{ groups['physical_ues'].index(inventory_hostname) + 1 }}"
+      imsi: "{{ synthran_fiveg.plmn.mcc }}{{ synthran_fiveg.plmn.mnc }}{{ synthran_fiveg.ues[inventory_hostname].imsi_suffix }}"
+      slice: "{{ synthran_physical_slice_name }}"
+      dnn: "{{ synthran_physical_slice.dnn }}"
+      interface: wwan0
+      address: "{{ synthran_physical_ipv4.stdout | trim }}"
+      host: "{{ inventory_hostname }}"
+      mode: "{{ mode | default('mbim') }}"
+
 - name: Collect physical UE session evidence
   ansible.builtin.shell: |
     echo "device={{ inventory_hostname }}"
     echo "mode={{ mode | default('mbim') }}"
     echo "dnn={{ synthran_physical_slice.dnn }}"
+    echo "slice={{ synthran_physical_slice_name }}"
+    echo "imsi={{ synthran_fiveg.plmn.mcc }}{{ synthran_fiveg.plmn.mnc }}{{ synthran_fiveg.ues[inventory_hostname].imsi_suffix }}"
     echo "upf={{ synthran_physical_slice.ip_prefix }}.1"
     echo "broker={{ synthran_physical_broker_ipv4 }}:{{ mqtt_port }}"
     ip -4 -o addr show dev wwan0
