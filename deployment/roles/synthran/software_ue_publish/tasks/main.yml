@@ -148,6 +148,29 @@
   loop_control: {label: "{{ item.device }} via {{ synthran_assigned_tunnels[item.index - 1].interface }}"}
   changed_when: true
 
+- name: Prove MQTT reachability through every assigned UE tunnel
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - exec
+      - -n
+      - "{{ item.namespace }}"
+      - "{{ item.pod }}"
+      - -c
+      - synthran-runtime
+      - --
+      - python3
+      - -c
+      - >-
+        import socket; s=socket.create_connection(("{{ synthran_effective_broker_address }}", {{ mqtt_port | int }}), 5, ("{{ item.address }}", 0)); s.close()
+  loop: "{{ synthran_assigned_tunnels }}"
+  loop_control: {label: "{{ item.device }} via {{ item.address }}"}
+  register: synthran_mqtt_path_probe
+  changed_when: false
+  retries: 30
+  delay: 2
+  until: synthran_mqtt_path_probe.rc == 0
+
 - name: Choose one shared UTC start after every UE is attached
   set_fact:
     synthran_replay_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
