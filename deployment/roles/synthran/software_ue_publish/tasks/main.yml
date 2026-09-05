@@ -135,7 +135,25 @@
   loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
   changed_when: false
 
-- name: Configure source-policy routing for every assigned UE tunnel
+- name: Remove legacy SynthRAN policy routing from OAI UE pods
+  shell: >-
+    kubectl exec -n {{ item.namespace }} {{ item.pod }}
+    -c {{ item.container }} -- sh -lc
+    'src=$(ip -4 -o addr show dev {{ item.interface }} | awk "{print \$4}" | cut -d/ -f1);
+    changed=0;
+    while ip rule del from "$src"/32 table {{ 100 + item.index }} 2>/dev/null; do changed=1; done;
+    if ip route show table {{ 100 + item.index }} | grep -q .; then
+      ip route flush table {{ 100 + item.index }};
+      changed=1;
+    fi;
+    echo "$changed"'
+  loop: "{{ synthran_assigned_tunnels }}"
+  loop_control: {label: "{{ item.device }} via OAI-native routing"}
+  register: synthran_oai_route_cleanup
+  changed_when: synthran_oai_route_cleanup.stdout | trim == '1'
+  when: ran == 'oai'
+
+- name: Configure source-policy routing for non-OAI software UEs
   shell: >-
     kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
     {{ synthran_assigned_tunnels[item.index - 1].pod }}
@@ -147,6 +165,7 @@
   loop: "{{ synthran_ue_map }}"
   loop_control: {label: "{{ item.device }} via {{ synthran_assigned_tunnels[item.index - 1].interface }}"}
   changed_when: true
+  when: ran != 'oai'
 
 - name: Prove MQTT reachability through every assigned UE tunnel
   ansible.builtin.command:
