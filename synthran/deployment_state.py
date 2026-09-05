@@ -84,7 +84,10 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
         release = "oai-nr-ue" if index == 1 else f"oai-nr-ue{index}"
         return {
             "namespace": core,
-            "interface": f"oaitun_ue{index}",
+            # OAI gives the primary PDU-session interface this name inside
+            # every NR-UE pod. The numbered Helm release/pod, rather than the
+            # interface name, distinguishes UE2 and UE3 from UE1.
+            "interface": "oaitun_ue1",
             "pod_name_prefix": release + "-",
         }
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
@@ -202,6 +205,51 @@ def verify_reuse(candidate_path: str | Path, active_path: str | Path) -> None:
     assert_reusable(candidate, active)
 
 
+def verify_resume(
+    source_path: str | Path,
+    candidate_path: str | Path,
+    evidence_path: str | Path,
+) -> None:
+    source = read_json(source_path)
+    candidate = read_json(candidate_path)
+    evidence = read_json(evidence_path)
+    for label, value in (("source", source), ("candidate", candidate)):
+        if value.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(f"resume {label} identity has an unsupported schema")
+        if value.get("deployment_hash") != content_hash(value.get("deployment", {})):
+            raise ValueError(f"resume {label} identity failed its integrity check")
+    if not evidence.get("cluster_identity_verified"):
+        raise ValueError("--resume refused: the failed run has no successful cluster attestation")
+    if evidence.get("deployment_hash") != source.get("deployment_hash"):
+        raise ValueError("--resume refused: the failed run's attestation evidence does not match its identity")
+    if candidate.get("scenario_hash") != source.get("scenario_hash"):
+        raise ValueError("--resume refused: the resolved scenario has changed")
+    if candidate.get("deployment") == source.get("deployment"):
+        return
+
+    # Allow the narrowly scoped correction from numbered OAI interfaces to the
+    # actual per-pod interface name. No deployed infrastructure field changes.
+    normalized_source = copy.deepcopy(source.get("deployment", {}))
+    source_ues = normalized_source.get("ues", [])
+    if (
+        normalized_source.get("platform") == "rfsim"
+        and normalized_source.get("ran") == "oai"
+        and source_ues
+        and all(
+            ue.get("tunnel", {}).get("interface") == f"oaitun_ue{ue.get('index')}"
+            for ue in source_ues
+        )
+    ):
+        for ue in source_ues:
+            ue["tunnel"]["interface"] = "oaitun_ue1"
+        if candidate.get("deployment") == normalized_source:
+            return
+    raise ValueError(
+        "--resume refused: current code would change the failed run's deployment "
+        "identity beyond the supported OAI per-pod tunnel correction"
+    )
+
+
 def invalidate(active_path: str | Path, run_id: str) -> None:
     value = {
         "schema_version": SCHEMA_VERSION,
@@ -244,6 +292,10 @@ def _parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify-reuse")
     verify.add_argument("--candidate", required=True)
     verify.add_argument("--active", required=True)
+    resume = commands.add_parser("verify-resume")
+    resume.add_argument("--source", required=True)
+    resume.add_argument("--candidate", required=True)
+    resume.add_argument("--evidence", required=True)
     invalid = commands.add_parser("invalidate")
     invalid.add_argument("--active", required=True)
     invalid.add_argument("--run-id", required=True)
@@ -263,6 +315,8 @@ def main(argv: list[str] | None = None) -> None:
             resolve_scenario(args.source, args.output)
         elif args.command == "verify-reuse":
             verify_reuse(args.candidate, args.active)
+        elif args.command == "verify-resume":
+            verify_resume(args.source, args.candidate, args.evidence)
         elif args.command == "invalidate":
             invalidate(args.active, args.run_id)
         elif args.command == "activate":

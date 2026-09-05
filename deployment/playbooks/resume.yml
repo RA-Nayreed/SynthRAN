@@ -1,0 +1,4 @@
+---
+- import_playbook: validate_resume.yml
+- import_playbook: attest_deployment.yml
+- import_playbook: mqtt.yml

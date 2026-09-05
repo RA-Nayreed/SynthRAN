@@ -21,6 +21,9 @@
     --expected /tmp/synthran-expected-deployment.json
   register: synthran_discovery
   changed_when: false
+  retries: 30
+  delay: 5
+  until: synthran_discovery.rc == 0
 - name: Decode proved UE tunnel bindings
   set_fact:
     synthran_software_tunnels: "{{ synthran_discovery.stdout | from_json }}"

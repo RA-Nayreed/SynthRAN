@@ -1,0 +1,53 @@
+---
+- name: Prove the failed deployment checkpoint is still live
+  hosts: core_node
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the identity attested by the failed run
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: synthran-deployment-identity
+        namespace: "{{ synthran_resume_source_contract.deployment.topology.namespace }}"
+      register: synthran_resume_live_identity
+
+    - name: Require the failed run's exact deployment to remain attested
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_resume_live_identity.resources | length == 1
+          - synthran_resume_live_identity.resources[0].data['manifest.json'] is defined
+          - >-
+            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).schema_version
+            == synthran_resume_source_contract.schema_version
+          - >-
+            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).deployment_hash
+            == synthran_resume_source_contract.deployment_hash
+          - >-
+            (synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json).deployment
+            == synthran_resume_source_contract.deployment
+        fail_msg: >-
+          --resume refused because the failed run is no longer the exact
+          deployment attested in the live Kubernetes cluster.
+
+    - name: Read the live Kubernetes nodes before resuming
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: synthran_resume_live_nodes
+
+    - name: Require the failed run's core and RAN nodes to remain Ready
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - core_node_name in (synthran_resume_live_nodes.resources | map(attribute='metadata.name') | list)
+          - ran_node_name in (synthran_resume_live_nodes.resources | map(attribute='metadata.name') | list)
+          - >-
+            (synthran_resume_live_nodes.resources | selectattr('metadata.name', 'equalto', core_node_name) | first).status.conditions
+            | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+          - >-
+            (synthran_resume_live_nodes.resources | selectattr('metadata.name', 'equalto', ran_node_name) | first).status.conditions
+            | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+        fail_msg: >-
+          --resume refused because the failed run's core/RAN nodes are no longer live and Ready.

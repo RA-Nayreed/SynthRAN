@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; SOP_RESERVATION_DONE=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; SOP_RESERVATION_DONE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
@@ -10,14 +10,34 @@ while [[ $# -gt 0 ]]; do
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
+    --resume) RESUME=true; RESUME_FROM="$2"; NO_RESERVATION=true; shift 2 ;;
     -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--resume results/<failed-run>] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
+if $RESUME && $WORKLOAD_ONLY; then echo "--resume and --workload-only cannot be combined" >&2; exit 2; fi
+if $RESUME && $INTERACTIVE; then echo "--resume cannot be combined with --interactive" >&2; exit 2; fi
+if $RESUME && $DRY_RUN; then echo "--resume cannot be combined with --dry-run" >&2; exit 2; fi
+if $RESUME && $CONFIG_EXPLICIT; then echo "--resume uses the failed run's resolved scenario and cannot be combined with --config" >&2; exit 2; fi
 if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed scenario and cannot be interactive" >&2; exit 2; fi
 if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
+if $RESUME; then
+  [[ -d "$RESUME_FROM" ]] || { echo "Resume run directory not found: $RESUME_FROM" >&2; exit 2; }
+  CONFIG="$RESUME_FROM/resolved-scenario.yml"
+  RESUME_SOURCE_CONTRACT="$RESUME_FROM/deployment-fingerprint.json"
+  RESUME_SOURCE_EVIDENCE="$RESUME_FROM/live-deployment-evidence.json"
+  RESUME_SOURCE_MODEL="$RESUME_FROM/model"
+  [[ -f "$RESUME_SOURCE_CONTRACT" ]] || { echo "Resume deployment identity not found: $RESUME_SOURCE_CONTRACT" >&2; exit 2; }
+  [[ -f "$RESUME_SOURCE_EVIDENCE" ]] || { echo "Resume attestation evidence not found: $RESUME_SOURCE_EVIDENCE" >&2; exit 2; }
+  [[ -f "$RESUME_SOURCE_MODEL/events.jsonl" ]] || { echo "Resume workload trace not found: $RESUME_SOURCE_MODEL/events.jsonl" >&2; exit 2; }
+  CONFIG_EXPLICIT=true
+else
+  RESUME_SOURCE_CONTRACT=""
+  RESUME_SOURCE_EVIDENCE=""
+  RESUME_SOURCE_MODEL=""
+fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
@@ -392,7 +412,7 @@ SOURCE_CONFIG="$CONFIG"
 CONFIG="$RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
   --source "$SOURCE_CONFIG" --output "$CONFIG"
-if ! $WORKLOAD_ONLY && ! $DRY_RUN; then
+if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
     --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
 fi
@@ -404,14 +424,22 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   SOP_RESERVATION_DONE=true
 fi
 
-deployment_section "Generating the energy-aware sensor trace"
-"$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
-"$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" "$WORKLOAD_ONLY" <<'PY'
+if $RESUME; then
+  deployment_section "Reusing the failed run's energy-aware sensor trace"
+  cp -a -- "$RESUME_SOURCE_MODEL" "$RUN_DIR/model"
+else
+  deployment_section "Generating the energy-aware sensor trace"
+  "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
+fi
+REUSE_EXISTING=false
+if $WORKLOAD_ONLY || $RESUME; then REUSE_EXISTING=true; fi
+"$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" "$REUSE_EXISTING" "$RESUME_SOURCE_CONTRACT" <<'PY'
 import copy, json, os, re, socket, sys, yaml
 from pathlib import Path
 from synthran.deployment_state import build_manifest, build_ue_map
 c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
 workload_only=sys.argv[3] == 'true'
+resume_source_contract=sys.argv[4]
 if len(ues) != len(set(ues)): raise SystemExit('UE names must be unique: ' + ', '.join(ues))
 # Preserve the upstream 100-port spacing while allowing every representable
 # pair. This is a TCP port-space guard, not the inherited three-UE policy.
@@ -551,6 +579,8 @@ manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
 reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
 destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
 variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
+if resume_source_contract:
+    variables['synthran_resume_source_contract']=json.loads(Path(resume_source_contract).read_text())
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
 PY
 if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
@@ -559,6 +589,12 @@ if $WORKLOAD_ONLY; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-reuse \
     --candidate "$RUN_DIR/deployment-fingerprint.json" \
     --active "$ACTIVE_DEPLOYMENT_STATE"
+fi
+if $RESUME; then
+  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-resume \
+    --source "$RESUME_SOURCE_CONTRACT" \
+    --candidate "$RUN_DIR/deployment-fingerprint.json" \
+    --evidence "$RESUME_SOURCE_EVIDENCE"
 fi
 
 if ! $NO_RESERVATION && ! $SOP_RESERVATION_DONE; then
@@ -734,7 +770,7 @@ if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements
   exit 1
 fi
 
-if $WORKLOAD_ONLY; then
+if $WORKLOAD_ONLY || $RESUME; then
   deployment_section "Replaying telemetry on the existing 5G stack"
 else
   deployment_section "Provisioning nodes and deploying the selected 5G stack"
@@ -745,6 +781,9 @@ export PYTHONUNBUFFERED=1
 if $WORKLOAD_ONLY; then
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/workload.yml
   echo "The stored identity and exact live UE bindings will be proved before telemetry replay"
+elif $RESUME; then
+  DEPLOYMENT_PLAYBOOK=deployment/playbooks/resume.yml
+  echo "The failed run's live attestation will be proved before its corrected contract and workload are resumed"
 else
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/site.yml
 fi
@@ -765,6 +804,10 @@ ANSIBLE_RC=${PIPESTATUS[0]}
 set -e
 if (( ANSIBLE_RC != 0 )); then
   echo "Deployment failed; complete Ansible output: $RUN_DIR/ansible.log" >&2
+  if [[ -f "$RUN_DIR/live-deployment-evidence.json" ]]; then
+    echo "The attested 5G stack was preserved. Resume at the workload boundary with:" >&2
+    echo "  ./deploy.sh --resume $RUN_DIR" >&2
+  fi
   exit "$ANSIBLE_RC"
 fi
 

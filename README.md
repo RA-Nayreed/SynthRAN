@@ -50,6 +50,18 @@ the cluster or 5G stack:
 ./deploy.sh --config scenarios/rfsim-sidecars-3ue.yml --workload-only
 ```
 
+If a full run reaches deployment attestation but fails during MQTT setup or
+telemetry replay, resume that run without reserving, reimaging, or rebuilding
+the nodes:
+
+```sh
+./deploy.sh --resume results/<failed-run-id>
+```
+
+Resume reuses the failed run's resolved scenario and exact generated trace. It
+fails closed unless the source identity is intact, its attestation evidence is
+present, and the same identity is still stored in the live Kubernetes cluster.
+
 SynthRAN never rewrites the supplied scenario. Every run retains an immutable
 `resolved-scenario.yml` containing reservation-time node choices and materialized
 device settings.
@@ -88,8 +100,8 @@ gaps are summarized as experiment results rather than deployment failures.
 
 The deployment matrix retains OAI, Open5GS, Free5GC, OAI RAN, srsRAN,
 UERANSIM, RF simulation, and physical R2Lab adapters. Supported UE interfaces
-are `uesimtun0`, `oaitun_*`, `tun_srsue*`, and physical `wwan0`; smartphones are
-not supported.
+are `uesimtun0`, per-pod OAI `oaitun_ue1`, `tun_srsue*`, and physical `wwan0`;
+smartphones are not supported.
 
 For software UEs, the workload role discovers the real tunnel inside running
 UE pods and injects an isolated publisher container into the same network
