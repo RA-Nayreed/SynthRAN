@@ -180,6 +180,11 @@
       index: "{{ item.index | int }}"
       imsi: "{{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}{{ ue_profile.imsi_suffix }}"
       dnn: "{{ ue_slice.dnn }}"
+      sst: "{{ ue_slice.sst | int }}"
+      sd: >-
+        {{ ''
+           if (ue_slice.sd | string | upper) == 'EMPTY'
+           else (ue_slice.sd | string | regex_replace('^0[xX]', '') | int(base=16)) }}
       tx_port: "{{ 2101 + ((item.index | int) - 1) * 100 }}"
       rx_port: "{{ 2100 + ((item.index | int) - 1) * 100 }}"
       ue_ip: "{{ srsran_network.n3.ue_ips[0] }}"
@@ -205,6 +210,8 @@
           k: "{{ fiveg.security.full_key }}"
           opc: "{{ fiveg.security.opc }}"
           apn: "{{ ue.dnn }}"
+          sst: "{{ ue.sst }}"
+          sd: "{{ ue.sd }}"
           ueIp: "{{ ue.ue_ip }}"
           zmqTxPort: {{ ue.tx_port }}
           zmqRxPort: {{ ue.rx_port }}

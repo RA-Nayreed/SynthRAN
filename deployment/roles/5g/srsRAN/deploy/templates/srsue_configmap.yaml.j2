@@ -45,6 +45,8 @@ data:
         "k":         "{{ '{{' }} $ue.k {{ '}}' }}",
         "opc":       "{{ '{{' }} $ue.opc {{ '}}' }}",
         "apn":       "{{ '{{' }} $ue.apn {{ '}}' }}",
+        "sst":       "{{ '{{' }} $ue.sst {{ '}}' }}",
+        "sd":        "{{ '{{' }} $ue.sd {{ '}}' }}",
         "ue_ip":     "{{ '{{' }} $ue.ueIp {{ '}}' }}",
         "gnb_ip":    "{{ '{{' }} $.Values.gnbIp {{ '}}' }}",
         "tx_port":   {{ '{{' }} $ue.zmqTxPort {{ '}}' }},
@@ -89,6 +91,7 @@ data:
         "[nas]\n"
         "apn = {apn}\n"
         "apn_protocol = ipv4\n"
+        "{slicing}"
         "[gw]\n"
         "ip_devname = tun_srsue{ue_number}\n"
         "ip_netmask = 255.255.255.0\n"
@@ -100,12 +103,21 @@ data:
         if ue_number not in UE_CONFIGS:
             raise SystemExit("No generated configuration for UE {}".format(ue_number))
         cfg = UE_CONFIGS[ue_number]
+        slicing = ""
+        if cfg["sd"]:
+            slicing = (
+                "[slicing]\n"
+                "enable = true\n"
+                "nssai-sst = {sst}\n"
+                "nssai-sd = {sd}\n"
+            ).format(sst=int(cfg["sst"]), sd=int(cfg["sd"]))
         content = UE_TEMPLATE.format(
             tx_port="tcp://{}:{}".format(cfg['ue_ip'], cfg['tx_port']),
             rx_port="tcp://{}:{}".format(cfg['ue_ip'], cfg['rx_port']),
             log_file=os.path.join(output_directory, "ue{}.log".format(ue_number)),
             opc=cfg["opc"], k=cfg["k"],
-            imsi=cfg["imsi"], apn=cfg["apn"], ue_number=ue_number,
+            imsi=cfg["imsi"], apn=cfg["apn"], slicing=slicing,
+            ue_number=ue_number,
         )
         path = os.path.join(output_directory, "ue_{}.conf".format(ue_number))
         with open(path, "w") as f:
