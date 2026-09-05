@@ -77,8 +77,17 @@
   ansible.builtin.shell: |
     echo '--- gNB log ---'
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- tail -n 120 /var/log/gnb.log 2>&1 || true
-    echo '--- AMF log ---'
-    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=amf --all-containers=true --tail=120 2>&1 || true
+    echo '--- AMF candidates ---'
+    {{ kubectl_bin }} get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
+    while read ns pod; do
+      lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
+      case "$lower" in
+        *amf*)
+          echo "--- ${ns}/${pod} ---"
+          {{ kubectl_bin }} -n "$ns" logs "$pod" --all-containers=true --tail=120 2>&1 || true
+          ;;
+      esac
+    done
   register: ngap_failure_diagnostics
   changed_when: false
   when: gnb_amf_wait.rc != 0
@@ -109,7 +118,6 @@
           rm -f "/var/log/ue${i}.log"
           tmux new-window -t ran -n "ue${i}" \
             "bash -lc \"/srsran/config/start_ue.sh ${i} 2>&1 | tee /var/log/ue${i}.log\""
-          sleep {{ srsue_start_stagger_seconds | int }}
         done
   changed_when: true
 
@@ -143,8 +151,8 @@
       - -lc
       - |
         for i in {{ ue_indices | join(' ') }}; do
-          echo "=== UE ${i} launcher ==="
-          tail -n 80 "/var/log/ue${i}.log" 2>/dev/null || true
+          echo "=== UE ${i} console ==="
+          tail -n 160 "/var/log/ue${i}.log" 2>/dev/null || true
           echo "=== UE ${i} native log ==="
           tail -n 160 "/tmp/ue${i}.log" 2>/dev/null || true
         done
@@ -178,7 +186,7 @@
   delay: 2
   until: all_ue_tunnels_wait.rc == 0
 
-- name: Inspect each configured UE tunnel after the initial wait
+- name: Inspect each configured UE tunnel after the baseline attempt
   ansible.builtin.command: >
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
     "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
@@ -197,71 +205,32 @@
          | map(attribute='item')
          | list }}
 
-- name: Restart UEs that did not establish a tunnel
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
-    "pkill -f '^/opt/srsRAN_4G/build/srsue/src/srsue /tmp/ue_{{ item.index }}\\.conf' || true;
-     tmux kill-window -t ran:ue{{ item.index }} 2>/dev/null || true;
-     rm -f /var/log/ue{{ item.index }}.log;
-     tmux new-window -t ran -n ue{{ item.index }}
-       'bash -lc \"/srsran/config/start_ue.sh {{ item.index }} 2>&1 | tee /var/log/ue{{ item.index }}.log\"';
-     sleep 3"
+- name: Read decisive logs for UEs missing after the baseline attempt
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/sh
+      - -lc
+      - |
+        echo '--- srsUE console ---'
+        tail -n 220 /var/log/ue{{ item.index }}.log 2>/dev/null || true
+        echo '--- relevant native events ---'
+        grep -Ei 'RACH|RNTI|RRC|NAS|registration|authentication|security|PDU|session|slice|NSSAI|reject|fail|error' \
+          /tmp/ue{{ item.index }}.log 2>/dev/null | tail -n 220 || true
+        echo '--- native srsUE tail ---'
+        tail -n 160 /tmp/ue{{ item.index }}.log 2>/dev/null || true
   loop: "{{ failed_ue_starts }}"
-  loop_control:
-    label: "{{ item.name }}"
-  changed_when: true
-
-- name: Wait for all restarted UE tunnels
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
-    'missing="";
-     for i in {{ failed_ue_starts | map(attribute="index") | join(" ") }}; do
-       if ! ip -4 -o addr show dev "tun_srsue${i}" | grep -q "inet "; then
-         missing="${missing} tun_srsue${i}";
-       fi;
-     done;
-     if [ -n "$missing" ]; then echo "Missing:${missing}"; exit 1; fi'
-  register: restarted_ue_tunnels_wait
-  changed_when: false
-  failed_when: false
-  retries: 30
-  delay: 2
-  until: restarted_ue_tunnels_wait.rc == 0
-  when: failed_ue_starts | length > 0
-
-- name: Inspect each restarted UE tunnel
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
-    "ip -4 -o addr show dev tun_srsue{{ item.index }} | grep -q 'inet '"
-  loop: "{{ failed_ue_starts }}"
-  loop_control:
-    label: "{{ item.name }} / tun_srsue{{ item.index }}"
-  register: retried_ue_tunnels
-  changed_when: false
-  failed_when: false
-
-- name: Identify UEs still missing after retry
-  ansible.builtin.set_fact:
-    failed_ue_retries: >-
-      {{ retried_ue_tunnels.results | default([])
-         | selectattr('rc', 'ne', 0)
-         | map(attribute='item')
-         | list }}
-
-- name: Read logs for UEs still missing after retry
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
-    "echo '--- launcher log ---';
-     tail -n 80 /var/log/ue{{ item.index }}.log 2>/dev/null || true;
-     echo '--- native srsUE log ---';
-     tail -n 200 /tmp/ue{{ item.index }}.log 2>/dev/null || true"
-  loop: "{{ failed_ue_retries }}"
   loop_control:
     label: "{{ item.name }}"
   register: failed_ue_logs
   changed_when: false
 
-- name: Report logs for UEs still missing after retry
+- name: Report logs for UEs missing after the baseline attempt
   ansible.builtin.debug:
     msg: |-
       {{ item.item.name }} (IMSI {{ item.item.imsi }}, DNN {{ item.item.dnn }}) did not establish tun_srsue{{ item.item.index }}.
@@ -270,32 +239,72 @@
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: Collect radio and core diagnostics when UE establishment fails
+- name: Collect radio and backend-aware core diagnostics when UE establishment fails
   ansible.builtin.shell: |
     echo '--- GNU Radio broker ---'
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- tail -n 120 /var/log/gnu_multi_ue.log 2>&1 || true
-    echo '--- gNB ---'
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- tail -n 200 /var/log/gnb.log 2>&1 || true
-    echo '--- AMF ---'
-    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=amf --all-containers=true --tail=200 2>&1 || true
-    echo '--- SMF ---'
-    {{ kubectl_bin }} -n {{ ran_ns }} logs -l nf=smf --all-containers=true --tail=200 2>&1 || true
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- tail -n 160 /var/log/gnu_multi_ue.log 2>&1 || true
+    echo '--- gNB relevant events ---'
+    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ gnb_pod_name_result.stdout }} -c gnb-logs -- /bin/sh -lc \
+      "grep -Ei 'RACH|RNTI|RRC|NGAP|PDU|UE|reject|fail|error' /var/log/gnb.log | tail -n 300" 2>&1 || true
+    echo '--- core AMF/SMF candidates ---'
+    {{ kubectl_bin }} get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
+    while read ns pod; do
+      lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
+      case "$lower" in
+        *amf*|*smf*)
+          echo "--- ${ns}/${pod} ---"
+          {{ kubectl_bin }} -n "$ns" logs "$pod" --all-containers=true --tail=220 2>&1 || true
+          ;;
+      esac
+    done
   register: failed_ue_control_plane_logs
   changed_when: false
-  when: failed_ue_retries | length > 0
+  when: failed_ue_starts | length > 0
 
 - name: Require every configured UE to establish a PDU-session tunnel
   ansible.builtin.assert:
     that:
-      - failed_ue_retries | length == 0
+      - failed_ue_starts | length == 0
     fail_msg: |-
-      {{ failed_ue_retries | length }} UE(s) failed registration or PDU-session
-      establishment after one clean retry. Telemetry replay was not started.
+      {{ failed_ue_starts | length }} UE(s) failed registration or PDU-session
+      establishment on the pinned 5g-Ansible CSI baseline attempt. No automatic
+      retry was performed, and telemetry replay was not started.
       {% for result in failed_ue_logs.results | default([]) %}
       === {{ result.item.name }} / IMSI {{ result.item.imsi }} / DNN {{ result.item.dnn }} / tun_srsue{{ result.item.index }} ===
       {{ result.stdout | default('No UE log was produced.') }}
       {% endfor %}
       {{ failed_ue_control_plane_logs.stdout | default('No radio/core diagnostics were produced.') }}
+
+- name: Capture srsUE runtime provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/sh
+      - -lc
+      - |
+        grep -m1 'Built in Release mode using commit' /var/log/ue1.log 2>/dev/null || true
+  register: srsue_build_provenance
+  changed_when: false
+  failed_when: false
+
+- name: Capture srsUE container image identity
+  ansible.builtin.command: >
+    {{ kubectl_bin }} -n {{ ran_ns }} get pod {{ ue_pod_name }}
+    -o jsonpath='{.status.containerStatuses[0].imageID}'
+  register: srsue_image_identity
+  changed_when: false
+  failed_when: false
+
+- name: Report srsUE runtime provenance
+  ansible.builtin.debug:
+    msg:
+      - "{{ srsue_build_provenance.stdout | default('srsUE source commit unavailable') }}"
+      - "imageID={{ srsue_image_identity.stdout | default('unavailable') }}"
 
 # --- Routes ---
 

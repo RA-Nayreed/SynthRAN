@@ -1,6 +1,7 @@
 ---
 repo_url: "https://github.com/turletti/srsran-helm.git"
-version: main
+# Pin the exact 5g-Ansible CSI baseline for reproducible srsRAN RFSIM runs.
+version: 8dfb9890d127734cdcd6eee9df8c5d09b1a8076a
 
 ran_ns: "{{ core }}"
 repo_dest: "~/srsran-helm"
@@ -13,8 +14,6 @@ srs_ue_label_selectors:
   - "component=ue"
 # Standalone role default. SynthRAN overrides this from deployment.ues.
 ue_count: 3
-# Stagger initial access attempts instead of making every UE hit PRACH at once.
-srsue_start_stagger_seconds: 3
 kubectl_bin: "/usr/bin/kubectl"
 
 yq_version: "v4.45.1"
