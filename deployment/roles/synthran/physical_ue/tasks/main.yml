@@ -23,10 +23,190 @@
          | selectattr('name', 'equalto', synthran_physical_slice_name)
          | first }}
 
-- name: Attach an MBIM physical UE
-  ansible.builtin.shell: "stop.sh; start.sh -F {{ synthran_physical_slice.dnn }}"
-  when: mode | default('mbim') == 'mbim'
+- name: Resolve the physical UE deployment-contract entry
+  ansible.builtin.set_fact:
+    synthran_physical_contract_matches: >-
+      {{ synthran_ue_map
+         | selectattr('device', 'equalto', inventory_hostname)
+         | list }}
+
+- name: Require one physical UE deployment-contract entry
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_physical_contract_matches | length == 1
+    fail_msg: >-
+      Expected exactly one deployment-contract entry for {{ inventory_hostname }},
+      found {{ synthran_physical_contract_matches | length }}.
+
+- name: Record the physical UE deployment-contract entry
+  ansible.builtin.set_fact:
+    synthran_physical_contract_ue: "{{ synthran_physical_contract_matches | first }}"
+
+- name: Resolve the physical UE host data interface
+  ansible.builtin.set_fact:
+    synthran_physical_interface: >-
+      {{ 'wwan0.1'
+         if ((mode | default('mbim')) == 'mbim'
+             and (synthran_physical_slice.sd | default('EMPTY')) != 'EMPTY')
+         else 'wwan0' }}
+    synthran_physical_mbim_session_id: >-
+      {{ 1
+         if ((mode | default('mbim')) == 'mbim'
+             and (synthran_physical_slice.sd | default('EMPTY')) != 'EMPTY')
+         else 0 }}
+
+- name: Require the runtime physical transport to match the deployment contract
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_physical_contract_ue.tunnel.host == inventory_hostname
+      - synthran_physical_contract_ue.tunnel.interface == synthran_physical_interface
+      - synthran_physical_contract_ue.tunnel.mode == (mode | default('mbim'))
+      - >-
+        (mode | default('mbim')) != 'mbim' or
+        ((synthran_physical_contract_ue.tunnel.mbim_session | int) ==
+         (synthran_physical_mbim_session_id | int))
+    fail_msg: >-
+      Physical transport selection for {{ inventory_hostname }} does not match the
+      deployment fingerprint. contract={{ synthran_physical_contract_ue.tunnel }},
+      runtime_interface={{ synthran_physical_interface }},
+      runtime_mode={{ mode | default('mbim') }},
+      runtime_mbim_session={{ synthran_physical_mbim_session_id }}.
+
+- name: Attach an unsliced MBIM physical UE using the R2Lab start.sh workflow
+  ansible.builtin.shell: "start.sh -F {{ synthran_physical_slice.dnn }}"
+  register: synthran_mbim_attach_unsliced
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_physical_slice.sd | default('EMPTY') == 'EMPTY'
   changed_when: true
+  failed_when: false
+
+- name: Attach an explicit-SD MBIM physical UE on the secondary R2Lab session
+  ansible.builtin.shell: |
+    set -euo pipefail
+    DEVICE=/dev/cdc-wdm0
+    INTERFACE={{ synthran_physical_interface }}
+
+    ip link set wwan0 up
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+      ip link add link wwan0 name "$INTERFACE" type vlan id 1
+    fi
+    ip link set "$INTERFACE" up
+
+    mbimcli -p -d "$DEVICE" --set-radio-state=on
+    sleep 2
+    mbimcli -p -d "$DEVICE" --attach-packet-service
+    mbimcli -p -d "$DEVICE" \
+      --connect=session-id={{ synthran_physical_mbim_session_id }},access-string={{ synthran_physical_slice.dnn }},ip-type=ipv4
+    mbim-set-ip.sh "$DEVICE" "$INTERFACE" {{ synthran_physical_mbim_session_id }}
+  args:
+    executable: /bin/bash
+  register: synthran_mbim_attach_sliced
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_physical_slice.sd | default('EMPTY') != 'EMPTY'
+  changed_when: true
+  failed_when: false
+
+- name: Record the selected MBIM activation result
+  ansible.builtin.set_fact:
+    synthran_mbim_attach: >-
+      {{ synthran_mbim_attach_sliced
+         if (synthran_physical_slice.sd | default('EMPTY')) != 'EMPTY'
+         else synthran_mbim_attach_unsliced }}
+  when: mode | default('mbim') == 'mbim'
+
+- name: Capture modem state after an MBIM DNN or PDU activation failure
+  ansible.builtin.shell: |
+    echo "device={{ inventory_hostname }}"
+    echo "dnn={{ synthran_physical_slice.dnn }}"
+    echo "slice={{ synthran_physical_slice_name }}"
+    echo "sst={{ synthran_physical_slice.sst }}"
+    echo "sd={{ synthran_physical_slice.sd | default('EMPTY') }}"
+    echo "mbim_session={{ synthran_physical_mbim_session_id }}"
+    echo "interface={{ synthran_physical_interface }}"
+    echo "attach_rc={{ synthran_mbim_attach.rc }}"
+    echo "--- qhat-check ---"
+    qhat-check 2>&1 || true
+    echo "--- direct AT state after MBIM activation ---"
+    python3 - <<'PY'
+    import serial
+    import time
+
+    commands = [
+        "AT+CMEE=2",
+        "AT+CFUN?",
+        "AT+COPS?",
+        "AT+QNWINFO",
+        'AT+QENG="servingcell"',
+        "AT+C5GREG=2",
+        "AT+C5GREG?",
+        "AT+C5GNSSAIRDP=3",
+        "AT+CGDCONT?",
+        "AT+CGACT?",
+        "AT+CGPADDR",
+        "AT+CEER",
+    ]
+
+    try:
+        modem = serial.Serial("/dev/ttyUSB2", 460800, timeout=1)
+    except Exception as exc:
+        print(f"serial_open_error={exc}")
+    else:
+        try:
+            for command in commands:
+                print(f"===== {command} =====")
+                modem.reset_input_buffer()
+                modem.write((command + "\r").encode())
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    line = modem.readline().decode(errors="replace").strip()
+                    if not line:
+                        continue
+                    print(line)
+                    if line == "OK" or line == "ERROR" or "+CME ERROR:" in line:
+                        break
+        finally:
+            modem.close()
+    PY
+    echo "--- physical interface ---"
+    ip -4 -o addr show dev {{ synthran_physical_interface }} 2>&1 || true
+    ip link show {{ synthran_physical_interface }} 2>&1 || true
+  register: synthran_mbim_failure_evidence
+  changed_when: false
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_mbim_attach.rc | default(0) | int != 0
+
+- name: Save MBIM DNN or PDU activation failure evidence
+  ansible.builtin.copy:
+    content: >-
+      {{ (synthran_mbim_attach.stdout | default('')) ~ '\n' ~
+         (synthran_mbim_attach.stderr | default('')) ~ '\n' ~
+         (synthran_mbim_failure_evidence.stdout | default('')) ~ '\n' }}
+    dest: "{{ run_dir }}/physical-ue-{{ inventory_hostname }}-attach-failure.log"
+  delegate_to: localhost
+  become: false
+  when:
+    - mode | default('mbim') == 'mbim'
+    - synthran_mbim_attach.rc | default(0) | int != 0
+
+- name: Require MBIM DNN and PDU activation
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_mbim_attach.rc | int == 0
+    fail_msg: >-
+      MBIM DNN/PDU activation failed for {{ inventory_hostname }} on DNN
+      {{ synthran_physical_slice.dnn }}, session
+      {{ synthran_physical_mbim_session_id }}, interface
+      {{ synthran_physical_interface }}. Post-radio modem, NSSAI, PDP-context,
+      activation, and interface evidence was saved to
+      {{ run_dir }}/physical-ue-{{ inventory_hostname }}-attach-failure.log.
+      stderr={{ synthran_mbim_attach.stderr | default('') | trim }}
+  when: mode | default('mbim') == 'mbim'
 
 - name: Start the QMI connection manager
   ansible.builtin.shell: >-
@@ -45,15 +225,15 @@
   changed_when: true
 
 - name: Require the supported physical modem interface
-  ansible.builtin.command: ip link show wwan0
+  ansible.builtin.command: "ip link show {{ synthran_physical_interface }}"
   changed_when: false
 
 - name: Enable the physical modem interface
-  ansible.builtin.command: ip link set wwan0 up
+  ansible.builtin.command: "ip link set {{ synthran_physical_interface }} up"
   changed_when: true
 
 - name: Wait for the physical 5G session address
-  ansible.builtin.command: ip -4 -o addr show dev wwan0
+  ansible.builtin.command: "ip -4 -o addr show dev {{ synthran_physical_interface }}"
   register: synthran_physical_address
   changed_when: false
   retries: "{{ 60 if (mode | default('mbim')) == 'qmi' else 30 }}"
@@ -66,18 +246,18 @@
     address=ipaddress.ip_address(sys.argv[1]);
     network=ipaddress.ip_network(sys.argv[2], strict=False);
     raise SystemExit(0 if address in network else 1)'
-    "$(ip -4 -o addr show dev wwan0 | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    "$(ip -4 -o addr show dev {{ synthran_physical_interface }} | awk '{print $4}' | cut -d/ -f1 | head -n1)"
     "{{ synthran_physical_slice.ip_prefix }}.0/16"
   changed_when: false
 
 - name: Install the route to the assigned UPF
   ansible.builtin.command: >-
-    ip route replace {{ synthran_physical_slice.ip_prefix }}.1 dev wwan0
+    ip route replace {{ synthran_physical_slice.ip_prefix }}.1 dev {{ synthran_physical_interface }}
   changed_when: true
 
 - name: Prove physical user-plane reachability
   ansible.builtin.command: >-
-    ping -I wwan0 -c 1 -W 3 {{ synthran_physical_slice.ip_prefix }}.1
+    ping -I {{ synthran_physical_interface }} -c 1 -W 3 {{ synthran_physical_slice.ip_prefix }}.1
   register: synthran_physical_upf_ping
   changed_when: false
   retries: 15
@@ -102,12 +282,12 @@
 
 - name: Route the broker endpoint through the physical UE session
   ansible.builtin.command: >-
-    ip route replace {{ synthran_physical_broker_ipv4 }}/32 dev wwan0
+    ip route replace {{ synthran_physical_broker_ipv4 }}/32 dev {{ synthran_physical_interface }}
   changed_when: true
 
 - name: Prove MQTT TCP reachability through the physical UE
   ansible.builtin.shell: |
-    ue_source="$(ip -4 -o addr show dev wwan0 | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    ue_source="$(ip -4 -o addr show dev {{ synthran_physical_interface }} | awk '{print $4}' | cut -d/ -f1 | head -n1)"
     python3 -c 'import socket, sys
     sock = socket.socket()
     sock.settimeout(3)
@@ -120,14 +300,43 @@
   delay: 2
   until: synthran_physical_broker_check.rc == 0
 
+- name: Read the proved physical UE IPv4 address
+  ansible.builtin.shell: >-
+    ip -4 -o addr show dev {{ synthran_physical_interface }} |
+    awk '{print $4}' | cut -d/ -f1 | head -n1
+  register: synthran_physical_ipv4
+  changed_when: false
+  failed_when: synthran_physical_ipv4.stdout | trim == ''
+
+- name: Record the structured physical UE binding
+  ansible.builtin.set_fact:
+    synthran_physical_binding:
+      device: "{{ inventory_hostname }}"
+      index: "{{ synthran_physical_contract_ue.index }}"
+      imsi: "{{ synthran_fiveg.plmn.mcc }}{{ synthran_fiveg.plmn.mnc }}{{ synthran_fiveg.ues[inventory_hostname].imsi_suffix }}"
+      slice: "{{ synthran_physical_slice_name }}"
+      dnn: "{{ synthran_physical_slice.dnn }}"
+      interface: "{{ synthran_physical_interface }}"
+      address: "{{ synthran_physical_ipv4.stdout | trim }}"
+      host: "{{ inventory_hostname }}"
+      mode: "{{ mode | default('mbim') }}"
+      mbim_session: >-
+        {{ synthran_physical_mbim_session_id
+           if (mode | default('mbim')) == 'mbim'
+           else none }}
+
 - name: Collect physical UE session evidence
   ansible.builtin.shell: |
     echo "device={{ inventory_hostname }}"
     echo "mode={{ mode | default('mbim') }}"
     echo "dnn={{ synthran_physical_slice.dnn }}"
+    echo "slice={{ synthran_physical_slice_name }}"
+    echo "imsi={{ synthran_fiveg.plmn.mcc }}{{ synthran_fiveg.plmn.mnc }}{{ synthran_fiveg.ues[inventory_hostname].imsi_suffix }}"
+    echo "interface={{ synthran_physical_interface }}"
+    echo "mbim_session={{ synthran_physical_mbim_session_id }}"
     echo "upf={{ synthran_physical_slice.ip_prefix }}.1"
     echo "broker={{ synthran_physical_broker_ipv4 }}:{{ mqtt_port }}"
-    ip -4 -o addr show dev wwan0
+    ip -4 -o addr show dev {{ synthran_physical_interface }}
     ip route show
     qhat-check 2>&1 || true
   register: synthran_physical_evidence

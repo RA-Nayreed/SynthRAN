@@ -3,6 +3,13 @@
   ansible.builtin.set_fact:
     synthran_r2lab_ues: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}"
 
+- name: Load the active 5G profile for physical UE preparation
+  ansible.builtin.include_vars:
+    file: >-
+      {{ fiveg_profile_file |
+         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    name: synthran_fiveg
+
 - name: Power off selected QHAT devices
   ansible.builtin.command: "rhubarbe pdu off {{ item }}"
   loop: "{{ groups['qhats'] | default([]) }}"
@@ -39,19 +46,123 @@
   delay: 10
   until: synthran_r2lab_ping.rc == 0
 
-- name: Initialize selected physical UEs
+- name: Prepare selected MBIM QHATs with the documented R2Lab workflow
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }}
+    prepare-ue
+    {% if synthran_qhat_slice.sd | default('EMPTY') == 'EMPTY' %}
+    --dnn={{ synthran_qhat_slice.dnn }}
+    {% else %}
+    --dnn={{ synthran_qhat_default_slice.dnn }}
+    --dnn2={{ synthran_qhat_slice.dnn }}
+    --nssai2={{ '%02d' | format(synthran_qhat_slice.sst | int) }}.{{ synthran_qhat_slice.sd }}
+    {% endif %}
+  loop: "{{ groups['qhats'] | default([]) }}"
+  when: hostvars[item].mode | default('mbim') == 'mbim'
+  vars:
+    synthran_qhat_slice_name: "{{ synthran_fiveg.ues[item].slice }}"
+    synthran_qhat_slice: >-
+      {{ synthran_fiveg.slices
+         | selectattr('name', 'equalto', synthran_qhat_slice_name)
+         | first }}
+    synthran_qhat_default_slice: >-
+      {{ synthran_fiveg.slices
+         | selectattr('sd', 'defined')
+         | selectattr('sd', 'equalto', 'EMPTY')
+         | first }}
+  changed_when: true
+
+- name: Require MBIM modem enumeration after prepare-ue and recover local USB power if needed
+  ansible.builtin.shell: |
+    set -eu
+    target={{ item }}
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null root@"$target" 'bash -s' <<'QHAT'
+    set -eu
+    modem_ready() {
+      test -c /dev/ttyUSB2 &&
+      test -c /dev/cdc-wdm0 &&
+      ip link show wwan0 >/dev/null 2>&1
+    }
+    if modem_ready; then
+      echo "USB_POWER_RECOVERY=0"
+      exit 0
+    fi
+    echo "USB_POWER_RECOVERY=1"
+    uon || true
+    attempt=1
+    while [ "$attempt" -le 30 ]; do
+      if modem_ready; then
+        echo "MODEM_ENUMERATION=ready"
+        exit 0
+      fi
+      sleep 2
+      attempt=$((attempt + 1))
+    done
+    echo "MODEM_ENUMERATION=missing"
+    lsusb || true
+    ls -l /dev/ttyUSB* /dev/cdc-wdm* 2>&1 || true
+    ip -br link || true
+    exit 1
+    QHAT
+  args:
+    executable: /bin/bash
+  loop: "{{ groups['qhats'] | default([]) }}"
+  when: hostvars[item].mode | default('mbim') == 'mbim'
+  register: synthran_r2lab_mbim_enumeration
+  changed_when: "'USB_POWER_RECOVERY=1' in synthran_r2lab_mbim_enumeration.stdout"
+
+- name: Normalize explicit-SD QHAT contexts onto the secondary R2Lab DNN slot
+  ansible.builtin.shell: |
+    set -eu
+    target={{ item }}
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null root@"$target" 'python3 -' <<'PY'
+    import serial
+    import time
+
+    modem = serial.Serial("/dev/ttyUSB2", 460800, timeout=1)
+    try:
+        for command in ["AT+CGDCONT=2", "AT+CGDCONT?"]:
+            modem.reset_input_buffer()
+            modem.write((command + "\r").encode())
+            deadline = time.time() + 5
+            lines = []
+            while time.time() < deadline:
+                line = modem.readline().decode(errors="replace").strip()
+                if not line:
+                    continue
+                lines.append(line)
+                if line == "OK" or line == "ERROR" or "+CME ERROR:" in line:
+                    break
+            print("\n".join(lines))
+            if command == "AT+CGDCONT=2" and ("ERROR" in lines or any("+CME ERROR:" in line for line in lines)):
+                raise SystemExit(1)
+    finally:
+        modem.close()
+    PY
+  args:
+    executable: /bin/bash
+  loop: "{{ groups['qhats'] | default([]) }}"
+  when:
+    - hostvars[item].mode | default('mbim') == 'mbim'
+    - synthran_qhat_slice.sd | default('EMPTY') != 'EMPTY'
+  vars:
+    synthran_qhat_slice_name: "{{ synthran_fiveg.ues[item].slice }}"
+    synthran_qhat_slice: >-
+      {{ synthran_fiveg.slices
+         | selectattr('name', 'equalto', synthran_qhat_slice_name)
+         | first }}
+  register: synthran_r2lab_secondary_context_normalization
+  changed_when: true
+
+- name: Initialize selected non-MBIM physical UEs with the existing helper
   ansible.builtin.command: >-
     ssh -o BatchMode=yes -o StrictHostKeyChecking=no
     -o UserKnownHostsFile=/dev/null root@{{ item }} qhat-init
   loop: "{{ synthran_r2lab_ues }}"
-  changed_when: true
-
-- name: Stop MBIM UEs after initialization
-  ansible.builtin.command: >-
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
-    -o UserKnownHostsFile=/dev/null root@{{ item }} stop.sh
-  loop: "{{ synthran_r2lab_ues }}"
-  when: hostvars[item].mode | default('mbim') == 'mbim'
+  when: hostvars[item].mode | default('mbim') != 'mbim'
   changed_when: true
 
 - name: Detach QMI UEs after initialization
@@ -64,3 +175,22 @@
   loop: "{{ synthran_r2lab_ues }}"
   when: hostvars[item].mode | default('mbim') == 'qmi'
   changed_when: true
+
+- name: Capture post-initialization physical UE state
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null root@{{ item }} qhat-check
+  loop: "{{ synthran_r2lab_ues }}"
+  register: synthran_r2lab_qhat_check
+  changed_when: false
+  failed_when: false
+
+- name: Report post-initialization physical UE state
+  ansible.builtin.debug:
+    msg:
+      - "UE={{ item.item }}"
+      - "{{ item.stdout_lines | default([]) }}"
+      - "stderr={{ item.stderr | default('') | trim }}"
+  loop: "{{ synthran_r2lab_qhat_check.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"

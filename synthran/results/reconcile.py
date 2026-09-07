@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from ..deployment_state import bindings_match_deployment
+
 
 def _read(path: str | Path) -> list[dict]:
     source = Path(path)
@@ -40,13 +42,7 @@ def _deployment_evidence(expected: str | Path) -> dict:
     cluster_verified = evidence.get("cluster_identity_verified") is True
     deployment = identity.get("deployment", {})
     bindings = evidence.get("bindings", [])
-    binding_fields = ("device", "index", "imsi", "slice", "dnn")
-    binding_verified = (
-        [tuple(item.get(field) for field in binding_fields) for item in bindings]
-        == [tuple(item.get(field) for field in binding_fields) for item in deployment.get("ues", [])]
-        if deployment.get("platform") == "rfsim"
-        else True
-    )
+    binding_verified = bindings_match_deployment(deployment, bindings)
     status_valid = identity.get("status") in {"active", "reused"}
     verified = matches and cluster_verified and binding_verified and status_valid
     return {
@@ -55,6 +51,7 @@ def _deployment_evidence(expected: str | Path) -> dict:
         "deployment_hash": identity.get("deployment_hash"),
         "scenario_hash": identity.get("scenario_hash"),
         "cluster_identity_verified": cluster_verified,
+        "binding_verified": binding_verified,
         "bindings": bindings,
         "reason": None if verified else "live evidence does not completely match the deployment identity",
     }

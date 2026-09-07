@@ -1,0 +1,5 @@
+---
+# A fresh full R2Lab deployment starts N3xx radios from a known power state.
+# These waits are implementation timing, not experiment parameters.
+r2lab_n3xx_power_off_seconds: 20
+r2lab_n3xx_boot_seconds: 60

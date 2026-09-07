@@ -1,7 +1,7 @@
 ---
 - name: Configure CPU and tuned profile on Ubuntu 22.04
   block:
-  
+
     - name: Install cpupower utility
       package:
         name:
@@ -70,23 +70,55 @@
       when: inventory_hostname == "sopnode-f3"
 
     - block:
-        - name: Check if hyperthreading is disabled (reliable method)
-          shell: |
+        - name: Read the current SMT control state
+          ansible.builtin.command: cat /sys/devices/system/cpu/smt/control
+          register: smt_control_before
+          changed_when: false
+          failed_when: false
+
+        - name: Check whether live SMT control is writable
+          ansible.builtin.command: test -w /sys/devices/system/cpu/smt/control
+          register: smt_control_writable
+          changed_when: false
+          failed_when: false
+
+        - name: Disable SMT live when the kernel exposes writable SMT control
+          ansible.builtin.shell: |
+            set -eu
+            echo off > /sys/devices/system/cpu/smt/control
+          args:
+            executable: /bin/bash
+          register: smt_disable
+          changed_when: true
+          when:
+            - smt_control_before.rc == 0
+            - smt_control_before.stdout | trim == 'on'
+            - smt_control_writable.rc == 0
+
+        - name: Read the SMT control state after preparation
+          ansible.builtin.command: cat /sys/devices/system/cpu/smt/control
+          register: smt_control_after
+          changed_when: false
+          failed_when: false
+
+        - name: Verify hyperthreading is disabled
+          ansible.builtin.shell: |
             threads_per_core=$(lscpu | awk '/^Thread\(s\) per core:/ {print $4}')
-            if [ "$threads_per_core" -eq 1 ]; then
-              echo "Hyperthreading is disabled"
-              exit 0
-            else
-              echo "Hyperthreading is enabled"
-              exit 1
-            fi
+            smt_state="$(cat /sys/devices/system/cpu/smt/control 2>/dev/null || echo unavailable)"
+            echo "SMT control: ${smt_state}"
+            echo "Thread(s) per core: ${threads_per_core}"
+            test "${threads_per_core}" -eq 1
+          args:
+            executable: /bin/bash
           register: ht_check
           changed_when: false
           failed_when: ht_check.rc != 0
 
         - name: Show hyperthreading status
-          debug:
-            msg: "{{ ht_check.stdout }}"
+          ansible.builtin.debug:
+            msg:
+              - "{{ ht_check.stdout_lines }}"
+              - "SMT control writable={{ smt_control_writable.rc == 0 }}"
       when: inventory_hostname == "sopnode-f3"
 
     - block:

@@ -1,114 +1,193 @@
 ---
-- name: "Execute deployment attempt"
-  block:
-  - name: Report the current gNB deployment attempt
-    ansible.builtin.debug:
-      msg: "Starting gNB deployment attempt {{ gnb_attempt }} of {{ max_attempts }}"
+- name: Initialize physical gNB startup state
+  ansible.builtin.set_fact:
+    gnb_startup_success: false
+    gnb_pod_name: ""
 
-  - name: Ensure values file has node constraints
-    ansible.builtin.blockinfile:
-      path: "{{ values_file }}"
-      marker: "# {mark} ANSIBLE MANAGED NODE SELECTOR"
-      insertafter: EOF
-      block: |
-        nodeSelector:
-          kubernetes.io/hostname: "{{ ran_node_name }}"
-        nodeName: {{ ran_node_name }}
+- name: Ensure values file has node constraints
+  ansible.builtin.blockinfile:
+    path: "{{ values_file }}"
+    marker: "# {mark} ANSIBLE MANAGED NODE SELECTOR"
+    insertafter: EOF
+    block: |
+      nodeSelector:
+        kubernetes.io/hostname: "{{ ran_node_name }}"
+      nodeName: {{ ran_node_name }}
 
-  - name: Fix space after addr= in device_args
-    ansible.builtin.replace:
-      path: "{{ values_file }}"
-      regexp: 'addr=\s*([0-9.]+)\s*,'
-      replace: 'addr=\1,'
+- name: Fix space after addr= in device_args
+  ansible.builtin.replace:
+    path: "{{ values_file }}"
+    regexp: 'addr=\s*([0-9.]+)\s*,'
+    replace: 'addr=\1,'
 
-  - name: Deploy srsRAN gNB using Helm
-    kubernetes.core.helm:
-      name: srsran-gnb
-      chart_ref: "{{ [repo_dest_abs, 'charts', 'srsran-gnb'] | path_join }}"
-      release_namespace: "{{ ran_ns }}"
-      values_files:
-        - "{{ values_file }}"
-      state: present
-      wait: true
-      atomic: true
-      timeout: 120s
-    register: helm_result
-    ignore_errors: yes
+- name: Deploy physical srsRAN gNB once
+  kubernetes.core.helm:
+    name: srsran-gnb
+    chart_ref: "{{ [repo_dest_abs, 'charts', 'srsran-gnb'] | path_join }}"
+    release_namespace: "{{ ran_ns }}"
+    values_files:
+      - "{{ values_file }}"
+    state: present
+    wait: false
+    atomic: false
+  register: helm_result
+  ignore_errors: true
 
-  - name: Wait for initial Ready state
-    kubernetes.core.k8s_info:
-      kind: Pod
-      namespace: "{{ ran_ns }}"
-      label_selectors: "{{ srs_gnb_label_selectors }}"
-    register: pod_initial
-    until: 
-      - pod_initial.resources | length > 0
-      - (pod_initial.resources[0].status.containerStatuses | default([{'ready':false}]) | selectattr('name', 'equalto', 'gnb') | first).ready | bool
-    retries: 3
-    delay: 5
-    ignore_errors: yes
-    when: helm_result is succeeded
+- name: Wait quietly for the physical gNB pod to be created
+  ansible.builtin.shell: |
+    set -u
+    deadline=$(( $(date +%s) + {{ physical_gnb_pod_create_timeout_seconds | int }} ))
+    while (( $(date +%s) < deadline )); do
+      pod="$({{ kubectl_bin }} get pods -n "{{ ran_ns }}" \
+        -l "{{ srs_gnb_label_selectors | join(',') }}" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+      if [[ -n "$pod" ]]; then
+        printf '%s\n' "$pod"
+        exit 0
+      fi
+      sleep 2
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  register: gnb_pod_lookup
+  changed_when: false
+  failed_when: false
+  when: helm_result is succeeded
 
-  - name: Stability window
-    ansible.builtin.pause:
-      seconds: 45
-    when: 
-      - helm_result is succeeded
-      - pod_initial.resources is defined and pod_initial.resources | length > 0
+- name: Record the physical gNB pod name
+  ansible.builtin.set_fact:
+    gnb_pod_name: "{{ gnb_pod_lookup.stdout | default('') | trim }}"
+  when:
+    - helm_result is succeeded
+    - gnb_pod_lookup is defined
+    - gnb_pod_lookup.rc | default(1) | int == 0
 
-  - name: Final stability check
-    kubernetes.core.k8s_info:
-      kind: Pod
-      namespace: "{{ ran_ns }}"
-      label_selectors: "{{ srs_gnb_label_selectors }}"
-    register: pod_final
-    when: helm_result is succeeded
+- name: Wait for the physical gNB startup gate
+  ansible.builtin.shell: |
+    set -u
+    start_epoch=$(date +%s)
+    deadline=$(( start_epoch + {{ physical_gnb_startup_timeout_seconds | int }} ))
+    last_phase="unknown"
+    last_ready="false"
 
-  - name: Evaluate deployment success
-    ansible.builtin.set_fact:
-      gnb_startup_success: >-
-        {{
-          helm_result is succeeded and
-          pod_final.resources | default([]) | length > 0 and
-          (pod_final.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).ready | bool and
-          (pod_final.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int == 
-          (pod_initial.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'gnb') | first).restartCount | int
-        }}
+    while (( $(date +%s) < deadline )); do
+      current_log="$({{ kubectl_bin }} logs -n "{{ ran_ns }}" "{{ gnb_pod_name }}" -c gnb 2>&1 || true)"
+      last_phase="$({{ kubectl_bin }} get pod -n "{{ ran_ns }}" "{{ gnb_pod_name }}" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+      last_ready="$({{ kubectl_bin }} get pod -n "{{ ran_ns }}" "{{ gnb_pod_name }}" \
+        -o jsonpath='{.status.containerStatuses[?(@.name=="gnb")].ready}' 2>/dev/null || true)"
 
-  - name: Handle IP Swap
-    block:
-    - name: Extract current IP
-      ansible.builtin.shell: |
-        grep -oE 'addr=[0-9.]+' {{ values_file }} | head -1 | cut -d= -f2 | tr -d ' '
-      register: current_ip_cmd
-      changed_when: false
+      amf_seen=0
+      start_seen=0
 
-    - name: Determine new IP
-      ansible.builtin.set_fact:
-        new_ip: >-
-          {%- if current_ip_cmd.stdout == '192.168.235.105' -%}192.168.235.106
-          {%- elif current_ip_cmd.stdout == '192.168.235.106' -%}192.168.235.105
-          {%- elif current_ip_cmd.stdout == '192.168.235.103' -%}192.168.235.104
-          {%- elif current_ip_cmd.stdout == '192.168.235.104' -%}192.168.235.103
-          {%- else -%}{{ current_ip_cmd.stdout }}{%- endif -%}
+      if [[ "$current_log" == *"Connected to AMF"* ]] || \
+         { [[ "$current_log" == *"N2: Connection to AMF"* ]] && [[ "$current_log" == *" completed"* ]]; }; then
+        amf_seen=1
+      fi
 
-    - name: Apply IP swap
-      ansible.builtin.replace:
-        path: "{{ values_file }}"
-        regexp: '(?<==){{ current_ip_cmd.stdout | regex_escape }}'
-        replace: "{{ new_ip }}"
-      when: new_ip != current_ip_cmd.stdout
+      if [[ "$current_log" == *"gNB started"* ]] || \
+         [[ "$current_log" == *"Cell was activated"* ]]; then
+        start_seen=1
+      fi
 
-    - name: Remove failed Helm release
-      kubernetes.core.helm:
-        name: srsran-gnb
-        release_namespace: "{{ ran_ns }}"
-        state: absent
-        wait: true
-      when: gnb_attempt | int < max_attempts | int
+      if (( amf_seen == 1 && start_seen == 1 )) && \
+         [[ "$last_phase" == "Running" ]] && \
+         [[ "${last_ready,,}" == "true" ]]; then
+        printf 'PASS after %ss: pod=%s phase=%s ready=%s N2=completed gNB=started\n' \
+          "$(( $(date +%s) - start_epoch ))" "{{ gnb_pod_name }}" "$last_phase" "$last_ready"
+        exit 0
+      fi
 
-    when: 
-      - not gnb_startup_success | bool
-      - rru in ['n300', 'n320']
+      sleep {{ physical_gnb_poll_interval_seconds | int }}
+    done
 
+    printf 'TIMEOUT after %ss: pod=%s phase=%s ready=%s\n' \
+      "$(( $(date +%s) - start_epoch ))" "{{ gnb_pod_name }}" "$last_phase" "$last_ready"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: gnb_startup_gate
+  changed_when: false
+  failed_when: false
+  when: gnb_pod_name | length > 0
+
+- name: Accept the physical gNB startup gate result
+  ansible.builtin.set_fact:
+    gnb_startup_success: >-
+      {{
+        helm_result is succeeded and
+        gnb_startup_gate is defined and
+        (gnb_startup_gate.rc | default(1) | int) == 0
+      }}
+
+- name: Read the physical gNB log for retained evidence
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - logs
+      - -n
+      - "{{ ran_ns }}"
+      - "{{ gnb_pod_name }}"
+      - -c
+      - gnb
+  register: gnb_runtime_log
+  changed_when: false
+  failed_when: false
+  when: gnb_pod_name | length > 0
+
+- name: Report physical gNB startup gate
+  ansible.builtin.debug:
+    msg:
+      - "Physical gNB startup gate: {{ 'PASS' if gnb_startup_success | bool else 'FAIL' }}"
+      - "{{ gnb_startup_gate.stdout | default('Startup gate did not run because no gNB pod was found.') }}"
+
+- name: Retain the physical gNB log with the run
+  ansible.builtin.copy:
+    content: |-
+      {{ gnb_runtime_log.stdout | default('') }}
+      {{ gnb_runtime_log.stderr | default('') }}
+    dest: "{{ run_dir }}/gnb.log"
+  delegate_to: localhost
+
+- name: Retain physical gNB startup-gate result with the run
+  ansible.builtin.copy:
+    content: |-
+      success={{ gnb_startup_success | bool }}
+      pod={{ gnb_pod_name | default('') }}
+      gate={{ gnb_startup_gate.stdout | default('not-run') }}
+    dest: "{{ run_dir }}/gnb-health.txt"
+  delegate_to: localhost
+
+- name: Capture the physical gNB pod description on startup-gate failure
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - describe
+      - pod
+      - -n
+      - "{{ ran_ns }}"
+      - "{{ gnb_pod_name }}"
+  register: gnb_pod_description
+  changed_when: false
+  failed_when: false
+  when:
+    - not gnb_startup_success | bool
+    - gnb_pod_name | length > 0
+
+- name: Retain physical gNB diagnostics on startup-gate failure
+  ansible.builtin.copy:
+    content: "{{ gnb_pod_description.stdout | default('No gNB pod was available to describe.') }}\n"
+    dest: "{{ run_dir }}/gnb-describe.txt"
+  delegate_to: localhost
+  when: not gnb_startup_success | bool
+
+- name: Stop when the physical gNB never becomes ready for UE attachment
+  ansible.builtin.fail:
+    msg: >-
+      Physical srsRAN gNB did not reach the startup gate within
+      {{ physical_gnb_startup_timeout_seconds }} seconds. The live Helm release
+      and pod were preserved. Review {{ run_dir }}/gnb.log and
+      {{ run_dir }}/gnb-describe.txt before changing RF, core, or topology
+      settings.
   when: not gnb_startup_success | bool

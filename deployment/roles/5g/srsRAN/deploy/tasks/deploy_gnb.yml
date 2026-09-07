@@ -40,39 +40,21 @@
   ansible.builtin.command: helm uninstall srsran-gnb -n {{ ran_ns }} --no-hooks
   when: gnb_release_exists.rc == 0
 
-- name: Deploy srsRAN gNB (only when not rfsim)
+- name: Deploy and validate the physical srsRAN gNB once
+  ansible.builtin.include_tasks: deploy_with_check.yml
   when: rru in ['n300', 'n320']
-  block:
 
-    - name: Set initial retry facts
-      ansible.builtin.set_fact:
-        gnb_startup_success: false
-        max_attempts: 2
-
-    - name: Deploy and monitor srsRAN gNB with bounded retries
-      block:
-        - name: Run a gNB deployment attempt
-          ansible.builtin.include_tasks: deploy_with_check.yml
-          loop: "{{ range(1, max_attempts + 1) | list }}"
-          loop_control:
-            loop_var: gnb_attempt
-            label: "attempt {{ gnb_attempt }}"
-          when: not gnb_startup_success
-
-      rescue:
-        - name: Final failure message
-          ansible.builtin.fail:
-            msg: "gNB failed to start properly on both IP addresses."
-          when: not gnb_startup_success
-
-    - name: Confirm success
-      ansible.builtin.debug:
-        msg: "srsRAN gNB is running successfully!"
-      when: gnb_startup_success
+- name: Confirm physical gNB startup gate
+  ansible.builtin.debug:
+    msg: "srsRAN gNB reached the physical startup gate and is ready for UE attachment."
+  when:
+    - rru in ['n300', 'n320']
+    - gnb_startup_success | default(false) | bool
 
 - name: Configure SR-IOV for Benetel with DPDK
   when: rru in ['benetel1', 'benetel2']
   block:
+
     - name: Load ran_node vars
       include_vars:
         file: "{{ playbook_dir }}/../group_vars/ran_node.yml"
@@ -217,4 +199,3 @@
   when:
     - rru in ['benetel1', 'benetel2']
     - venv_python.stat.exists | default(false)
-
