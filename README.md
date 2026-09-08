@@ -23,8 +23,10 @@ For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly to
 source of truth: known devices use the selected 5G profile, while additional
 names such as `uesim04` receive a deterministic IMSI and the profile's first
 slice. A scenario can override either value under `deployment.ue_profiles`.
-Missing model-device entries are materialized from the declared device templates
-in UE order, and the explicit result is retained in `resolved-scenario.yml`.
+Modeled sensors are declared separately under `devices`, with each sensor mapped
+to a UE using `gateway`. Many sensors may share a UE, and a competing-traffic UE
+may have no modeled sensors. A same-named sensor/UE mapping remains implicit for
+existing scenarios. Undeclared mappings are rejected, not silently materialized.
 A preparation-only run is available without deploying infrastructure:
 
 ```sh
@@ -63,8 +65,8 @@ fails closed unless the source identity is intact, its attestation evidence is
 present, and the same identity is still stored in the live Kubernetes cluster.
 
 SynthRAN never rewrites the supplied scenario. Every run retains an immutable
-`resolved-scenario.yml` containing reservation-time node choices and materialized
-device settings.
+`resolved-scenario.yml` containing reservation-time node choices and explicit
+sensor-to-gateway settings.
 
 After a successful full run, SynthRAN stores a versioned deployment identity in
 both `.synthran/deployment-fingerprint.json` and the live Kubernetes cluster.
@@ -107,4 +109,16 @@ For software UEs, the workload role discovers the real tunnel inside running
 UE pods and injects an isolated publisher container into the same network
 namespace. This keeps MQTT replay independent of the selected core and dispatches
 uniformly across OAI NR-UE, UERANSIM, and srsUE. Physical qhat/qfit publishers
-run on their UE hosts and bind to `wwan0`.
+run on their UE hosts and bind to the verified source address on `wwan0`, or an
+explicit per-UE interface in `deployment.ue_interfaces`.
+
+## Scientific experiment readiness
+
+The research plan contains **seven experiment families**, with energy-driven
+burst formation, matched-trace physical 5G transport, and gateway freshness
+mitigation forming the core study. MAC/SIC, aggregation/scaling, isolation, and
+RF robustness provide supporting studies.
+
+See [the readiness and migration guide](docs/experiment-readiness.md) for the
+corrected model contract, immutable timing interventions, measurement validity,
+local acceptance tests, and the remaining physical qualification gates.

@@ -118,7 +118,10 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
         else:
-            entry["tunnel"] = {"host": device, "interface": "wwan0"}
+            interface = deployment.get("ue_interfaces", {}).get(device, "wwan0")
+            if not isinstance(interface, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface):
+                raise ValueError(f"invalid physical interface for {device}")
+            entry["tunnel"] = {"host": device, "interface": interface}
         result.append(entry)
     return result
 

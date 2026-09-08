@@ -16,7 +16,7 @@
     PYTHONPATH: /opt/synthran-source
   changed_when: false
 - name: Require physical UE interface
-  command: ip -4 -o addr show dev wwan0
+  command: ip -4 -o addr show dev {{ synthran_physical_interface }}
   register: ue_tunnel
   changed_when: false
   failed_when: "' inet ' not in ue_tunnel.stdout"

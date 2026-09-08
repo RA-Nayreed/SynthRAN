@@ -14,6 +14,9 @@ class TxRecord:
     payload: int
     slot_idx: int
     delivered: bool
+    start_ms: float = 0.0
+    event_id: str | None = None
+    energy_complete: bool = True
 
 
 @dataclass
@@ -56,6 +59,9 @@ class BackscatterModule:
         self.log_file = log_file
         self.keep_logs = keep_logs
 
+        self.controller = None
+        self.rng = random.Random(node.id)
+        self.pending_transmission = None
         self.state = "idle"  # idle, wait_ack, registered
 
         # RX slot timing (set by BS command)
@@ -100,6 +106,8 @@ class BackscatterModule:
             Optional dict with rx_slots list of (start_ms, end_ms) tuples, by default None
         """
         data = data or {}
+        if self.controller is not None and not self.controller.receive_enabled:
+            return
 
         # Check if received power is above node sensitivity
         node_sensitivity = getattr(self.node, "sensitivity_dbm", -45.0)
@@ -157,7 +165,7 @@ class BackscatterModule:
                 self.rx_slots = []
                 return
             if self.rx_slots:
-                self.chosen_slot_idx = random.randint(0, len(self.rx_slots) - 1)
+                self.chosen_slot_idx = self.rng.randrange(len(self.rx_slots))
             else:
                 self.chosen_slot_idx = -1
             self.state = "wait_ack"
@@ -179,14 +187,14 @@ class BackscatterModule:
                 # self.chosen_slot_idx = 0 if self.rx_slots else -1 
                 if self.rx_slots:
                     if target == self.node.id:
-                        self.chosen_slot_idx = len(self.rx_slots) - 1  # Unicast: pick earliest slot deterministically
+                        self.chosen_slot_idx = 0
                     else:
-                        self.chosen_slot_idx = random.randint(0, len(self.rx_slots) - 1)  # Broadcast: random
+                        self.chosen_slot_idx = self.rng.randrange(len(self.rx_slots))  # Broadcast: random
                 else:
                     self.chosen_slot_idx = -1
                 self.last_tx_command_time = self.env.now
 
-    def controller_tx_ready(self, sensor_data: int) -> Optional[dict]:
+    def controller_tx_ready(self, sensor_data: int, duration_ms: float = 0.0) -> Optional[dict]:
         """Called by Controller when it enters TX state.
         Returns what to transmit, or None if not ready.
 
@@ -219,7 +227,7 @@ class BackscatterModule:
         now = self.env.now
         # Reject now == slot_end: the BS _do_rx window uses `while now < end_time`,
         # so at exactly slot_end it has already closed and would miss the packet.
-        if now < slot_start or now >= slot_end:
+        if now < slot_start or now >= slot_end or now + duration_ms > slot_end + 1e-9:
             return None  # Not in our slot yet (or past it)
 
         # Verify slot was assigned after the command (not stale from previous cycle)
@@ -256,76 +264,49 @@ class BackscatterModule:
 
         return None
 
-    def do_transmit(self, tx_info: dict) -> bool:
-        """Perform the actual transmission to BS.
-        Parameters
-        ----------
-        tx_info : dict
-            Dict with "type" ("id" or "data") and "payload"
-
-        Returns
-        -------
-        bool
-            True if transmission was attempted, False if not ready to transmit
-        """        
-
-        payload_type = tx_info["type"]
-        payload = tx_info["payload"]
-
-        # Use pre-computed uplink results
-        per_sector = self.uplink_results.get("per_sector_powers", {})
-
-        delivered = False
-        for bs in self.bs_processes:
-            # Find best sector for this BS where this node is visible
-            best_sector_name = None
-            best_rssi_dbm = -999.0
-
-            for sector_name, node_powers in per_sector.items():
-                 if sector_name.startswith(f"BS{bs.id}_"):
-                    if self.node.id in node_powers:
-                        rssi = node_powers[self.node.id]
-                        if rssi > best_rssi_dbm:
-                            best_rssi_dbm = rssi
-                            best_sector_name = sector_name
-
-            # Skip this BS if node not visible to any of its sectors
-            if best_sector_name is None:
-                continue
-
-            # Set scratch and interrupt
-            bs.received_tag_id = self.node.id
-            bs.data_from_tag = payload
-            bs.rssi_dbm = best_rssi_dbm
-            bs.best_sector_idx = int(best_sector_name.split("_S")[1])
-            bs.subcarrier_shift = getattr(self.node, "subcarrier_shift", 0)
-
-            bs.action.interrupt("receive_data")
-            delivered = True
-
-        # Log
-        if self.keep_logs:
-            self.tx_records.append(
-                TxRecord(
-                    end_ms=self.env.now,
-                    payload_type=payload_type,
-                    payload=payload,
-                    slot_idx=self.chosen_slot_idx,
-                    delivered=delivered,
-                )
-            )
-
-        self.packets_sent += 1
-        if delivered:
-            self.packets_delivered += 1
-
-        # Clear state after transmission to prevent re-transmission
-        # Node must receive a new command to transmit again
+    def clear_slot(self):
         self.chosen_slot_idx = -1
         self.rx_slots = []
         self.last_tx_command_time = -1.0
 
+    def do_transmit(self, tx_info: dict) -> bool:
+        """Register an in-flight packet; decoding waits for energy completion."""
+        tx_info.setdefault("start_ms", float(self.env.now))
+        tx_info.setdefault("end_ms", float(self.env.now) + 1e-6)
+        tx_info.setdefault("energy_complete", True)
+        delivered = False
+        per_sector = self.uplink_results.get("per_sector_powers", {})
+        for bs in self.bs_processes:
+            visible = [(power[self.node.id], name) for name, power in per_sector.items()
+                       if name.startswith(f"BS{bs.id}_") and self.node.id in power]
+            if not visible:
+                continue
+            rssi, name = max(visible)
+            delivered |= bs.receive_packet({
+                "node_id": self.node.id, "rssi_dbm": rssi,
+                "sector_idx": int(name.split("_S")[1]),
+                "subcarrier_shift": getattr(self.node, "subcarrier_shift", 0),
+                "transmission": tx_info,
+            })
+        record = TxRecord(end_ms=tx_info["end_ms"], start_ms=tx_info["start_ms"],
+                          payload_type=tx_info["type"], payload=tx_info["payload"],
+                          slot_idx=self.chosen_slot_idx, delivered=delivered,
+                          event_id=tx_info.get("event_id"), energy_complete=tx_info["energy_complete"])
+        if self.keep_logs:
+            self.tx_records.append(record)
+        self.pending_transmission = (tx_info, record)
+        self.packets_sent += 1
+        self.packets_delivered += int(delivered)
+        self.clear_slot()
         return delivered
+
+    def complete_transmission(self, success: bool):
+        if self.pending_transmission is None:
+            return
+        info, record = self.pending_transmission
+        info["end_ms"] = record.end_ms = float(self.env.now)
+        info["energy_complete"] = record.energy_complete = bool(success)
+        self.pending_transmission = None
 
     def save_logs(self, clear: bool = True):
         """Save logs to file using pandas and optionally clear lists.
