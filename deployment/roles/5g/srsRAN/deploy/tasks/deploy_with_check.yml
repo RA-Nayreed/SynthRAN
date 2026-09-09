@@ -40,8 +40,8 @@
     while (( $(date +%s) < deadline )); do
       pod="$({{ kubectl_bin }} get pods -n "{{ ran_ns }}" \
         -l "{{ srs_gnb_label_selectors | join(',') }}" \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-      if [[ -n "$pod" ]]; then
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+      if [[ -n "$pod" && "$pod" != *" "* ]]; then
         printf '%s\n' "$pod"
         exit 0
       fi
@@ -70,13 +70,22 @@
     deadline=$(( start_epoch + {{ physical_gnb_startup_timeout_seconds | int }} ))
     last_phase="unknown"
     last_ready="false"
+    stable_since=0
+    stable_identity=""
 
     while (( $(date +%s) < deadline )); do
       current_log="$({{ kubectl_bin }} logs -n "{{ ran_ns }}" "{{ gnb_pod_name }}" -c gnb 2>&1 || true)"
-      last_phase="$({{ kubectl_bin }} get pod -n "{{ ran_ns }}" "{{ gnb_pod_name }}" \
-        -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-      last_ready="$({{ kubectl_bin }} get pod -n "{{ ran_ns }}" "{{ gnb_pod_name }}" \
-        -o jsonpath='{.status.containerStatuses[?(@.name=="gnb")].ready}' 2>/dev/null || true)"
+      pod_state="$({{ kubectl_bin }} get pod -n "{{ ran_ns }}" "{{ gnb_pod_name }}" \
+        -o jsonpath='{.metadata.uid}|{.status.phase}|{.status.containerStatuses[?(@.name=="gnb")].ready}|{.status.containerStatuses[?(@.name=="gnb")].restartCount}' 2>/dev/null || true)"
+      IFS='|' read -r pod_uid last_phase last_ready restarts <<< "$pod_state"
+      if [[ -n "$stable_identity" && "$pod_uid:$restarts" != "$stable_identity" ]]; then
+        printf 'FAIL: gNB identity or restart count changed during stability observation\n'
+        exit 1
+      fi
+      if [[ "$current_log" =~ Segmentation[[:space:]]fault|terminate[[:space:]]called|SIGABRT|Assertion.*failed ]]; then
+        printf 'FAIL: fatal gNB process error\n'
+        exit 1
+      fi
 
       amf_seen=0
       start_seen=0
@@ -92,11 +101,22 @@
       fi
 
       if (( amf_seen == 1 && start_seen == 1 )) && \
+         [[ -n "$pod_uid" && "$restarts" =~ ^[0-9]+$ ]] && \
          [[ "$last_phase" == "Running" ]] && \
          [[ "${last_ready,,}" == "true" ]]; then
-        printf 'PASS after %ss: pod=%s phase=%s ready=%s N2=completed gNB=started\n' \
-          "$(( $(date +%s) - start_epoch ))" "{{ gnb_pod_name }}" "$last_phase" "$last_ready"
-        exit 0
+        if (( stable_since == 0 )); then
+          stable_since=$(date +%s)
+          stable_identity="$pod_uid:$restarts"
+        fi
+        if (( $(date +%s) - stable_since >= {{ physical_gnb_stability_seconds | int }} )); then
+          printf 'PASS after %ss: pod=%s uid=%s restarts=%s stable=%ss N2=completed gNB=started\n' \
+            "$(( $(date +%s) - start_epoch ))" "{{ gnb_pod_name }}" "$pod_uid" "$restarts" \
+            "{{ physical_gnb_stability_seconds | int }}"
+          exit 0
+        fi
+      elif [[ -n "$stable_identity" ]]; then
+        printf 'FAIL: gNB lost readiness during stability observation\n'
+        exit 1
       fi
 
       sleep {{ physical_gnb_poll_interval_seconds | int }}

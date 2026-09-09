@@ -101,16 +101,13 @@ def _physical_mode(platform: str, device: str) -> str:
     return "mbim"
 
 
-def _physical_tunnel(platform: str, device: str, selected_slice: dict) -> dict:
+def _physical_tunnel(platform: str, device: str) -> dict:
     mode = _physical_mode(platform, device)
-    explicit_sd = str(selected_slice.get("sd", "EMPTY")).upper() != "EMPTY"
-    mbim_session = 1 if mode == "mbim" and explicit_sd else 0 if mode == "mbim" else None
-    interface = "wwan0.1" if mbim_session == 1 else "wwan0"
     return {
         "host": device,
-        "interface": interface,
+        "interface": "wwan0",
         "mode": mode,
-        "mbim_session": mbim_session,
+        "mbim_session": 0 if mode == "mbim" else None,
     }
 
 
@@ -169,6 +166,8 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
         live = by_device.get(str(contract.get("device")))
         if live is None or binding_identity(live) != binding_identity(contract):
             return False
+        if deployment.get("platform") in {"r2lab", "physical"} and live.get("modem_verified") is not True:
+            return False
         cidr = contract.get("address_cidr")
         address = live.get("address")
         if cidr:
@@ -226,7 +225,7 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
         else:
-            entry["tunnel"] = _physical_tunnel(platform, device, selected_slice)
+            entry["tunnel"] = _physical_tunnel(platform, device)
         result.append(entry)
     return result
 

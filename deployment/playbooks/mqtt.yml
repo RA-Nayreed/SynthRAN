@@ -66,12 +66,25 @@
         fail_msg: Physical UE binding evidence does not cover the complete deployment contract.
       when: platform in ['r2lab', 'physical']
 
+    - name: Read the existing cluster attestation
+      ansible.builtin.set_fact:
+        synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"
+      when: platform in ['r2lab', 'physical']
+
+    - name: Require a matching cluster attestation before adding UE evidence
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_cluster_evidence.cluster_identity_verified is sameas true
+          - synthran_cluster_evidence.deployment_hash == synthran_deployment_contract.deployment_hash
+        fail_msg: Physical UE observations cannot replace a missing or mismatched cluster attestation.
+      when: platform in ['r2lab', 'physical']
+
     - name: Retain physical UE bindings with the run
       ansible.builtin.copy:
         content: >-
-          {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
-               'cluster_identity_verified': true,
-               'bindings': synthran_physical_bindings} | to_nice_json }}
+          {{ synthran_cluster_evidence
+             | combine({'bindings': synthran_physical_bindings}) | to_nice_json }}
         dest: "{{ run_dir }}/live-deployment-evidence.json"
       when: platform in ['r2lab', 'physical']
 

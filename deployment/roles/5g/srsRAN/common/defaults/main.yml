@@ -25,6 +25,7 @@ yq_url: "https://github.com/mikefarah/yq/releases/download/{{ yq_version }}/yq_l
 physical_gnb_pod_create_timeout_seconds: 60
 physical_gnb_startup_timeout_seconds: 300
 physical_gnb_poll_interval_seconds: 5
+physical_gnb_stability_seconds: 15
 
 # Selected from deployment/topology.yml and included in the deployment hash.
 srsran_network: "{{ synthran_topology.network }}"

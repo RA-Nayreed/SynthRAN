@@ -39,9 +39,10 @@ evidence also requires the deliberate scenario setting
 `deployment.allow_destructive_node_reset: true`; otherwise the Kubernetes/CNI/
 containerd reset is refused before any destructive task runs.
 
-A full deployment allocates the selected SOP nodes, selects the configured POS
-image, and resets them into a known state even when an existing calendar event
-is retained. Use `--workload-only` for repeated measurements without a reset.
+A full deployment prepares newly allocated SOP nodes with the configured POS
+image. Keeping an existing reservation preserves nodes that POS reports as
+already allocated; calendar coverage alone does not prove an active allocation.
+Use `--workload-only` for repeated measurements without rebuilding the 5G stack.
 
 After one healthy deployment, run additional immutable traces without rebuilding
 the cluster or 5G stack:
@@ -108,3 +109,6 @@ UE pods and injects an isolated publisher container into the same network
 namespace. This keeps MQTT replay independent of the selected core and dispatches
 uniformly across OAI NR-UE, UERANSIM, and srsUE. Physical qhat/qfit publishers
 run on their UE hosts and bind to `wwan0`.
+
+The [R2Lab PR #7 handoff](docs/r2lab-pr7-handoff.md) gives the upstream modem
+workflow, corrected reference mapping, reuse rules, and physical acceptance steps.
