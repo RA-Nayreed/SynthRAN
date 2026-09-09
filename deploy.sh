@@ -40,6 +40,7 @@ else
 fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran
 mkdir -p .synthran/r2lab
@@ -704,40 +705,6 @@ ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.ini"
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
-echo "Showing deployment stages, retries, warnings, and failures; full host results are saved to $RUN_DIR/ansible.log"
-echo
-set +e
-stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}" 2>&1 \
-  | stdbuf -oL -eL tee "$RUN_DIR/ansible.log" \
-  | "$SYNTHRAN_PYTHON" -u deployment/scripts/filter_ansible_output.py
-ANSIBLE_RC=${PIPESTATUS[0]}
-set -e
-if (( ANSIBLE_RC != 0 )); then
-  echo "Deployment failed; complete Ansible output: $RUN_DIR/ansible.log" >&2
-  if [[ -f "$RUN_DIR/live-deployment-evidence.json" ]]; then
-    echo "The attested 5G stack was preserved. Resume at the workload boundary with:" >&2
-    echo "  ./deploy.sh --resume $RUN_DIR" >&2
-  fi
-  exit "$ANSIBLE_RC"
-fi
-
-if $WORKLOAD_ONLY; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state record-reuse \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-else
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-fi
-
-deployment_section "Reconciling model, publisher, and broker results"
-"$SYNTHRAN_PYTHON" - "$RUN_DIR" <<'PY'
-import sys
-from pathlib import Path
-run=Path(sys.argv[1]); rows=[]
-for source in sorted(run.glob('publisher-*.jsonl')): rows.extend(source.read_text().splitlines())
-(run/'publisher.jsonl').write_text('\n'.join(rows)+('\n' if rows else ''))
-PY
-"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" --output "$RUN_DIR/summary.json" --require-deployment-identity
-echo "Artifacts retained in $RUN_DIR"
+exec bash deployment/scripts/run_deployment.sh \
+  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$CONFIG" "$ACTIVE_DEPLOYMENT_STATE" \
+  "$WORKLOAD_ONLY" "${ANSIBLE_COMMAND[@]}"

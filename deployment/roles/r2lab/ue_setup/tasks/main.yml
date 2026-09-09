@@ -23,8 +23,9 @@
   failed_when: false
 
 - name: Allow physical modems to power down
-  ansible.builtin.pause:
-    seconds: 20
+  ansible.builtin.wait_for:
+    timeout: 20
+  delegate_to: localhost
   when: synthran_r2lab_ues | length > 0
 
 - name: Power on selected QHAT devices

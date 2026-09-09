@@ -79,7 +79,9 @@ and `ci_ctl_qtel.py` procedure. They are outside this two-QHAT acceptance run.
 2. Reconcile reservations through `deployment/scripts/reserve_sop.py`.
 3. Prepare the selected radio and UEs before deploying the core and gNB.
    N3xx radios retain the proved OFF state, 20-second off interval, ON transition,
-   and 60-second boot interval from the earlier physical diagnosis.
+   and 60-second boot interval from the earlier physical diagnosis. These
+   intervals use noninteractive waits on the controller; they do not read or
+   change the SSH terminal, and cannot be skipped with a pause prompt.
 4. Deploy the N3xx gNB once. Wait for one pod, Running/Ready state, completed N2,
    and a gNB-start marker. Observe the same pod UID and restart count for another
    15 seconds. Startup failure preserves the release and diagnostic artifacts.
@@ -133,6 +135,62 @@ migrated to session 0.
 after the corrected deployment was attested and its physical sessions remain
 healthy. A failure during initial UE attachment cannot be repaired by resume.
 
+## Terminal disconnects and controller state
+
+The entrypoint completes interactive selection, credentials, reservations, and
+dependency preparation before starting its independent deployment controller.
+Stay connected through those preparation steps. When the entrypoint prints the
+Ansible and controller log paths, Ansible and subsequent reconciliation can
+continue after the SSH terminal disconnects. The controller retains the
+deployment lock for its entire lifetime, so another run cannot overlap it.
+
+Ansible reads no terminal input and writes directly to `ansible.log`. The
+terminal's progress viewer is independent of that writer. The controller writes
+its PID to `controller.pid`, its final exit status to `controller-exit-code`,
+and its diagnostics to `deployment.log`. `source-revision.txt` records the
+checkout's commit at run creation. Keep the checkout unchanged during a run.
+
+After reconnecting, set the actual run directory and read its existing log:
+
+```sh
+cd ~/SynthRAN
+R2LAB_RUN=results/REPLACE_WITH_RUN_ID
+tail -F "$R2LAB_RUN/ansible.log"
+```
+
+Stopping this log viewer does not stop deployment. After deployment finishes:
+
+```sh
+cat "$R2LAB_RUN/controller-exit-code"
+cat "$R2LAB_RUN/deployment.log"
+python3 -m json.tool "$R2LAB_RUN/summary.json"
+```
+
+Exit status zero means the controller completed successfully. It does not mean
+every MQTT event arrived: check the summary's identity, coverage, and delivery
+fields. A missing exit-status file means completion has not been recorded;
+inspect the PID and log rather than assuming success or starting another run.
+
+Ctrl+C in the original deployment terminal cancels the controller and its active
+local child process. To cancel after reconnecting, first verify the recorded PID:
+
+```sh
+R2LAB_CONTROLLER=$(cat "$R2LAB_RUN/controller.pid")
+ps -p "$R2LAB_CONTROLLER" -o pid,ppid,etime,args
+```
+
+Only if that process is this run's `run_deployment.sh --worker`, stop it with
+`kill -TERM "$R2LAB_CONTROLLER"`. Keep the logs and allow the process to release
+the deployment lock. Cancellation leaves already created remote resources for
+inspection.
+
+The reported `20260909T042818Z` log contains the obsolete tasks `Override the
+generated Faraday inventory identity` and `Override R2Lab endpoint jump
+identities`. Those tasks were removed in commit `590a404`. That run therefore
+does not demonstrate execution of the corrected PR head. Finish or stop its
+remaining controller before updating the checkout and running again. Updating
+files does not repair an already running process.
+
 ## Physical acceptance
 
 Local tests exercise command fixtures; they do not establish R2Lab hardware
@@ -148,7 +206,8 @@ success. On the actual testbed, require all of the following before merging:
 - A workload-only repetition with no modem attach, power, interface, or route
   mutations, and complete deployment identity evidence in `summary.json`.
 
-Retain `ansible.log`, `deployment-fingerprint.json`, `live-deployment-evidence.json`,
+Retain `ansible.log`, `deployment.log`, `controller.pid`, `controller-exit-code`,
+`source-revision.txt`, `deployment-fingerprint.json`, `live-deployment-evidence.json`,
 `gnb.log`, `gnb-health.txt`, `physical-ue-*.log`, publisher records, broker receipts,
 and `summary.json`. Failed gNB startup additionally retains `gnb-describe.txt`;
 failed MBIM activation retains the helper output and `qhat-check` output in
@@ -165,9 +224,13 @@ With the deployment dependencies installed:
 ```sh
 python -m unittest discover -s tests -v
 bash -n deploy.sh
+bash -n deployment/scripts/run_deployment.sh
 ```
 
 The tests cover selected-DNN preparation for QHAT/QFIT, real Ansible task flow
 with command fixtures, full attachment, read-only reuse, retained failures,
 wrong SIMs, stale addresses, wrong sessions/NSSAI, management-route rejection,
 publisher address changes, legacy fingerprint rejection, and gNB stability.
+Process tests close a real pseudo-terminal while Ansible waits, then require
+continued execution and reconciliation, unchanged terminal settings, a retained
+deployment lock, correct failure status, and cancellation of local child processes.

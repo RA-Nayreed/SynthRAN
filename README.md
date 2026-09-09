@@ -99,6 +99,15 @@ saved as `interactive-scenario.yml` in the run directory.
 Operational failures stop deployment and retain the run directory; delivery
 gaps are summarized as experiment results rather than deployment failures.
 
+Once Ansible deployment starts, its controller runs independently of the SSH
+terminal and completes result reconciliation even if the terminal disconnects.
+Keep the terminal connected through the earlier configuration, reservation, and
+dependency preparation steps. Ctrl+C in the deployment terminal cancels the
+controller; reconnecting and following `results/<run-id>/ansible.log` only
+observes it. The same directory retains `deployment.log`, `controller.pid`,
+`controller-exit-code`, and `source-revision.txt`. A controller exit code of zero
+means the command completed; inspect `summary.json` for delivery results.
+
 The deployment matrix retains OAI, Open5GS, Free5GC, OAI RAN, srsRAN,
 UERANSIM, RF simulation, and physical R2Lab adapters. Supported UE interfaces
 are `uesimtun0`, per-pod OAI `oaitun_ue1`, `tun_srsue*`, and physical `wwan0`;
