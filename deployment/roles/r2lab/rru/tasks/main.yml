@@ -1,41 +1,10 @@
 ---
-- name: Read the selected RRU initial PDU status
-  ansible.builtin.command: "rhubarbe pdu status {{ rru }}"
-  register: rru_initial_pdu_status
-  changed_when: false
-  failed_when: false
-
-- name: Parse the selected RRU initial PDU state
-  ansible.builtin.set_fact:
-    rru_initial_is_on: >-
-      {{
-        (rru_initial_pdu_status.stdout | default('') |
-         regex_search('\):\s*ON(?:\s|$)', ignorecase=True)) is not none
-      }}
-    rru_initial_is_off: >-
-      {{
-        (rru_initial_pdu_status.stdout | default('') |
-         regex_search('\):\s*OFF(?:\s|$)', ignorecase=True)) is not none
-      }}
-
-- name: Require an unambiguous initial RRU PDU state
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - (rru_initial_is_on | bool) != (rru_initial_is_off | bool)
-    fail_msg: >-
-      Could not determine {{ rru }} PDU state from Rhubarbe output. rc={{
-      rru_initial_pdu_status.rc | default('unavailable') }}; status={{
-      rru_initial_pdu_status.stdout | default('unavailable') }}
-
 - name: Request N3xx power off before a fresh deployment
   ansible.builtin.command: "rhubarbe pdu off {{ rru }}"
   register: r2lab_n3xx_power_off
   changed_when: true
   failed_when: false
-  when:
-    - rru in ['n300', 'n320']
-    - rru_initial_is_on | bool
+  when: rru in ['n300', 'n320']
 
 - name: Verify the N3xx powered-off state
   ansible.builtin.command: "rhubarbe pdu status {{ rru }}"

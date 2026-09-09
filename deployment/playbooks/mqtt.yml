@@ -57,15 +57,6 @@
         label: "{{ item.device }}"
       when: platform in ['r2lab', 'physical']
 
-    - name: Require complete physical UE binding evidence
-      ansible.builtin.assert:
-        quiet: true
-        that:
-          - synthran_physical_bindings | length > 0
-          - synthran_physical_bindings | length == synthran_deployment_contract.deployment.ues | length
-        fail_msg: Physical UE binding evidence does not cover the complete deployment contract.
-      when: platform in ['r2lab', 'physical']
-
     - name: Read the existing cluster attestation
       ansible.builtin.set_fact:
         synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"

@@ -1,28 +1,4 @@
 ---
-- name: Load the active physical UE profile
-  ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
-    name: synthran_fiveg
-
-- name: Require the physical UE in the active 5G profile
-  ansible.builtin.assert:
-    that:
-      - synthran_fiveg.ues[inventory_hostname] is defined
-    fail_msg: "{{ inventory_hostname }} is not defined in the active 5G profile"
-
-- name: Resolve the physical UE slice
-  ansible.builtin.set_fact:
-    synthran_physical_slice_name: "{{ synthran_fiveg.ues[inventory_hostname].slice }}"
-
-- name: Resolve the physical UE DNN and UPF address
-  ansible.builtin.set_fact:
-    synthran_physical_slice: >-
-      {{ synthran_fiveg.slices
-         | selectattr('name', 'equalto', synthran_physical_slice_name)
-         | first }}
-
 - name: Resolve the physical UE deployment-contract entry
   ansible.builtin.set_fact:
     synthran_physical_contract_matches: >-
@@ -43,9 +19,12 @@
   ansible.builtin.set_fact:
     synthran_physical_contract_ue: "{{ synthran_physical_contract_matches | first }}"
 
-- name: Resolve the physical transport from the deployment contract
+- name: Resolve the physical transport and endpoints from the deployment contract
   ansible.builtin.set_fact:
     synthran_physical_interface: "{{ synthran_physical_contract_ue.tunnel.interface }}"
+    synthran_physical_dnn: "{{ synthran_physical_contract_ue.dnn }}"
+    synthran_physical_upf_address: >-
+      {{ synthran_physical_contract_ue.address_cidr | regex_replace('\.0/[0-9]+$', '.1') }}
 
 - name: Require the supported upstream single-DNN transport
   ansible.builtin.assert:
@@ -67,7 +46,7 @@
 
     - name: Start the selected DNN with the R2Lab helper
       ansible.builtin.command:
-        argv: [env, -u, DNN1, DNN_TYPE0=ipv4, start.sh, -q, -F, "{{ synthran_physical_slice.dnn }}"]
+        argv: [env, -u, DNN1, DNN_TYPE0=ipv4, start.sh, -q, -F, "{{ synthran_physical_dnn }}"]
       when: mode | default('mbim') == 'mbim'
       register: synthran_mbim_attach
       changed_when: true
@@ -99,7 +78,7 @@
         quiet: true
         that: synthran_mbim_attach.rc == 0
         fail_msg: >-
-          R2Lab start.sh failed for {{ inventory_hostname }} on {{ synthran_physical_slice.dnn }}.
+          R2Lab start.sh failed for {{ inventory_hostname }} on {{ synthran_physical_dnn }}.
           See physical-ue-{{ inventory_hostname }}-attach.log. The live stack is preserved.
       when: mode | default('mbim') == 'mbim'
 
@@ -149,18 +128,9 @@
 
 - name: Install the UPF route during a full deployment
   ansible.builtin.command: >-
-    ip route replace {{ synthran_physical_slice.ip_prefix }}.1 dev {{ synthran_physical_interface }}
+    ip route replace {{ synthran_physical_upf_address }} dev {{ synthran_physical_interface }}
   changed_when: true
   when: not (synthran_workload_only | default(false) | bool)
-
-- name: Prove physical user-plane reachability
-  ansible.builtin.command: >-
-    ping -I {{ synthran_physical_interface }} -c 1 -W 3 {{ synthran_physical_slice.ip_prefix }}.1
-  register: synthran_physical_upf_ping
-  changed_when: false
-  retries: 15
-  delay: 4
-  until: synthran_physical_upf_ping.rc == 0
 
 - name: Resolve the broker endpoint for the physical user plane
   ansible.builtin.set_fact:

@@ -41,6 +41,8 @@ elif name == 'start.sh':
 elif name == 'python3':
     if args[0] == '/usr/local/bin/ci_ctl_qtel.py' and args[-1] in ('detach','wup'): pass
     elif args[0] != '-c' or 'sock.bind' not in args[1]: sys.exit(93)
+    elif fixture.get('broker_failure'): sys.exit(1)
+elif name == 'ping': sys.exit(1)
 elif name == 'ssh':
     if 'prepare-ue' not in args: sys.exit(95)
     options = args[args.index('prepare-ue') + 1:]
@@ -55,7 +57,7 @@ elif name == 'ssh':
     if fixture.get('prepare_failure'):
         print('prepare-ue failed after argument validation', file=sys.stderr)
         sys.exit(17)
-elif name not in ('ping', 'stop.sh', 'uoff', 'uon', 'sleep', 'config-ue', 'check-ue2', 'init.sh'): sys.exit(94)
+elif name not in ('stop.sh', 'uoff', 'uon', 'sleep', 'config-ue', 'check-ue2', 'init.sh'): sys.exit(94)
 """
 
 
@@ -110,9 +112,9 @@ class PhysicalRoleTests(unittest.TestCase):
             for contract in manifest["deployment"]["ues"]:
                 fixture = observations(contract)
                 if qmi:
-                    fixture["modem"] += (
-                        f"\nIMSI: {contract['imsi']}\n" + '+QCFG: "usbnet",0'
-                    )
+                    fixture[
+                        "modem"
+                    ] += f"\nIMEI: 863305041464453\nIMSI: {contract['imsi']}\nUSB Mode: 0 (QMI)"
                     dnn = "wrong" if failure == "qmi_dnn" else contract["dnn"]
                     fixture["manager"] = f"777 /usr/local/bin/quectel-CM -s {dnn} -4"
                 if failure == "inactive":
@@ -125,6 +127,8 @@ class PhysicalRoleTests(unittest.TestCase):
                     fixture["attach_failure"] = True
                 elif failure == "prepare":
                     fixture["prepare_failure"] = True
+                elif failure == "broker":
+                    fixture["broker_failure"] = True
                 fixtures[contract["device"]] = fixture
                 (directory / f'{contract["device"]}.json').write_text(
                     json.dumps(fixture)
@@ -257,6 +261,16 @@ class PhysicalRoleTests(unittest.TestCase):
                 commands[host].index(["start.sh", "-q", "-F", dnn]),
             )
             self.assertTrue(json.loads(evidence[f"physical-ue-{host}.log"])["verified"])
+            gateway = "12.1.1.1" if host == "qhat01" else "14.1.1.1"
+            self.assertIn(
+                ["ip", "route", "replace", gateway, "dev", "wwan0"], commands[host]
+            )
+            self.assertFalse(any(command[0] == "ping" for command in commands[host]))
+
+    def test_broker_connection_failure_still_blocks_workload(self):
+        result, _, _ = self.run_role(failure="broker")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Prove MQTT TCP reachability", result.stdout)
 
     def test_reuse_only_observes_modem_and_routes(self):
         result, commands, _ = self.run_role(reuse=True)
@@ -364,6 +378,103 @@ class PhysicalRoleTests(unittest.TestCase):
         self.assertIn(
             "prepare-ue failed after argument validation", result.stdout + result.stderr
         )
+
+
+@unittest.skipUnless(
+    shutil.which("ansible-playbook"),
+    "install .[deployment] to run Ansible integration tests",
+)
+class RadioRoleTests(unittest.TestCase):
+    def run_role(self, initial_state="ON", failed_transition=""):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "state").write_text(initial_state)
+            command = directory / "rhubarbe"
+            command.write_text(f"#!{sys.executable}\n" + r"""import os, pathlib, sys
+root = pathlib.Path(os.environ['TEST_RADIO'])
+operation = sys.argv[2]
+with (root / 'commands').open('a') as log:
+    log.write(' '.join(sys.argv[1:]) + '\n')
+if sys.argv[1] != 'pdu' or sys.argv[3] != 'n320':
+    sys.exit(2)
+if operation == 'status':
+    print('pdu2 chain-0@outlet-2 (n320): ' + (root / 'state').read_text())
+elif operation in ('off', 'on'):
+    if operation == os.environ['TEST_FAILED_TRANSITION']:
+        sys.exit(1)
+    previous = (root / 'state').read_text()
+    (root / 'state').write_text(operation.upper())
+    sys.exit(1 if previous == operation.upper() else 0)
+else:
+    sys.exit(2)
+""")
+            command.chmod(0o755)
+            playbook = directory / "playbook.yml"
+            playbook.write_text(
+                yaml.safe_dump(
+                    [
+                        {
+                            "hosts": "localhost",
+                            "gather_facts": False,
+                            "vars": {
+                                "ansible_connection": "local",
+                                "ansible_python_interpreter": sys.executable,
+                                "rru": "n320",
+                                "ran": "srsran",
+                                "r2lab_n3xx_power_off_seconds": 0,
+                                "r2lab_n3xx_boot_seconds": 0,
+                            },
+                            "environment": {
+                                "PATH": f'{directory}:{os.environ["PATH"]}',
+                                "TEST_RADIO": temp,
+                                "TEST_FAILED_TRANSITION": failed_transition,
+                            },
+                            "roles": ["r2lab/rru"],
+                        }
+                    ]
+                )
+            )
+            result = subprocess.run(
+                ["ansible-playbook", "-i", "localhost,", str(playbook)],
+                env={
+                    **os.environ,
+                    "ANSIBLE_CONFIG": str(ROOT / "deployment/ansible.cfg"),
+                    "ANSIBLE_ROLES_PATH": str(ROOT / "deployment/roles"),
+                    "ANSIBLE_NOCOLOR": "1",
+                },
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            return result, (directory / "commands").read_text().splitlines()
+
+    def test_cold_boot_from_on_or_off(self):
+        for initial in ("ON", "OFF"):
+            with self.subTest(initial=initial):
+                result, commands = self.run_role(initial_state=initial)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(
+                    commands,
+                    [
+                        "pdu off n320",
+                        "pdu status n320",
+                        "pdu on n320",
+                        "pdu status n320",
+                        "pdu status n320",
+                    ],
+                )
+
+    def test_failed_power_off_stops_before_power_on(self):
+        result, commands = self.run_role(failed_transition="off")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not reach a proved OFF state", result.stdout + result.stderr)
+        self.assertNotIn("pdu on n320", commands)
+
+    def test_failed_power_on_is_reported(self):
+        result, _ = self.run_role(failed_transition="on")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not reach a proved ON state", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

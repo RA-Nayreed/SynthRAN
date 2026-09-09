@@ -13,7 +13,7 @@
         synthran_qmi_existing.rc == 1 or
         (synthran_qmi_existing.stdout_lines | length == 1 and
          (synthran_qmi_existing.stdout | regex_search(
-           '(?:^|\s)-s\s+' ~ (synthran_physical_slice.dnn | regex_escape) ~ '(?:\s|$)')) is not none)
+           '(?:^|\s)-s\s+' ~ (synthran_physical_dnn | regex_escape) ~ '(?:\s|$)')) is not none)
     fail_msg: An existing quectel-CM process uses another DNN; inspect it before a fresh deployment.
 
 - name: Start the upstream QMI connection manager when absent
@@ -22,7 +22,7 @@
     if pgrep -x quectel-CM >/dev/null; then
       echo running
     else
-      setsid /usr/local/bin/quectel-CM -s {{ synthran_physical_slice.dnn | quote }} -4 \
+      setsid /usr/local/bin/quectel-CM -s {{ synthran_physical_dnn | quote }} -4 \
         </dev/null >/var/log/quectel-CM.log 2>&1 &
       sleep 3
       pgrep -x quectel-CM >/dev/null

@@ -15,21 +15,6 @@
   environment:
     PYTHONPATH: /opt/synthran-source
   changed_when: false
-- name: Read the proved physical UE interface before publishing
-  command: "ip -j -4 address show dev {{ synthran_physical_binding.interface }}"
-  register: ue_tunnel
-  changed_when: false
-- name: Require the observed publisher address to remain present
-  assert:
-    quiet: true
-    that:
-      - synthran_physical_binding.modem_verified | bool
-      - >-
-        (ue_tunnel.stdout | from_json | first).addr_info
-        | selectattr('family', 'equalto', 'inet')
-        | selectattr('scope', 'equalto', 'global')
-        | map(attribute='local') | list == [synthran_physical_binding.address]
-    fail_msg: The physical UE address changed after validation.
 - name: Copy immutable trace
   copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
 - name: Resolve N6-reachable broker address

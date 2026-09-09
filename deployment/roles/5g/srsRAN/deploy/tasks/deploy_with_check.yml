@@ -47,6 +47,9 @@
     release_namespace: "{{ ran_ns }}"
     values_files:
       - "{{ values_file }}"
+    release_values:
+      start:
+        logs: false
     state: present
     wait: false
     atomic: false

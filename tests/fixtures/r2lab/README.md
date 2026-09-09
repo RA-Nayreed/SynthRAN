@@ -14,3 +14,10 @@ A separate strict CLI fixture accepts only `--dnn`, `--dnn2`, `--nssai`, and
 `20260909T101521Z`. That fixture rejects unknown options instead of allowing
 every SSH invocation to succeed. It models the reported CLI contract; it is
 not a copy of the installed helper, whose source was not supplied.
+
+`qhat03-cgdcont.txt` contains the four modem context lines from the user-supplied
+`qhat-check` output in run `20260909T103737Z`. The modem reports the base DNN
+`streaming` and the eMBB context `streaming_EMBB100000` with NSSAI `01.100000`.
+These are configuration observations before attachment, not evidence of a
+successful PDU session. Tests combine them with separately simulated MBIM
+session/address responses and exercise both raw text and `check-ue` list output.

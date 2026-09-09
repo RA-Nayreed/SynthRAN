@@ -58,7 +58,14 @@ def verify_observations(
         )
     if str(contract["sd"]).upper() != "EMPTY":
         nssai = f"{int(contract['sst']):02x}.{str(contract['sd']).lower()}"
-        if not any(f'"{nssai}"' in tail.lower() for tail in selected_contexts):
+        slice_apns = {contract["dnn"].lower()}
+        # RM500Q firmware reports the configured eMBB context with this suffix.
+        if int(contract["sst"]) == 1:
+            slice_apns.add(f"{contract['dnn']}_EMBB{contract['sd']}".lower())
+        if not any(
+            dnn.lower() in slice_apns and f'"{nssai}"' in tail.lower()
+            for dnn, tail in contexts
+        ):
             raise ValueError(
                 f"R2Lab diagnostics do not show NSSAI {nssai} for {contract['dnn']}"
             )
@@ -80,8 +87,12 @@ def verify_observations(
             )
         session = int(sessions[0])
     else:
-        identities = sorted(set(re.findall(r"(?<![0-9])[0-9]{15}(?![0-9])", modem)))
-        if not re.search(r'\+QCFG:\s*"usbnet",\s*0\b', modem, re.IGNORECASE):
+        identities = sorted(set(re.findall(r"\bIMSI:\s*([0-9]{15})\b", modem)))
+        if not re.search(
+            r'\+QCFG:\s*"usbnet",\s*0\b|\bUSB Mode:\s*0\s*\(QMI\)',
+            modem,
+            re.IGNORECASE,
+        ):
             raise ValueError("R2Lab diagnostics do not confirm QMI USB mode")
         processes = manager.strip().splitlines()
         if len(processes) != 1:

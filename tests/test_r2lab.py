@@ -40,10 +40,17 @@ def scenario_contract():
 def observations(contract):
     address = "14.1.1.12" if contract["dnn"] == "streaming" else "12.1.1.11"
     contexts = [f'+CGDCONT: 1,"IP","{contract["dnn"]}","0.0.0.0",0,0']
-    if contract["sd"] != "EMPTY":
-        contexts.append(
-            f'+CGDCONT: 2,"IP","{contract["dnn"]}",,,,,,,,,,,,,,1,"01.100000",'
+    if (contract["dnn"], str(contract["sst"]), contract["sd"]) == (
+        "streaming",
+        "1",
+        "100000",
+    ):
+        contexts = (
+            (ROOT / "tests/fixtures/r2lab/qhat03-cgdcont.txt").read_text().splitlines()
         )
+    elif contract["sd"] != "EMPTY":
+        nssai = f"{int(contract['sst']):02x}.{contract['sd']}"
+        contexts.append(f'+CGDCONT: 2,"IP","{contract["dnn"]}","0.0.0.0",0,0,"{nssai}"')
     return {
         "links": [
             {
@@ -86,6 +93,47 @@ class PhysicalIdentityTests(unittest.TestCase):
         self.assertEqual(binding["imsi"], self.contract["imsi"])
         self.assertEqual(binding["address"], "14.1.1.12")
         self.assertTrue(binding["modem_verified"])
+
+    def test_observed_qhat03_contexts_are_accepted(self):
+        self.data["modem"] = (
+            ROOT / "tests/fixtures/r2lab/qhat03-cgdcont.txt"
+        ).read_text()
+        self.assertTrue(self.verify()["modem_verified"])
+
+    def test_unsuffixed_upstream_slice_context_is_accepted(self):
+        self.data["modem"] = self.data["modem"].replace(
+            "streaming_EMBB100000", "streaming"
+        )
+        self.assertTrue(self.verify()["modem_verified"])
+
+    def test_slice_context_must_belong_to_selected_dnn(self):
+        self.data["modem"] = self.data["modem"].replace(
+            "streaming_EMBB100000", "internet_EMBB100000"
+        )
+        with self.assertRaisesRegex(ValueError, "NSSAI"):
+            self.verify()
+
+    def test_decorated_slice_context_must_match_sd(self):
+        self.data["modem"] = self.data["modem"].replace(
+            "streaming_EMBB100000", "streaming_EMBB999999"
+        )
+        with self.assertRaisesRegex(ValueError, "NSSAI"):
+            self.verify()
+
+    def test_qmi_uses_labelled_imsi_and_usb_mode(self):
+        self.scenario["deployment"]["ues"] = ["qhat20"]
+        contract = build_ue_map(self.scenario, self.profile)[0]
+        data = observations(contract)
+        data[
+            "modem"
+        ] += f"\nIMEI: 863305041464453\nIMSI: {contract['imsi']}\nUSB Mode: 0 (QMI)\n"
+        data["manager"] = f"777 /usr/local/bin/quectel-CM -s {contract['dnn']} -4"
+        self.assertTrue(probe.verify_observations(contract, **data)["modem_verified"])
+        data["modem"] = data["modem"].replace(
+            f"IMSI: {contract['imsi']}", "IMSI: 001010000000099"
+        )
+        with self.assertRaisesRegex(ValueError, "SIM identity"):
+            probe.verify_observations(contract, **data)
 
     def test_wrong_sim_is_rejected(self):
         self.data["subscriber"] = "Subscriber ID: '001010000000099'"
