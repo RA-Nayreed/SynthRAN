@@ -13,7 +13,7 @@ import yaml
 from synthran.deployment_state import build_manifest, build_ue_map
 from test_r2lab import ROOT, observations, scenario_contract
 
-STUB = r"""import json, os, pathlib, sys
+STUB = r"""import argparse, json, os, pathlib, subprocess, sys
 root = pathlib.Path(os.environ['TEST_FIXTURES'])
 name = pathlib.Path(sys.argv[0]).name
 host = os.environ['TEST_DEVICE']
@@ -41,7 +41,21 @@ elif name == 'start.sh':
 elif name == 'python3':
     if args[0] == '/usr/local/bin/ci_ctl_qtel.py' and args[-1] in ('detach','wup'): pass
     elif args[0] != '-c' or 'sock.bind' not in args[1]: sys.exit(93)
-elif name not in ('ping', 'stop.sh', 'ssh'): sys.exit(94)
+elif name == 'ssh':
+    if 'prepare-ue' not in args: sys.exit(95)
+    options = args[args.index('prepare-ue') + 1:]
+    if os.environ['TEST_PREPARE_HELPER'] == 'installed':
+        parser = argparse.ArgumentParser(prog='prepare-ue', allow_abbrev=False)
+        for option in ('dnn', 'dnn2', 'nssai', 'nssai2'):
+            parser.add_argument('--' + option)
+        parser.parse_args(options)
+    else:
+        result = subprocess.run(['bash', os.environ['TEST_PREPARE_SOURCE'], *options])
+        if result.returncode: sys.exit(result.returncode)
+    if fixture.get('prepare_failure'):
+        print('prepare-ue failed after argument validation', file=sys.stderr)
+        sys.exit(17)
+elif name not in ('ping', 'stop.sh', 'uoff', 'uon', 'sleep', 'config-ue', 'check-ue2', 'init.sh'): sys.exit(94)
 """
 
 
@@ -50,7 +64,14 @@ elif name not in ('ping', 'stop.sh', 'ssh'): sys.exit(94)
     "install .[deployment] to run Ansible integration tests",
 )
 class PhysicalRoleTests(unittest.TestCase):
-    def run_role(self, reuse=False, failure=None, preparation=False, qmi=False):
+    def run_role(
+        self,
+        reuse=False,
+        failure=None,
+        preparation=False,
+        qmi=False,
+        helper="installed",
+    ):
         scenario, profile, manifest = scenario_contract()
         if qmi:
             scenario["deployment"]["ues"] = ["qhat20"]
@@ -76,6 +97,12 @@ class PhysicalRoleTests(unittest.TestCase):
                 "python3",
                 "ssh",
                 "pgrep",
+                "uoff",
+                "uon",
+                "sleep",
+                "config-ue",
+                "check-ue2",
+                "init.sh",
             ):
                 (bin_dir / command).symlink_to(stub)
             hosts = [ue["device"] for ue in manifest["deployment"]["ues"]]
@@ -96,6 +123,8 @@ class PhysicalRoleTests(unittest.TestCase):
                     fixture["route_interface"] = "eth0"
                 elif failure == "attach":
                     fixture["attach_failure"] = True
+                elif failure == "prepare":
+                    fixture["prepare_failure"] = True
                 fixtures[contract["device"]] = fixture
                 (directory / f'{contract["device"]}.json').write_text(
                     json.dumps(fixture)
@@ -164,6 +193,10 @@ class PhysicalRoleTests(unittest.TestCase):
                         "PATH": f'{bin_dir}:{os.environ["PATH"]}',
                         "TEST_FIXTURES": temp,
                         "TEST_DEVICE": "{{ inventory_hostname }}",
+                        "TEST_PREPARE_HELPER": helper,
+                        "TEST_PREPARE_SOURCE": str(
+                            ROOT / "tests/fixtures/r2lab/prepare-ue"
+                        ),
                     },
                     "vars": {
                         "run_dir": temp,
@@ -295,8 +328,42 @@ class PhysicalRoleTests(unittest.TestCase):
             if dnn == "streaming":
                 self.assertIn("--nssai=01.100000", call)
             self.assertFalse(
-                any(arg.startswith(("--dnn2=", "--nssai2=")) for arg in call)
+                any(arg.startswith(("--dnn2=", "--nssai2=", "--mode")) for arg in call)
             )
+
+    def test_prepare_uses_upstream_default_mbim_mode(self):
+        result, commands, _ = self.run_role(preparation=True, helper="upstream")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [call for call in commands["qhat01"] if call[0] == "config-ue"]
+        self.assertEqual(len(calls), 3)
+        for call, dnn, nssai in zip(
+            calls,
+            ["internet", "streaming", "streaming"],
+            ["", "01.100000", "01.100000"],
+        ):
+            self.assertEqual(
+                call,
+                [
+                    "config-ue",
+                    "--dnn",
+                    dnn,
+                    "--dnn2",
+                    "",
+                    "--nssai",
+                    nssai,
+                    "--nssai2",
+                    "",
+                    "--mode",
+                    "mbim",
+                ],
+            )
+
+    def test_prepare_failure_is_reported(self):
+        result, _, _ = self.run_role(preparation=True, failure="prepare")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "prepare-ue failed after argument validation", result.stdout + result.stderr
+        )
 
 
 if __name__ == "__main__":

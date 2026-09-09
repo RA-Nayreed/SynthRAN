@@ -57,11 +57,18 @@ Before the gNB starts, the MBIM preparation role runs the equivalent of:
 
 ```sh
 # On qhat01
-prepare-ue --mode=mbim --dnn=internet
+prepare-ue --dnn=internet
 
 # On qhat03
-prepare-ue --mode=mbim --dnn=streaming --nssai=01.100000
+prepare-ue --dnn=streaming --nssai=01.100000
 ```
+
+The installed helper in physical run `20260909T101521Z` advertises only `--dnn`,
+`--dnn2`, `--nssai`, and `--nssai2`. Passing `--mode=mbim` failed with exit code 2
+on both QHATs before the helper could configure either modem. The MBIM role omits `--mode`;
+the referenced upstream helper also defaults to MBIM without that option.
+QMI preparation remains separate. Do not replace installed helpers merely to
+make an unsupported argument work.
 
 After the gNB passes its startup gate, the connection role uses `stop.sh` and
 `start.sh -q -F internet` or `start.sh -q -F streaming`. It unsets inherited
@@ -234,3 +241,6 @@ publisher address changes, legacy fingerprint rejection, and gNB stability.
 Process tests close a real pseudo-terminal while Ansible waits, then require
 continued execution and reconciliation, unchanged terminal settings, a retained
 deployment lock, correct failure status, and cancellation of local child processes.
+Preparation tests enforce the physical helper's reported option list and execute
+the pinned upstream `prepare-ue` with its hardware commands replaced by local
+fixtures. These checks prove command compatibility, not physical modem success.
