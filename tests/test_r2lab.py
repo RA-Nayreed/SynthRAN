@@ -167,7 +167,7 @@ class PhysicalIdentityTests(unittest.TestCase):
 
 
 class GnbGateTests(unittest.TestCase):
-    def run_gate(self, mode):
+    def run_gate(self, mode, console_file=None):
         from jinja2 import Environment
 
         tasks = yaml.safe_load(
@@ -206,9 +206,17 @@ mode = os.environ['TEST_MODE']
 if cmd == 'date': print(tick)
 elif cmd == 'sleep': clock.write_text(str(tick + int(sys.argv[1])))
 elif 'logs' in sys.argv:
-    if mode == 'fatal': print('Segmentation fault')
-    elif mode != 'timeout': print('MPM timeout during early startup\\nN2: Connection to AMF completed\\ngNB started')
+    if os.environ.get('TEST_CONSOLE'):
+        print(pathlib.Path(os.environ['TEST_CONSOLE']).read_text(), end='')
+    elif mode == 'fatal': print('Segmentation fault')
+    elif mode == 'srsran_error': print('srsRAN ERROR: CU-CP failed to connect to AMF')
+    elif mode == 'missing_start': print('N2: Connection to AMF on 192.168.3.201:38412 completed')
+    elif mode == 'missing_amf': print('==== gNB started ===')
+    elif mode == 'unrelated_completed': print('N2: Connection to AMF on 192.168.3.201:38412 failed\\nUHD initialization completed\\n==== gNB started ===')
+    elif mode != 'timeout': print('MPM timeout during early startup\\nN2: Connection to AMF on 192.168.3.201:38412 completed\\n==== gNB started ===')
+    if mode == 'log_error': sys.exit(1)
 else:
+    if mode == 'state_error': print('Unable to connect to the server', file=sys.stderr); sys.exit(1)
     uid = 'new' if mode == 'replacement' and tick >= 105 else 'original'
     restart = 1 if mode == 'restart' and tick >= 105 else 0
     ready = 'false' if mode == 'unready' and tick >= 105 else 'true'
@@ -222,6 +230,7 @@ else:
                 "PATH": f"{temp}:{os.environ['PATH']}",
                 "TEST_CLOCK": str(clock),
                 "TEST_MODE": mode,
+                "TEST_CONSOLE": str(console_file) if console_file else "",
             }
             return subprocess.run(
                 ["bash", "-c", script],
@@ -238,11 +247,44 @@ else:
         self.assertIn("stable=15s", result.stdout)
 
     def test_restart_replacement_readiness_loss_fatal_and_timeout_fail(self):
-        for mode in ("restart", "replacement", "unready", "fatal", "timeout"):
+        for mode in (
+            "restart",
+            "replacement",
+            "unready",
+            "fatal",
+            "srsran_error",
+            "timeout",
+        ):
             with self.subTest(mode=mode):
                 result = self.run_gate(mode)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertNotIn("PASS", result.stdout)
+
+    def test_timeout_identifies_each_missing_startup_signal(self):
+        for mode, expected in (
+            ("missing_start", "N2_seen=1 gNB_start_seen=0"),
+            ("missing_amf", "N2_seen=0 gNB_start_seen=1"),
+            ("timeout", "N2_seen=0 gNB_start_seen=0"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_gate(mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(expected, result.stdout)
+
+    def test_unrelated_completed_message_cannot_prove_amf_connection(self):
+        result = self.run_gate("unrelated_completed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("N2_seen=0", result.stdout)
+
+    def test_failed_kubectl_reads_cannot_pass_with_partial_output(self):
+        for mode, expected in (
+            ("log_error", "log_read_rc=1"),
+            ("state_error", "pod_read_rc=1"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_gate(mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(expected, result.stdout)
 
 
 if __name__ == "__main__":

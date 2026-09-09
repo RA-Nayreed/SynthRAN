@@ -26,6 +26,11 @@ The implementation was compared with:
   [config-ue](https://github.com/sopnode/oai5g-rru/blob/9d7f2df8e98527c1a3b05c6352b167e8e9ce7c19/quectel-utils/config-ue),
   [start.sh](https://github.com/sopnode/oai5g-rru/blob/9d7f2df8e98527c1a3b05c6352b167e8e9ce7c19/quectel-utils/start.sh),
   and [stop.sh](https://github.com/sopnode/oai5g-rru/blob/9d7f2df8e98527c1a3b05c6352b167e8e9ce7c19/quectel-utils/stop.sh).
+- [5g_ansible's gNB deployment check](https://github.com/sopnode/5g_ansible/blob/a0149fc0dde39e2872945a0f3c91e804ece52d4f/roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml),
+  the pinned [srsRAN Helm launch template](https://github.com/turletti/srsran-helm/blob/8dfb9890d127734cdcd6eee9df8c5d09b1a8076a/charts/srsran-gnb/templates/deployment.yaml),
+  and its [N320 values](https://github.com/turletti/srsran-helm/blob/8dfb9890d127734cdcd6eee9df8c5d09b1a8076a/charts/srsran-gnb/values-n320-n78-20MHz.yaml).
+- The srsRAN fork's [startup banner](https://github.com/turletti/srsRAN_Project/blob/5883162f190a97e219a4609b184b032f91f247e1/apps/services/application_message_banners.h)
+  and [N2 connection output](https://github.com/turletti/srsRAN_Project/blob/5883162f190a97e219a4609b184b032f91f247e1/lib/ngap/gateways/n2_connection_client_factory.cpp).
 
 `5g_ansible` connects a UE's selected DNN using `start.sh -F DNN` on `wwan0`.
 R2Lab's `-S` option adds a second simultaneous DNN to the same UE. An explicit
@@ -89,9 +94,11 @@ and `ci_ctl_qtel.py` procedure. They are outside this two-QHAT acceptance run.
    and 60-second boot interval from the earlier physical diagnosis. These
    intervals use noninteractive waits on the controller; they do not read or
    change the SSH terminal, and cannot be skipped with a pause prompt.
-4. Deploy the N3xx gNB once. Wait for one pod, Running/Ready state, completed N2,
-   and a gNB-start marker. Observe the same pod UID and restart count for another
-   15 seconds. Startup failure preserves the release and diagnostic artifacts.
+4. Deploy the N3xx gNB once, using `exec stdbuf -oL -eL` before the chart's
+   existing gNB command so console messages flush without a terminal or UE
+   traffic. Wait for one pod, Running/Ready state, completed N2, and a gNB-start
+   marker. Observe the same pod UID and restart count for another 15 seconds.
+   Startup failure preserves the release and diagnostic artifacts.
 5. Attach UEs through the installed upstream helpers. Read the SIM identity,
    configured DNN/NSSAI, interface, activated MBIM session, and modem IP settings.
    Require a single matching host IPv4 address and the selected slice subnet.
@@ -104,6 +111,59 @@ The former direct secondary-session activation, `wwan0.1` construction,
 post-preparation USB recovery, standalone CID-2 deletion, and mutating AT
 diagnostic block have been removed. The duplicate reservation implementation
 and redundant inventory identity overrides have also been removed.
+
+## Startup timeout in run 20260909T103737Z
+
+The supplied run passed N320 power preparation, both installed `prepare-ue`
+calls, host preparation, Kubernetes, and transport setup. It then timed out at
+the physical gNB gate after 301 seconds with pod
+`srsran-gnb-868c957c8-xwq8c` reported as `Running`, `ready=true`.
+The attachments contain the Ansible task output, not the saved `gnb.log` or
+`gnb-describe.txt`. They identify the failing gate but do not establish the
+radio application's state.
+
+The pinned chart launches the gNB without a terminal and has no readiness
+probe. Consequently, Kubernetes readiness alone does not prove N2 or radio
+startup. The srsRAN source emits the N2 message and startup banner through
+buffered stdout. A reproduction using the upstream banner header reached the
+startup code while producing no visible stdout; `stdbuf -oL -eL` made both
+messages visible while that same process remained running. The earlier test
+fixture printed its messages immediately and missed this failure mode.
+
+The correction changes only the physical gNB launch prefix, retaining its
+binary, arguments, image, configuration, and existing startup requirements.
+The launch patch is idempotent and rejects an unexpected chart launch shape
+before Helm. It does not add a terminal or wait for UE traffic to flush logs.
+This fixes a reproduced observer defect; it does not prove that buffering was
+the only cause of this physical run's timeout. The source examined above is
+the fork's recorded revision, not an observed build identity from this pod.
+
+Timeout output now includes the observed N2 and gNB-start signals, pod identity,
+restart count, and return codes of the log and pod reads. A failed read cannot
+satisfy the gate using partial output. The N2 completion message must be on one
+line; an unrelated completed operation is insufficient. Explicit srsRAN process
+errors fail the gate. Recoverable early UHD warnings retain their prior handling.
+
+Failures print the last 80 console and application-log lines into `ansible.log`
+and preserve the full captured files. The pinned N300/N320 values put the
+application log at `/tmp/gnb.log`, while the chart's log sidecar tails
+`/var/log/gnb.log`; collection therefore reads the application file directly
+from the `gnb` container. It does not depend on that sidecar.
+
+Before another deployment overwrites the live pod, inspect the already saved
+evidence on Duckburg:
+
+```sh
+cd ~/SynthRAN
+cat results/20260909T103737Z/gnb-health.txt
+cat results/20260909T103737Z/gnb.log
+cat results/20260909T103737Z/gnb-describe.txt
+```
+
+Retain the pod's image ID and gNB build banner with that evidence. A failed
+initial gNB startup has no attested deployment to resume. Do not use
+`--workload-only` or `--resume` to bypass this gate. After reviewing the saved
+evidence, use the normal full deployment below for the corrected launch.
 
 ## Running and resuming
 
@@ -216,7 +276,8 @@ success. On the actual testbed, require all of the following before merging:
 Retain `ansible.log`, `deployment.log`, `controller.pid`, `controller-exit-code`,
 `source-revision.txt`, `deployment-fingerprint.json`, `live-deployment-evidence.json`,
 `gnb.log`, `gnb-health.txt`, `physical-ue-*.log`, publisher records, broker receipts,
-and `summary.json`. Failed gNB startup additionally retains `gnb-describe.txt`;
+and `summary.json`. Failed gNB startup additionally retains `gnb-describe.txt`
+and `gnb-application.log`;
 failed MBIM activation retains the helper output and `qhat-check` output in
 `physical-ue-<host>-attach.log`. Correlate a UE failure with the AMF/SMF log window.
 
@@ -244,3 +305,11 @@ deployment lock, correct failure status, and cancellation of local child process
 Preparation tests enforce the physical helper's reported option list and execute
 the pinned upstream `prepare-ue` with its hardware commands replaced by local
 fixtures. These checks prove command compatibility, not physical modem success.
+
+The gNB regressions run the real Ansible launch tasks and a C process whose
+startup messages remain buffered until flushed. They demonstrate failure with
+the former launch and stable success with the corrected launch before any UE
+traffic or process exit. They also cover individual missing startup signals,
+failed Kubernetes reads, retained application/console diagnostics, and fatal
+srsRAN errors. A separate local check applied the launch tasks twice to the
+unmodified pinned Helm template and verified that only its launch prefix changed.
