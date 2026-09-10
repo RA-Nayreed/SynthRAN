@@ -18,9 +18,9 @@ for the exact pinned upstream revision and ownership boundary.
 
 The primary interface is one interactive command. It prompts for the core, RAN,
 platform, radio unit, currently available nodes, profile, UEs, POS reservation
-duration, and node image; creates or reuses `.venv`; generates the immutable
-energy-aware trace; deploys the network; maps devices to UE tunnels; replays
-MQTT; and reconciles the JSONL artifacts:
+duration, and node image; creates or reuses `.venv`; generates or imports the
+immutable energy-aware trace; deploys the network; maps sensors to UE gateways;
+replays MQTT; and reconciles the JSONL artifacts:
 
 ```sh
 ./deploy.sh
@@ -31,8 +31,10 @@ For an Open5GS+srsRAN RFSIM deployment, device order maps explicitly to
 source of truth: known devices use the selected 5G profile, while additional
 names such as `uesim04` receive a deterministic IMSI and the profile's first
 slice. A scenario can override either value under `deployment.ue_profiles`.
-Missing model-device entries are materialized from the declared device templates
-in UE order, and the explicit result is retained in `resolved-scenario.yml`.
+Modeled sensors are declared separately under `devices`, with each sensor mapped
+to a UE using `gateway`. Many sensors may share a UE, and a competing-traffic UE
+may have no modeled sensors. A same-named sensor/UE mapping remains implicit for
+existing scenarios. Undeclared mappings are rejected, not silently materialized.
 A preparation-only run is available without deploying infrastructure:
 
 ```sh
@@ -53,10 +55,11 @@ already allocated; calendar coverage alone does not prove an active allocation.
 Use `--workload-only` for repeated measurements without rebuilding the 5G stack.
 
 After one healthy deployment, run additional immutable traces without rebuilding
-the cluster or 5G stack:
+the cluster or 5G stack. Prepared source bundles can be imported explicitly:
 
 ```sh
-./deploy.sh --config scenarios/rfsim-sidecars-3ue.yml --workload-only
+./deploy.sh --config scenarios/reference.yml \
+  --workload-only --prepared-workload results/permuted/model
 ```
 
 If a full run reaches deployment attestation but fails during MQTT setup or
@@ -72,8 +75,8 @@ fails closed unless the source identity is intact, its attestation evidence is
 present, and the same identity is still stored in the live Kubernetes cluster.
 
 SynthRAN never rewrites the supplied scenario. Every run retains an immutable
-`resolved-scenario.yml` containing reservation-time node choices and materialized
-device settings.
+`resolved-scenario.yml` containing reservation-time node choices and explicit
+sensor-to-gateway settings.
 
 After a successful full run, SynthRAN stores a versioned deployment identity in
 both `.synthran/deployment-fingerprint.json` and the live Kubernetes cluster.
@@ -128,4 +131,21 @@ UE pods and injects an isolated publisher container into the same network
 namespace. This keeps MQTT replay independent of the selected core and dispatches
 uniformly across OAI NR-UE, UERANSIM, and srsUE. For R2Lab qhat/qfit UEs,
 upstream `5g_ansible` establishes the `wwan0` session; SynthRAN then routes the
-experiment broker through that interface and runs the publisher there.
+experiment broker through that interface and runs the publisher there. The
+scientific replay records planned releases, pre-publication timestamps,
+PUBACK/client-send completion separately, and receiving-application callback
+receipts without per-event ACK blocking.
+
+## Scientific experiment readiness
+
+The research plan contains **seven experiment families**, with energy-driven
+burst formation, matched-trace physical 5G transport, and gateway freshness
+mitigation forming the core study. MAC/SIC, aggregation/scaling, isolation, and
+RF robustness provide supporting studies.
+
+The matched-trace transport experiment uses immutable source bundles and the
+`native`, `gap_permutation`, and `periodic` timing variants so the event set can
+remain fixed while release timing changes. See
+[`docs/experiment-readiness.md`](docs/experiment-readiness.md) for the corrected
+model contract, immutable timing interventions, measurement validity, local
+acceptance tests, and remaining physical qualification gates.
