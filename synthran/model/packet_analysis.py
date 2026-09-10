@@ -112,6 +112,8 @@ def apply_sic(
     Tuple[List[int], List[float]]
         Indices of successfully decoded packets (in decode order) and their final SINR values
     """    
+    if not 0 <= cancellation_factor <= 1:
+        raise ValueError("cancellation_factor must lie in [0, 1]")
     n = len(powers_dbm)
     if n == 0:
         return [], []
@@ -130,7 +132,7 @@ def apply_sic(
         signal_w = residual_w[strongest_idx]
 
         # Calculate interference from other candidates
-        interference_w = sum(residual_w[j] for j in candidates if j != strongest_idx)
+        interference_w = sum(residual_w[j] for j in range(n) if j != strongest_idx)
 
         # SINR for strongest
         sinr_lin = signal_w / max(1e-18, interference_w + noise_w)
@@ -150,7 +152,7 @@ def apply_sic(
             for idx in candidates:
                 if idx != strongest_idx:
                     sig = residual_w[idx]
-                    interf = sum(residual_w[j] for j in candidates if j != idx)
+                    interf = sum(residual_w[j] for j in range(n) if j != idx)
                     s_lin = sig / max(1e-18, interf + noise_w)
                     final_sinr_db[idx] = 10.0 * math.log10(max(1e-18, s_lin))
             break

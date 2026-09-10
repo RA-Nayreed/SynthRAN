@@ -7,7 +7,8 @@ import csv
 import pandas as pd
 import simpy
 
-from .packet_analysis import apply_sic, thermal_noise_watts
+from .packet_analysis import thermal_noise_watts
+from .receiver import decode_receptions
 
 
 @dataclass
@@ -23,7 +24,17 @@ class RxPacket:
     matched: bool  # Did node_id match expected?
     bs_id: int = 0  # Which BS received this packet
     subcarrier_shift: int = 0
-    collided: bool = False  # True if collision (packet NOT decoded)
+    collided: bool = False
+    event_id: str | None = None
+    sequence: int | None = None
+    generated_ms: float | None = None
+    decode_available_ms: float | None = None
+    payload_type: str = "data"
+    outcome: str = "decoded"
+    sinr_db: float = 0.0
+    interference_w: float = 0.0
+    residual_w: float = 0.0
+    decode_stage: int | None = None
 
 
 @dataclass
@@ -120,6 +131,7 @@ class BSBehavior:
 
         # Node ids decoded during the current frame; read by a policy to decide
         # how to answer (ack, register, adapt). Reset at the start of each frame.
+        self.slot_outcomes_this_frame = []
         self.decoded_this_frame: List[int] = []
 
         # Opt-in streaming sinks: write each packet to disk instead of keeping it in memory
@@ -180,6 +192,7 @@ class BSBehavior:
         while True:
             self._frame_start_ms = self.env.now
             self.decoded_this_frame = []
+            self.slot_outcomes_this_frame = []
             for idx, entry in enumerate(self.schedule):
                 self._schedule_idx = idx
                 mode = entry[0]
@@ -220,6 +233,7 @@ class BSBehavior:
             self._frame_duration_ms = sum(e[1] for e in frame)
             self._frame_start_ms = self.env.now
             self.decoded_this_frame = []
+            self.slot_outcomes_this_frame = []
             for idx, entry in enumerate(frame):
                 self._schedule_idx = idx
                 mode = entry[0]
@@ -251,6 +265,7 @@ class BSBehavior:
             Wait for duration of RX slot, but can be interrupted by incoming packets (handled by _buffer_rx)
         """        
         self._rx_start_ms = self.env.now
+        self._rx_end_ms = self.env.now + duration_ms
         self._rx_slot_id = slot_id
         self._rx_expect = payload.get("expect", "any")
         self._rx_buffer = []  # Clear buffer for new RX window
@@ -265,166 +280,78 @@ class BSBehavior:
                 if it.cause == "receive_data":
                     self._buffer_rx()
 
-        # RX window ended - process buffer with collision detection
+        # Let operations completing exactly at the slot boundary settle first.
+        yield self.env.timeout(0)
         self._process_rx_buffer()
 
+    def _receive_after_boundary(self, packet):
+        yield self.env.timeout(0)
+        self.receive_packet(packet)
+
+    def receive_packet(self, packet):
+        if self.mode != "rx":
+            return False
+        transmission = packet["transmission"]
+        if self.env.now >= self._rx_end_ms and transmission["start_ms"] >= self._rx_end_ms:
+            self.env.process(self._receive_after_boundary(packet))
+            return True
+        if transmission["start_ms"] < self._rx_start_ms or transmission["end_ms"] > self._rx_end_ms + 1e-9:
+            return False
+        self._rx_buffer.append(packet)
+        return True
+
     def _buffer_rx(self):
-        """Buffer incoming transmission for later collision check."""
-        self._rx_buffer.append({
-            "time_ms": self.env.now,
-            "node_id": self.received_tag_id,
-            "payload": self.data_from_tag,
-            "rssi_dbm": self.rssi_dbm,
-            "sector_idx": self.best_sector_idx,
-            "subcarrier_shift": self.subcarrier_shift,
+        self.receive_packet({
+            "node_id": self.received_tag_id, "rssi_dbm": self.rssi_dbm,
+            "sector_idx": self.best_sector_idx, "subcarrier_shift": self.subcarrier_shift,
+            "transmission": {"start_ms": float(self.env.now), "end_ms": float(self.env.now) + 1e-6,
+                             "payload": self.data_from_tag, "energy_complete": True},
         })
 
-    def _process_rx_buffer(self, collision_window_ms: float = 5.0):
-        """Process buffered receptions with SIC-based collision resolution.
-
-        Parameters
-        ----------
-        collision_window_ms : float, optional
-            Packets on same subcarrier within this time window collide, by default 5.0
-        """        
-        if not self._rx_buffer:
-            return
-
-        # Group by subcarrier_shift
-        by_subcarrier: Dict[int, List[Dict]] = {}
-        for rx in self._rx_buffer:
-            sc = rx["subcarrier_shift"]
-            if sc not in by_subcarrier:
-                by_subcarrier[sc] = []
-            by_subcarrier[sc].append(rx)
-
-        # Process each subcarrier group
-        for rx_list in by_subcarrier.values():
-            # Sort by time
-            rx_list.sort(key=lambda x: x["time_ms"])
-
-            # Find collision groups (packets within collision_window_ms of each other)
-            collision_groups: List[List[int]] = []
-            used = set()
-
-            for i, rx in enumerate(rx_list):
-                if i in used:
-                    continue
-
-                # Find all packets that collide with this one
-                group = [i]
-                for j, other in enumerate(rx_list):
-                    if j != i and j not in used:
-                        if abs(rx["time_ms"] - other["time_ms"]) <= collision_window_ms:
-                            group.append(j)
-
-                if len(group) > 1:
-                    # This is a collision group - apply SIC
-                    collision_groups.append(group)
-                    used.update(group)
-                else:
-                    # Single packet - no collision
-                    used.add(i)
-
-            # Process collision groups with SIC
-            decoded_indices_global = set()
-            for group in collision_groups:
-                powers_dbm = [rx_list[i]["rssi_dbm"] for i in group]
-
-                if self.enable_sic:
-                    decoded_local, _ = apply_sic(
-                        powers_dbm=powers_dbm,
-                        noise_w=self.noise_w,
-                        required_sinr_db=self.required_sinr_db,
-                        cancellation_factor=self.cancellation_factor,
-                    )
-                else:
-                    # Without SIC, only strongest can be decoded (capture effect)
-                    decoded_local, _ = apply_sic(
-                        powers_dbm=powers_dbm,
-                        noise_w=self.noise_w,
-                        required_sinr_db=self.required_sinr_db,
-                        cancellation_factor=0.0,
-                    )
-                    decoded_local = decoded_local[:1] if decoded_local else []
-
-                # Map local indices back to global
-                for local_idx in decoded_local:
-                    decoded_indices_global.add(group[local_idx])
-
-            # Mark all packets as decoded or collided
-            for i, rx in enumerate(rx_list):
-                # Check if this packet was in a collision group
-                in_collision = any(i in g for g in collision_groups)
-
-                if in_collision:
-                    collided = i not in decoded_indices_global
-                else:
-                    collided = False  # Single packet, no collision
-
-                # Validate sector
-                if rx["sector_idx"] < 0:
-                    print(f"Warning: Received packet with invalid sector index {rx['sector_idx']} from node {rx['node_id']}")
-                    continue
-                if rx["sector_idx"] >= len(self.base_station.sectors):
-                    print(f"Warning: Received packet with out-of-range sector index {rx['sector_idx']} from node {rx['node_id']}")
-                    continue
-
-                # Check sensitivity
-                sector = self.base_station.sectors[rx["sector_idx"]]
-                if rx["rssi_dbm"] < sector.sensitivity_dbm:
-                    continue
-
-                # Check if matched expected
-                matched = (
-                    self._rx_expect == "any" or self._rx_expect == rx["node_id"]
+    def _process_rx_buffer(self, collision_window_ms=None):
+        by_subcarrier = {}
+        for buffered in self._rx_buffer:
+            sector_index = buffered["sector_idx"]
+            if not 0 <= sector_index < len(self.base_station.sectors):
+                raise ValueError("received packet has an invalid sector index")
+            row = {**buffered, **buffered["transmission"],
+                   "sensitivity_dbm": self.base_station.sectors[sector_index].sensitivity_dbm}
+            by_subcarrier.setdefault(row["subcarrier_shift"], []).append(row)
+        slot_decoded = False
+        for rows in by_subcarrier.values():
+            decisions = decode_receptions(rows, self.noise_w, self.required_sinr_db,
+                                           self.cancellation_factor, self.enable_sic)
+            for row, decision in zip(rows, decisions):
+                decoded = decision["decode_stage"] is not None
+                matched = self._rx_expect == "any" or self._rx_expect == row["node_id"]
+                packet = RxPacket(
+                    start_ms=row["start_ms"], end_ms=row["end_ms"], slot_id=self._rx_slot_id,
+                    node_id=row["node_id"], payload=row["payload"], rssi_dbm=row["rssi_dbm"],
+                    sector_idx=row["sector_idx"], expected_node=self._rx_expect, matched=matched,
+                    bs_id=self.id, subcarrier_shift=row["subcarrier_shift"], collided=not decoded,
+                    event_id=row.get("event_id"), sequence=row.get("sequence"), generated_ms=row.get("generated_ms"),
+                    decode_available_ms=float(self.env.now) if decoded else None,
+                    payload_type=row.get("type", "data"), **decision,
                 )
-
-                pkt = RxPacket(
-                    start_ms=self._rx_start_ms,
-                    end_ms=rx["time_ms"],
-                    slot_id=self._rx_slot_id,
-                    node_id=rx["node_id"],
-                    payload=rx["payload"],
-                    rssi_dbm=rx["rssi_dbm"],
-                    sector_idx=rx["sector_idx"],
-                    expected_node=self._rx_expect,
-                    matched=matched,
-                    bs_id=self.id,
-                    subcarrier_shift=rx["subcarrier_shift"],
-                    collided=collided,
-                )
-                # counters (always maintained)
                 self.total_rx += 1
-                if collided:
-                    self.total_collided += 1
-                else:
-                    self.rx_count_by_node[rx["node_id"]] += 1
-
-                # store: stream to disk (bounded memory), keep in list (default), or discard (counters only)
+                self.total_collided += int(not decoded)
+                if self.keep_logs:
+                    self.rx_packets.append(packet)
                 if self._rx_stream_writer is not None:
-                    self._rx_stream_writer.writerow(
-                        [pkt.start_ms, pkt.end_ms, pkt.slot_id, pkt.node_id, pkt.payload,
-                         pkt.rssi_dbm, pkt.sector_idx, pkt.expected_node, pkt.matched,
-                         pkt.subcarrier_shift, pkt.collided]
-                    )
-                elif self.keep_logs:
-                    self.rx_packets.append(pkt)
-
-                # Only process decoded (non-collided) packets
-                if not collided:
-                    self.decoded_this_frame.append(rx["node_id"])
-                    # Track node for ack if not already registered
-                    if rx["node_id"] not in self.nodes_registered:
-                        if rx["node_id"] not in self.nodes_pending_ack:
-                            self.nodes_pending_ack.append(rx["node_id"])
-
+                    self._rx_stream_writer.writerow([
+                        packet.start_ms, packet.end_ms, packet.slot_id, packet.node_id, packet.payload,
+                        packet.rssi_dbm, packet.sector_idx, packet.expected_node, packet.matched,
+                        packet.subcarrier_shift, packet.collided])
+                if decoded:
+                    slot_decoded = True
+                    self.rx_count_by_node[row["node_id"]] += 1
+                    self.decoded_this_frame.append(row["node_id"])
+                    if row.get("type") == "id" and row["node_id"] not in self.nodes_pending_ack:
+                        self.nodes_pending_ack.append(row["node_id"])
                     if self.on_rx:
-                        self.on_rx(pkt)
-
-        # Buffer is now processed - acks will be sent in the next TX slot
-        # nodes_pending_ack is populated here, cleared after acks are sent
-
+                        self.on_rx(packet)
+        self.slot_outcomes_this_frame.append(
+            "success" if slot_decoded else "occupied_undecoded" if self._rx_buffer else "idle")
 
     # def _get_next_rx_slots(self, num_slots: int, start_after_ms: float) -> List[Tuple[float, float]]:
     def _get_next_rx_slots(self, start_after_ms: float) -> List[Tuple[float, float]]:

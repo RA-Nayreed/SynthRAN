@@ -9,6 +9,6 @@ model:
   topology: {frequency_hz: 924000000, base_station: {sectors: [{azimuth_deg: 0, beamwidth_deg: 360, power_dbm: 46}]}}
   propagation: {model: macro, los: true}
   protocol: {type: broadcast_sic, slots: 2}
-  receiver: {sic: true, required_sinr_db: 3, cancellation_factor: 0.9, collision_window_ms: 5}
+  receiver: {sic: true, required_sinr_db: 3, cancellation_factor: 0.9}
 mqtt: {topic_prefix: synthran, payload_bytes: 256}
 devices: {node-00: {x: 0, y: 15, subcarrier_shift: 0}, node-01: {x: 0, y: 25, subcarrier_shift: 0}, node-02: {x: 0, y: 35, subcarrier_shift: 0}}

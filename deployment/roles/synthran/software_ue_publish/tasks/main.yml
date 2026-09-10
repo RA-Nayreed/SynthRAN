@@ -190,22 +190,12 @@
   delay: 2
   until: synthran_mqtt_path_probe.rc == 0
 
-- name: Measure immutable replay horizon
-  ansible.builtin.command:
-    argv:
-      - python3
-      - -c
-      - >-
-        import json; from pathlib import Path; events=[json.loads(line) for line in Path('/tmp/synthran-events.jsonl').read_text(encoding='utf-8').splitlines() if line]; print(max((float(event['time_offset_s']) for event in events), default=0.0))
-  register: synthran_replay_horizon
-  changed_when: false
-
 - name: Bound publisher wait to the immutable trace horizon
   ansible.builtin.set_fact:
     synthran_publish_timeout_seconds: >-
-      {{ (mqtt_start_delay_seconds | int) + (synthran_replay_horizon.stdout | float | int) + 61 }}
+      {{ (mqtt_start_delay_seconds | int) + (synthran_replay_horizon_seconds | float | round(0, 'ceil') | int) + (mqtt_drain_seconds | float | round(0, 'ceil') | int) + 30 }}
     synthran_publish_poll_retries: >-
-      {{ (((mqtt_start_delay_seconds | int) + (synthran_replay_horizon.stdout | float | int) + 65) // 5) | int }}
+      {{ (((mqtt_start_delay_seconds | int) + (synthran_replay_horizon_seconds | float | round(0, 'ceil') | int) + (mqtt_drain_seconds | float | round(0, 'ceil') | int) + 35) // 5) | int }}
 
 - name: Choose one shared UTC start after every UE is attached
   set_fact:
@@ -215,11 +205,13 @@
     kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
     {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
     env PYTHONPATH=/opt/synthran-runtime python3 -m synthran.cli workload replay
-    --trace /opt/synthran-events.jsonl --device {{ item.device }}
+    --trace /opt/synthran-events.jsonl --gateway {{ item.device }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --bind-address {{ synthran_assigned_tunnels[item.index - 1].address }}
     --start-utc {{ synthran_replay_start_utc }}
-    --output /tmp/publisher-{{ item.device }}.jsonl
+    --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
+    --max-inflight {{ mqtt_max_inflight }} --max-queued {{ mqtt_max_queued }}
+    --output /tmp/publisher-{{ run_dir | basename }}-{{ item.device }}.jsonl
   loop: "{{ synthran_ue_map }}"
   loop_control: {label: "{{ item.device }}"}
   async: "{{ synthran_publish_timeout_seconds }}"
@@ -238,7 +230,7 @@
   command: >-
     kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
     {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
-    cat /tmp/publisher-{{ item.device }}.jsonl
+    cat /tmp/publisher-{{ run_dir | basename }}-{{ item.device }}.jsonl
   loop: "{{ synthran_ue_map }}"
   loop_control: {label: "{{ item.device }}"}
   register: synthran_publisher_artifacts

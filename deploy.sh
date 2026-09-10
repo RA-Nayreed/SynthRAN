@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; SOP_RESERVATION_DONE=false
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; SOP_RESERVATION_DONE=false; PREPARED_WORKLOAD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
@@ -9,14 +9,19 @@ while [[ $# -gt 0 ]]; do
     -n|--no-input) NO_INPUT=true; shift ;;
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --prepared-workload) PREPARED_WORKLOAD="$2"; shift 2 ;;
     --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
     --resume) RESUME=true; RESUME_FROM="$2"; NO_RESERVATION=true; shift 2 ;;
     -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--resume results/<failed-run>] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--prepared-workload path/to/bundle] [--resume results/<failed-run>] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
+if [[ -n "$PREPARED_WORKLOAD" ]] && { $RESUME || $INTERACTIVE || ! $CONFIG_EXPLICIT; }; then
+  echo "--prepared-workload requires --config and cannot be combined with --resume or --interactive" >&2
+  exit 2
+fi
 if $RESUME && $WORKLOAD_ONLY; then echo "--resume and --workload-only cannot be combined" >&2; exit 2; fi
 if $RESUME && $INTERACTIVE; then echo "--resume cannot be combined with --interactive" >&2; exit 2; fi
 if $RESUME && $DRY_RUN; then echo "--resume cannot be combined with --dry-run" >&2; exit 2; fi
@@ -39,7 +44,7 @@ else
   RESUME_SOURCE_MODEL=""
 fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran
 mkdir -p .synthran/r2lab
@@ -359,13 +364,18 @@ BANNER
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
   "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
-import copy, sys, yaml
+import sys, yaml
 from pathlib import Path
+from synthran.scenario import remap_gateways
 source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration, sensor_csv, edge_csv, rf_csv, r2_image = sys.argv[1:]
 scenario = yaml.safe_load(Path(source).read_text())
 trace = scenario.get('model', {}).get('energy', {}).get('trace')
 if trace and not str(trace).startswith('builtin:'):
     scenario['model']['energy']['trace'] = str((Path(source).resolve().parent / trace).resolve())
+for device in scenario.get('devices', {}).values():
+    trace = device.get('energy', {}).get('trace')
+    if trace and not str(trace).startswith('builtin:'):
+        device['energy']['trace'] = str((Path(source).resolve().parent / trace).resolve())
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 def r2nodes(value):
     nodes = list(dict.fromkeys(name.strip() for name in value.split(',') if name.strip()))
@@ -379,13 +389,12 @@ if not ues: raise SystemExit('At least one UE is required')
 physical_ues = {'qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34'}
 if platform == 'r2lab' and not set(ues) <= physical_ues: raise SystemExit('Unsupported R2Lab physical UE(s): ' + ', '.join(sorted(set(ues) - physical_ues)))
 if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
-scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}, 'ues': ues})
+remap_gateways(scenario, ues)
+scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}})
 scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 scenario['deployment']['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
 scenario['deployment']['r2lab_experiment_nodes'] = {'sensor': sensor_nodes, 'edge': edge_nodes, 'rf_measurement': rf_nodes, 'image': r2_image}
 if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
-defaults = list(scenario['devices'].values())
-scenario['devices'] = {name: copy.deepcopy(defaults[index % len(defaults)]) for index, name in enumerate(ues)}
 Path(output).write_text(yaml.safe_dump(scenario, sort_keys=False))
 PY
 
@@ -411,6 +420,10 @@ SOURCE_CONFIG="$CONFIG"
 CONFIG="$RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
   --source "$SOURCE_CONFIG" --output "$CONFIG"
+if [[ -n "$PREPARED_WORKLOAD" ]]; then
+  deployment_section "Validating and importing the prepared workload"
+  "$SYNTHRAN_PYTHON" -m synthran.cli workload import --source "$PREPARED_WORKLOAD" --config "$CONFIG" --output "$RUN_DIR/model"
+fi
 if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
     --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
@@ -426,6 +439,8 @@ fi
 if $RESUME; then
   deployment_section "Reusing the failed run's energy-aware sensor trace"
   cp -a -- "$RESUME_SOURCE_MODEL" "$RUN_DIR/model"
+elif [[ -n "$PREPARED_WORKLOAD" ]]; then
+  deployment_section "Using the validated prepared workload"
 else
   deployment_section "Generating the energy-aware sensor trace"
   "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
@@ -578,6 +593,13 @@ manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
 reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
 destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
 variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
+source_manifest = json.loads(Path(sys.argv[2], 'model', 'source-manifest.json').read_text()) if Path(sys.argv[2], 'model', 'source-manifest.json').exists() else {}
+variables.update({
+    'mqtt_drain_seconds': c['mqtt'].get('drain_seconds', 60),
+    'mqtt_max_inflight': c['mqtt'].get('max_inflight', 20),
+    'mqtt_max_queued': c['mqtt'].get('max_queued', 10000),
+    'synthran_replay_horizon_seconds': source_manifest.get('duration_seconds', c['model'].get('duration_ms', c['model'].get('duration_seconds', 60) * 1000) / 1000),
+})
 if resume_source_contract:
     variables['synthran_resume_source_contract']=json.loads(Path(resume_source_contract).read_text())
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))

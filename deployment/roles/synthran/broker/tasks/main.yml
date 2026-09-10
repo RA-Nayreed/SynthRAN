@@ -26,6 +26,13 @@
   notify: Restart Mosquitto
 - name: Create artifact directory
   file: {path: /var/log/synthran, state: directory, mode: '0755'}
+- name: Discover existing receipt collector service
+  service_facts:
+- name: Stop any previous receipt collector
+  systemd: {name: synthran-collector, state: stopped}
+  when: "'synthran-collector.service' in ansible_facts.services"
+- name: Remove the previous subscription-ready marker
+  file: {path: /var/log/synthran/collector-ready.json, state: absent}
 - name: Initialize receipt artifact
   copy: {content: "", dest: /var/log/synthran/receipts.jsonl, force: true}
 - name: Start broker before collector
@@ -43,7 +50,7 @@
       Requires=mosquitto.service
       [Service]
       Environment=PYTHONPATH=/opt/synthran-source
-      ExecStart=/opt/synthran-venv/bin/python -m synthran.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts.jsonl
+      ExecStart=/opt/synthran-venv/bin/python -m synthran.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts.jsonl --ready-file /var/log/synthran/collector-ready.json
       Restart=on-failure
       [Install]
       WantedBy=multi-user.target
@@ -52,3 +59,8 @@
 - name: Verify receipt collector is active
   command: systemctl is-active synthran-collector
   changed_when: false
+
+- name: Require a successful receiving subscription before replay
+  wait_for: {path: /var/log/synthran/collector-ready.json, state: present, timeout: 30}
+- name: Retain the receiving subscription evidence
+  fetch: {src: /var/log/synthran/collector-ready.json, dest: "{{ run_dir }}/collector-ready.json", flat: true}
