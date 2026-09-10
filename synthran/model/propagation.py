@@ -51,7 +51,11 @@ def watts_to_dbm(p_w: float) -> float:
     numpy array
         Power in dBm
     """    
-    return 10.0 * np.log10(np.maximum(p_w, 1e-15)) + 30.0
+    values = np.asarray(p_w, dtype=float)
+    if not np.isfinite(values).all() or (values < 0).any():
+        raise ValueError("power must be finite and nonnegative")
+    with np.errstate(divide="ignore"):
+        return 10.0 * np.log10(values) + 30.0
 
 
 def lin_from_dbi(g_dbi: float) -> float:
@@ -263,7 +267,7 @@ def urban_macro_loss_db_38_901(
         Path loss in dB
     """    
     fc_GHz = np.maximum(0.1, freq_hz / 1e9)  # spec expects GHz
-    d2D = np.maximum(distance_m, 1.0)
+    d2D = np.maximum(distance_m, 10.0)
     d3D = np.hypot(d2D, h_bs - h_ut)
     d3D = np.maximum(d3D, 10.0)  # stay within model validity; also removes near-BS artifact
     dBP = 4.0 * (h_bs - 1.0) * np.maximum(h_ut - 1.0, 0.1) * freq_hz / C
@@ -277,7 +281,7 @@ def urban_macro_loss_db_38_901(
         - 9.0 * np.log10(dBP**2 + (h_bs - h_ut) ** 2)
     )
 
-    PL_LOS = np.where((d2D <= dBP) & (d2D >= 10.0), PL1_LOS, PL2_LOS)
+    PL_LOS = np.where(d2D <= dBP, PL1_LOS, PL2_LOS)
 
     # NLOS
     PL_NLOS = (
@@ -386,6 +390,7 @@ class CoverageMap:
     node_energy_mode: str = "wpt"  # "wpt" | "external" | "hybrid"
     node_ext_power_fn: Optional[NodeExtPowerFn] = None
     combine_mode: str = "max"
+    node_wpt_power_w: Optional[float] = None
 
     # internal
     _grid: Optional[Dict[str, np.ndarray]] = field(init=False, default=None, repr=False)
@@ -592,9 +597,9 @@ class CoverageMap:
                 received_w = downlink_results["best_pw_w"].get(node_id, 0.0)
                 efficiency = getattr(node, "efficiency", 1.0)
                 if node.state != "transmitting":
-                    harvested_w = received_w
+                    harvested_w = received_w if self.node_wpt_power_w is None else self.node_wpt_power_w
                 else:
-                    harvested_w = received_w * (1 - efficiency)
+                    harvested_w = (received_w if self.node_wpt_power_w is None else self.node_wpt_power_w) * (1 - efficiency)
                 backscatter_w = received_w * efficiency
 
                 node.harvesting_power_dbm = watts_to_dbm(harvested_w)
@@ -619,9 +624,9 @@ class CoverageMap:
                 received_w = downlink_results["best_pw_w"].get(node_id, 0.0)
                 efficiency = getattr(node, "efficiency", 1.0)
                 if node.state != "transmitting":
-                    harvested_w = received_w
+                    harvested_w = received_w if self.node_wpt_power_w is None else self.node_wpt_power_w
                 else:
-                    harvested_w = received_w * (1 - efficiency)
+                    harvested_w = (received_w if self.node_wpt_power_w is None else self.node_wpt_power_w) * (1 - efficiency)
                 backscatter_w = received_w * efficiency
 
                 ext_w = self.node_ext_power_fn(node) if self.node_ext_power_fn else 0.0
