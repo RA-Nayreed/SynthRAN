@@ -20,13 +20,6 @@ yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
 yq_url: "https://github.com/mikefarah/yq/releases/download/{{ yq_version }}/yq_linux_amd64"
 
-# Physical N3xx startup is slower and less deterministic than pod creation.
-# Deploy once and wait for one clear gate: pod Running/Ready plus N2 and gNB-start markers.
-physical_gnb_pod_create_timeout_seconds: 60
-physical_gnb_startup_timeout_seconds: 300
-physical_gnb_poll_interval_seconds: 5
-physical_gnb_stability_seconds: 15
-
 # Selected from deployment/topology.yml and included in the deployment hash.
 srsran_network: "{{ synthran_topology.network }}"
 n3networkName: "{{ synthran_topology.n3network_name }}"
