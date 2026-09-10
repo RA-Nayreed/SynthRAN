@@ -1,0 +1,39 @@
+{
+  "experiment": 1,
+  "name": "Energy_Correlation_and_Burst_Formation",
+  "status": "completed",
+  "raw_results_root": "results/exp1-energy-correlation",
+  "raw_results_tracked": false,
+  "raw_results_note": "The repository .gitignore excludes /results/; raw completed run bundles remain local experiment artifacts.",
+  "calibration": {
+    "sensors": 8,
+    "duration_seconds": 60,
+    "sensing_interval_seconds": 1,
+    "harvest_distribution": "lognormal",
+    "harvest_cv": 1.0,
+    "source_interval_seconds": 0.1,
+    "correlation_time_seconds": 5,
+    "seeds": [1, 2, 3, 4, 5],
+    "mean_power_uw": [250, 500, 1000, 2000, 4000],
+    "selected_population_n_star": 32
+  },
+  "confirmation": {
+    "seeds": {"first": 1001, "last": 1030, "count": 30},
+    "conditions": 7,
+    "runs_expected": 210,
+    "runs_integrity_passed": 210,
+    "valid_zero_event_run": "low-common-seed1028"
+  },
+  "condition_means": {
+    "always-powered": {"active_fraction": 1.0, "decode_rate_per_s": 26.841, "fano": 0.255, "gap_cv": 0.854, "collision_rate": 0.1593},
+    "low-independent": {"active_fraction": 0.165, "realized_power_correlation": -0.001, "decode_rate_per_s": 4.720, "fano": 0.759, "gap_cv": 0.925, "collision_rate": 0.0254},
+    "low-common": {"active_fraction": 0.176, "realized_power_correlation": 0.967, "decode_rate_per_s": 4.387, "fano": 18.630, "gap_cv": 6.446, "collision_rate": 0.1447},
+    "knee-independent": {"active_fraction": 0.454, "realized_power_correlation": 0.001, "decode_rate_per_s": 12.628, "fano": 0.584, "gap_cv": 0.922, "collision_rate": 0.0730},
+    "knee-common": {"active_fraction": 0.445, "realized_power_correlation": 0.961, "decode_rate_per_s": 11.294, "fano": 13.391, "gap_cv": 6.508, "collision_rate": 0.1533},
+    "high-independent": {"active_fraction": 0.769, "realized_power_correlation": 0.002, "decode_rate_per_s": 20.941, "fano": 0.363, "gap_cv": 0.886, "collision_rate": 0.1207},
+    "high-common": {"active_fraction": 0.744, "realized_power_correlation": 0.943, "decode_rate_per_s": 19.489, "fano": 6.568, "gap_cv": 4.488, "collision_rate": 0.1515}
+  },
+  "supported_mechanism": "common energy harvesting -> synchronized activation -> burstier decoded traffic -> higher collision exposure",
+  "unsupported_claim": "Experiment 1 does not establish reader-freshness degradation; reader-side AoI common-minus-independent confidence intervals crossed zero.",
+  "experiment2_source_example": "results/exp1-energy-correlation/knee-common-seed1001"
+}

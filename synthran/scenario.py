@@ -61,15 +61,18 @@ def load_scenario(path: str | Path) -> dict:
 
 
 def remap_gateways(scenario: dict, selected: list[str]) -> None:
-    original = scenario["deployment"]["ues"]
-    replacement = dict(zip(original, selected))
+    if not selected:
+        raise ValueError("at least one gateway UE is required")
+    original = list(scenario["deployment"]["ues"])
+    replacement = {
+        gateway: selected[index % len(selected)]
+        for index, gateway in enumerate(original)
+    }
     for name, device in scenario["devices"].items():
         gateway = device.get("gateway", name if name in original else None)
         target = gateway if gateway in selected else replacement.get(gateway)
         if target is None:
-            raise ValueError(
-                f"interactive selection removes the gateway for {name!r}; edit its explicit gateway in the scenario"
-            )
+            raise ValueError(f"sensor {name!r} references unknown gateway {gateway!r}")
         device["gateway"] = target
     scenario["deployment"]["ues"] = list(selected)
 
