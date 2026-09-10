@@ -1,51 +1,23 @@
 ---
-- name: Prove R2Lab control access before physical provisioning
+- name: Cleanup R2Lab
   hosts: faraday
   gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Verify Faraday SSH access with the canonical slice identity
-      ansible.builtin.command: /bin/true
-      changed_when: false
-      when: platform == 'r2lab'
+  roles:
+    - role: r2lab/cleanup
+      when:
+        - platform == 'r2lab'
+        - not no_r2lab_cleanup | default(false)
 
-    - name: Record successful R2Lab control preflight
-      ansible.builtin.set_fact:
-        synthran_r2lab_preflight_ok: true
-      delegate_to: localhost
-      delegate_facts: true
-      when: platform == 'r2lab'
-
-- name: Prepare the selected R2Lab radio unit
+- name: Power ON RRU on R2Lab
   hosts: faraday
   gather_facts: false
-  any_errors_fatal: true
   roles:
     - role: r2lab/rru
       when: platform == 'r2lab'
-    - role: r2lab/ue_setup
-      when: platform == 'r2lab'
-    - role: r2lab/experiment_nodes
-      when: platform == 'r2lab'
 
-- name: Prepare selected R2Lab experiment hosts
-  hosts: r2lab_experiment_nodes
+- name: Setup UEs on R2Lab
+  hosts: faraday
   gather_facts: false
-  become: true
-  any_errors_fatal: true
-  pre_tasks:
-    - name: Wait for the reimaged R2Lab host to accept SSH
-      ansible.builtin.wait_for_connection:
-        connect_timeout: 5
-        sleep: 2
-        timeout: 10
-      register: synthran_r2lab_ssh_ready
-      until: synthran_r2lab_ssh_ready is succeeded
-      retries: 20
-      delay: 5
-
-    - name: Gather facts after SSH is operational
-      ansible.builtin.setup:
-
   roles:
-    - role: r2lab/experiment_host
+    - role: r2lab/ue/setup
+      when: platform == 'r2lab'
