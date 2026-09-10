@@ -184,7 +184,7 @@ def valid_bundle(path: Path) -> bool:
     if not (path / "source-manifest.json").is_file():
         return False
     try:
-        from synthran.workload.bundle import validate_bundle
+        from Experiment.workload.bundle import validate_bundle
         validate_bundle(path)
     except Exception:
         return False
@@ -206,7 +206,7 @@ def run_one(results_root: Path, name: str, value: dict, resume: bool) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "synthran.cli",
+        "Experiment.cli",
         "model",
         "run",
         "--config",

@@ -28,7 +28,7 @@ M2 permits a null or monotonic benefit. Do not design the experiment to require 
 
 ## Code and acceptance requirements
 
-Read `synthran/model/{packet_analysis,bsengine,backscatter,controller,capacitor}.py`, `synthran/ambient_iot/{protocols,runner,bridge,evidence,outcomes}.py`, the protocol examples, and the replay/reconciliation path.
+Read `Experiment/model/{packet_analysis,bsengine,backscatter,controller,capacitor}.py`, `Experiment/ambient_iot/{protocols,runner,bridge,evidence,outcomes}.py`, the protocol examples, and the replay/reconciliation path.
 
 The reviewed `apply_sic()` removed a decoded signal from the set contributing interference, making `cancellation_factor` ineffective. `adaptive_aloha()` compared cumulative historical collision counts with current-frame decodes. Decoding labels were reconstructed from packet records rather than retained per cancellation stage. Transmission was delivered before its later energy-draw phase was complete, and control-message handling was not gated by actual power state. Resolve these problems before calling a scheme energy-aware or SIC-qualified.
 

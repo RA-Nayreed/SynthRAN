@@ -92,7 +92,7 @@ CONFIG="$RUN_DIR/resolved-scenario.yml"
   --source "$SOURCE_CONFIG" --output "$CONFIG"
 if [[ -n "$PREPARED_WORKLOAD" ]]; then
   deployment_section "Validating and importing the prepared workload"
-  "$SYNTHRAN_PYTHON" -m synthran.cli workload import --source "$PREPARED_WORKLOAD" --config "$CONFIG" --output "$RUN_DIR/model"
+  "$SYNTHRAN_PYTHON" -m Experiment.cli workload import --source "$PREPARED_WORKLOAD" --config "$CONFIG" --output "$RUN_DIR/model"
 fi
 if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
@@ -112,7 +112,7 @@ elif [[ -n "$PREPARED_WORKLOAD" ]]; then
   deployment_section "Using the validated prepared workload"
 else
   deployment_section "Generating the energy-aware sensor trace"
-  "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
+  "$SYNTHRAN_PYTHON" -m Experiment.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
 fi
 REUSE_EXISTING=false
 if $WORKLOAD_ONLY || $RESUME; then REUSE_EXISTING=true; fi

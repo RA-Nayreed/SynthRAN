@@ -29,7 +29,7 @@ Only within-source timing interventions establish the intended equal-volume comp
 
 ## Required implementation before the pilot
 
-Read `synthran/scenario.py`, the Ambient-IoT runner/bridge/evidence modules, `synthran/workload/{trace,replay}.py`, `synthran/results/reconcile.py`, `synthran/deployment_state.py`, `deploy.sh`, the broker/publisher/software-UE roles and the current N320 candidate.
+Read `synthran/scenario.py`, the Ambient-IoT runner/bridge/evidence modules, `Experiment/workload/{trace,replay}.py`, `Experiment/results/reconcile.py`, `synthran/deployment_state.py`, `deploy.sh`, the broker/publisher/software-UE roles and the current N320 candidate.
 
 Qualify sensing and energy inputs, circuit/receiver semantics, shared-subcarrier contention, and true generation/completed-decode timestamps. Separate modeled sensor membership from gateway UE membership. The current loader silently discards sensors not in the UE list.
 

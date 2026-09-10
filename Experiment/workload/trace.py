@@ -4,9 +4,9 @@ import platform
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import yaml
-from synthran.ambient_iot import AmbientIoTRunner
-from synthran.ambient_iot.evidence import write as write_ambient_iot_evidence
-from synthran.scenario import load_scenario, redacted
+from Experiment.ambient_iot import AmbientIoTRunner
+from Experiment.ambient_iot.evidence import write as write_ambient_iot_evidence
+from Experiment.scenario import load_scenario, redacted
 from .bundle import digest, write_manifest
 
 

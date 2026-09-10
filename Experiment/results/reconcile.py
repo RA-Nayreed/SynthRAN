@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from ..deployment_state import bindings_match_deployment
+from synthran.deployment_state import bindings_match_deployment
 from .metrics import measurements
 
 
@@ -104,7 +104,7 @@ def reconcile(
     manifest_path = Path(expected).parent / "source-manifest.json"
     manifest = {}
     if manifest_path.exists():
-        from synthran.workload.bundle import validate_bundle
+        from Experiment.workload.bundle import validate_bundle
 
         if Path(expected).name != "events.jsonl":
             raise ValueError(

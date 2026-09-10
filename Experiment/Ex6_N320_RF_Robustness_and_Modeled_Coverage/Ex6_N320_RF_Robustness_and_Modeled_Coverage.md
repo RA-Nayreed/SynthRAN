@@ -37,7 +37,7 @@ F1 does not assume monotonic latency among successful packets: weak conditions c
 
 ## Code and physical acceptance
 
-Inspect `scenarios/r2lab-reference-oai-srsran.yml` on the physical candidate, N320/RAN deployment inputs, the actual rendered gNB configuration, UE session/attestation evidence, `synthran/workload/replay.py`, and the MQTT role that launches it. In draft PR #7, the secondary-DNN MBIM path could attest `wwan0.1`, while the unchanged replay task still selected `wwan0`. Bind the publisher to the attested data interface and source address; prove that packets reach the intended user-plane path.
+Inspect `scenarios/r2lab-reference-oai-srsran.yml` on the physical candidate, N320/RAN deployment inputs, the actual rendered gNB configuration, UE session/attestation evidence, `Experiment/workload/replay.py`, and the MQTT role that launches it. In draft PR #7, the secondary-DNN MBIM path could attest `wwan0.1`, while the unchanged replay task still selected `wwan0`. Bind the publisher to the attested data interface and source address; prove that packets reach the intended user-plane path.
 
 The inspected upstream N320 values specified n78/20 MHz/30 kHz, a 61.44-Msample/s setting, transmit/receive gains of 35/60, internal clock/synchronization and image tag `r2labuser/srsran-gnb-uhd:v1.0`. These are provenance facts about a reference file, not instructions to assume the live hardware has that state or to vary those values blindly. Record the runtime image digest and rendered parameters. The source was [the pinned N320 values](https://github.com/turletti/srsran-helm/blob/8dfb9890d127734cdcd6eee9df8c5d09b1a8076a/charts/srsran-gnb/values-n320-n78-20MHz.yaml); verify the actual deployed upstream revision before execution.
 
@@ -93,7 +93,7 @@ Produce a measured RF-state summary, native-versus-periodic delivery curves, fre
 
 ## Optional modeled Ambient-IoT coverage study
 
-Read `synthran/model/{propagation,backscatter,controller,capacitor}.py` and the energy/source adapter. The reviewed UMa implementation entered a far-distance branch below 10 m, creating a discontinuity between 9 and 10 m while the default layout included 5–10 m. Correct the domain behavior. The code cites a version of [3GPP TR 38.901](https://www.etsi.org/deliver/etsi_tr/138900_138999/138901/15.00.00_60/tr_138901v150000p.pdf); using a formula from that report does not establish indoor-backscatter calibration or full standard conformance.
+Read `Experiment/model/{propagation,backscatter,controller,capacitor}.py` and the energy/source adapter. The reviewed UMa implementation entered a far-distance branch below 10 m, creating a discontinuity between 9 and 10 m while the default layout included 5–10 m. Correct the domain behavior. The code cites a version of [3GPP TR 38.901](https://www.etsi.org/deliver/etsi_tr/138900_138999/138901/15.00.00_60/tr_138901v150000p.pdf); using a formula from that report does not establish indoor-backscatter calibration or full standard conformance.
 
 Choose a model appropriate to the intended geometry/frequency and state what has been calibrated. If no relevant RF measurements are available, restrict results to a model sensitivity analysis. Document forward command and reflected-data paths, antenna assumptions, sensitivity/noise, fading/shadowing, energy conversion and whether RF harvesting shares the same propagation path. Avoid applying a distance loss twice accidentally, or omitting the return path where required by the selected abstraction.
 

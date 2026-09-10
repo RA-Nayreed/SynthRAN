@@ -2,11 +2,11 @@
 
 SynthRAN runs its native Ambient-IoT model deterministically, freezes decoded
 packets into JSONL, and replays only those packets as MQTT traffic through real
-5G UE interfaces. Scientific model primitives live in `synthran/model/`, while
+5G UE interfaces. Scientific model primitives live in `Experiment/model/`, while
 configuration, protocols, evidence, and event bridging live in
-`synthran/ambient_iot/`. The model originated from Amber; its provenance and
+`Experiment/ambient_iot/`. The model originated from Amber; its provenance and
 license are preserved under `third_party/amber/`.
-Protocol examples are colocated at `synthran/ambient_iot/examples/`.
+Protocol examples are colocated at `Experiment/ambient_iot/examples/`.
 
 For `platform: r2lab`, SynthRAN deliberately does not maintain an independent
 R2Lab radio/gNB/modem implementation. R2Lab cleanup, RRU handling, UE setup,

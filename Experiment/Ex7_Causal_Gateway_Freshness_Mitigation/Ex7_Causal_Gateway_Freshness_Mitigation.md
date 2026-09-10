@@ -30,7 +30,7 @@ No policy is assumed to improve every objective. Prespecify a useful trade-off, 
 
 ## Required implementation and evidence
 
-Read `synthran/workload/{trace,replay}.py`, the model-to-trace bridge and all MQTT publication/collection/reconciliation tasks. At the review baseline, replay waited for each PUBACK before submitting the next event and set `sent_utc` after that wait. That behavior can resemble uncontrolled pacing. Implement and qualify a nonblocking release scheduler before comparing deliberate gateway policies.
+Read `Experiment/workload/{trace,replay}.py`, the model-to-trace bridge and all MQTT publication/collection/reconciliation tasks. At the review baseline, replay waited for each PUBACK before submitting the next event and set `sent_utc` after that wait. That behavior can resemble uncontrolled pacing. Implement and qualify a nonblocking release scheduler before comparing deliberate gateway policies.
 
 Retain the same source trace for all policies. Every completed reader decode becomes an immutable gateway-arrival event at its native real-time release `s`. A policy may inspect that event only after `s`, plus the queue and locally available past observations. It must not read future trace entries, future energy, future channel state or future application receipts. The runner can read input for scheduling, but the policy interface must expose only released events and permitted state.
 

@@ -30,7 +30,7 @@ The current implementation maps one modeled device to each `deployment.ues` entr
 
 ## Required source work
 
-Read `synthran/scenario.py`, `synthran/deployment_state.py`, `deploy.sh`, `synthran/workload/replay.py`, `deployment/roles/synthran/software_ue_publish/`, `deployment/roles/synthran/publisher/`, and srsRAN's UE/broker configuration roles. Read the model runner/bridge for source identities.
+Read `synthran/scenario.py`, `synthran/deployment_state.py`, `deploy.sh`, `Experiment/workload/replay.py`, `deployment/roles/synthran/software_ue_publish/`, `deployment/roles/synthran/publisher/`, and srsRAN's UE/broker configuration roles. Read the model runner/bridge for source identities.
 
 Implement separate sensor and gateway identities, an explicit `sensor_id -> gateway_id -> connection_id` mapping, and validation that every expected event is forwarded exactly once. A gateway with no assigned modeled sensor, such as a competing-load UE, must be allowed. Preserve the old 1:1 mapping as an explicit special case if useful; do not silently rewrite populations.
 

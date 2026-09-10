@@ -136,7 +136,7 @@ def _copy_bundle(source, destination, manifest):
 
 
 def import_bundle(source, destination, scenario):
-    from synthran.scenario import load_scenario
+    from Experiment.scenario import load_scenario
 
     manifest = validate_bundle(source)
     configured = load_scenario(scenario)

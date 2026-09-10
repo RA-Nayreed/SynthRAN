@@ -13,7 +13,7 @@ Make the R2Lab path use the pinned SOPNode 5g_ansible hardware implementation, r
 1. deploy.sh hardcodes an operator-specific SSH key filename, bypasses normal SSH configuration, repeats physical UE lists/mode mappings, and hardcodes Faraday settings in multiple places. Inventory is generated before .r2lab_config is loaded for reservation, so credentials can be applied too late.
 2. deploy.sh unconditionally prepares an Ambient-IoT trace and embeds MQTT variables. The detached controller aggregates publisher records and reconciles MQTT results. Those are experiment responsibilities.
 3. R2Lab UE connection is inside deployment/playbooks/mqtt.yml rather than the testbed bring-up path.
-4. synthran/scenario.py requires model, mqtt and devices even for infrastructure configuration. Campaigns are under experiments/, while model/workload/analysis implementation remains mixed into the testbed package.
+4. synthran/scenario.py requires model, mqtt and devices even for infrastructure configuration. Campaigns are under Experiment/, while model/workload/analysis implementation remains mixed into the testbed package.
 5. The progress filter prints full slash-separated role paths and suppresses standalone Ansible [ERROR] diagnostics.
 6. Source attribution still points to a deleted parity test. Legacy OAI resume migration and optional R2Lab auxiliary orchestration require reachability review before removal.
 7. Experiment 1 embeds settings already represented in its plan. Experiment 2 contains fixed transport and gateway assumptions that should be explicit campaign configuration, not testbed policies.

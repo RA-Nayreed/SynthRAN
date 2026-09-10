@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .scenario import load_scenario, remap_gateways
+from Experiment.scenario import load_scenario, remap_gateways
 
 
 def choose(label: str, default: str, choices=()) -> str:

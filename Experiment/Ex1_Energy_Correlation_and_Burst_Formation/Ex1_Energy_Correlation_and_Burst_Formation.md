@@ -28,7 +28,7 @@ Use one modeled reader and static RF geometry initially. Main energy variation i
 
 ## Readiness specific to this study
 
-Read `synthran/ambient_iot/{config,runner,protocols,bridge,evidence,outcomes}.py` and `synthran/model/{capacitor,controller,propagation,backscatter,bsengine,packet_analysis}.py`.
+Read `Experiment/ambient_iot/{config,runner,protocols,bridge,evidence,outcomes}.py` and `Experiment/model/{capacitor,controller,propagation,backscatter,bsengine,packet_analysis}.py`.
 
 The reviewed code ignored sensing intervals and CSV timestamps; `wpt_power_w` had no effect; one energy actor served all sensors; capacitor branches accounted for charging differently; generation/completed-decode timestamps were absent. Missing subcarrier assignments gave nodes separate subcarriers. The receiver also accepted singleton packets without applying the same SINR threshold used for collisions. Resolve these before generating a scientific energy sweep.
 

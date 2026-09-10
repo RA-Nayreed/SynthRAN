@@ -148,10 +148,10 @@ rejection, separate ACK records and hand-integrated freshness examples.
 Use fresh output directories; existing bundles are not overwritten.
 
 ```sh
-python -m synthran.cli model run --config scenarios/reference.yml --output results/source/model
-python -m synthran.cli workload validate --source results/source/model
-python -m synthran.cli workload transform --source results/source/model --output results/permuted/model --variant gap_permutation --seed 101 --warmup-seconds 1
-python -m synthran.cli workload transform --source results/source/model --output results/periodic/model --variant periodic --warmup-seconds 1
+python -m Experiment.cli model run --config scenarios/reference.yml --output results/source/model
+python -m Experiment.cli workload validate --source results/source/model
+python -m Experiment.cli workload transform --source results/source/model --output results/permuted/model --variant gap_permutation --seed 101 --warmup-seconds 1
+python -m Experiment.cli workload transform --source results/source/model --output results/periodic/model --variant periodic --warmup-seconds 1
 ```
 
 These are command examples, not the final study duration or warm-up. The

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from synthran.model.backscatter import BackscatterModule
+from Experiment.model.backscatter import BackscatterModule
 import math
 
 

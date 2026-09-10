@@ -115,7 +115,7 @@ for source in sorted(run.glob('publisher-*.jsonl')):
     rows.extend(source.read_text().splitlines())
 (run / 'publisher.jsonl').write_text('\n'.join(rows) + ('\n' if rows else ''))
 PY
-run_step "$SYNTHRAN_PYTHON" -m synthran.cli results reconcile \
+run_step "$SYNTHRAN_PYTHON" -m Experiment.cli results reconcile \
   --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" \
   --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" \
   --output "$RUN_DIR/summary.json" --require-deployment-identity
