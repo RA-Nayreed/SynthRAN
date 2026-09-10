@@ -37,13 +37,23 @@
       "periodic": false
     }
   },
+  "transport_baseline": {
+    "software_platform": "rfsim",
+    "core": "oai",
+    "ran": "srsran",
+    "core_node": "sopnode-f2",
+    "ran_node": "sopnode-f3",
+    "broker_node": "sopnode-f2",
+    "profile": "default",
+    "rationale": "Freeze the previously live-qualified OAI+srsRAN multi-UE slice path and match the intended OAI+srsRAN N320 physical transport. The first setup-only Open5GS+srsRAN attempt exposed the known srsUE Requested-NSSAI-in-cleartext incompatibility before any Experiment-2 telemetry was replayed, so it produced no transport outcome and is not used as the experiment baseline."
+  },
   "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point before the matched timing confirmation campaign. Do not use this pilot to select a source trace based on transport outcomes.",
   "transport_sequence": [
     "prepared workload dry-run",
-    "RFSIM no-load sanity replay",
+    "OAI+srsRAN RFSIM no-load sanity replay",
     "RFSIM competing-traffic sweep to locate the transport knee",
     "freeze the transport operating point",
     "paired native/gap_permutation/periodic pilot at the frozen point",
-    "qualify physical N320 path before any physical confirmation runs"
+    "qualify physical N320 OAI+srsRAN path before any physical confirmation runs"
   ]
 }
