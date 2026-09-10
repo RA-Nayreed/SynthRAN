@@ -15,15 +15,35 @@
   environment:
     PYTHONPATH: /opt/synthran-source
   changed_when: false
-- name: Require physical UE interface
-  command: ip -4 -o addr show dev {{ synthran_physical_interface }}
-  register: ue_tunnel
-  changed_when: false
-  failed_when: "' inet ' not in ue_tunnel.stdout"
 - name: Copy immutable trace
   copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
-- name: Resolve N6-reachable broker address
+
+- name: Reuse the non-R2Lab physical broker endpoint
   set_fact:
-    synthran_effective_broker_address: >-
+    synthran_effective_broker_address: "{{ synthran_physical_broker_ipv4 }}"
+  when: platform == 'physical'
+
+- name: Resolve the R2Lab N6 broker endpoint
+  set_fact:
+    synthran_r2lab_broker_endpoint: >-
       {{ mqtt_broker_address if mqtt_broker_address else
          hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+  when: platform == 'r2lab'
+
+- name: Resolve the R2Lab broker endpoint to IPv4
+  command:
+    argv: [getent, ahostsv4, "{{ synthran_r2lab_broker_endpoint }}"]
+  register: synthran_r2lab_broker_lookup
+  changed_when: false
+  when: platform == 'r2lab'
+
+- name: Record the R2Lab broker IPv4 address
+  set_fact:
+    synthran_effective_broker_address: "{{ synthran_r2lab_broker_lookup.stdout_lines[0].split()[0] }}"
+  when: platform == 'r2lab'
+
+- name: Route the SynthRAN broker through the upstream R2Lab wwan0 session
+  command: >-
+    ip route replace {{ synthran_effective_broker_address }}/32 dev wwan0
+  changed_when: true
+  when: platform == 'r2lab'

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; SOP_RESERVATION_DONE=false; PREPARED_WORKLOAD=""
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; PREPARED_WORKLOAD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
@@ -45,6 +45,7 @@ else
 fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran
 mkdir -p .synthran/r2lab
@@ -433,7 +434,6 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   deployment_section "Resolving the SOP reservation"
   command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
   "$SYNTHRAN_PYTHON" deployment/scripts/reserve_sop.py "$CONFIG" "$RUN_DIR"
-  SOP_RESERVATION_DONE=true
 fi
 
 if $RESUME; then
@@ -461,7 +461,7 @@ if d['ran'].lower() == 'srsran' and d['platform'] == 'rfsim' and len(ues) > 635:
     raise SystemExit('srsRAN RFSIM exceeds the available TCP port range (maximum 635 UEs)')
 if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit('UERANSIM cannot be combined with an R2Lab physical radio')
 if d['platform'] == 'r2lab':
-    r2user = d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))
+    r2user = os.environ.get('R2LAB_USERNAME') or d.get('r2lab_username', '')
     identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
     faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
@@ -502,7 +502,7 @@ if d['platform'] == 'r2lab':
     faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
     key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
     common_arg = f" ansible_ssh_common_args='-F /dev/null -o UserKnownHostsFile={faraday_known_hosts} -o StrictHostKeyChecking=accept-new'"
-    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={d.get('r2lab_username', os.environ.get('R2LAB_USERNAME',''))} ansible_python_interpreter=/usr/bin/python3{key_arg}{common_arg}"]
+    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={r2user} ansible_python_interpreter=/usr/bin/python3{key_arg}{common_arg}"]
 else:
     faraday = []
 lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
@@ -618,109 +618,6 @@ if $RESUME; then
     --evidence "$RESUME_SOURCE_EVIDENCE"
 fi
 
-if ! $NO_RESERVATION && ! $SOP_RESERVATION_DONE; then
-  deployment_section "Preparing SOP node reservations"
-  mapfile -t POS_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
-import sys, yaml
-from pathlib import Path
-d = yaml.safe_load(Path(sys.argv[1]).read_text())['deployment']
-r = d.get('reservation', {})
-print('true' if r.get('enabled', True) else 'false')
-print(int(r.get('duration_minutes', 120)))
-print(r.get('image', 'ubuntu-jammy'))
-for node in dict.fromkeys(d['nodes'].values()): print(node)
-PY
-  )
-  if [[ "${POS_SETTINGS[0]}" == true ]]; then
-    command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
-    POS_DURATION=${POS_SETTINGS[1]}; POS_IMAGE=${POS_SETTINGS[2]}; POS_NODES=("${POS_SETTINGS[@]:3}")
-    POS_REUSED=false; POS_RESERVED=false; POS_LAST_ERROR=""
-    echo "Requesting up to ${POS_DURATION} minutes for: ${POS_NODES[*]}"
-    POS_OWNER=${USER:-$(id -un)}
-    pos calendar list --filter "owner=$POS_OWNER" --json > "$RUN_DIR/pos-calendar-owner.json"
-    if ! POS_COVERAGE_OUTPUT=$("$SYNTHRAN_PYTHON" - \
-      "$RUN_DIR/pos-calendar-owner.json" "$POS_DURATION" "${POS_NODES[@]}" <<'PY'
-import json, math, sys
-from datetime import datetime
-events = json.load(open(sys.argv[1], encoding='utf-8'))
-nodes = sys.argv[3:]; now = datetime.now()
-def stamp(value): return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
-active_ends = {}
-for node in nodes:
-    active = [stamp(e['end_date']) for e in events
-              if node in e['nodes'] and stamp(e['start_date']) <= now < stamp(e['end_date'])]
-    if active:
-        active_ends[node] = max(active)
-if active_ends and len(active_ends) != len(nodes):
-    missing = sorted(set(nodes) - set(active_ends))
-    raise SystemExit(f'Only part of the requested SOP set has active calendar coverage; missing {missing}')
-if not active_ends:
-    print('fresh')
-else:
-    print('reuse')
-    remaining = min(math.floor((end - now).total_seconds() / 60)
-                    for end in active_ends.values())
-    common_end = min(active_ends.values())
-    print(f'duration|{max(0, remaining)}')
-    print(f'end|{common_end:%Y-%m-%dT%H:%M}')
-PY
-    ); then
-      echo "Unable to reconcile the current SOP calendar coverage" >&2
-      exit 1
-    fi
-    mapfile -t POS_COVERAGE <<< "$POS_COVERAGE_OUTPUT"
-    if [[ "${POS_COVERAGE[0]}" == reuse ]]; then
-      POS_REUSED=true; POS_RESERVED=true; POS_ACTUAL_DURATION=0; POS_CALENDAR_END=""
-      for coverage in "${POS_COVERAGE[@]:1}"; do
-        IFS='|' read -r action node start extension <<< "$coverage"
-        if [[ "$action" == duration ]]; then
-          POS_ACTUAL_DURATION=$node
-        elif [[ "$action" == end ]]; then
-          POS_CALENDAR_END=$node
-        fi
-      done
-      echo "Reusing the active allocation unchanged; calendar coverage ends at $POS_CALENDAR_END (${POS_ACTUAL_DURATION} minutes remain)"
-    else
-      for ((candidate=POS_DURATION; candidate>=10; candidate-=10)); do
-        if POS_OUTPUT=$(pos calendar create --start now --duration "$candidate" "${POS_NODES[@]}" 2>&1); then
-          POS_RESERVED=true; POS_ACTUAL_DURATION=$candidate
-          printf '%s\n' "$POS_OUTPUT" | tee "$RUN_DIR/pos-allocation.log"
-          break
-        fi
-        POS_LAST_ERROR=$POS_OUTPUT
-        [[ "$POS_OUTPUT" =~ [Cc]alendar|[Cc]onflict|[Uu]navailable|fit ]] || break
-      done
-      if $POS_RESERVED; then
-        POS_OUTPUT=$(pos allocations allocate "${POS_NODES[@]}" 2>&1) || {
-          printf '%s\n' "$POS_OUTPUT" >&2
-          echo "Calendar reservation succeeded, but POS could not allocate the selected nodes" >&2
-          exit 1
-        }
-        printf '%s\n' "$POS_OUTPUT" | tee -a "$RUN_DIR/pos-allocation.log"
-      fi
-    fi
-    if ! $POS_RESERVED; then
-      printf '%s\n' "$POS_LAST_ERROR" >&2
-      echo "Unable to reserve these nodes for any usable duration; they may belong to another user" >&2
-      exit 1
-    fi
-    echo "POS allocation ready for ${POS_ACTUAL_DURATION} minutes from now"
-    if $POS_REUSED; then
-      echo "Reusing existing node state; skipping image selection and reset"
-    else
-      for node in "${POS_NODES[@]}"; do
-        echo "Selecting image $POS_IMAGE on $node"
-        pos nodes image "$node" "$POS_IMAGE" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
-      done
-      for node in "${POS_NODES[@]}"; do
-        echo "Resetting and waiting for $node to finish booting"
-        pos nodes reset --blocking --verbose "$node" 2>&1 | tee -a "$RUN_DIR/pos-provisioning.log"
-      done
-    fi
-
-  fi
-fi
-
 mapfile -t R2LAB_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))['deployment']
@@ -801,10 +698,10 @@ export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
 if $WORKLOAD_ONLY; then
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/workload.yml
-  echo "The stored identity and exact live UE bindings will be proved before telemetry replay"
+  echo "The stored deployment identity will be checked before telemetry replay"
 elif $RESUME; then
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/resume.yml
-  echo "The failed run's live attestation will be proved before its corrected contract and workload are resumed"
+  echo "The failed run's live attestation will be checked before its workload is resumed"
 else
   DEPLOYMENT_PLAYBOOK=deployment/playbooks/site.yml
 fi
@@ -815,40 +712,6 @@ ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.ini"
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
-echo "Showing deployment stages, retries, warnings, and failures; full host results are saved to $RUN_DIR/ansible.log"
-echo
-set +e
-stdbuf -oL -eL "${ANSIBLE_COMMAND[@]}" 2>&1 \
-  | stdbuf -oL -eL tee "$RUN_DIR/ansible.log" \
-  | "$SYNTHRAN_PYTHON" -u deployment/scripts/filter_ansible_output.py
-ANSIBLE_RC=${PIPESTATUS[0]}
-set -e
-if (( ANSIBLE_RC != 0 )); then
-  echo "Deployment failed; complete Ansible output: $RUN_DIR/ansible.log" >&2
-  if [[ -f "$RUN_DIR/live-deployment-evidence.json" ]]; then
-    echo "The attested 5G stack was preserved. Resume at the workload boundary with:" >&2
-    echo "  ./deploy.sh --resume $RUN_DIR" >&2
-  fi
-  exit "$ANSIBLE_RC"
-fi
-
-if $WORKLOAD_ONLY; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state record-reuse \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-else
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-fi
-
-deployment_section "Reconciling model, publisher, and broker results"
-"$SYNTHRAN_PYTHON" - "$RUN_DIR" <<'PY'
-import sys
-from pathlib import Path
-run=Path(sys.argv[1]); rows=[]
-for source in sorted(run.glob('publisher-*.jsonl')): rows.extend(source.read_text().splitlines())
-(run/'publisher.jsonl').write_text('\n'.join(rows)+('\n' if rows else ''))
-PY
-"$SYNTHRAN_PYTHON" -m synthran.cli results reconcile --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" --output "$RUN_DIR/summary.json" --require-deployment-identity
-echo "Artifacts retained in $RUN_DIR"
+exec bash deployment/scripts/run_deployment.sh \
+  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$CONFIG" "$ACTIVE_DEPLOYMENT_STATE" \
+  "$WORKLOAD_ONLY" "${ANSIBLE_COMMAND[@]}"

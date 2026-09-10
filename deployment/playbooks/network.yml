@@ -3,30 +3,79 @@
   hosts: sopnodes
   become: true
   any_errors_fatal: true
-  roles: [setup/destructive_guard, setup/common, setup/netplan, setup/containerd, setup/pre_k8s, setup/k8s/k8s_setup, setup/ovs]
+  roles:
+    - setup/destructive_guard
+    - setup/common
+    - setup/netplan
+    - setup/containerd
+    - setup/pre_k8s
+    - setup/k8s/k8s_setup
+    - setup/optimization/cpu
+    - setup/ovs
+
 - name: Create the Kubernetes control plane
   hosts: core_node
   become: true
   any_errors_fatal: true
-  roles: [setup/k8s/cluster_create, setup/k8s/remove_cp_taint, setup/cni, setup/storage]
+  roles:
+    - setup/k8s/cluster_create
+    - setup/k8s/remove_cp_taint
+
 - name: Join the RAN host to Kubernetes
   hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
-    - {role: setup/k8s/cluster_join, when: "inventory_hostname != groups['core_node'][0]"}
+    - role: setup/k8s/cluster_join
+      when: inventory_hostname != groups['core_node'][0]
+
+- name: Reserve only a split RAN node for RAN workloads
+  hosts: core_node
+  become: true
+  any_errors_fatal: true
+  roles:
+    - role: setup/k8s/add_taint
+      vars:
+        target_node: "{{ ran_node_name }}"
+      when: bridge_enabled and core_node_name != ran_node_name
+    - role: setup/k8s/remove_taint
+      vars:
+        target_node: "{{ ran_node_name }}"
+      when: core_node_name == ran_node_name
+
+- name: Install Multus and storage prerequisites
+  hosts: core_node
+  become: true
+  any_errors_fatal: true
+  roles:
+    - setup/cni
+    - role: setup/storage
+      when: core == 'open5gs' or core == 'free5gc'
+
+- name: Apply the upstream RAN-node CPU and kubelet tuning
+  hosts: ran_node
+  become: true
+  any_errors_fatal: true
+  roles:
+    - role: setup/k8s/k8s_cpu_tuning
+      when: not (fhi72 | default(false) | bool)
+
 - name: Configure core-side transport
   hosts: core_node
   become: true
   any_errors_fatal: true
   roles:
-    - {role: setup/gre_tunnel, when: "bridge_enabled and core_node_name != ran_node_name"}
+    - role: setup/gre_tunnel
+      when: bridge_enabled and core_node_name != ran_node_name
+
 - name: Configure RAN-side transport
   hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
-    - {role: setup/gre_tunnel, when: "bridge_enabled and core_node_name != ran_node_name"}
+    - role: setup/gre_tunnel
+      when: bridge_enabled and core_node_name != ran_node_name
+
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
   any_errors_fatal: true
@@ -51,6 +100,7 @@
       ansible.builtin.include_role:
         name: 5g/free5gc/deploy
       when: core == 'free5gc'
+
 - name: "Deploy the {{ ran | upper }} RAN and software UEs"
   hosts: ran_node
   any_errors_fatal: true

@@ -1,0 +1,89 @@
+{
+  "experiment": "exp2-matched-trace-transport",
+  "phase": "transport-operating-point-pilot",
+  "status": "frozen-before-transport-outcomes",
+  "source_selection": {
+    "experiment_1_condition": "knee-common",
+    "model_seed": 1001,
+    "energy_source": "lognormal",
+    "energy_correlation": "common",
+    "mean_power_w": 0.001,
+    "sensor_count": 32,
+    "duration_seconds": 60,
+    "selection_rationale": "first preregistered Experiment-1 confirmation seed; selected by ID rather than an observed burstiness, collision, freshness, or transport outcome"
+  },
+  "timing_interventions": {
+    "variants": [
+      "native",
+      "gap_permutation",
+      "periodic"
+    ],
+    "warmup_seconds": 10.0,
+    "gap_permutation_seed": 101,
+    "invariants": [
+      "source bundle lineage",
+      "event IDs",
+      "event count",
+      "event order",
+      "sensor and gateway mapping",
+      "MQTT topic",
+      "serialized payload bytes",
+      "measurement endpoints",
+      "source horizon"
+    ],
+    "generation_age_valid": {
+      "native": true,
+      "gap_permutation": false,
+      "periodic": false
+    }
+  },
+  "transport_baseline": {
+    "software_platform": "rfsim",
+    "core": "oai",
+    "ran": "srsran",
+    "core_node": "sopnode-f2",
+    "ran_node": "sopnode-f3",
+    "broker_node": "sopnode-f2",
+    "profile": "default",
+    "workload_gateways": [
+      "uesim01",
+      "uesim02"
+    ],
+    "competing_traffic_ue": "uesim03",
+    "rationale": "Freeze the previously live-qualified OAI+srsRAN multi-UE slice path and match the intended OAI+srsRAN N320 physical transport. uesim03 is deployment-only competing traffic and receives no modeled sensors. The first setup-only Open5GS+srsRAN attempt exposed the known srsUE Requested-NSSAI-in-cleartext incompatibility before any Experiment-2 telemetry was replayed, so it produced no transport outcome and is not used as the experiment baseline."
+  },
+  "transport_calibration": {
+    "generator": "paced UDP application payload",
+    "packet_bytes": 1200,
+    "probe_duration_seconds": 10,
+    "offered_payload_mbps_grid": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30,
+      40,
+      50
+    ],
+    "delivery_threshold": 0.98,
+    "knee_rule": "The first grid rate with end-to-end delivery ratio below 0.98 marks saturation onset; L* is the immediately preceding grid rate. If the first rate already fails or no rate crosses the threshold, the pilot stops without selecting L*.",
+    "manual_rate_selection_forbidden": true
+  },
+  "matched_pilot": {
+    "background_rate": "L* selected only by the frozen transport_calibration rule",
+    "variant_order_seed": 20260910,
+    "repeats": 1,
+    "purpose": "mechanism/measurement pilot only; not the final confirmation campaign"
+  },
+  "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point before the matched timing confirmation campaign. Do not use this pilot to select a source trace based on transport outcomes.",
+  "transport_sequence": [
+    "prepare immutable timing variants",
+    "prepare fixed OAI+srsRAN RFSIM scenario with separate competing UE",
+    "full native no-load qualification",
+    "automated RFSIM competing-traffic sweep",
+    "select L* by the frozen threshold rule",
+    "automated native/gap_permutation/periodic pilot at the frozen L*",
+    "qualify physical N320 OAI+srsRAN path before any physical confirmation runs"
+  ]
+}

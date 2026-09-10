@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from ..deployment_state import bindings_match_deployment
 from .metrics import measurements
 
 
@@ -55,16 +56,23 @@ def _deployment_evidence(expected: str | Path) -> dict:
     cluster_verified = evidence.get("cluster_identity_verified") is True
     deployment = identity.get("deployment", {})
     bindings = evidence.get("bindings", [])
+    platform = deployment.get("platform")
     binding_fields = ("device", "index", "imsi", "slice", "dnn")
-    binding_verified = (
-        [tuple(item.get(field) for field in binding_fields) for item in bindings]
-        == [
-            tuple(item.get(field) for field in binding_fields)
-            for item in deployment.get("ues", [])
-        ]
-        if deployment.get("platform") == "rfsim"
-        else True
-    )
+    if platform == "rfsim":
+        binding_verified = (
+            [tuple(item.get(field) for field in binding_fields) for item in bindings]
+            == [
+                tuple(item.get(field) for field in binding_fields)
+                for item in deployment.get("ues", [])
+            ]
+        )
+    elif platform == "physical":
+        binding_verified = bindings_match_deployment(deployment, bindings)
+    else:
+        # R2Lab UE/RRU attachment is delegated to the pinned upstream 5g_ansible
+        # implementation; SynthRAN no longer requires its retired modem-binding
+        # evidence as a second acceptance gate.
+        binding_verified = True
     status_valid = identity.get("status") in {"active", "reused"}
     verified = matches and cluster_verified and binding_verified and status_valid
     return {
@@ -73,6 +81,7 @@ def _deployment_evidence(expected: str | Path) -> dict:
         "deployment_hash": identity.get("deployment_hash"),
         "scenario_hash": identity.get("scenario_hash"),
         "cluster_identity_verified": cluster_verified,
+        "binding_verified": binding_verified,
         "bindings": bindings,
         "reason": (
             None

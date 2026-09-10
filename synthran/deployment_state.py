@@ -5,6 +5,7 @@ import argparse
 import copy
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from .scenario import load_scenario
 
 
 SCHEMA_VERSION = 1
+R2LAB_QMI_DEVICES = {"qhat20", "qhat21", "qhat22", "qhat23"}
 
 
 def _canonical(value: Any) -> bytes:
@@ -93,6 +95,111 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
 
 
+def _physical_mode(platform: str, device: str) -> str:
+    if platform == "r2lab" and device in R2LAB_QMI_DEVICES:
+        return "qmi"
+    return "mbim"
+
+
+def _physical_tunnel(platform: str, device: str) -> dict:
+    mode = _physical_mode(platform, device)
+    return {
+        "host": device,
+        "interface": "wwan0",
+        "mode": mode,
+        "mbim_session": 0 if mode == "mbim" else None,
+    }
+
+
+def _normalized_index(value: Any) -> Any:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return value
+
+
+def _transport_value(item: dict, key: str) -> Any:
+    if key in item:
+        return item.get(key)
+    tunnel = item.get("tunnel", {})
+    return tunnel.get(key) if isinstance(tunnel, dict) else None
+
+
+def binding_identity(item: dict) -> tuple:
+    """Normalize desired/live UE transport identity into one comparable tuple."""
+    mode = _transport_value(item, "mode")
+    session = _transport_value(item, "mbim_session")
+    if mode != "mbim":
+        session = None
+    return (
+        str(item.get("device")) if item.get("device") is not None else None,
+        _normalized_index(item.get("index")),
+        str(item.get("imsi")) if item.get("imsi") is not None else None,
+        str(item.get("slice")) if item.get("slice") is not None else None,
+        str(item.get("dnn")) if item.get("dnn") is not None else None,
+        str(_transport_value(item, "host")) if _transport_value(item, "host") is not None else None,
+        str(_transport_value(item, "namespace")) if _transport_value(item, "namespace") is not None else None,
+        str(_transport_value(item, "interface")) if _transport_value(item, "interface") is not None else None,
+        str(mode) if mode is not None else None,
+        _normalized_index(session),
+    )
+
+
+def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
+    """Require complete UE identity, interface/session, and slice-address evidence."""
+    if deployment.get("platform") not in {"rfsim", "r2lab", "physical"}:
+        return True
+
+    expected = deployment.get("ues", [])
+    if len(bindings) != len(expected):
+        return False
+
+    by_device = {
+        str(item.get("device")): item
+        for item in bindings
+        if isinstance(item, dict) and item.get("device") is not None
+    }
+    if len(by_device) != len(bindings):
+        return False
+
+    for contract in expected:
+        live = by_device.get(str(contract.get("device")))
+        if live is None or binding_identity(live) != binding_identity(contract):
+            return False
+        if deployment.get("platform") in {"r2lab", "physical"} and live.get("modem_verified") is not True:
+            return False
+        cidr = contract.get("address_cidr")
+        address = live.get("address")
+        if cidr:
+            if not address:
+                return False
+            try:
+                if ipaddress.ip_address(str(address)) not in ipaddress.ip_network(str(cidr), strict=False):
+                    return False
+            except ValueError:
+                return False
+    return True
+
+
+def _normalize_legacy_oai_deployment(deployment: dict) -> dict | None:
+    """Return the supported legacy OAI tunnel correction, if applicable."""
+    normalized = copy.deepcopy(deployment)
+    source_ues = normalized.get("ues", [])
+    if (
+        normalized.get("platform") == "rfsim"
+        and normalized.get("ran") == "oai"
+        and source_ues
+        and all(
+            ue.get("tunnel", {}).get("interface") == f"oaitun_ue{ue.get('index')}"
+            for ue in source_ues
+        )
+    ):
+        for ue in source_ues:
+            ue["tunnel"]["interface"] = "oaitun_ue1"
+        return normalized
+    return None
+
+
 def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
     deployment = scenario["deployment"]
     platform = str(deployment["platform"]).lower()
@@ -118,10 +225,7 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
         else:
-            interface = deployment.get("ue_interfaces", {}).get(device, "wwan0")
-            if not isinstance(interface, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface):
-                raise ValueError(f"invalid physical interface for {device}")
-            entry["tunnel"] = {"host": device, "interface": interface}
+            entry["tunnel"] = _physical_tunnel(platform, device)
         result.append(entry)
     return result
 
@@ -140,6 +244,7 @@ def build_manifest(
         "ran": str(deployment["ran"]).lower(),
         "platform": str(deployment["platform"]).lower(),
         "radio_unit": "rfsim" if deployment["platform"] == "rfsim" else deployment.get("ru", deployment["platform"]),
+        "radio": copy.deepcopy(deployment.get("radio", {})),
         "nodes": copy.deepcopy(deployment["nodes"]),
         "bridge_enabled": bool(deployment.get("bridge_enabled", True)),
         "profile": deployment.get("profile", "default"),
@@ -225,28 +330,31 @@ def verify_resume(
         raise ValueError("--resume refused: the failed run has no successful cluster attestation")
     if evidence.get("deployment_hash") != source.get("deployment_hash"):
         raise ValueError("--resume refused: the failed run's attestation evidence does not match its identity")
+    source_deployment = source.get("deployment", {})
+    normalized_source = _normalize_legacy_oai_deployment(source_deployment)
+    source_bindings = evidence.get("bindings", [])
+    if source_bindings:
+        evidence_matches = bindings_match_deployment(
+            source_deployment, source_bindings
+        )
+        if not evidence_matches and normalized_source is not None:
+            evidence_matches = bindings_match_deployment(
+                normalized_source, source_bindings
+            )
+        if not evidence_matches:
+            raise ValueError(
+                "--resume refused: the failed run's recorded UE bindings do not "
+                "match its deployment contract"
+            )
     if candidate.get("scenario_hash") != source.get("scenario_hash"):
         raise ValueError("--resume refused: the resolved scenario has changed")
-    if candidate.get("deployment") == source.get("deployment"):
+    if candidate.get("deployment") == source_deployment:
         return
 
     # Allow the narrowly scoped correction from numbered OAI interfaces to the
     # actual per-pod interface name. No deployed infrastructure field changes.
-    normalized_source = copy.deepcopy(source.get("deployment", {}))
-    source_ues = normalized_source.get("ues", [])
-    if (
-        normalized_source.get("platform") == "rfsim"
-        and normalized_source.get("ran") == "oai"
-        and source_ues
-        and all(
-            ue.get("tunnel", {}).get("interface") == f"oaitun_ue{ue.get('index')}"
-            for ue in source_ues
-        )
-    ):
-        for ue in source_ues:
-            ue["tunnel"]["interface"] = "oaitun_ue1"
-        if candidate.get("deployment") == normalized_source:
-            return
+    if normalized_source is not None and candidate.get("deployment") == normalized_source:
+        return
     raise ValueError(
         "--resume refused: current code would change the failed run's deployment "
         "identity beyond the supported OAI per-pod tunnel correction"

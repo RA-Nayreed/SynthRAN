@@ -82,7 +82,12 @@
             fi
           register: ht_check
           changed_when: false
-          failed_when: ht_check.rc != 0
+          # RFSIM is a software transport qualification path. Record the host
+          # state but do not block it on a physical-radio real-time prerequisite.
+          # Keep the inherited requirement fatal for physical/R2Lab execution.
+          failed_when:
+            - ht_check.rc != 0
+            - (platform | default('rfsim')) != 'rfsim'
 
         - name: Show hyperthreading status
           debug:

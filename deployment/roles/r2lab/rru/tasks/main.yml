@@ -1,28 +1,33 @@
 ---
 - name: Power ON "{{ rru }}" PDU outlet
-  ansible.builtin.command: "rhubarbe pdu on {{ rru }}"
-  changed_when: true
+  shell: rhubarbe pdu on "{{ rru }}"
+  delegate_to: faraday.inria.fr
 
-- name: Wait for a Benetel RRU to be ready
-  ansible.builtin.pause:
+- name: Wait 210 seconds for the "{{ rru }}" RRU to be ready
+  pause:
     seconds: 210
-  when: rru in ['benetel1', 'benetel2'] and ran | lower in ['srsran', 'oai']
+  when: rru in ['benetel1', 'benetel2'] and ran in ['srsRAN', 'oai']
 
-- name: Prepare the selected Benetel RRU
-  ansible.builtin.command: "/usr/local/bin/prepare-{{ rru }}-for-{{ ran | lower }}.sh"
-  when: rru in ['benetel1', 'benetel2'] and ran | lower in ['srsran', 'oai']
+- name: "Prepare {{ rru }} RRU (switch on, load conf, reboot)"
+  shell: "/usr/local/bin/prepare-{{ rru }}-for-{{ ran | lower }}.sh"
+  delegate_to: faraday.inria.fr
+  when: rru in ['benetel1', 'benetel2'] and ran in ['srsRAN', 'oai']
   register: prepare_rru_output
-  changed_when: true
 
-- name: Report R2Lab radio preparation
-  ansible.builtin.debug:
-    msg: "{{ prepare_rru_output.stdout | default('No additional preparation required') }}"
+- name: Show prepare RRU output
+  debug:
+    msg: "{{ prepare_rru_output.stdout | default('Task skipped') }}"
 
-- name: Verify the selected RRU PDU status
-  ansible.builtin.command: "rhubarbe pdu status {{ rru }}"
+- name: Verify PDU status
+  shell: rhubarbe pdu status "{{ rru }}"
   register: pdu_status
-  changed_when: false
+  delegate_to: faraday.inria.fr
 
-- name: Report R2Lab PDU status
-  ansible.builtin.debug:
+- name: Show PDU status
+  debug:
     var: pdu_status.stdout
+
+# no need to actively wait for 210, time required for other tasks much longer
+#- name: Wait 210 seconds for the "{{ rru }}" RRU to be ready
+#  pause:
+#    seconds: 210

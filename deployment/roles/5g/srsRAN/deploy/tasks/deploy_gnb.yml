@@ -49,14 +49,11 @@
         gnb_startup_success: false
         max_attempts: 2
 
-    - name: Deploy and monitor srsRAN gNB with bounded retries
+    - name: Deploy and Monitor srsRAN gNB
       block:
-        - name: Run a gNB deployment attempt
-          ansible.builtin.include_tasks: deploy_with_check.yml
+        - name: "Attempt gNB deployment (Attempt {{ item }})"
+          include_tasks: deploy_with_check.yml
           loop: "{{ range(1, max_attempts + 1) | list }}"
-          loop_control:
-            loop_var: gnb_attempt
-            label: "attempt {{ gnb_attempt }}"
           when: not gnb_startup_success
 
       rescue:
@@ -185,7 +182,7 @@
       set_fact:
         governor_value: "{{ governor_logs.stdout | regex_search('After:\\n(.*)', '\\1') | default('unknown') }}"
 
-    - name: Report the RAN CPU governor
+    - name: Show governor status
       ansible.builtin.debug:
         msg: "CPU governor on {{ ran_node_name }}: {{ governor_value }}"
 
@@ -211,9 +208,9 @@
     atomic: True
     timeout: 180s
 
-- name: Retain the Kubernetes-enabled Ansible Python runtime
+- name: Reset ansible_python_interpreter to system python3
   ansible.builtin.set_fact:
-    ansible_python_interpreter: /opt/ansible-venv/bin/python
+    ansible_python_interpreter: /usr/bin/python3
   when:
     - rru in ['benetel1', 'benetel2']
     - venv_python.stat.exists | default(false)
