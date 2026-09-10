@@ -1,114 +1,33 @@
 ---
-- name: Request N3xx power off before a fresh deployment
-  ansible.builtin.command: "rhubarbe pdu off {{ rru }}"
-  register: r2lab_n3xx_power_off
-  changed_when: true
-  failed_when: false
-  when: rru in ['n300', 'n320']
+- name: Power ON "{{ rru }}" PDU outlet
+  shell: rhubarbe pdu on "{{ rru }}"
+  delegate_to: faraday.inria.fr
 
-- name: Verify the N3xx powered-off state
-  ansible.builtin.command: "rhubarbe pdu status {{ rru }}"
-  register: r2lab_n3xx_off_status
-  changed_when: false
-  failed_when: false
-  when: rru in ['n300', 'n320']
+- name: Wait 210 seconds for the "{{ rru }}" RRU to be ready
+  pause:
+    seconds: 210
+  when: rru in ['benetel1', 'benetel2'] and ran in ['srsRAN', 'oai']
 
-- name: Require the N3xx to be powered off before the reset interval
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - >-
-        (r2lab_n3xx_off_status.stdout | default('') |
-         regex_search('\):\s*OFF(?:\s|$)', ignorecase=True)) is not none
-    fail_msg: >-
-      {{ rru }} did not reach a proved OFF state; refusing to start the physical
-      gNB from an unknown radio state. Transition rc={{
-      (r2lab_n3xx_power_off | default({})).rc | default('not-run') }}; status
-      rc={{ r2lab_n3xx_off_status.rc | default('unavailable') }}; status={{
-      r2lab_n3xx_off_status.stdout | default('unavailable') }}
-  when: rru in ['n300', 'n320']
-
-- name: Hold the N3xx powered off long enough to clear MPM and RFNoC state
-  ansible.builtin.wait_for:
-    timeout: "{{ r2lab_n3xx_power_off_seconds }}"
-  delegate_to: localhost
-  when: rru in ['n300', 'n320']
-
-- name: Request N3xx power on
-  ansible.builtin.command: "rhubarbe pdu on {{ rru }}"
-  register: r2lab_n3xx_power_on
-  changed_when: true
-  failed_when: false
-  when: rru in ['n300', 'n320']
-
-- name: Verify the N3xx powered-on transition state
-  ansible.builtin.command: "rhubarbe pdu status {{ rru }}"
-  register: r2lab_n3xx_on_status
-  changed_when: false
-  failed_when: false
-  when: rru in ['n300', 'n320']
-
-- name: Require the N3xx to be powered on before the boot interval
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - >-
-        (r2lab_n3xx_on_status.stdout | default('') |
-         regex_search('\):\s*ON(?:\s|$)', ignorecase=True)) is not none
-    fail_msg: >-
-      {{ rru }} did not reach a proved ON state after the power-on request.
-      Transition rc={{ r2lab_n3xx_power_on.rc | default('unavailable') }};
-      status rc={{ r2lab_n3xx_on_status.rc | default('unavailable') }}; status={{
-      r2lab_n3xx_on_status.stdout | default('unavailable') }}
-  when: rru in ['n300', 'n320']
-
-- name: Power ON a non-N3xx RRU PDU outlet
-  ansible.builtin.command: "rhubarbe pdu on {{ rru }}"
-  register: r2lab_other_rru_power_on
-  changed_when: true
-  failed_when: r2lab_other_rru_power_on.rc | int != 0
-  when: rru not in ['n300', 'n320']
-
-- name: Allow an N3xx to complete its cold boot before gNB deployment
-  ansible.builtin.wait_for:
-    timeout: "{{ r2lab_n3xx_boot_seconds }}"
-  delegate_to: localhost
-  when: rru in ['n300', 'n320']
-
-- name: Wait for a Benetel RRU to be ready
-  ansible.builtin.wait_for:
-    timeout: 210
-  delegate_to: localhost
-  when: rru in ['benetel1', 'benetel2'] and ran | lower in ['srsran', 'oai']
-
-- name: Prepare the selected Benetel RRU
-  ansible.builtin.command: "/usr/local/bin/prepare-{{ rru }}-for-{{ ran | lower }}.sh"
-  when: rru in ['benetel1', 'benetel2'] and ran | lower in ['srsran', 'oai']
+- name: "Prepare {{ rru }} RRU (switch on, load conf, reboot)"
+  shell: "/usr/local/bin/prepare-{{ rru }}-for-{{ ran | lower }}.sh"
+  delegate_to: faraday.inria.fr
+  when: rru in ['benetel1', 'benetel2'] and ran in ['srsRAN', 'oai']
   register: prepare_rru_output
-  changed_when: true
 
-- name: Report R2Lab radio preparation
-  ansible.builtin.debug:
-    msg: "{{ prepare_rru_output.stdout | default('No additional preparation required') }}"
+- name: Show prepare RRU output
+  debug:
+    msg: "{{ prepare_rru_output.stdout | default('Task skipped') }}"
 
-- name: Verify the selected RRU PDU status after preparation
-  ansible.builtin.command: "rhubarbe pdu status {{ rru }}"
+- name: Verify PDU status
+  shell: rhubarbe pdu status "{{ rru }}"
   register: pdu_status
-  changed_when: false
-  failed_when: false
+  delegate_to: faraday.inria.fr
 
-- name: Require the selected RRU to be powered on
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - >-
-        (pdu_status.stdout | default('') |
-         regex_search('\):\s*ON(?:\s|$)', ignorecase=True)) is not none
-    fail_msg: >-
-      {{ rru }} is not in a proved ON state after R2Lab radio preparation.
-      Observed rc={{ pdu_status.rc | default('unavailable') }}; status={{
-      pdu_status.stdout | default('unavailable') }}
-
-- name: Report R2Lab PDU status
-  ansible.builtin.debug:
+- name: Show PDU status
+  debug:
     var: pdu_status.stdout
+
+# no need to actively wait for 210, time required for other tasks much longer
+#- name: Wait 210 seconds for the "{{ rru }}" RRU to be ready
+#  pause:
+#    seconds: 210
