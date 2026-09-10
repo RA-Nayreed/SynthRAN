@@ -5,9 +5,7 @@
 - name: Install physical publisher Python runtime
   package: {name: [python3, python3-pip, python3-venv], state: present}
 - name: Copy SynthRAN package
-  copy: {src: "{{ synthran_root }}/Experiment", dest: /opt/synthran-source/}
-- name: Copy package metadata
-  copy: {src: "{{ synthran_root }}/pyproject.toml", dest: /opt/synthran-source/pyproject.toml}
+  copy: {src: "{{ run_dir }}/runtime/", dest: /opt/synthran-source/}
 - name: Create isolated publisher runtime
   command: python3 -m venv /opt/synthran-venv
   args: {creates: /opt/synthran-venv/bin/python}

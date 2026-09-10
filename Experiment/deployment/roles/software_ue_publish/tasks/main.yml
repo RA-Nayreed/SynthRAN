@@ -102,9 +102,7 @@
 - name: Reset runtime staging directory
   file: {path: /tmp/synthran-build, state: absent}
 - name: Stage SynthRAN package on RAN node
-  copy: {src: "{{ synthran_root }}/Experiment", dest: /tmp/synthran-build/}
-- name: Stage package metadata on RAN node
-  copy: {src: "{{ synthran_root }}/pyproject.toml", dest: /tmp/synthran-build/pyproject.toml}
+  copy: {src: "{{ run_dir }}/runtime/", dest: /tmp/synthran-build/}
 - name: Stage immutable workload trace on RAN node
   copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
 - name: Copy package into every publisher runtime

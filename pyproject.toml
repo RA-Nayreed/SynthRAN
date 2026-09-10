@@ -10,14 +10,15 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "BSD-3-Clause"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-dependencies = ["numpy>=1.24", "pandas>=2", "simpy>=4", "PyYAML>=6", "paho-mqtt>=2"]
+dependencies = ["PyYAML>=6"]
 
 [project.optional-dependencies]
+experiment = ["numpy>=1.24", "pandas>=2", "simpy>=4", "paho-mqtt>=2"]
 analysis = ["matplotlib>=3.7", "openpyxl>=3.0"]
 deployment = ["ansible-core>=2.19,<2.20"]
 
 [tool.setuptools.package-data]
-Experiment = ["data/*.csv"]
+Experiment = ["data/*.csv", "configs/*.yml", "Ex*/*.json", "Ex*/*.yml", "Ex*/*.md", "deployment/**/*.yml", "deployment/**/*.j2"]
 "Experiment.ambient_iot" = ["examples/*.yml", "examples/README.md"]
 
 [tool.setuptools.packages.find]

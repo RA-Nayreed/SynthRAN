@@ -174,25 +174,6 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     return True
 
 
-def _normalize_legacy_oai_deployment(deployment: dict) -> dict | None:
-    """Return the supported legacy OAI tunnel correction, if applicable."""
-    normalized = copy.deepcopy(deployment)
-    source_ues = normalized.get("ues", [])
-    if (
-        normalized.get("platform") == "rfsim"
-        and normalized.get("ran") == "oai"
-        and source_ues
-        and all(
-            ue.get("tunnel", {}).get("interface") == f"oaitun_ue{ue.get('index')}"
-            for ue in source_ues
-        )
-    ):
-        for ue in source_ues:
-            ue["tunnel"]["interface"] = "oaitun_ue1"
-        return normalized
-    return None
-
-
 def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
     deployment = scenario["deployment"]
     platform = str(deployment["platform"]).lower()
@@ -241,6 +222,7 @@ def build_manifest(
         "platform": str(deployment["platform"]).lower(),
         "radio_unit": "rfsim" if deployment["platform"] == "rfsim" else deployment.get("ru", deployment["platform"]),
         "radio": copy.deepcopy(deployment.get("radio", {})),
+        "ansible_vars": copy.deepcopy(deployment.get("ansible_vars", {})),
         "nodes": copy.deepcopy(deployment["nodes"]),
         "bridge_enabled": bool(deployment.get("bridge_enabled", True)),
         "profile": deployment.get("profile", "default"),
@@ -326,16 +308,11 @@ def verify_resume(
     if evidence.get("deployment_hash") != source.get("deployment_hash"):
         raise ValueError("--resume refused: the failed run's attestation evidence does not match its identity")
     source_deployment = source.get("deployment", {})
-    normalized_source = _normalize_legacy_oai_deployment(source_deployment)
     source_bindings = evidence.get("bindings", [])
     if source_bindings:
         evidence_matches = bindings_match_deployment(
             source_deployment, source_bindings
         )
-        if not evidence_matches and normalized_source is not None:
-            evidence_matches = bindings_match_deployment(
-                normalized_source, source_bindings
-            )
         if not evidence_matches:
             raise ValueError(
                 "--resume refused: the failed run's recorded UE bindings do not "
@@ -346,14 +323,7 @@ def verify_resume(
     if candidate.get("deployment") == source_deployment:
         return
 
-    # Allow the narrowly scoped correction from numbered OAI interfaces to the
-    # actual per-pod interface name. No deployed infrastructure field changes.
-    if normalized_source is not None and candidate.get("deployment") == normalized_source:
-        return
-    raise ValueError(
-        "--resume refused: current code would change the failed run's deployment "
-        "identity beyond the supported OAI per-pod tunnel correction"
-    )
+    raise ValueError("--resume refused: the failed run's deployment identity has changed")
 
 
 def invalidate(active_path: str | Path, run_id: str) -> None:

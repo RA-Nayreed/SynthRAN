@@ -29,28 +29,14 @@
         synthran_resume_live_contract: >-
           {{ synthran_resume_live_identity.resources[0].data['manifest.json'] | from_json }}
 
-    - name: Require the failed or already-normalized deployment to remain attested
+    - name: Require the failed deployment to remain attested
       ansible.builtin.assert:
         quiet: true
         that:
           - synthran_resume_live_contract.schema_version == synthran_resume_source_contract.schema_version
-          - >-
-            (
-              synthran_resume_live_contract.deployment_hash
-              == synthran_resume_source_contract.deployment_hash
-              and synthran_resume_live_contract.deployment
-              == synthran_resume_source_contract.deployment
-            )
-            or
-            (
-              synthran_resume_live_contract.deployment_hash
-              == synthran_deployment_contract.deployment_hash
-              and synthran_resume_live_contract.deployment
-              == synthran_deployment_contract.deployment
-            )
-        fail_msg: >-
-          --resume refused because the live cluster matches neither the failed run's
-          attested deployment nor the narrowly corrected deployment candidate.
+          - synthran_resume_live_contract.deployment_hash == synthran_resume_source_contract.deployment_hash
+          - synthran_resume_live_contract.deployment == synthran_resume_source_contract.deployment
+        fail_msg: The live cluster no longer matches the failed run's deployment.
 
     - name: Read the live Kubernetes nodes before resuming
       kubernetes.core.k8s_info:

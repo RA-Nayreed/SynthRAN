@@ -11,18 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RESULTS_ROOT = ROOT / "results" / "exp1-energy-correlation"
-DURATION_SECONDS = 60.0
-WARMUP_SECONDS = 10.0
-CONFIRMATION_SEEDS = tuple(range(1001, 1031))
-CONDITIONS = (
-    "always-powered",
-    "low-independent",
-    "low-common",
-    "knee-independent",
-    "knee-common",
-    "high-independent",
-    "high-common",
-)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -35,14 +23,14 @@ def read_jsonl(path: Path) -> list[dict]:
     ]
 
 
-def active_fraction(bundle: Path) -> float:
+def active_fraction(bundle: Path, measurement: dict) -> float:
     rows = read_jsonl(bundle / "ambient_iot" / "transitions.jsonl")
     by_node: dict[int, list[dict]] = defaultdict(list)
     for row in rows:
         by_node[int(row["node_id"])].append(row)
 
-    start_ms = WARMUP_SECONDS * 1000.0
-    end_ms = DURATION_SECONDS * 1000.0
+    start_ms = measurement["warmup_seconds"] * 1000.0
+    end_ms = measurement["duration_seconds"] * 1000.0
     values = []
     for node_rows in by_node.values():
         node_rows.sort(key=lambda row: float(row["time_ms"]))
@@ -66,11 +54,11 @@ def active_fraction(bundle: Path) -> float:
     return statistics.fmean(values) if values else math.nan
 
 
-def event_offsets(bundle: Path) -> list[float]:
+def event_offsets(bundle: Path, warmup: float) -> list[float]:
     values = []
     for row in read_jsonl(bundle / "events.jsonl"):
         when = row.get("reader_decode_time_s", row.get("time_offset_s"))
-        if when is not None and float(when) >= WARMUP_SECONDS:
+        if when is not None and float(when) >= warmup:
             values.append(float(when))
     return sorted(values)
 
@@ -83,10 +71,10 @@ def gap_cv(offsets: list[float]) -> float:
     return statistics.pstdev(gaps) / avg if avg > 0 else math.nan
 
 
-def fano_one_second(offsets: list[float]) -> float:
-    bins = [0] * int(DURATION_SECONDS - WARMUP_SECONDS)
+def fano_one_second(offsets: list[float], measurement: dict) -> float:
+    bins = [0] * int(measurement["duration_seconds"] - measurement["warmup_seconds"])
     for when in offsets:
-        index = int(when - WARMUP_SECONDS)
+        index = int(when - measurement["warmup_seconds"])
         if 0 <= index < len(bins):
             bins[index] += 1
     avg = statistics.fmean(bins) if bins else 0.0
@@ -115,29 +103,27 @@ def pairwise_power_correlation(bundle: Path) -> float:
             da = [value - ma for value in a]
             db = [value - mb for value in b]
             denominator = math.sqrt(
-                sum(value * value for value in da)
-                * sum(value * value for value in db)
+                sum(value * value for value in da) * sum(value * value for value in db)
             )
             if denominator:
-                correlations.append(
-                    sum(x * y for x, y in zip(da, db)) / denominator
-                )
+                correlations.append(sum(x * y for x, y in zip(da, db)) / denominator)
     return statistics.fmean(correlations) if correlations else math.nan
 
 
-def metrics(bundle: Path) -> dict:
+def metrics(bundle: Path, measurement: dict) -> dict:
     summary = json.loads(
         (bundle / "ambient_iot" / "summary.json").read_text(encoding="utf-8")
     )
-    offsets = event_offsets(bundle)
+    offsets = event_offsets(bundle, measurement["warmup_seconds"])
     transmitted = int(summary["transmitted"])
     collisions = int(summary["radio_collision_loss"])
     return {
-        "active_fraction": active_fraction(bundle),
+        "active_fraction": active_fraction(bundle, measurement),
         "realized_power_correlation": pairwise_power_correlation(bundle),
         "decoded": int(summary["decoded"]),
-        "decode_rate_per_s": len(offsets) / (DURATION_SECONDS - WARMUP_SECONDS),
-        "fano_1s": fano_one_second(offsets),
+        "decode_rate_per_s": len(offsets)
+        / (measurement["duration_seconds"] - measurement["warmup_seconds"]),
+        "fano_1s": fano_one_second(offsets, measurement),
         "gap_cv": gap_cv(offsets),
         "collision_rate": collisions / transmitted if transmitted else 0.0,
         "generated": int(summary["generated"]),
@@ -156,22 +142,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Analyze Experiment 1 confirmation bundles without modifying them."
     )
+    parser.add_argument(
+        "--plan", type=Path, default=Path(__file__).with_name("experiment-plan.json")
+    )
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
+    plan = json.loads(args.plan.read_text())
+    measurement = plan["measurement"]
+    conditions = plan["confirmation"]["conditions"]
+    seed_range = plan["confirmation"]["seeds"]
+    seeds = range(seed_range["first"], seed_range["last"] + 1)
     root = args.results_root.expanduser().resolve()
     output = args.output or (root / "analysis-summary.json")
     records = []
     missing = []
 
-    for condition in CONDITIONS:
-        for seed in CONFIRMATION_SEEDS:
+    for condition in conditions:
+        for seed in seeds:
             bundle = root / f"{condition}-seed{seed}"
             if not (bundle / "ambient_iot" / "summary.json").is_file():
                 missing.append(str(bundle))
                 continue
-            records.append({"condition": condition, "seed": seed, **metrics(bundle)})
+            records.append(
+                {"condition": condition, "seed": seed, **metrics(bundle, measurement)}
+            )
 
     fields = (
         "active_fraction",
@@ -186,7 +182,7 @@ def main() -> None:
         "suppressed",
     )
     condition_means = {}
-    for condition in CONDITIONS:
+    for condition in conditions:
         rows = [row for row in records if row["condition"] == condition]
         condition_means[condition] = {
             "n_runs": len(rows),
@@ -200,10 +196,13 @@ def main() -> None:
     result = {
         "experiment": 1,
         "name": "Energy_Correlation_and_Burst_Formation",
-        "analysis_window_seconds": [WARMUP_SECONDS, DURATION_SECONDS],
+        "analysis_window_seconds": [
+            measurement["warmup_seconds"],
+            measurement["duration_seconds"],
+        ],
         "fano_window_seconds": 1.0,
         "runs_found": len(records),
-        "runs_expected": len(CONDITIONS) * len(CONFIRMATION_SEEDS),
+        "runs_expected": len(conditions) * len(seeds),
         "missing": missing,
         "condition_means": condition_means,
         "run_metrics": records,

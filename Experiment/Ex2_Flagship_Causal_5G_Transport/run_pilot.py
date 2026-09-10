@@ -14,11 +14,11 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 PLAN = EXPERIMENT_DIR / "pilot-plan-v1.json"
 PILOT_DEFAULT = ROOT / "results/exp2-matched-trace/pilot-seed1001"
-SCENARIO_NAME = "rfsim-oai-srsran-3ue.yml"
-COMPETING_UE = "uesim03"
+SCENARIO_NAME = "transport.yml"
 
 
 def die(msg):
@@ -75,7 +75,7 @@ def deploy(args):
     return rd
 
 
-def ensure_inputs(pilot, exp1):
+def ensure_inputs(pilot, exp1, plan, plan_path):
     required = [
         pilot / "pilot-source-selection.json",
         pilot / "native/model/events.jsonl",
@@ -85,27 +85,48 @@ def ensure_inputs(pilot, exp1):
     if not all(p.exists() for p in required):
         if pilot.exists():
             die(f"incomplete pilot directory exists: {pilot}")
-        run([
-            sys.executable,
-            EXPERIMENT_DIR / "prepare_pilot.py",
-            "--experiment1-root", exp1,
-            "--output", pilot,
-        ])
+        run(
+            [
+                sys.executable,
+                EXPERIMENT_DIR / "prepare_pilot.py",
+                "--experiment1-root",
+                exp1,
+                "--plan",
+                plan_path,
+                "--output",
+                pilot,
+            ]
+        )
 
     scenario = pilot / SCENARIO_NAME
     if not scenario.exists():
-        run([
-            sys.executable,
-            EXPERIMENT_DIR / "prepare_transport_scenario.py",
-            "--pilot-root", pilot,
-            "--output", scenario,
-        ])
+        run(
+            [
+                sys.executable,
+                EXPERIMENT_DIR / "prepare_transport_scenario.py",
+                "--pilot-root",
+                pilot,
+                "--plan",
+                plan_path,
+                "--output",
+                scenario,
+            ]
+        )
     data = yaml.safe_load(scenario.read_text())
     d = data["deployment"]
-    if (d["core"], d["ran"], d["platform"]) != ("oai", "srsran", "rfsim"):
-        die("transport scenario is not frozen OAI+srsRAN RFSIM")
-    if d.get("ues", [])[-1:] != [COMPETING_UE]:
-        die("transport scenario does not reserve uesim03 as the competing UE")
+    baseline = plan["transport_baseline"]
+    if (d["core"], d["ran"], d["platform"]) != (
+        baseline["core"],
+        baseline["ran"],
+        baseline["software_platform"],
+    ):
+        die("transport scenario differs from the selected plan")
+    if d["platform"] != "rfsim":
+        die(
+            "This pilot runner uses Kubernetes UE pods; physical transport requires a physical workload runner"
+        )
+    if d.get("ues", [])[-1:] != [plan["transport_baseline"]["competing_traffic_ue"]]:
+        die("transport scenario does not reserve the configured competing UE")
     return scenario
 
 
@@ -118,10 +139,14 @@ def binding(run_dir, device):
 
 
 def broker_ip(host):
-    p = run([
-        "ssh", host,
-        "ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") {print $(i+1); exit}}'"
-    ], capture=True)
+    p = run(
+        [
+            "ssh",
+            host,
+            "ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") {print $(i+1); exit}}'",
+        ],
+        capture=True,
+    )
     value = p.stdout.strip().splitlines()[-1].strip()
     if not value:
         die(f"could not resolve broker address on {host}")
@@ -129,7 +154,13 @@ def broker_ip(host):
 
 
 def stage_tools(ran, broker, b):
-    run(["scp", EXPERIMENT_DIR / "udp_receiver.py", f"{broker}:/tmp/exp2_udp_receiver.py"])
+    run(
+        [
+            "scp",
+            EXPERIMENT_DIR / "udp_receiver.py",
+            f"{broker}:/tmp/exp2_udp_receiver.py",
+        ]
+    )
     run(["scp", EXPERIMENT_DIR / "udp_sender.py", f"{ran}:/tmp/exp2_udp_sender.py"])
     remote = (
         f"kubectl cp -n {shlex.quote(b['namespace'])} -c {shlex.quote(b['container'])} "
@@ -153,12 +184,17 @@ def prove_route(ran, b, dst):
 def udp_probe(ran, broker, b, dst, rate, seconds, packet_bytes, port):
     rx = subprocess.Popen(
         [
-            "ssh", "-n", broker,
+            "ssh",
+            "-n",
+            broker,
             f"python3 /tmp/exp2_udp_receiver.py --port {port} "
-            "--startup-timeout-seconds 30 --idle-timeout-seconds 2"
+            "--startup-timeout-seconds 30 --idle-timeout-seconds 2",
         ],
-        cwd=ROOT, text=True, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=ROOT,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     time.sleep(0.75)
     remote = (
@@ -194,10 +230,12 @@ def udp_probe(ran, broker, b, dst, rate, seconds, packet_bytes, port):
 
 
 def calibrate(plan, scenario, baseline, outdir):
-    cfg = yaml.safe_load(scenario.read_text())
+    from Experiment.scenario import load_scenario
+
+    cfg = load_scenario(scenario)
     nodes = cfg["deployment"]["nodes"]
     ran, broker = nodes["ran"], nodes["broker"]
-    b = binding(baseline, COMPETING_UE)
+    b = binding(baseline, plan["transport_baseline"]["competing_traffic_ue"])
     dst = broker_ip(broker)
     stage_tools(ran, broker, b)
     route = prove_route(ran, b, dst)
@@ -214,9 +252,13 @@ def calibrate(plan, scenario, baseline, outdir):
     cdir.mkdir(parents=True)
     for i, rate in enumerate(rates):
         print(f"\n=== {rate:g} Mbps ===")
-        p = udp_probe(ran, broker, b, dst, rate, seconds, packet_bytes, 39001 + i)
+        p = udp_probe(
+            ran, broker, b, dst, rate, seconds, packet_bytes, int(cal["base_port"]) + i
+        )
         probes.append(p)
-        (cdir / f"{i+1:02d}-{rate:g}mbps.json").write_text(json.dumps(p, indent=2) + "\n")
+        (cdir / f"{i+1:02d}-{rate:g}mbps.json").write_text(
+            json.dumps(p, indent=2) + "\n"
+        )
         ratio = p["end_to_end"]["delivery_ratio"]
         print(f"delivery_ratio={ratio:.6f}")
         if crossing is None and ratio < threshold:
@@ -248,12 +290,17 @@ def calibrate(plan, scenario, baseline, outdir):
 def start_bg(ran, broker, b, dst, rate, seconds, packet_bytes, port):
     rx = subprocess.Popen(
         [
-            "ssh", "-n", broker,
+            "ssh",
+            "-n",
+            broker,
             f"python3 /tmp/exp2_udp_receiver.py --port {port} "
-            "--startup-timeout-seconds 30 --idle-timeout-seconds 3"
+            "--startup-timeout-seconds 30 --idle-timeout-seconds 3",
         ],
-        cwd=ROOT, text=True, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=ROOT,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     time.sleep(0.75)
     remote = (
@@ -265,8 +312,11 @@ def start_bg(ran, broker, b, dst, rate, seconds, packet_bytes, port):
     )
     tx = subprocess.Popen(
         ["ssh", ran, remote],
-        cwd=ROOT, text=True, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=ROOT,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     return tx, rx
 
@@ -290,11 +340,20 @@ def finish_bg(tx, rx, timeout):
 
 
 def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b, dst):
-    cfg = yaml.safe_load(scenario.read_text())
+    from Experiment.scenario import load_scenario
+
+    cfg = load_scenario(scenario)
     mqtt = cfg.get("mqtt", {})
     model = cfg.get("model", {})
-    horizon = float(model.get("duration_seconds", float(model.get("duration_ms", 60000)) / 1000))
-    bg_seconds = horizon + float(mqtt.get("start_delay_seconds", 30)) + float(mqtt.get("drain_seconds", 60)) + 90
+    horizon = float(
+        model.get("duration_seconds", float(model.get("duration_ms", 60000)) / 1000)
+    )
+    bg_seconds = (
+        horizon
+        + float(mqtt.get("start_delay_seconds", 30))
+        + float(mqtt.get("drain_seconds", 60))
+        + 90
+    )
     packet_bytes = int(plan["transport_calibration"]["packet_bytes"])
 
     variants = list(plan["timing_interventions"]["variants"])
@@ -307,14 +366,27 @@ def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b
 
     for i, variant in enumerate(variants):
         print(f"\n=== {variant} @ L*={lstar:g} Mbps ===")
-        tx, rx = start_bg(ran, broker, b, dst, lstar, bg_seconds, packet_bytes, 39101 + i)
+        tx, rx = start_bg(
+            ran,
+            broker,
+            b,
+            dst,
+            lstar,
+            bg_seconds,
+            packet_bytes,
+            int(plan["matched_pilot"]["base_port"]) + i,
+        )
         time.sleep(2)
         try:
-            rd = deploy([
-                "--config", scenario,
-                "--workload-only",
-                "--prepared-workload", pilot / variant / "model",
-            ])
+            rd = deploy(
+                [
+                    "--config",
+                    scenario,
+                    "--workload-only",
+                    "--prepared-workload",
+                    pilot / variant / "model",
+                ]
+            )
         except BaseException:
             tx.terminate()
             rx.terminate()
@@ -322,14 +394,16 @@ def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b
         bg = finish_bg(tx, rx, bg_seconds + 30)
         (rd / "exp2-background-load.json").write_text(json.dumps(bg, indent=2) + "\n")
         summary = json.loads((rd / "summary.json").read_text())
-        manifest["runs"].append({
-            "variant": variant,
-            "run_dir": str(rd.relative_to(ROOT)),
-            "background": bg,
-            "measurement": summary.get("measurement"),
-            "five_g": summary.get("five_g"),
-            "experimental_coverage": summary.get("experimental_coverage"),
-        })
+        manifest["runs"].append(
+            {
+                "variant": variant,
+                "run_dir": str(rd.relative_to(ROOT)),
+                "background": bg,
+                "measurement": summary.get("measurement"),
+                "five_g": summary.get("five_g"),
+                "experimental_coverage": summary.get("experimental_coverage"),
+            }
+        )
         (mdir / "summary.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
@@ -338,34 +412,47 @@ def main():
     ap.add_argument(
         "--experiment1-root",
         type=Path,
-        default=Path.home() / "SynthRAN/results/exp1-energy-correlation",
+        default=ROOT / "results/exp1-energy-correlation",
     )
+    ap.add_argument("--plan", type=Path, default=PLAN)
     ap.add_argument("--pilot-root", type=Path, default=PILOT_DEFAULT)
     ap.add_argument("--prepare-only", action="store_true")
     args = ap.parse_args()
 
-    plan = json.loads(PLAN.read_text())
+    plan = json.loads(args.plan.read_text())
     pilot = args.pilot_root.expanduser().resolve()
-    scenario = ensure_inputs(pilot, args.experiment1_root.expanduser().resolve())
+    scenario = ensure_inputs(
+        pilot, args.experiment1_root.expanduser().resolve(), plan, args.plan.resolve()
+    )
 
     print("\nChecking the fixed prepared-workload contract.")
-    deploy([
-        "--config", scenario,
-        "--prepared-workload", pilot / "native/model",
-        "--dry-run",
-    ])
+    deploy(
+        [
+            "--config",
+            scenario,
+            "--prepared-workload",
+            pilot / "native/model",
+            "--dry-run",
+        ]
+    )
     if args.prepare_only:
         return
 
-    outdir = pilot / "executions" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    outdir = (
+        pilot / "executions" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
     outdir.mkdir(parents=True)
     (outdir / "plan-snapshot.json").write_text(json.dumps(plan, indent=2) + "\n")
 
     print("\nDeploying/qualifying the fixed three-UE native baseline.")
-    baseline = deploy([
-        "--config", scenario,
-        "--prepared-workload", pilot / "native/model",
-    ])
+    baseline = deploy(
+        [
+            "--config",
+            scenario,
+            "--prepared-workload",
+            pilot / "native/model",
+        ]
+    )
     summary = json.loads((baseline / "summary.json").read_text())
     coverage = summary.get("experimental_coverage", {})
     if coverage.get("transport_loss_observed") is not False:

@@ -50,7 +50,12 @@
       "uesim02"
     ],
     "competing_traffic_ue": "uesim03",
-    "rationale": "Freeze the previously live-qualified OAI+srsRAN multi-UE slice path and match the intended OAI+srsRAN N320 physical transport. uesim03 is deployment-only competing traffic and receives no modeled sensors. The first setup-only Open5GS+srsRAN attempt exposed the known srsUE Requested-NSSAI-in-cleartext incompatibility before any Experiment-2 telemetry was replayed, so it produced no transport outcome and is not used as the experiment baseline."
+    "rationale": "Freeze the previously live-qualified OAI+srsRAN multi-UE slice path and match the intended OAI+srsRAN N320 physical transport. uesim03 is deployment-only competing traffic and receives no modeled sensors. The first setup-only Open5GS+srsRAN attempt exposed the known srsUE Requested-NSSAI-in-cleartext incompatibility before any Experiment-2 telemetry was replayed, so it produced no transport outcome and is not used as the experiment baseline.",
+    "reservation": {
+      "enabled": true,
+      "duration_minutes": 120,
+      "image": "ubuntu-jammy"
+    }
   },
   "transport_calibration": {
     "generator": "paced UDP application payload",
@@ -68,13 +73,15 @@
     ],
     "delivery_threshold": 0.98,
     "knee_rule": "The first grid rate with end-to-end delivery ratio below 0.98 marks saturation onset; L* is the immediately preceding grid rate. If the first rate already fails or no rate crosses the threshold, the pilot stops without selecting L*.",
-    "manual_rate_selection_forbidden": true
+    "manual_rate_selection_forbidden": true,
+    "base_port": 39001
   },
   "matched_pilot": {
     "background_rate": "L* selected only by the frozen transport_calibration rule",
     "variant_order_seed": 20260910,
     "repeats": 1,
-    "purpose": "mechanism/measurement pilot only; not the final confirmation campaign"
+    "purpose": "mechanism/measurement pilot only; not the final confirmation campaign",
+    "base_port": 39101
   },
   "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point before the matched timing confirmation campaign. Do not use this pilot to select a source trace based on transport outcomes.",
   "transport_sequence": [

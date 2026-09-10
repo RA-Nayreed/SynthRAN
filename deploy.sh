@@ -72,11 +72,7 @@ else
   SYNTHRAN_PYTHON=.venv/bin/python
 fi
 deployment_section "Preparing the local SynthRAN runtime"
-if ! "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e '.[deployment]' >"$RUN_DIR/bootstrap.log" 2>&1; then
-  cat "$RUN_DIR/bootstrap.log" >&2
-  echo "Runtime preparation failed; full output: $RUN_DIR/bootstrap.log" >&2
-  exit 1
-fi
+"$SYNTHRAN_PYTHON" -m synthran.runtime deployment --log "$RUN_DIR/bootstrap.log"
 
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }

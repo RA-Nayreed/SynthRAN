@@ -1,0 +1,79 @@
+model:
+  engine: ambient_iot
+  seed: 1001
+  duration_seconds: 60
+  energy:
+    mode: environmental
+    source: lognormal
+    mean_power_w: 0.001
+    coefficient_of_variation: 1.0
+    sample_interval_s: 0.1
+    correlation_time_s: 5.0
+    correlation: independent
+    interpolation: hold
+  capacitor:
+    capacitance_f: 0.0003
+    series_resistance_ohm: 5000
+    leakage_resistance_ohm: 100000
+    initial_voltage_v: 0
+    maximum_voltage_v: 2
+    timestep_seconds: 0.001
+    log_interval_seconds: 0.01
+  controller:
+    low_voltage_v: 1.3
+    high_voltage_v: 1.7
+    max_startup_time_ms: 2000
+    currents_a:
+      listening: 0.00014
+      sensing: 0.000512
+      processing: 0.00128
+      transmitting: 0.005
+    durations_ms:
+      sensing: 2
+      processing: 5
+      transmitting: 5
+  topology:
+    frequency_hz: 924000000
+    pathloss: macro
+    nodes:
+      placement:
+        type: random_annulus
+        min_radius_m: 10
+        max_radius_m: 40
+    base_station:
+      x: 0
+      y: 0
+      height_m: 25
+      sectors:
+      - azimuth_deg: 0
+        beamwidth_deg: 65
+        power_dbm: 46
+      - azimuth_deg: 120
+        beamwidth_deg: 65
+        power_dbm: 46
+      - azimuth_deg: 240
+        beamwidth_deg: 65
+        power_dbm: 46
+  propagation:
+    model: macro
+    los: true
+  protocol:
+    type: broadcast_sic
+    slots: 4
+    tx_duration_ms: 5
+    rx_duration_ms: 10
+    pre_registered: true
+  receiver:
+    sic: true
+    required_sinr_db: 3
+    cancellation_factor: 0.9
+    bandwidth_hz: 100000000
+    noise_figure_db: 6
+mqtt:
+  port: 1883
+  qos: 1
+  topic_prefix: synthran
+  payload_bytes: 256
+  start_delay_seconds: 30
+gateways:
+- uesim01

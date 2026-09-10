@@ -194,7 +194,7 @@ def write(
         "sic_enabled": any(behavior.enable_sic for behavior in behaviors),
         "base_stations": len(behaviors),
         "sensors": len(names),
-        "gateways": len(scenario["deployment"]["ues"]),
+        "gateways": len({device["gateway"] for device in scenario["devices"].values()}),
         "receiver_abstraction": "minimum instantaneous SINR across packet airtime; residual-power SIC",
         "command_abstraction": "power/state-gated command at scheduled command start; listening load while waiting",
     }

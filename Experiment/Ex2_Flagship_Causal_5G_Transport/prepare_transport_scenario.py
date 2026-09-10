@@ -1,79 +1,70 @@
 #!/usr/bin/env python3
-"""Build the fixed RFSIM transport scenario for Experiment 2.
-
-The immutable workload is independent of the selected 5G core. Experiment 2
-uses the previously qualified OAI+srsRAN path for RFSIM so that its software
-transport baseline matches the intended OAI+srsRAN physical path.
-
-uesim01 and uesim02 remain the workload gateways carried by the frozen source
-bundle. uesim03 is added only as a deployment UE for controlled competing
-traffic; no modeled sensor is remapped to it.
-"""
+"""Apply the selected transport plan without changing frozen sensor mappings."""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import yaml
 
-
-DEFAULT_PILOT = Path("results/exp2-matched-trace/pilot-seed1001")
-DEFAULT_OUTPUT = DEFAULT_PILOT / "rfsim-oai-srsran-3ue.yml"
-COMPETING_UE = "uesim03"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PLAN = Path(__file__).with_name("pilot-plan-v1.json")
 
 
-def prepare(pilot_root: Path, output: Path) -> Path:
-    source = pilot_root / "native" / "model" / "resolved-scenario.yml"
-    if not source.is_file():
-        raise SystemExit(f"Native pilot scenario not found: {source}")
+def prepare(pilot_root: Path, output: Path, plan_path: Path = DEFAULT_PLAN) -> Path:
+    source = pilot_root / "native/model/resolved-scenario.yml"
     if output.exists():
         raise SystemExit(f"Refusing to overwrite existing transport scenario: {output}")
-
-    scenario = yaml.safe_load(source.read_text(encoding="utf-8"))
-    if not isinstance(scenario, dict) or not isinstance(scenario.get("deployment"), dict):
-        raise SystemExit(f"Invalid source scenario: {source}")
-
-    deployment = scenario["deployment"]
-    if deployment.get("platform") != "rfsim" or str(deployment.get("ran", "")).lower() != "srsran":
+    scenario = yaml.safe_load(source.read_text())
+    plan = json.loads(plan_path.read_text())["transport_baseline"]
+    gateways = list(
+        dict.fromkeys(device["gateway"] for device in scenario["devices"].values())
+    )
+    competing = plan["competing_traffic_ue"]
+    if competing in gateways:
+        raise SystemExit(f"{competing} is already a workload gateway")
+    if not set(gateways) <= set(plan["workload_gateways"]):
         raise SystemExit(
-            "Experiment-2 pilot source must already use platform=rfsim and ran=srsran"
+            "Source gateway mapping does not match the selected transport plan"
         )
-
-    # Freeze the transport implementation without altering modeled sensors,
-    # sensor->gateway mapping, workload payloads, MQTT settings, or measurement.
-    deployment["core"] = "oai"
-    deployment["ran"] = "srsran"
-    deployment["platform"] = "rfsim"
-    deployment["nodes"] = {
-        "core": "sopnode-f2",
-        "ran": "sopnode-f3",
-        "broker": "sopnode-f2",
+    deployment = {
+        "core": plan["core"],
+        "ran": plan["ran"],
+        "platform": plan["software_platform"],
+        "nodes": {role: plan[role + "_node"] for role in ("core", "ran", "broker")},
+        "profile": plan["profile"],
+        "ues": plan["workload_gateways"] + [competing],
+        "reservation": plan["reservation"],
     }
-    deployment["profile"] = "default"
-
-    workload_gateways = list(deployment.get("ues", []))
-    if not workload_gateways:
-        raise SystemExit("Frozen pilot scenario has no deployment UEs")
-    if COMPETING_UE in workload_gateways:
-        raise SystemExit(
-            f"{COMPETING_UE} is already a frozen workload gateway; choose a distinct competing UE"
-        )
-    deployment["ues"] = workload_gateways + [COMPETING_UE]
-
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
-    print(output)
+    settings = output.with_name(output.stem + "-experiment.yml")
+    if settings.exists():
+        raise SystemExit(
+            f"Refusing to overwrite existing experiment configuration: {settings}"
+        )
+    settings.write_text(
+        yaml.safe_dump(
+            {key: scenario[key] for key in ("model", "mqtt", "devices")},
+            sort_keys=False,
+        )
+    )
+    value = {
+        "deployment": deployment,
+        "experiment": {
+            "entrypoint": str(ROOT / "Experiment/runner.py"),
+            "config": str(settings.resolve()),
+        },
+    }
+    output.write_text(yaml.safe_dump(value, sort_keys=False))
     return output
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--pilot-root", type=Path, default=DEFAULT_PILOT)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    args = parser.parse_args()
-    prepare(args.pilot_root, args.output)
-
-
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
+    parser.add_argument("--pilot-root", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    print(prepare(args.pilot_root, args.output, args.plan))

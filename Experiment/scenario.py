@@ -10,7 +10,10 @@ from synthran.scenario import load_scenario as load_testbed, redacted
 
 def load_scenario(path: str | Path) -> dict:
     source = Path(path).resolve()
-    data = load_testbed(source)
+    raw = yaml.safe_load(source.read_text())
+    data = load_testbed(source) if isinstance(raw, dict) and 'deployment' in raw else raw
+    if not isinstance(data, dict):
+        raise ValueError('experiment scenario must be a mapping')
     experiment_config = data.get('experiment', {}).get('config')
     if experiment_config:
         source = Path(experiment_config)
@@ -20,7 +23,7 @@ def load_scenario(path: str | Path) -> dict:
     for section in ('model', 'mqtt', 'devices'):
         if not isinstance(data.get(section), dict):
             raise ValueError(f'experiment requires mapping: {section}')
-    ues = data['deployment']['ues']
+    ues = data.get('deployment', {}).get('ues', data.get('gateways', []))
     if not data["devices"]:
         raise ValueError("devices must define at least one sensor")
     for name, device in data["devices"].items():
