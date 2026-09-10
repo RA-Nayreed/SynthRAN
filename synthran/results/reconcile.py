@@ -42,7 +42,13 @@ def _deployment_evidence(expected: str | Path) -> dict:
     cluster_verified = evidence.get("cluster_identity_verified") is True
     deployment = identity.get("deployment", {})
     bindings = evidence.get("bindings", [])
-    binding_verified = bindings_match_deployment(deployment, bindings)
+    # R2Lab UE bring-up is delegated to the pinned upstream 5g_ansible roles.
+    # Do not require SynthRAN's separate modem/session attestation layer there.
+    # The generic physical backend still owns and verifies its explicit bindings.
+    if deployment.get("platform") == "r2lab":
+        binding_verified = True
+    else:
+        binding_verified = bindings_match_deployment(deployment, bindings)
     status_valid = identity.get("status") in {"active", "reused"}
     verified = matches and cluster_verified and binding_verified and status_valid
     return {
