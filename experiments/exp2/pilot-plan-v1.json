@@ -1,0 +1,49 @@
+{
+  "experiment": "exp2-matched-trace-transport",
+  "phase": "transport-operating-point-pilot",
+  "status": "frozen-before-transport-outcomes",
+  "source_selection": {
+    "experiment_1_condition": "knee-common",
+    "model_seed": 1001,
+    "energy_source": "lognormal",
+    "energy_correlation": "common",
+    "mean_power_w": 0.001,
+    "sensor_count": 32,
+    "duration_seconds": 60,
+    "selection_rationale": "first preregistered Experiment-1 confirmation seed; selected by ID rather than an observed burstiness, collision, freshness, or transport outcome"
+  },
+  "timing_interventions": {
+    "variants": [
+      "native",
+      "gap_permutation",
+      "periodic"
+    ],
+    "warmup_seconds": 10.0,
+    "gap_permutation_seed": 101,
+    "invariants": [
+      "source bundle lineage",
+      "event IDs",
+      "event count",
+      "event order",
+      "sensor and gateway mapping",
+      "MQTT topic",
+      "serialized payload bytes",
+      "measurement endpoints",
+      "source horizon"
+    ],
+    "generation_age_valid": {
+      "native": true,
+      "gap_permutation": false,
+      "periodic": false
+    }
+  },
+  "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point before the matched timing confirmation campaign. Do not use this pilot to select a source trace based on transport outcomes.",
+  "transport_sequence": [
+    "prepared workload dry-run",
+    "RFSIM no-load sanity replay",
+    "RFSIM competing-traffic sweep to locate the transport knee",
+    "freeze the transport operating point",
+    "paired native/gap_permutation/periodic pilot at the frozen point",
+    "qualify physical N320 path before any physical confirmation runs"
+  ]
+}
