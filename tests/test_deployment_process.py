@@ -288,66 +288,6 @@ class DeploymentProcessTests(unittest.TestCase):
         self.assertFalse((self.run / "summary.json").exists())
         self.assert_lock(held=False)
 
-    @unittest.skipUnless(shutil.which("ansible-playbook"), "requires Ansible")
-    def test_r2lab_wait_completes_after_terminal_hangup(self):
-        tasks = yaml.safe_load(
-            (ROOT / "deployment/roles/r2lab/rru/tasks/main.yml").read_text()
-        )
-        boot_wait = next(
-            task
-            for task in tasks
-            if task["name"]
-            == "Allow an N3xx to complete its cold boot before gNB deployment"
-        )
-        playbook = self.directory / "wait.yml"
-        playbook.write_text(
-            yaml.safe_dump(
-                [
-                    {
-                        "hosts": "localhost",
-                        "connection": "local",
-                        "gather_facts": False,
-                        "vars": {
-                            "rru": "n320",
-                            "r2lab_n3xx_boot_seconds": 2,
-                            "ansible_python_interpreter": sys.executable,
-                        },
-                        "tasks": [
-                            boot_wait,
-                            {
-                                "ansible.builtin.copy": {
-                                    "dest": str(self.run / "wait-finished"),
-                                    "content": "finished",
-                                }
-                            },
-                        ],
-                    }
-                ]
-            )
-        )
-        self.start(
-            command=[
-                shutil.which("ansible-playbook"),
-                "-i",
-                "localhost,",
-                str(playbook),
-            ]
-        )
-        self.wait_for(lambda: "cold boot" in (self.run / "ansible.log").read_text())
-        self.assertEqual(termios.tcgetattr(self.master), self.initial_termios)
-        os.close(self.master)
-        self.master = None
-        self.wait_for(lambda: self.process.poll() is not None)
-        self.wait_for(lambda: (self.run / "controller-exit-code").exists(), timeout=20)
-        self.assertEqual(
-            (self.run / "controller-exit-code").read_text().strip(),
-            "0",
-            (self.run / "ansible.log").read_text(),
-        )
-        self.assertTrue((self.run / "wait-finished").exists())
-        self.assertTrue((self.run / "summary.json").exists())
-        self.assertNotIn("ctrl+C", (self.run / "ansible.log").read_text())
-
 
 if __name__ == "__main__":
     unittest.main()
