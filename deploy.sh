@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; PREPARED_WORKLOAD=""
+CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; PREPARED_WORKLOAD=""; TESTBED_ONLY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
     -i|--interactive) INTERACTIVE=true; shift ;;
     -n|--no-input) NO_INPUT=true; shift ;;
     -r|--no-reservation) NO_RESERVATION=true; shift ;;
+    --testbed-only) TESTBED_ONLY=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --prepared-workload) PREPARED_WORKLOAD="$2"; shift 2 ;;
     --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
     --resume) RESUME=true; RESUME_FROM="$2"; NO_RESERVATION=true; shift 2 ;;
     -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--prepared-workload path/to/bundle] [--resume results/<failed-run>] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
+    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--prepared-workload path/to/bundle] [--resume results/<failed-run>] [--testbed-only] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -33,15 +34,12 @@ if $RESUME; then
   CONFIG="$RESUME_FROM/resolved-scenario.yml"
   RESUME_SOURCE_CONTRACT="$RESUME_FROM/deployment-fingerprint.json"
   RESUME_SOURCE_EVIDENCE="$RESUME_FROM/live-deployment-evidence.json"
-  RESUME_SOURCE_MODEL="$RESUME_FROM/model"
   [[ -f "$RESUME_SOURCE_CONTRACT" ]] || { echo "Resume deployment identity not found: $RESUME_SOURCE_CONTRACT" >&2; exit 2; }
   [[ -f "$RESUME_SOURCE_EVIDENCE" ]] || { echo "Resume attestation evidence not found: $RESUME_SOURCE_EVIDENCE" >&2; exit 2; }
-  [[ -f "$RESUME_SOURCE_MODEL/events.jsonl" ]] || { echo "Resume workload trace not found: $RESUME_SOURCE_MODEL/events.jsonl" >&2; exit 2; }
   CONFIG_EXPLICIT=true
 else
   RESUME_SOURCE_CONTRACT=""
   RESUME_SOURCE_EVIDENCE=""
-  RESUME_SOURCE_MODEL=""
 fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
@@ -90,10 +88,18 @@ SOURCE_CONFIG="$CONFIG"
 CONFIG="$RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
   --source "$SOURCE_CONFIG" --output "$CONFIG"
-if [[ -n "$PREPARED_WORKLOAD" ]]; then
-  deployment_section "Validating and importing the prepared workload"
-  "$SYNTHRAN_PYTHON" -m Experiment.cli workload import --source "$PREPARED_WORKLOAD" --config "$CONFIG" --output "$RUN_DIR/model"
+if $TESTBED_ONLY; then
+  "$SYNTHRAN_PYTHON" - "$CONFIG" <<'PYCONFIG'
+import sys, yaml
+from pathlib import Path
+p = Path(sys.argv[1]); data = yaml.safe_load(p.read_text())
+data.pop('experiment', None)
+p.write_text(yaml.safe_dump(data, sort_keys=False))
+PYCONFIG
 fi
+deployment_section "Preparing the selected experiment"
+"$SYNTHRAN_PYTHON" -m synthran.experiment prepare --config "$CONFIG" --run-dir "$RUN_DIR" \
+  --prepared-workload "$PREPARED_WORKLOAD" --resume-from "$RESUME_FROM"
 if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
     --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
@@ -105,15 +111,6 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" deployment/scripts/reserve_sop.py "$CONFIG" "$RUN_DIR"
 fi
 
-if $RESUME; then
-  deployment_section "Reusing the failed run's energy-aware sensor trace"
-  cp -a -- "$RESUME_SOURCE_MODEL" "$RUN_DIR/model"
-elif [[ -n "$PREPARED_WORKLOAD" ]]; then
-  deployment_section "Using the validated prepared workload"
-else
-  deployment_section "Generating the energy-aware sensor trace"
-  "$SYNTHRAN_PYTHON" -m Experiment.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
-fi
 REUSE_EXISTING=false
 if $WORKLOAD_ONLY || $RESUME; then REUSE_EXISTING=true; fi
 "$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR" "$REUSE_EXISTING" "$RESUME_SOURCE_CONTRACT"
@@ -203,7 +200,7 @@ if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements
 fi
 
 if $WORKLOAD_ONLY || $RESUME; then
-  deployment_section "Replaying telemetry on the existing 5G stack"
+  deployment_section "Reusing the existing 5G stack"
 else
   deployment_section "Provisioning nodes and deploying the selected 5G stack"
 fi
@@ -213,7 +210,7 @@ export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
 if $WORKLOAD_ONLY; then
   DEPLOYMENT_PLAYBOOK="$RUN_DIR/ansible/playbooks/workload.yml"
-  echo "The stored deployment identity will be checked before telemetry replay"
+  echo "The stored deployment identity will be checked before running the experiment"
 elif $RESUME; then
   DEPLOYMENT_PLAYBOOK="$RUN_DIR/ansible/playbooks/resume.yml"
   echo "The failed run's live attestation will be checked before its workload is resumed"

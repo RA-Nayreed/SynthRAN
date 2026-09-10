@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import yaml
 from pathlib import Path
 
 from synthran.scenario import load_scenario as load_testbed, redacted
@@ -10,6 +11,12 @@ from synthran.scenario import load_scenario as load_testbed, redacted
 def load_scenario(path: str | Path) -> dict:
     source = Path(path).resolve()
     data = load_testbed(source)
+    experiment_config = data.get('experiment', {}).get('config')
+    if experiment_config:
+        source = Path(experiment_config)
+        settings = yaml.safe_load(source.read_text())
+        for key in ('model', 'mqtt', 'devices'):
+            data[key] = settings[key]
     for section in ('model', 'mqtt', 'devices'):
         if not isinstance(data.get(section), dict):
             raise ValueError(f'experiment requires mapping: {section}')

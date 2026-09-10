@@ -104,18 +104,7 @@ else
     --active "$ACTIVE_DEPLOYMENT_STATE"
 fi
 
-echo "Reconciling model, publisher, and broker results"
-run_step "$SYNTHRAN_PYTHON" - "$RUN_DIR" <<'PY'
-import sys
-from pathlib import Path
-
-run = Path(sys.argv[1])
-rows = []
-for source in sorted(run.glob('publisher-*.jsonl')):
-    rows.extend(source.read_text().splitlines())
-(run / 'publisher.jsonl').write_text('\n'.join(rows) + ('\n' if rows else ''))
-PY
-run_step "$SYNTHRAN_PYTHON" -m Experiment.cli results reconcile \
-  --expected "$RUN_DIR/model/events.jsonl" --publisher "$RUN_DIR/publisher.jsonl" \
-  --broker "$RUN_DIR/broker.jsonl" --scenario "$CONFIG" \
-  --output "$RUN_DIR/summary.json" --require-deployment-identity
+echo "Running the selected experiment"
+run_step "$SYNTHRAN_PYTHON" -m synthran.experiment run --config "$CONFIG" --run-dir "$RUN_DIR" \
+  >>"$RUN_DIR/ansible.log" 2>&1
+run_step "$SYNTHRAN_PYTHON" -m synthran.experiment finalize --config "$CONFIG" --run-dir "$RUN_DIR"

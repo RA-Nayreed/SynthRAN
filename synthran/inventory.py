@@ -112,7 +112,7 @@ elif d['platform'] == 'physical':
 Path(sys.argv[2], 'inventory.yml').write_text(yaml.safe_dump({'all': {'children': children}}, sort_keys=False))
 effective_profile_path=Path(sys.argv[2], 'fiveg-profile.yml')
 effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
-topology_source=Path('deployment/topology.yml')
+topology_source=Path(d.get('topology_file', 'deployment/topology.yml'))
 topologies=yaml.safe_load(topology_source.read_text())
 try:
     topology=copy.deepcopy(topologies['rans'][d['ran'].lower()][d['core'].lower()])
@@ -128,14 +128,7 @@ topology['contract_version']=topologies['schema_version']
 manifest=build_manifest(c, profile, ue_map, topology)
 manifest_path=Path(sys.argv[2], 'deployment-fingerprint.json')
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
-variables={'synthran_root':str(Path.cwd()),'core':d['core'],'ran':'srsRAN' if d['ran'].lower() == 'srsran' else d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':'resolved','fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only}
-source_manifest = json.loads(Path(sys.argv[2], 'model', 'source-manifest.json').read_text()) if Path(sys.argv[2], 'model', 'source-manifest.json').exists() else {}
-variables.update({
-    'mqtt_drain_seconds': c['mqtt'].get('drain_seconds', 60),
-    'mqtt_max_inflight': c['mqtt'].get('max_inflight', 20),
-    'mqtt_max_queued': c['mqtt'].get('max_queued', 10000),
-    'synthran_replay_horizon_seconds': source_manifest.get('duration_seconds', c['model'].get('duration_ms', c['model'].get('duration_seconds', 60) * 1000) / 1000),
-})
+variables={'synthran_root':str(Path.cwd()),'core':d['core'],'ran':'srsRAN' if d['ran'].lower() == 'srsran' else d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':'resolved','fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only}
 if resume_source_contract:
     variables['synthran_resume_source_contract']=json.loads(Path(resume_source_contract).read_text())
 Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))

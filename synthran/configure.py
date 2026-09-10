@@ -6,7 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from Experiment.scenario import load_scenario, remap_gateways
+from .scenario import load_scenario
+from .experiment import invoke
 
 
 def choose(label: str, default: str, choices=()) -> str:
@@ -36,7 +37,7 @@ def main() -> None:
         profile = yaml.safe_load(profile_path.read_text())
         print('Profile UEs: ' + ', '.join(profile.get('ues', {})))
     selected = choose('UE names (comma separated)', ','.join(dep['ues']))
-    remap_gateways(scenario, [name.strip() for name in selected.split(',')])
+    dep['ues'] = [name.strip() for name in selected.split(',')]
     if dep['platform'] == 'r2lab':
         dep['r2lab_username'] = choose('R2Lab slice username (blank uses SSH config)', dep.get('r2lab_username', ''))
     for key, label in [('reservation', 'SOP'), ('r2lab_reservation', 'R2Lab')]:
@@ -51,6 +52,7 @@ def main() -> None:
     if choose('Continue', 'yes', ('yes', 'no')) != 'yes':
         raise SystemExit('Cancelled')
     Path(args.output).write_text(yaml.safe_dump(scenario, sort_keys=False))
+    invoke("configure", args.output, source_config=args.source)
 
 
 if __name__ == '__main__':

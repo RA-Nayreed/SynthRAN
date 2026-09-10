@@ -1,4 +1,7 @@
 ---
+- name: Prepare the non-R2Lab physical broker route
+  include_tasks: physical_route.yml
+  when: platform == 'physical'
 - name: Install physical publisher Python runtime
   package: {name: [python3, python3-pip, python3-venv], state: present}
 - name: Copy SynthRAN package

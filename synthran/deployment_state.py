@@ -231,6 +231,9 @@ def build_manifest(
 ) -> dict:
     clean_scenario = copy.deepcopy(scenario)
     clean_scenario.pop("_source_directory", None)
+    selection = clean_scenario.get('experiment', {})
+    if selection.get('config'):
+        selection['config'] = 'sha256:' + hashlib.sha256(Path(selection['config']).read_bytes()).hexdigest()
     deployment = clean_scenario["deployment"]
     selected = {
         "core": str(deployment["core"]).lower(),

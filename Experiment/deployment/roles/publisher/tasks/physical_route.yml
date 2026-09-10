@@ -1,0 +1,67 @@
+---
+- name: Load the non-R2Lab physical UE binding from the testbed
+  set_fact:
+    synthran_physical_binding: >-
+      {{ (lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json).bindings
+         | selectattr('device', 'equalto', inventory_hostname) | first }}
+- name: Use the testbed's physical source and interface
+  set_fact:
+    synthran_physical_interface: "{{ synthran_physical_binding.interface }}"
+    synthran_physical_source_address: "{{ synthran_physical_binding.address }}"
+- name: Resolve the broker endpoint for the physical user plane
+  ansible.builtin.set_fact:
+    synthran_physical_broker_address: >-
+      {{ mqtt_broker_address if mqtt_broker_address else
+         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+
+- name: Resolve the broker endpoint to IPv4
+  ansible.builtin.command:
+    argv: [getent, ahostsv4, "{{ synthran_physical_broker_address }}"]
+  register: synthran_physical_broker_lookup
+  changed_when: false
+
+- name: Record the physical broker IPv4 address
+  ansible.builtin.set_fact:
+    synthran_physical_broker_ipv4: "{{ synthran_physical_broker_lookup.stdout_lines[0].split()[0] }}"
+
+- name: Install the broker route during a full deployment
+  ansible.builtin.command: >-
+    ip route replace {{ synthran_physical_broker_ipv4 }}/32 dev {{ synthran_physical_interface }}
+  changed_when: true
+  when: not (synthran_workload_only | default(false) | bool)
+
+- name: Read the route used by the bound publisher
+  ansible.builtin.command: >-
+    ip -j route get {{ synthran_physical_broker_ipv4 }} from {{ synthran_physical_binding.address }}
+  register: synthran_physical_broker_route
+  changed_when: false
+
+- name: Require the broker route to use the proved modem interface
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_physical_broker_route.stdout | from_json | length == 1
+      - (synthran_physical_broker_route.stdout | from_json)[0].dev == synthran_physical_interface
+    fail_msg: The broker route does not use the physical UE. Reuse will not change routes.
+
+- name: Prove MQTT TCP reachability through the observed physical UE address
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import socket, sys
+        with socket.socket() as sock:
+            sock.settimeout(3)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, sys.argv[3].encode() + b"\0")
+            sock.bind((sys.argv[2], 0))
+            sock.connect((sys.argv[1], int(sys.argv[4])))
+      - "{{ synthran_physical_broker_ipv4 }}"
+      - "{{ synthran_physical_binding.address }}"
+      - "{{ synthran_physical_interface }}"
+      - "{{ mqtt_port | string }}"
+  register: synthran_physical_broker_check
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: synthran_physical_broker_check.rc == 0
