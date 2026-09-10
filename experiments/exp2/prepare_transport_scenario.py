@@ -19,6 +19,7 @@ import yaml
 
 
 DEFAULT_PILOT = Path("results/exp2-matched-trace/pilot-seed1001")
+DEFAULT_OUTPUT = DEFAULT_PILOT / "rfsim-oai-srsran-3ue.yml"
 COMPETING_UE = "uesim03"
 
 
@@ -69,11 +70,7 @@ def prepare(pilot_root: Path, output: Path) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pilot-root", type=Path, default=DEFAULT_PILOT)
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=DEFAULT_PILOT / "rfsim-oai-srsran.yml",
-    )
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     prepare(args.pilot_root, args.output)
 
