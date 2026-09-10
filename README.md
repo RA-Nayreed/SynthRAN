@@ -8,11 +8,19 @@ configuration, protocols, evidence, and event bridging live in
 license are preserved under `third_party/amber/`.
 Protocol examples are colocated at `synthran/ambient_iot/examples/`.
 
+For `platform: r2lab`, SynthRAN deliberately does not maintain an independent
+R2Lab radio/gNB/modem implementation. R2Lab cleanup, RRU handling, UE setup,
+N3xx srsRAN deployment, and UE MBIM/QMI connection follow the pinned upstream
+`sopnode/5g_ansible` implementation. SynthRAN adds only the experiment layer on
+top: workload generation/import, MQTT broker routing/replay, collection, and
+result reconciliation. See [`docs/r2lab-pr7-handoff.md`](docs/r2lab-pr7-handoff.md)
+for the exact pinned upstream revision and ownership boundary.
+
 The primary interface is one interactive command. It prompts for the core, RAN,
 platform, radio unit, currently available nodes, profile, UEs, POS reservation
-duration, and node image; creates or reuses `.venv`;
-generates the immutable energy-aware trace; deploys the network; maps devices to
-UE tunnels; replays MQTT; and reconciles the JSONL artifacts:
+duration, and node image; creates or reuses `.venv`; generates the immutable
+energy-aware trace; deploys the network; maps devices to UE tunnels; replays
+MQTT; and reconciles the JSONL artifacts:
 
 ```sh
 ./deploy.sh
@@ -71,11 +79,13 @@ After a successful full run, SynthRAN stores a versioned deployment identity in
 both `.synthran/deployment-fingerprint.json` and the live Kubernetes cluster.
 The identity covers the core, RAN, platform, node mapping, effective profile,
 PLMN, slices, UE IMSIs, expected tunnels, and the asserted topology contract.
-The workload-only path fails closed unless the requested identity matches both
-records and the core/RAN nodes are Ready. Software UE replay additionally proves
-each declared pod/interface, slice address, and—for srsUE—its generated IMSI and
-DNN configuration, while rejecting unexpected stale UE tunnels. The evidence is
-retained as `live-deployment-evidence.json` and included in `summary.json`.
+The workload-only path checks that the requested core/RAN deployment identity
+matches the live cluster. For R2Lab, physical UE bring-up and reconnect behavior
+belongs to upstream `5g_ansible`; SynthRAN no longer requires a second custom
+SIM/DNN/session binding attestation. Software UE replay retains its own tunnel
+and identity checks, and the separate generic `platform: physical` backend
+retains its explicit physical-binding contract.
+
 Full deployment replaces only the selected Open5GS subscriber records, which
 resets stale authentication state retained by MongoDB across repeat runs.
 Open5GS WebUI and its administrator account are disabled by default because the
@@ -111,13 +121,11 @@ means the command completed; inspect `summary.json` for delivery results.
 The deployment matrix retains OAI, Open5GS, Free5GC, OAI RAN, srsRAN,
 UERANSIM, RF simulation, and physical R2Lab adapters. Supported UE interfaces
 are `uesimtun0`, per-pod OAI `oaitun_ue1`, `tun_srsue*`, and physical `wwan0`;
-smartphones are not supported.
+smartphones are not supported by the SynthRAN experiment adapter.
 
 For software UEs, the workload role discovers the real tunnel inside running
 UE pods and injects an isolated publisher container into the same network
 namespace. This keeps MQTT replay independent of the selected core and dispatches
-uniformly across OAI NR-UE, UERANSIM, and srsUE. Physical qhat/qfit publishers
-run on their UE hosts and bind to `wwan0`.
-
-The [R2Lab PR #7 handoff](docs/r2lab-pr7-handoff.md) gives the upstream modem
-workflow, corrected reference mapping, reuse rules, and physical acceptance steps.
+uniformly across OAI NR-UE, UERANSIM, and srsUE. For R2Lab qhat/qfit UEs,
+upstream `5g_ansible` establishes the `wwan0` session; SynthRAN then routes the
+experiment broker through that interface and runs the publisher there.
