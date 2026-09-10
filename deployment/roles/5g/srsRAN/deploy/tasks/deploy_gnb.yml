@@ -70,7 +70,6 @@
 - name: Configure SR-IOV for Benetel with DPDK
   when: rru in ['benetel1', 'benetel2']
   block:
-
     - name: Load ran_node vars
       include_vars:
         file: "{{ playbook_dir }}/../group_vars/ran_node.yml"
@@ -215,3 +214,4 @@
   when:
     - rru in ['benetel1', 'benetel2']
     - venv_python.stat.exists | default(false)
+
