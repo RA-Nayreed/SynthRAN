@@ -2,6 +2,14 @@
 
 Experiment 1 — **Energy Correlation and Burst Formation** — was completed before the experiment-directory cleanup. Its raw run bundles are under the repository-local path `results/exp1-energy-correlation/`. The top-level `.gitignore` excludes `/results/`, so those raw run directories were not tracked in GitHub.
 
+The reproducibility code for this completed experiment now lives in this same directory:
+
+- `experiment-plan.json` — frozen campaign definition and historical integrity record.
+- `run_experiment.py` — reproduces the power calibration, population calibration, and 7-arm × 30-seed confirmation campaign while refusing to overwrite immutable bundles.
+- `analyze.py` — analyzes the retained confirmation bundles without modifying them.
+
+The original one-off orchestration script used during the completed campaign was not preserved. `run_experiment.py` reconstructs the campaign from the frozen experiment record and current SynthRAN model contract, while preserving the existing run-directory names used downstream by Experiment 2 (including `knee-common-seed1001`).
+
 ## Calibration
 
 Calibration used 8 modeled sensors, 60-second runs, 1-second sensing, lognormal harvested-power CV 1, 0.1-second source interval, 5-second correlation time, independent harvesting, and pilot seeds 1–5.
