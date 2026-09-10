@@ -4,6 +4,7 @@
   become: true
   any_errors_fatal: true
   roles: [synthran/broker]
+
 - name: Replay telemetry through software UE tunnels
   hosts: ran_node
   any_errors_fatal: true
@@ -14,17 +15,33 @@
       when:
         - platform == 'rfsim'
         - ran | lower in ['srsran', 'ueransim', 'oai']
-- name: Prepare physical UE interfaces
+
+- name: Connect R2Lab UEs with the upstream 5g_ansible role
+  hosts: faraday
+  gather_facts: false
+  tasks:
+    - name: Connect UEs on R2Lab to 5G network
+      ansible.builtin.include_role:
+        name: r2lab/ue/connect
+      vars:
+        ue_item: "{{ item }}"
+      loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) + (groups['phones'] | default([])) }}"
+      loop_control:
+        label: "{{ item }}"
+      ignore_errors: true
+      when: platform == 'r2lab'
+
+- name: Prepare non-R2Lab physical UE interfaces
   hosts: physical_ues
   become: true
   any_errors_fatal: true
   tasks:
-    - name: Prepare and validate the physical UE session
+    - name: Prepare and validate the custom physical UE session
       ansible.builtin.include_role:
         name: synthran/physical_ue
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
-- name: Retain structured physical UE bindings
+- name: Retain structured non-R2Lab physical UE bindings
   hosts: localhost
   gather_facts: false
   any_errors_fatal: true
@@ -32,7 +49,7 @@
     - name: Initialize physical UE binding evidence
       ansible.builtin.set_fact:
         synthran_physical_bindings: []
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
     - name: Require every deployment-contract UE to expose a proved binding
       ansible.builtin.assert:
@@ -46,7 +63,7 @@
       loop: "{{ synthran_deployment_contract.deployment.ues }}"
       loop_control:
         label: "{{ item.device }}"
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
     - name: Collect proved physical UE bindings in deployment-contract order
       ansible.builtin.set_fact:
@@ -55,12 +72,12 @@
       loop: "{{ synthran_deployment_contract.deployment.ues }}"
       loop_control:
         label: "{{ item.device }}"
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
     - name: Read the existing cluster attestation
       ansible.builtin.set_fact:
         synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
     - name: Require a matching cluster attestation before adding UE evidence
       ansible.builtin.assert:
@@ -69,7 +86,7 @@
           - synthran_cluster_evidence.cluster_identity_verified is sameas true
           - synthran_cluster_evidence.deployment_hash == synthran_deployment_contract.deployment_hash
         fail_msg: Physical UE observations cannot replace a missing or mismatched cluster attestation.
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
     - name: Retain physical UE bindings with the run
       ansible.builtin.copy:
@@ -77,7 +94,7 @@
           {{ synthran_cluster_evidence
              | combine({'bindings': synthran_physical_bindings}) | to_nice_json }}
         dest: "{{ run_dir }}/live-deployment-evidence.json"
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'physical'
 
 - name: Prepare physical publisher runtimes
   hosts: physical_ues
@@ -110,6 +127,7 @@
         name: synthran/publisher
         tasks_from: replay.yml
       when: platform in ['r2lab', 'physical']
+
 - name: Collect MQTT receipt artifacts
   hosts: broker_node
   become: true
