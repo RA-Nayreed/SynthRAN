@@ -8,11 +8,6 @@ deployment:
   reservation: {enabled: true, duration_minutes: 120, image: ubuntu-jammy}
   # Optional R2Lab FIT/PC hosts. These are prepared as experiment resources;
   # they do not gain a 5G user-plane path unless explicitly routed through a UE.
-  r2lab_experiment_nodes:
-    sensor: []
-    edge: []
-    rf_measurement: []
-    image: ubuntu
 model:
   engine: ambient_iot
   seed: 1

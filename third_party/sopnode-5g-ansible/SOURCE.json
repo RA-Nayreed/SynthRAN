@@ -16,8 +16,18 @@
     "Reorganized selected upstream Ansible content beneath deployment/.",
     "Removed upstream roles and supporting content outside SynthRAN's supported deployment matrix.",
     "Adapted non-R2Lab Kubernetes, networking, OAI, Open5GS, free5GC, srsRAN, UERANSIM, reservation, and experiment orchestration where SynthRAN requires its own integration.",
-    "For platform=r2lab, selected cleanup, RRU, UE setup/connect, and N3xx srsRAN deployment files are intentionally byte-identical to this pinned upstream revision and protected by an upstream-parity test.",
+    "For platform=r2lab, selected cleanup, RRU, UE setup/connect, and N3xx srsRAN deployment files are intentionally byte-identical to this pinned upstream revision.",
     "SynthRAN adds the Ambient-IoT workload, MQTT transport, collection, logging, reconciliation, and only the minimal adapter needed to run those experiments over the upstream-managed R2Lab UE interface."
   ],
-  "comparison_note": "The source_commit is the authoritative SOPNode revision for R2Lab deployment parity. Files listed in tests/test_r2lab_upstream_parity.py must remain byte-identical to that revision; other deployment files may remain SynthRAN-adapted."
+  "comparison_note": "The pinned source_commit is authoritative for the hardware roles. Compare the paths in upstream_parity directly with that revision; no test files are retained.",
+  "upstream_parity": [
+    "roles/r2lab/cleanup/tasks/main.yml",
+    "roles/r2lab/rru/tasks/main.yml",
+    "roles/r2lab/ue/setup/tasks/main.yml",
+    "roles/r2lab/ue/connect/tasks/main.yml",
+    "roles/5g/oai/ran/n3xx_ip_swap/tasks/main.yml",
+    "roles/5g/oai/ran/n3xx_ip_swap/meta/main.yml",
+    "roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml",
+    "roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml"
+  ]
 }

@@ -16,21 +16,6 @@
         - platform == 'rfsim'
         - ran | lower in ['srsran', 'ueransim', 'oai']
 
-- name: Connect R2Lab UEs with the upstream 5g_ansible role
-  hosts: faraday
-  gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Connect UEs on R2Lab to 5G network
-      ansible.builtin.include_role:
-        name: r2lab/ue/connect
-      vars:
-        ue_item: "{{ item }}"
-      loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) + (groups['phones'] | default([])) }}"
-      loop_control:
-        label: "{{ item }}"
-      when: platform == 'r2lab'
-
 - name: Prepare non-R2Lab physical UE interfaces
   hosts: physical_ues
   become: true

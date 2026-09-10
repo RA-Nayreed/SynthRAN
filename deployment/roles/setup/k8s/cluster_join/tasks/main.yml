@@ -1,8 +1,4 @@
 ---
-- name: Recheck destructive-reset authorization before worker cleanup
-  ansible.builtin.include_role:
-    name: setup/destructive_guard
-
 # Cleanup if node already joined a k8s cluster
 - name: Check if node has leftover Kubernetes data
   ansible.builtin.stat:

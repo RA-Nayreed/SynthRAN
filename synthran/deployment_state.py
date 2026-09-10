@@ -18,7 +18,6 @@ from .scenario import load_scenario
 
 
 SCHEMA_VERSION = 1
-R2LAB_QMI_DEVICES = {"qhat20", "qhat21", "qhat22", "qhat23"}
 
 
 def _canonical(value: Any) -> bytes:
@@ -95,19 +94,13 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
 
 
-def _physical_mode(platform: str, device: str) -> str:
-    if platform == "r2lab" and device in R2LAB_QMI_DEVICES:
-        return "qmi"
-    return "mbim"
-
-
-def _physical_tunnel(platform: str, device: str) -> dict:
-    mode = _physical_mode(platform, device)
+def _physical_tunnel(device: str, profile: dict) -> dict:
+    mode = profile.get("mode", "mbim")
     return {
         "host": device,
-        "interface": "wwan0",
+        "interface": profile.get("interface", "wwan0"),
         "mode": mode,
-        "mbim_session": 0 if mode == "mbim" else None,
+        "mbim_session": profile.get("mbim_session", 0) if mode == "mbim" else None,
     }
 
 
@@ -225,7 +218,7 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
         else:
-            entry["tunnel"] = _physical_tunnel(platform, device)
+            entry["tunnel"] = _physical_tunnel(device, ue)
         result.append(entry)
     return result
 
@@ -253,7 +246,6 @@ def build_manifest(
         "slices": copy.deepcopy(profile.get("slices", [])),
         "ues": copy.deepcopy(ue_map),
         "topology": copy.deepcopy(topology or {"namespace": str(deployment["core"]).lower()}),
-        "r2lab_experiment_nodes": copy.deepcopy(deployment.get("r2lab_experiment_nodes", {})),
     }
     return {
         "schema_version": SCHEMA_VERSION,

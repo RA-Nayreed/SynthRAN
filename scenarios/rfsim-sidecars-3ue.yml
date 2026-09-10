@@ -7,7 +7,6 @@ deployment:
   nodes: {core: sopnode-f2, ran: sopnode-f3, broker: sopnode-f2}
   ues: [uesim01, uesim02, uesim03]
   reservation: {enabled: true, duration_minutes: 120, image: ubuntu-jammy}
-  r2lab_experiment_nodes: {sensor: [], edge: [], rf_measurement: [], image: ubuntu}
 model:
   engine: ambient_iot
   seed: 11

@@ -65,15 +65,19 @@ ues:
     imsi_suffix: "0000000014"
     slice: slice1
   qhat20:
+    mode: qmi
     imsi_suffix: "0000000009"
     slice: slice1
   qhat21:
+    mode: qmi
     imsi_suffix: "0000000010"
     slice: slice1
   qhat22:
+    mode: qmi
     imsi_suffix: "0000000011"
     slice: slice1
   qhat23:
+    mode: qmi
     imsi_suffix: "0000000012"
     slice: slice1
   qfit07:

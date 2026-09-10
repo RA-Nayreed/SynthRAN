@@ -8,11 +8,6 @@ deployment:
   ues: [qhat01, qhat03]
   reservation: {enabled: true, duration_minutes: 120, image: ubuntu-jammy}
   r2lab_reservation: {enabled: true, duration_minutes: 120}
-  r2lab_experiment_nodes:
-    sensor: []
-    edge: []
-    rf_measurement: []
-    image: ubuntu
 model:
   engine: ambient_iot
   seed: 1

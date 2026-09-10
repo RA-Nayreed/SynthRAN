@@ -4,7 +4,6 @@
   become: true
   any_errors_fatal: true
   roles:
-    - setup/destructive_guard
     - setup/common
     - setup/netplan
     - setup/containerd

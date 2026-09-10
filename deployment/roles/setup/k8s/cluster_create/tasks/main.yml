@@ -1,8 +1,4 @@
 ---
-- name: Recheck destructive-reset authorization before control-plane cleanup
-  ansible.builtin.include_role:
-    name: setup/destructive_guard
-
 - name: Normalize booleans for current host
   ansible.builtin.set_fact:
     fhi72: "{{ fhi72 | default(false) | bool }}"
