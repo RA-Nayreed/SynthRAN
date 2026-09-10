@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Build the fixed RFSIM transport scenario for Experiment 2.
 
-The immutable workload is independent of the selected 5G core.  Experiment 2
-uses the previously qualified OAI+srsRAN multi-UE/slice path for RFSIM so that
-its software transport baseline matches the intended OAI+srsRAN physical path.
+The immutable workload is independent of the selected 5G core. Experiment 2
+uses the previously qualified OAI+srsRAN path for RFSIM so that its software
+transport baseline matches the intended OAI+srsRAN physical path.
+
+uesim01 and uesim02 remain the workload gateways carried by the frozen source
+bundle. uesim03 is added only as a deployment UE for controlled competing
+traffic; no modeled sensor is remapped to it.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import yaml
 
 
 DEFAULT_PILOT = Path("results/exp2-matched-trace/pilot-seed1001")
+COMPETING_UE = "uesim03"
 
 
 def prepare(pilot_root: Path, output: Path) -> Path:
@@ -34,8 +39,8 @@ def prepare(pilot_root: Path, output: Path) -> Path:
             "Experiment-2 pilot source must already use platform=rfsim and ran=srsran"
         )
 
-    # Freeze the transport implementation, without altering any modeled sensor,
-    # sensor->gateway, workload, MQTT, or measurement setting.
+    # Freeze the transport implementation without altering modeled sensors,
+    # sensor->gateway mapping, workload payloads, MQTT settings, or measurement.
     deployment["core"] = "oai"
     deployment["ran"] = "srsran"
     deployment["platform"] = "rfsim"
@@ -45,6 +50,15 @@ def prepare(pilot_root: Path, output: Path) -> Path:
         "broker": "sopnode-f2",
     }
     deployment["profile"] = "default"
+
+    workload_gateways = list(deployment.get("ues", []))
+    if not workload_gateways:
+        raise SystemExit("Frozen pilot scenario has no deployment UEs")
+    if COMPETING_UE in workload_gateways:
+        raise SystemExit(
+            f"{COMPETING_UE} is already a frozen workload gateway; choose a distinct competing UE"
+        )
+    deployment["ues"] = workload_gateways + [COMPETING_UE]
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
