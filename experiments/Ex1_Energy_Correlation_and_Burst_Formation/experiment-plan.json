@@ -1,0 +1,58 @@
+{
+  "experiment": 1,
+  "name": "Energy_Correlation_and_Burst_Formation",
+  "status": "completed",
+  "raw_results_root": "results/exp1-energy-correlation",
+  "measurement": {
+    "duration_seconds": 60,
+    "warmup_seconds": 10,
+    "sensing_interval_ms": 1000
+  },
+  "energy_source": {
+    "mode": "environmental",
+    "source": "lognormal",
+    "coefficient_of_variation": 1.0,
+    "sample_interval_s": 0.1,
+    "correlation_time_s": 5.0,
+    "interpolation": "hold"
+  },
+  "power_calibration": {
+    "sensor_count": 8,
+    "correlation": "independent",
+    "mean_power_w": [0.00025, 0.0005, 0.001, 0.002, 0.004],
+    "seeds": [1, 2, 3, 4, 5]
+  },
+  "population_calibration": {
+    "mean_power_w": 0.001,
+    "correlation": "independent",
+    "sensor_counts": [8, 16, 32, 64, 128],
+    "seeds": [1, 2, 3, 4, 5],
+    "frozen_n_star": 32
+  },
+  "confirmation": {
+    "sensor_count": 32,
+    "seeds": {"first": 1001, "last": 1030, "count": 30},
+    "conditions": {
+      "always-powered": {"mode": "always_powered", "mean_power_w": 0.001, "correlation": "independent"},
+      "low-independent": {"mode": "environmental", "mean_power_w": 0.0005, "correlation": "independent"},
+      "low-common": {"mode": "environmental", "mean_power_w": 0.0005, "correlation": "common"},
+      "knee-independent": {"mode": "environmental", "mean_power_w": 0.001, "correlation": "independent"},
+      "knee-common": {"mode": "environmental", "mean_power_w": 0.001, "correlation": "common"},
+      "high-independent": {"mode": "environmental", "mean_power_w": 0.002, "correlation": "independent"},
+      "high-common": {"mode": "environmental", "mean_power_w": 0.002, "correlation": "common"}
+    }
+  },
+  "model": {
+    "protocol": {"type": "broadcast_sic", "slots": 4, "tx_duration_ms": 5, "rx_duration_ms": 10},
+    "receiver": {"sic": true, "required_sinr_db": 3, "cancellation_factor": 0.9},
+    "shared_subcarrier_shift": 0,
+    "topology": {"frequency_hz": 924000000, "placement_radius_m": [10, 40], "pathloss": "macro", "los": true}
+  },
+  "historical_integrity": {
+    "confirmation_runs_expected": 210,
+    "confirmation_runs_passed": 210,
+    "valid_zero_event_run": "low-common-seed1028"
+  },
+  "historical_result_boundary": "Common energy harvesting synchronized activation and made decoded traffic substantially burstier with higher collision exposure. Reader-side AoI common-minus-independent confidence intervals crossed zero, so Experiment 1 did not establish reader-freshness degradation.",
+  "reconstruction_note": "The original one-off orchestration script was not preserved. run_experiment.py reconstructs the completed campaign from the frozen run record and the current SynthRAN model contract while preserving the existing immutable run-directory names used by Experiment 2."
+}
