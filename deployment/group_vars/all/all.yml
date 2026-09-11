@@ -3,3 +3,9 @@
 # Active profile, can be overloaded via -e
 fiveg_profile: default
 
+# Reproducible Kubernetes baseline. Keep the minor repository and exact package
+# patch together; kubeadm config and package verification consume the same value.
+kubernetes_minor: "1.36"
+kubernetes_version: "1.36.4"
+kubernetes_debian_revision: "1.1"
+kubernetes_package_version: "{{ kubernetes_version }}-{{ kubernetes_debian_revision }}"
