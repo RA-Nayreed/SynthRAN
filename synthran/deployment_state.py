@@ -223,6 +223,7 @@ def build_manifest(
         "radio_unit": "rfsim" if deployment["platform"] == "rfsim" else deployment.get("ru", deployment["platform"]),
         "radio": copy.deepcopy(deployment.get("radio", {})),
         "ansible_vars": copy.deepcopy(deployment.get("ansible_vars", {})),
+        "host_vars": copy.deepcopy(deployment.get("host_vars", {})),
         "nodes": copy.deepcopy(deployment["nodes"]),
         "bridge_enabled": bool(deployment.get("bridge_enabled", True)),
         "profile": deployment.get("profile", "default"),

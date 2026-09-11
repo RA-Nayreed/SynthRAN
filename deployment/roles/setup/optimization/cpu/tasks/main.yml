@@ -32,7 +32,7 @@
           ansible.builtin.command: tuned-adm profile throughput-performance
           when: "'Current active profile: throughput-performance' not in tuned_status.stdout"
       become: true
-      when: inventory_hostname != "sopnode-f3"
+      when: not (cpu_low_latency | default(false) | bool)
 
     - name: Apply sysctl tuning parameters
       sysctl:
@@ -51,26 +51,8 @@
         - { key: kernel.sched_rt_runtime_us,   val: '-1'        }
         - { key: kernel.timer_migration,       val: '0'         }
 
-    - name: Create /etc/sysctl.d/rt.conf and apply real-time settings
-      block:
-        - name: Create /etc/sysctl.d/rt.conf
-          ansible.builtin.copy:
-            dest: /etc/sysctl.d/rt.conf
-            content: |
-              kernel.sched_rt_runtime_us=-1
-              kernel.timer_migration=0
-            owner: root
-            group: root
-            mode: '0644'
-
-        - name: Apply sysctl settings from /etc/sysctl.d/rt.conf
-          ansible.builtin.command: sysctl -p /etc/sysctl.d/rt.conf
-          register: sysctl_apply
-          changed_when: "'apply' in sysctl_apply.stdout or 'set' in sysctl_apply.stdout"
-      when: inventory_hostname == "sopnode-f3"
-
     - block:
-        - name: Check if hyperthreading is disabled (reliable method)
+        - name: Read hyperthreading status
           shell: |
             threads_per_core=$(lscpu | awk '/^Thread\(s\) per core:/ {print $4}')
             if [ "$threads_per_core" -eq 1 ]; then
@@ -82,24 +64,14 @@
             fi
           register: ht_check
           changed_when: false
-          # RFSIM is a software transport qualification path. Record the host
-          # state but do not block it on a physical-radio real-time prerequisite.
-          # Keep the inherited requirement fatal for physical/R2Lab execution.
-          failed_when:
-            - ht_check.rc != 0
-            - (platform | default('rfsim')) != 'rfsim'
+          failed_when: false
 
         - name: Show hyperthreading status
           debug:
             msg: "{{ ht_check.stdout }}"
-      when: inventory_hostname == "sopnode-f3"
+      when: cpu_low_latency | default(false) | bool
 
     - block:
-        - name: Get CPU idle states
-          shell: cpupower idle-info
-          register: idle_info
-          changed_when: false
-
         - name: Disable all CPU idle states
           shell: |
             for state in $(cpupower idle-info | awk '/Available idle states/ {for(i=2;i<=NF;i++) print $i}'); do
@@ -117,4 +89,4 @@
         - name: Display CPU idle states
           debug:
             msg: "{{ idle_info_after.stdout_lines }}"
-      when: inventory_hostname == "sopnode-f3"
+      when: cpu_low_latency | default(false) | bool

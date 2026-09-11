@@ -8,6 +8,9 @@ deployment:
     core: sopnode-f2
     ran: sopnode-f3
     broker: sopnode-f2
+  host_vars:
+    sopnode-f3:
+      cpu_low_latency: true
   ues:
   - qhat01
   - qhat03

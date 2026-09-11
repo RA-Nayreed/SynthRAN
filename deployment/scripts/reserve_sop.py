@@ -4,11 +4,12 @@ from pathlib import Path
 
 import yaml
 
-POOL = ["sopnode-f1", "sopnode-f2", "sopnode-f3", "sopnode-w3"]
 STATE_PATH = Path(".synthran/pos-reservation.json")
+
 
 def run(*args, check=True):
     return subprocess.run(args, text=True, capture_output=True, check=check)
+
 
 def run_visible(*args, check=True):
     process = subprocess.Popen(
@@ -29,11 +30,13 @@ def run_visible(*args, check=True):
         raise subprocess.CalledProcessError(returncode, args, output=result.stdout)
     return result
 
+
 def stamp(value):
     parsed = dt.datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
     return parsed
+
 
 def calendars(owner=None):
     command = ["pos", "calendar", "list", "--json"]
@@ -41,23 +44,31 @@ def calendars(owner=None):
         command[3:3] = ["--filter", f"owner={owner}"]
     return json.loads(run(*command).stdout)
 
+
 def choice(title, options):
     print(f"\n{title}")
-    for index, option in enumerate(options, 1): print(f"{index}) {option}")
+    for index, option in enumerate(options, 1):
+        print(f"{index}) {option}")
     while True:
         answer = input(f"Enter choice [1-{len(options)}]: ").strip()
-        if answer.isdigit() and 1 <= int(answer) <= len(options): return int(answer)
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return int(answer)
 
-def manual_nodes(nodes):
+
+def manual_nodes(nodes, pool):
     result = dict(nodes)
     for role in ("core", "ran", "broker"):
-        print(f"\nChoose replacement {role} node (current: {result[role]})")
-        for index, node in enumerate(POOL, 1): print(f"{index}) {node}")
-        answer = input("Enter choice [1-4]: ").strip()
-        if answer: result[role] = POOL[int(answer) - 1]
+        while True:
+            print(f"\nAvailable pool: {', '.join(pool)}")
+            answer = input(f"Replacement {role} node [{result[role]}]: ").strip()
+            if not answer or answer in pool:
+                result[role] = answer or result[role]
+                break
+            print("Choose a hostname from deployment.reservation.node_pool.")
     return result
 
-def available(events, start, end, ignored_ids=()):
+
+def available(events, start, end, pool, ignored_ids=()):
     ignored_ids = {str(event_id) for event_id in ignored_ids}
     busy = set()
     for event in events:
@@ -65,7 +76,8 @@ def available(events, start, end, ignored_ids=()):
             continue
         if stamp(event["start_date"]) < end and stamp(event["end_date"]) > start:
             busy.update(event["nodes"])
-    return [node for node in POOL if node not in busy]
+    return [node for node in pool if node not in busy]
+
 
 def load_managed_state():
     try:
@@ -74,15 +86,23 @@ def load_managed_state():
         return {}
     return state if state.get("managed_by") == "synthran" else {}
 
+
 def save_managed_state(event_id, nodes, start, end):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps({
-        "event_id": str(event_id),
-        "nodes": nodes,
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "managed_by": "synthran",
-    }, indent=2) + "\n")
+    STATE_PATH.write_text(
+        json.dumps(
+            {
+                "event_id": str(event_id),
+                "nodes": nodes,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "managed_by": "synthran",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
 
 def restore_event(event):
     restore_now = dt.datetime.now().astimezone()
@@ -92,26 +112,47 @@ def restore_event(event):
         return
     start = max(event_start, restore_now)
     duration = max(1, math.ceil((event_end - start).total_seconds() / 60))
-    start_arg = "now" if event_start <= restore_now else event_start.strftime("%Y-%m-%d_%H:%M")
-    run(
-        "pos", "calendar", "create", "--start", start_arg,
-        "--duration", str(duration), *event["nodes"], check=False,
+    start_arg = (
+        "now" if event_start <= restore_now else event_start.strftime("%Y-%m-%d_%H:%M")
     )
+    run(
+        "pos",
+        "calendar",
+        "create",
+        "--start",
+        start_arg,
+        "--duration",
+        str(duration),
+        *event["nodes"],
+        check=False,
+    )
+
 
 def automatic_nodes(nodes, candidates):
     distinct = nodes["core"] != nodes["ran"]
-    pairs = [(a, b) for a in candidates for b in candidates if not distinct or a != b]
-    if not pairs: raise SystemExit("No usable SOP core/RAN pair is available now")
-    pairs.sort(key=lambda pair: (-(pair[0] == nodes["core"]), -(pair[1] == nodes["ran"]), POOL.index(pair[0]), POOL.index(pair[1])))
-    core, ran = pairs[0]
+    candidates = list(dict.fromkeys(candidates))
+    if len(candidates) < (2 if distinct else 1):
+        raise SystemExit("No usable SOP core/RAN pair is available now")
+    core = (
+        nodes["core"]
+        if nodes["core"] in candidates
+        else next(node for node in candidates if not distinct or node != nodes["ran"])
+    )
+    ran = (
+        nodes["ran"]
+        if nodes["ran"] in candidates and (not distinct or nodes["ran"] != core)
+        else next(node for node in candidates if not distinct or node != core)
+    )
     broker = nodes["broker"] if nodes["broker"] in candidates else core
     return {"core": core, "ran": ran, "broker": broker}
+
 
 def write_resolved_scenario(run_dir, scenario):
     output = Path(run_dir, "resolved-scenario.yml")
     temporary = output.with_name(output.name + ".tmp")
     temporary.write_text(yaml.safe_dump(scenario, sort_keys=False))
     os.replace(temporary, output)
+
 
 def classify_allocation(node, allocation):
     output = allocation.stdout
@@ -128,6 +169,7 @@ def classify_allocation(node, allocation):
     if allocation.returncode == 0:
         return "new"
     raise SystemExit(output.strip())
+
 
 def prepare_nodes(nodes, image, *, preserve_state=False):
     allocation_states = {}
@@ -154,30 +196,52 @@ def prepare_nodes(nodes, image, *, preserve_state=False):
             )
         print(f"Selecting image {image} on {node}", flush=True)
         run_visible("pos", "nodes", "image", node, image)
-        print(f"Resetting {node}; waiting for POS to report boot completion", flush=True)
+        print(
+            f"Resetting {node}; waiting for POS to report boot completion", flush=True
+        )
         run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
         print(f"{node} finished its POS reset", flush=True)
     return allocation_states
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("config"); parser.add_argument("run_dir")
-    args = parser.parse_args(); path = Path(args.config)
-    scenario = yaml.safe_load(path.read_text()); deployment = scenario["deployment"]
+    parser.add_argument("config")
+    parser.add_argument("run_dir")
+    args = parser.parse_args()
+    path = Path(args.config)
+    scenario = yaml.safe_load(path.read_text())
+    deployment = scenario["deployment"]
     reservation = deployment.get("reservation", {})
     if not reservation.get("enabled", True):
         write_resolved_scenario(args.run_dir, scenario)
         return
-    duration = int(reservation.get("duration_minutes", 120)); image = reservation.get("image", "ubuntu-jammy")
+    duration = int(reservation.get("duration_minutes", 120))
+    image = reservation.get("image", "ubuntu-jammy")
     owner = os.environ.get("USER") or run("id", "-un").stdout.strip()
-    now = dt.datetime.now().astimezone(); end = now + dt.timedelta(minutes=duration)
-    events = calendars(); own_active = [e for e in events if e.get("owner") == owner and stamp(e["start_date"]) <= now < stamp(e["end_date"])]
-    nodes = dict(deployment["nodes"]); requested = set(nodes.values())
+    now = dt.datetime.now().astimezone()
+    end = now + dt.timedelta(minutes=duration)
+    events = calendars()
+    own_active = [
+        e
+        for e in events
+        if e.get("owner") == owner
+        and stamp(e["start_date"]) <= now < stamp(e["end_date"])
+    ]
+    nodes = dict(deployment["nodes"])
+    requested = set(nodes.values())
+    configured_pool = reservation.get("node_pool", [])
+    if not isinstance(configured_pool, list) or any(
+        not isinstance(node, str) or not node.strip() for node in configured_pool
+    ):
+        raise SystemExit("deployment.reservation.node_pool must be a list of hostnames")
+    pool = list(dict.fromkeys([*configured_pool, *nodes.values()]))
     related = [e for e in own_active if requested.intersection(e["nodes"])]
     managed_state = load_managed_state()
     managed_event_id = str(managed_state.get("event_id", ""))
     managed_events = [
-        event for event in events
+        event
+        for event in events
         if managed_event_id
         and str(event.get("id")) == managed_event_id
         and event.get("owner") == owner
@@ -187,50 +251,105 @@ def main():
 
     if related:
         print("\nActive reservation owned by you:")
-        for event in related: print(f"  {', '.join(event['nodes'])}: {event['start_date']} to {event['end_date']}")
-        action = choice("How should SynthRAN handle it?", ["Replace it with a reservation starting now for the requested duration", "Keep its existing time", "Choose a different SOP-node reservation", "Abort deployment"])
-        if action == 4: raise SystemExit("Deployment aborted")
-        if action == 3: nodes = manual_nodes(nodes); requested = set(nodes.values())
+        for event in related:
+            print(
+                f"  {', '.join(event['nodes'])}: {event['start_date']} to {event['end_date']}"
+            )
+        action = choice(
+            "How should SynthRAN handle it?",
+            [
+                "Replace it with a reservation starting now for the requested duration",
+                "Keep its existing time",
+                "Choose a different SOP-node reservation",
+                "Abort deployment",
+            ],
+        )
+        if action == 4:
+            raise SystemExit("Deployment aborted")
+        if action == 3:
+            nodes = manual_nodes(nodes, pool)
+            requested = set(nodes.values())
         if action == 2:
-            reserved_nodes = list(dict.fromkeys(node for event in related for node in event["nodes"]))
+            reserved_nodes = list(
+                dict.fromkeys(node for event in related for node in event["nodes"])
+            )
             if not requested.issubset(set(reserved_nodes)):
                 nodes = automatic_nodes(nodes, reserved_nodes)
                 print("Using the nodes covered by the active reservation:")
-                print(f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}")
+                print(
+                    f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}"
+                )
             selected = list(dict.fromkeys(nodes.values()))
-            print(f"Keeping the active SOP calendar reservation for {', '.join(selected)}")
+            print(
+                f"Keeping the active SOP calendar reservation for {', '.join(selected)}"
+            )
             allocation_states = prepare_nodes(selected, image, preserve_state=True)
             preserved_nodes = [
-                node for node in selected
+                node
+                for node in selected
                 if allocation_states.get(node) == "already-active"
             ]
             reset_nodes = [
-                node for node in selected
+                node
+                for node in selected
                 if allocation_states.get(node) != "already-active"
             ]
             deployment["nodes"] = nodes
             write_resolved_scenario(args.run_dir, scenario)
-            Path(args.run_dir, "pos-selection.json").write_text(json.dumps({
-                "nodes": nodes, "duration_minutes": duration, "reused": True,
-                "allocation_states": allocation_states, "reset_nodes": reset_nodes,
-                "preserved_nodes": preserved_nodes,
-            }, indent=2) + "\n")
+            Path(args.run_dir, "pos-selection.json").write_text(
+                json.dumps(
+                    {
+                        "nodes": nodes,
+                        "duration_minutes": duration,
+                        "reused": True,
+                        "allocation_states": allocation_states,
+                        "reset_nodes": reset_nodes,
+                        "preserved_nodes": preserved_nodes,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
             return
         if action == 1:
-            replace_events = list({str(event["id"]): event for event in related + managed_events}.values())
+            replace_events = list(
+                {str(event["id"]): event for event in related + managed_events}.values()
+            )
 
     replace_ids = [event["id"] for event in replace_events]
-    candidates = available(events, now, end, replace_ids)
+    candidates = available(events, now, end, pool, replace_ids)
     unavailable = sorted(requested - set(candidates))
     if unavailable:
         print("\nUnavailable SOP nodes: " + ", ".join(unavailable))
-        action = choice("How should SynthRAN continue?", ["Automatically use available SOP nodes", "Choose replacement nodes manually", "Keep selected nodes and reserve the earliest available time", "Abort deployment"])
-        if action == 4: raise SystemExit("Deployment aborted")
-        if action == 1: nodes = automatic_nodes(nodes, candidates)
-        elif action == 2: nodes = manual_nodes(nodes)
+        action = choice(
+            "How should SynthRAN continue?",
+            [
+                "Automatically use available SOP nodes",
+                "Choose replacement nodes manually",
+                "Keep selected nodes and reserve the earliest available time",
+                "Abort deployment",
+            ],
+        )
+        if action == 4:
+            raise SystemExit("Deployment aborted")
+        if action == 1:
+            nodes = automatic_nodes(nodes, candidates)
+        elif action == 2:
+            nodes = manual_nodes(nodes, pool)
         else:
-            result = run("pos", "calendar", "create", "--asap", "--duration", str(duration), *sorted(requested))
-            print(result.stdout.strip()); raise SystemExit("Future reservation created; rerun deploy.sh when it becomes active")
+            result = run(
+                "pos",
+                "calendar",
+                "create",
+                "--asap",
+                "--duration",
+                str(duration),
+                *sorted(requested),
+            )
+            print(result.stdout.strip())
+            raise SystemExit(
+                "Future reservation created; rerun deploy.sh when it becomes active"
+            )
     selected = list(dict.fromkeys(nodes.values()))
     deleted = []
     try:
@@ -238,8 +357,14 @@ def main():
             run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
             deleted.append(event)
         result = run(
-            "pos", "calendar", "create", "--start", "now",
-            "--duration", str(duration), *selected,
+            "pos",
+            "calendar",
+            "create",
+            "--start",
+            "now",
+            "--duration",
+            str(duration),
+            *selected,
         )
     except subprocess.CalledProcessError as error:
         for event in deleted:
@@ -251,13 +376,26 @@ def main():
         )
     reservation_id = result.stdout.strip()
     save_managed_state(reservation_id, selected, now, end)
-    print(f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}")
+    print(
+        f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}"
+    )
     allocation_states = prepare_nodes(selected, image)
     deployment["nodes"] = nodes
     write_resolved_scenario(args.run_dir, scenario)
-    Path(args.run_dir, "pos-selection.json").write_text(json.dumps({
-        "nodes": nodes, "duration_minutes": duration, "reused": False,
-        "allocation_states": allocation_states, "reset_nodes": selected,
-    }, indent=2) + "\n")
+    Path(args.run_dir, "pos-selection.json").write_text(
+        json.dumps(
+            {
+                "nodes": nodes,
+                "duration_minutes": duration,
+                "reused": False,
+                "allocation_states": allocation_states,
+                "reset_nodes": selected,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
-if __name__ == "__main__": main()
+
+if __name__ == "__main__":
+    main()

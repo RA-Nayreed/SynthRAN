@@ -62,7 +62,7 @@ record_exit() {
 cancel_worker() {
   trap '' INT TERM
   if [[ -n "$CHILD_PID" ]]; then
-    kill -TERM "$CHILD_PID" 2>/dev/null || true
+    kill -TERM -- "-$CHILD_PID" 2>/dev/null || true
     wait "$CHILD_PID" 2>/dev/null || true
   fi
   exit "$1"
@@ -73,7 +73,9 @@ trap 'cancel_worker 143' TERM
 
 run_step() {
   local status=0
-  "$@" <&0 9>&- &
+  # Each step owns a process group so cancellation reaches experiment and
+  # Ansible descendants as well as the immediate command. Job control is off.
+  setsid --wait "$@" <&0 9>&- &
   CHILD_PID=$!
   wait "$CHILD_PID" || status=$?
   CHILD_PID=""
