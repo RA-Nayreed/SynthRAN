@@ -45,12 +45,22 @@ fi
 RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
 git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
-mkdir -p .synthran
+mkdir -p .synthran .synthran/r2lab
+R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
+export R2LAB_FARADAY_KNOWN_HOSTS
 # Load R2Lab access before rendering inventory, including --no-reservation runs.
 if [[ -f .r2lab_config ]]; then
   source .r2lab_config
 fi
-export R2LAB_USERNAME="${R2LAB_USERNAME:-}" R2LAB_IDENTITY_FILE="${R2LAB_IDENTITY_FILE:-}"
+R2LAB_IDENTITY_FILE=${R2LAB_IDENTITY_FILE:-}
+# Preserve the proven Duckburg R2Lab identity fallback used before the refactor.
+if [[ -z "$R2LAB_IDENTITY_FILE" && -r "$HOME/.ssh/id_rsa_r2lab_duckburg" ]]; then
+  R2LAB_IDENTITY_FILE="$HOME/.ssh/id_rsa_r2lab_duckburg"
+fi
+if [[ -n "$R2LAB_IDENTITY_FILE" ]]; then
+  [[ -r "$R2LAB_IDENTITY_FILE" ]] || { echo "R2Lab SSH identity is not readable: $R2LAB_IDENTITY_FILE" >&2; exit 1; }
+fi
+export R2LAB_USERNAME="${R2LAB_USERNAME:-}" R2LAB_IDENTITY_FILE
 command -v flock >/dev/null || { echo "flock is required to protect deployments from overlapping runs" >&2; exit 1; }
 exec 9>.synthran/deploy.lock
 if ! flock -n 9; then
@@ -156,7 +166,14 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
     "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
   echo "Resolving R2Lab access for $R2LAB_START to $R2LAB_END"
-  R2LAB_SSH=(ssh)
+  # The working pre-refactor reservation deliberately bypassed personal SSH
+  # Host/ProxyJump rules for Faraday. Keep configurable non-default gateways
+  # available, but use the proven direct path for the standard R2Lab gateway.
+  if [[ "$R2LAB_HOST" == faraday.inria.fr ]]; then
+    R2LAB_SSH=(ssh -F /dev/null -o "UserKnownHostsFile=$R2LAB_FARADAY_KNOWN_HOSTS" -o StrictHostKeyChecking=accept-new)
+  else
+    R2LAB_SSH=(ssh)
+  fi
   if [[ -n "${R2LAB_IDENTITY_FILE:-}" ]]; then
     R2LAB_SSH+=(-i "$R2LAB_IDENTITY_FILE" -o IdentitiesOnly=yes)
     echo "Using R2Lab SSH identity: $R2LAB_IDENTITY_FILE"
