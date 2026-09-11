@@ -52,10 +52,21 @@ CHILD_PID=""
 printf '%s\n' "$$" >"$RUN_DIR/controller.pid"
 
 record_exit() {
-  local status=$?
+  local original_status=$?
+  local safety_status=0
+  local status=$original_status
   trap - EXIT
+
+  if [[ -n "${SYNTHRAN_PRIVATE_DIR:-}" && -d "$RUN_DIR" ]]; then
+    "$SYNTHRAN_PYTHON" -m synthran.result_safety \
+      --run-dir "$RUN_DIR" --private-dir "$SYNTHRAN_PRIVATE_DIR" || safety_status=$?
+  fi
+  if (( status == 0 && safety_status != 0 )); then
+    status=$safety_status
+  fi
+
   printf '%s\n' "$status" >"$RUN_DIR/controller-exit-code"
-  echo "Deployment controller exited with status $status; artifacts retained in $RUN_DIR"
+  echo "Deployment controller exited with status $status; shareable artifacts retained in $RUN_DIR"
   exit "$status"
 }
 
