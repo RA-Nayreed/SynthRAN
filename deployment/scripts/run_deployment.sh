@@ -170,6 +170,15 @@ collect_failure_diagnostics() {
 if [[ -f "$RUN_DIR/source-revision.txt" ]]; then
   echo "Source revision: $(cat "$RUN_DIR/source-revision.txt")"
 fi
+
+CONTROLLER_PROVENANCE_RC=0
+run_step "$SYNTHRAN_PYTHON" -m synthran.provenance --run-dir "$RUN_DIR" || CONTROLLER_PROVENANCE_RC=$?
+if (( CONTROLLER_PROVENANCE_RC != 0 )); then
+  echo "Controller dependency provenance failed with status $CONTROLLER_PROVENANCE_RC; provisioning was not started." >&2
+  exit "$CONTROLLER_PROVENANCE_RC"
+fi
+echo "Controller dependency provenance recorded."
+
 ANSIBLE_RC=0
 run_step "${DEPLOYMENT_COMMAND[@]}" </dev/null >"$RUN_DIR/ansible.log" 2>&1 || ANSIBLE_RC=$?
 if (( ANSIBLE_RC != 0 )); then
@@ -183,9 +192,9 @@ if (( ANSIBLE_RC != 0 )); then
 fi
 
 if [[ "$WORKLOAD_ONLY" == true ]]; then
-  echo "Reuse verification playbook completed; validating fresh live deployment evidence."
+  echo "Reuse verification and runtime provenance completed; validating fresh live deployment evidence."
 else
-  echo "Provisioning playbook completed; validating fresh live deployment evidence."
+  echo "Provisioning, UE verification, and runtime provenance completed; validating fresh live deployment evidence."
 fi
 
 STATE_RC=0
