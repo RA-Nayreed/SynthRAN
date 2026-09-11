@@ -39,11 +39,14 @@ def prepare(
     from synthran.runtime import ensure
 
     ensure("experiment", run / "experiment-bootstrap.log")
+    from Experiment.mqtt_auth import write_credentials
     from Experiment.workload.bundle import import_bundle
     from Experiment.workload.trace import generate
 
     scenario = load_scenario(config)
     run.mkdir(parents=True, exist_ok=True)
+    private = Path(os.environ["SYNTHRAN_PRIVATE_DIR"])
+    write_credentials(private)
     # Freeze scientific settings and resolve trace paths before any reservation.
     settings = run / "experiment-input.yml"
     settings.write_text(
@@ -95,6 +98,9 @@ def _run_playbook(run: Path, playbook: Path) -> None:
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
     environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "Experiment/deployment/roles")
     private = Path(environment["SYNTHRAN_PRIVATE_DIR"])
+    secrets_file = private / "experiment-secrets.yml"
+    if not secrets_file.is_file():
+        raise FileNotFoundError("private MQTT credentials are missing")
     executable = Path(sys.executable).with_name("ansible-playbook")
     command = [
         str(executable),
@@ -106,6 +112,8 @@ def _run_playbook(run: Path, playbook: Path) -> None:
         "@" + str(private / "deployment-vars.yml"),
         "-e",
         "@" + str(run / "experiment-vars.yml"),
+        "-e",
+        "@" + str(secrets_file),
         str(playbook),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
