@@ -11,6 +11,45 @@
     - setup/k8s/k8s_setup
     - setup/optimization/cpu
     - setup/ovs
+  tasks:
+    - name: Resolve the supported yq architecture
+      ansible.builtin.set_fact:
+        synthran_yq_arch: >-
+          {{ 'amd64' if ansible_architecture in ['x86_64', 'amd64'] else
+             'arm64' if ansible_architecture in ['aarch64', 'arm64'] else '' }}
+
+    - name: Require a checksum-pinned yq binary for this architecture
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_yq_arch | length > 0
+          - synthran_yq_arch in yq_sha256
+        fail_msg: >-
+          No checksum-pinned yq binary is defined for architecture
+          {{ ansible_architecture }}.
+
+    - name: Install the checksum-verified shared yq binary
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/mikefarah/yq/releases/download/{{ yq_version }}/yq_linux_{{ synthran_yq_arch }}
+        dest: /usr/local/bin/yq
+        mode: '0755'
+        force: true
+        checksum: "sha256:{{ yq_sha256[synthran_yq_arch] }}"
+
+    - name: Read back the installed yq version
+      ansible.builtin.command: /usr/local/bin/yq --version
+      register: synthran_yq_version
+      changed_when: false
+
+    - name: Require the installed yq binary to match the pinned release
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - yq_version in synthran_yq_version.stdout
+        fail_msg: >-
+          /usr/local/bin/yq does not match the pinned {{ yq_version }} baseline:
+          {{ synthran_yq_version.stdout | default(synthran_yq_version.stderr) }}
 
 - name: Create the Kubernetes control plane
   hosts: core_node
@@ -152,6 +191,47 @@
   hosts: ran_node
   any_errors_fatal: true
   tasks:
+    - name: Validate an explicitly configured immutable OAI charts revision
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_oai_charts_revision is match('^[0-9a-fA-F]{40}$')
+        fail_msg: synthran_oai_charts_revision must be an immutable 40-hex Git revision.
+      when:
+        - core == 'oai' or ran == 'oai'
+        - synthran_oai_charts_revision is defined
+        - synthran_oai_charts_revision | string | length > 0
+
+    - name: Resolve the OAI R2Lab charts branch once for this run
+      ansible.builtin.command:
+        argv:
+          - git
+          - ls-remote
+          - --exit-code
+          - https://gitlab.eurecom.fr/turletti/charts.git
+          - refs/heads/main
+      register: synthran_oai_charts_lookup
+      changed_when: false
+      when:
+        - core == 'oai' or ran == 'oai'
+        - synthran_oai_charts_revision is not defined or synthran_oai_charts_revision | string | length == 0
+
+    - name: Freeze the resolved OAI charts revision
+      ansible.builtin.set_fact:
+        synthran_oai_charts_revision: "{{ synthran_oai_charts_lookup.stdout.split()[0] }}"
+      when:
+        - core == 'oai' or ran == 'oai'
+        - synthran_oai_charts_lookup is not skipped | default(false)
+
+    - name: Require the OAI charts source to be immutable before preparation
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_oai_charts_revision is defined
+          - synthran_oai_charts_revision is match('^[0-9a-fA-F]{40}$')
+        fail_msg: OAI deployment requires a resolved immutable charts revision.
+      when: core == 'oai' or ran == 'oai'
+
     - name: Configure OAI
       ansible.builtin.include_role:
         name: 5g/oai/config
