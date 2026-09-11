@@ -96,6 +96,14 @@ if (( ANSIBLE_RC != 0 )); then
   exit "$ANSIBLE_RC"
 fi
 
+# Desired configuration and process-level Ansible success are not enough to
+# activate/reuse a physical deployment. Require the fresh observed evidence
+# emitted after UE connection before any durable state transition.
+run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_evidence \
+  --candidate "$RUN_DIR/deployment-fingerprint.json" \
+  --evidence "$RUN_DIR/live-deployment-evidence.json" \
+  --max-age-seconds 300
+
 if [[ "$WORKLOAD_ONLY" == true ]]; then
   run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_state record-reuse \
     --candidate "$RUN_DIR/deployment-fingerprint.json" \
