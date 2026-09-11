@@ -79,7 +79,7 @@
 - name: Add isolated publisher runtime to each UE pod network namespace
   command: >-
     {{ kubectl_bin | default('/usr/bin/kubectl') }} debug -n {{ item.namespace }} pod/{{ item.pod }}
-    --image={{ synthran_runtime_image | default('python:3.13-slim') }}
+    --image={{ synthran_runtime_image | default('python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d') }}
     --container=synthran-runtime -- sleep infinity
   loop: "{{ synthran_software_pods }}"
   loop_control:
