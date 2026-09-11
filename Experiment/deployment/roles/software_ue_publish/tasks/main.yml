@@ -133,6 +133,27 @@
   loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
   changed_when: false
 
+- name: Install the software publisher password outside process arguments
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - exec
+      - -i
+      - -n
+      - "{{ item.namespace }}"
+      - "{{ item.pod }}"
+      - -c
+      - synthran-runtime
+      - --
+      - sh
+      - -c
+      - 'umask 077; cat > /opt/synthran-mqtt-password'
+    stdin: "{{ mqtt_publisher_password }}\n"
+  loop: "{{ synthran_software_pods }}"
+  loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
+  no_log: true
+  changed_when: true
+
 - name: Remove legacy SynthRAN policy routing from OAI UE pods
   shell: >-
     kubectl exec -n {{ item.namespace }} {{ item.pod }}
@@ -205,6 +226,7 @@
     env PYTHONPATH=/opt/synthran-runtime python3 -m Experiment.cli workload replay
     --trace /opt/synthran-events.jsonl --gateway {{ item.device }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --username {{ mqtt_publisher_username }} --password-file /opt/synthran-mqtt-password
     --bind-address {{ synthran_assigned_tunnels[item.index - 1].address }}
     --start-utc {{ synthran_replay_start_utc }}
     --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
