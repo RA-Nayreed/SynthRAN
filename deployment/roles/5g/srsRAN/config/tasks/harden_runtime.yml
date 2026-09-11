@@ -166,3 +166,29 @@
     SYNTHRAN_LOG_SIDECAR_IMAGE: "{{ synthran_log_sidecar_image }}"
     SYNTHRAN_LOGS_ENABLED: "{{ synthran_srsran_runtime_policy.logs_enabled | bool | ternary('true', 'false') }}"
   changed_when: false
+
+- name: Ensure the shareable provenance directory exists
+  ansible.builtin.file:
+    path: "{{ run_dir }}/provenance"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Retain the resolved srsRAN runtime provenance
+  ansible.builtin.copy:
+    dest: "{{ run_dir }}/provenance/srsran-runtime.json"
+    mode: '0644'
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'source_repository': synthran_srsran_image_repository.stdout | trim,
+           'source_tag': synthran_srsran_image_tag.stdout | trim,
+           'resolved_image': synthran_srsran_image_reference,
+           'log_sidecar_image': synthran_log_sidecar_image,
+           'log_filename': '/var/log/gnb.log',
+           'remote_control_enabled': synthran_srsran_runtime_policy.remote_control.enabled | bool,
+           'remote_control_bind_addr': synthran_srsran_runtime_policy.remote_control.bind_addr
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false
