@@ -221,7 +221,7 @@
         synthran_oai_charts_revision: "{{ synthran_oai_charts_lookup.stdout.split()[0] }}"
       when:
         - core == 'oai' or ran == 'oai'
-        - synthran_oai_charts_lookup is not skipped | default(false)
+        - synthran_oai_charts_lookup is not skipped
 
     - name: Require the OAI charts source to be immutable before preparation
       ansible.builtin.assert:
