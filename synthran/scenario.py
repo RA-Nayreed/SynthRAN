@@ -3,9 +3,20 @@ import copy, re
 from pathlib import Path
 import yaml
 
+from .profile_validation import validate_profile, validate_ue_profile_overrides
+
 SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
 SUPPORTED_PLATFORMS = {"rfsim", "r2lab", "physical"}
+_TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
+
+
+def _profile_source(deployment: dict) -> Path:
+    if deployment.get("profile_file"):
+        return Path(deployment["profile_file"])
+    return Path("deployment/group_vars/all") / (
+        "5g_profile_" + str(deployment.get("profile", "default")) + ".yaml"
+    )
 
 
 def load_scenario(path: str | Path) -> dict:
@@ -24,6 +35,11 @@ def load_scenario(path: str | Path) -> dict:
         raise ValueError("unsupported RAN")
     if dep.get("platform") not in SUPPORTED_PLATFORMS:
         raise ValueError("unsupported platform")
+    if dep.get("radio") not in (None, {}):
+        raise ValueError(
+            "deployment.radio is not a supported effective configuration surface; "
+            "use documented deployment fields/ansible_vars that are actually rendered"
+        )
     ues = dep.get("ues", [])
     if (
         not isinstance(ues, list)
@@ -36,6 +52,22 @@ def load_scenario(path: str | Path) -> dict:
         raise ValueError("deployment.ues must be a non-empty list of names")
     if len(ues) != len(set(ues)):
         raise ValueError("deployment.ues must contain unique names")
+
+    host_vars = dep.get("host_vars", {})
+    if host_vars is not None and not isinstance(host_vars, dict):
+        raise ValueError("deployment.host_vars must be a mapping when provided")
+    for name in ues:
+        values = (host_vars or {}).get(name, {})
+        if values is not None and not isinstance(values, dict):
+            raise ValueError(f"deployment.host_vars.{name} must be a mapping")
+        conflicts = sorted(_TRANSPORT_KEYS & set(values or {}))
+        if conflicts:
+            raise ValueError(
+                f"deployment.host_vars.{name} cannot override canonical UE transport fields: "
+                + ", ".join(conflicts)
+                + "; configure physical transport in the selected 5G profile"
+            )
+
     for key in ("entrypoint", "config"):
         value = data.get("experiment", {}).get(key)
         if value:
@@ -43,6 +75,14 @@ def load_scenario(path: str | Path) -> dict:
     for key in ("profile_file", "topology_file"):
         if dep.get(key):
             dep[key] = str((source.parent / dep[key]).resolve())
+
+    profile_source = _profile_source(dep)
+    if not profile_source.is_file():
+        raise ValueError(f"5G profile not found: {profile_source}")
+    profile = yaml.safe_load(profile_source.read_text(encoding="utf-8"))
+    validate_profile(profile)
+    validate_ue_profile_overrides(dep.get("ue_profiles", {}), profile)
+
     data["_source_directory"] = str(source.parent)
     return data
 
