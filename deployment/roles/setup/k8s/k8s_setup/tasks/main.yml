@@ -101,33 +101,97 @@
     creates: /opt/ansible-venv/bin/python
   become: true
 
-- name: Check the Kubernetes Python client
-  ansible.builtin.command: /opt/ansible-venv/bin/python -c "import kubernetes"
+- name: Read the installed Kubernetes Python client version
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/python
+      - -c
+      - "import importlib.metadata; print(importlib.metadata.version('kubernetes'))"
   register: kubernetes_python_client
   changed_when: false
   failed_when: false
 
-- name: Install the Kubernetes Python client
-  ansible.builtin.command: /opt/ansible-venv/bin/pip install --disable-pip-version-check kubernetes
+- name: Install the exact Kubernetes Python client
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/pip
+      - install
+      - --disable-pip-version-check
+      - --no-input
+      - "kubernetes=={{ kubernetes_python_version }}"
   become: true
-  when: kubernetes_python_client.rc != 0
+  when: kubernetes_python_client.stdout | default('') | trim != kubernetes_python_version
+
+- name: Verify the Kubernetes Python client version
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/python
+      - -c
+      - "import importlib.metadata; assert importlib.metadata.version('kubernetes') == '{{ kubernetes_python_version }}'"
+  changed_when: false
 
 - name: Use the shared Kubernetes-enabled Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
 
-- name: Check whether Helm is installed
-  ansible.builtin.command: helm version --short
-  register: helm_version
+- name: Resolve Helm release architecture
+  ansible.builtin.set_fact:
+    synthran_helm_arch: >-
+      {{ 'amd64' if ansible_architecture == 'x86_64'
+         else 'arm64' if ansible_architecture in ['aarch64', 'arm64']
+         else '' }}
+
+- name: Require a checksum-pinned Helm architecture
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_helm_arch in helm_sha256
+    fail_msg: "No pinned Helm checksum for architecture {{ ansible_architecture }}"
+
+- name: Read the installed Helm version
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: synthran_helm_installed
   changed_when: false
   failed_when: false
 
-- name: Install Helm on the Kubernetes host
-  ansible.builtin.shell: |
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+- name: Download the checksum-pinned Helm release
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    dest: "/tmp/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    mode: '0644'
+    checksum: "sha256:{{ helm_sha256[synthran_helm_arch] }}"
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
   become: true
-  when: helm_version.rc != 0
 
-- name: Verify Helm is available
-  ansible.builtin.command: helm version --short
+- name: Extract the checksum-verified Helm release
+  ansible.builtin.unarchive:
+    src: "/tmp/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
+  become: true
+
+- name: Install the exact Helm binary
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ synthran_helm_arch }}/helm"
+    dest: /usr/local/bin/helm
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
+  become: true
+
+- name: Verify the exact Helm version
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: synthran_helm_verified
   changed_when: false
+
+- name: Require the checksum-pinned Helm release
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ helm_version) in synthran_helm_verified.stdout"
+    fail_msg: "Helm does not match the pinned v{{ helm_version }} baseline"
