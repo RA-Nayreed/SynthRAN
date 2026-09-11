@@ -9,3 +9,10 @@ kubernetes_minor: "1.36"
 kubernetes_version: "1.36.4"
 kubernetes_debian_revision: "1.1"
 kubernetes_package_version: "{{ kubernetes_version }}-{{ kubernetes_debian_revision }}"
+kubernetes_python_version: "36.0.3"
+
+# Fixed deployment tooling. Downloads are checksum verified before installation.
+helm_version: "3.22.0"
+helm_sha256:
+  amd64: "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb"
+  arm64: "0236e2ebea9577799375a236c5e0e98d0eded4b9a3260678e51bfbc9dcca97a1"
