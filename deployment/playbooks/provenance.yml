@@ -58,6 +58,16 @@
           yq {{ yq_version }}, kubernetes-python {{ kubernetes_python_version }}).
           Refusing activation/reuse until the host is provisioned by this baseline.
 
+    - name: Read installed Debian package versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort
+      args:
+        executable: /bin/bash
+      register: synthran_prov_packages
+      changed_when: false
+      when: ansible_os_family == 'Debian'
+
     - name: Read UHD userspace version when available
       ansible.builtin.command: uhd_config_info --version
       register: synthran_prov_uhd
@@ -84,6 +94,7 @@
                'helm': synthran_prov_helm.stdout,
                'yq': synthran_prov_yq.stdout,
                'kubernetes_python': synthran_prov_kubernetes_python.stdout,
+               'packages': synthran_prov_packages.stdout_lines | default([]),
                'uhd': (synthran_prov_uhd.stdout | default(''))
              } | to_nice_json }}
 
