@@ -6,10 +6,29 @@ import hashlib
 import json
 import platform
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+
+
+def _sanitize_text(value: str) -> str:
+    text = value.replace(str(ROOT), "<synthran-root>")
+    text = text.replace(str(HOME), "~")
+    text = re.sub(r"(https?://)[^/@\s:]+:[^/@\s]+@", r"\1<redacted>@", text)
+    return text
+
+
+def _sanitize(value):
+    if isinstance(value, dict):
+        return {_sanitize_text(str(key)): _sanitize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    return value
 
 
 def _command(argv: list[str]) -> dict:
@@ -22,8 +41,8 @@ def _command(argv: list[str]) -> dict:
     )
     return {
         "returncode": result.returncode,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
+        "stdout": _sanitize_text(result.stdout.strip()),
+        "stderr": _sanitize_text(result.stderr.strip()),
     }
 
 
@@ -46,7 +65,7 @@ def collect(run_dir: Path) -> Path:
         [str(Path(sys.executable).with_name("ansible-galaxy")), "collection", "list", "--format", "json"]
     )
     try:
-        collections = json.loads(galaxy["stdout"]) if galaxy["returncode"] == 0 else None
+        collections = _sanitize(json.loads(galaxy["stdout"])) if galaxy["returncode"] == 0 else None
     except json.JSONDecodeError:
         collections = None
 
@@ -59,11 +78,13 @@ def collect(run_dir: Path) -> Path:
             "worktree_status_sha256": hashlib.sha256(status_bytes).hexdigest(),
         },
         "controller": {
-            "python": sys.version,
-            "executable": str(Path(sys.executable).name),
-            "platform": platform.platform(),
+            "python": _sanitize_text(sys.version),
+            "executable": Path(sys.executable).name,
+            "platform": _sanitize_text(platform.platform()),
             "machine": platform.machine(),
-            "pip_freeze": sorted(line for line in pip_freeze["stdout"].splitlines() if line),
+            "pip_freeze": sorted(
+                _sanitize_text(line) for line in pip_freeze["stdout"].splitlines() if line
+            ),
             "ansible_version": ansible["stdout"],
             "galaxy_collections": collections,
         },
