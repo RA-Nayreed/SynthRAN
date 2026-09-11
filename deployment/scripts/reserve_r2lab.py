@@ -28,7 +28,11 @@ for lease in b.leases(start, end):
         "start_epoch": iso_to_epoch(lease["t_from"]),
         "end_epoch": iso_to_epoch(lease["t_until"]),
     })
-print(json.dumps(rows, separators=(",", ":")))
+print(json.dumps({
+    "requested_start_epoch": start,
+    "requested_end_epoch": end,
+    "leases": rows,
+}, separators=(",", ":")))
 '''.strip()
 
 BOOK_CODE = r'''
@@ -81,7 +85,7 @@ def _remote(
     )
 
 
-def _query(args: argparse.Namespace) -> list[dict]:
+def _query(args: argparse.Namespace) -> dict:
     result = _remote(
         args,
         ["python3", "-c", QUERY_CODE, args.start, args.end],
@@ -93,8 +97,13 @@ def _query(args: argparse.Namespace) -> list[dict]:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("R2Lab provider returned unreadable lease evidence") from error
-    if not isinstance(value, list):
-        raise RuntimeError("R2Lab provider lease response is not a list")
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("leases"), list)
+        or not isinstance(value.get("requested_start_epoch"), int)
+        or not isinstance(value.get("requested_end_epoch"), int)
+    ):
+        raise RuntimeError("R2Lab provider lease response has an unexpected shape")
     return value
 
 
@@ -125,14 +134,6 @@ def main(argv=None) -> int:
     parser.add_argument("--log", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    try:
-        start_epoch = int(dt.datetime.fromisoformat(args.start).timestamp())
-        end_epoch = int(dt.datetime.fromisoformat(args.end).timestamp())
-    except ValueError as error:
-        parser.error(f"invalid R2Lab interval: {error}")
-    if end_epoch <= start_epoch:
-        parser.error("R2Lab end must be after start")
-
     args.known_hosts = str(Path(args.known_hosts).expanduser().resolve())
     Path(args.known_hosts).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.identity_file:
@@ -147,7 +148,12 @@ def main(argv=None) -> int:
         detail = (access.stderr or access.stdout).strip()
         raise SystemExit(f"R2Lab SSH authentication failed: {detail}")
 
-    leases = _query(args)
+    evidence = _query(args)
+    start_epoch = evidence["requested_start_epoch"]
+    end_epoch = evidence["requested_end_epoch"]
+    if end_epoch <= start_epoch:
+        parser.error("R2Lab end must be after start")
+    leases = evidence["leases"]
     covering = _covering(leases, args.username, start_epoch, end_epoch)
     status = "reused"
     if len(covering) > 1:
@@ -172,7 +178,10 @@ def main(argv=None) -> int:
             detail = (booking.stderr or booking.stdout).strip()
             raise SystemExit(f"R2Lab reservation failed: {detail}")
         status = "booked"
-        leases = _query(args)
+        evidence = _query(args)
+        start_epoch = evidence["requested_start_epoch"]
+        end_epoch = evidence["requested_end_epoch"]
+        leases = evidence["leases"]
         covering = _covering(leases, args.username, start_epoch, end_epoch)
         if len(covering) != 1:
             raise SystemExit(
@@ -185,8 +194,8 @@ def main(argv=None) -> int:
         "requested": {
             "start": args.start,
             "end": args.end,
-            "start_epoch": start_epoch,
-            "end_epoch": end_epoch,
+            "provider_start_epoch": start_epoch,
+            "provider_end_epoch": end_epoch,
         },
         "provider_lease": lease,
         "verified_at": dt.datetime.now(dt.timezone.utc).isoformat(),
