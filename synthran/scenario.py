@@ -9,6 +9,9 @@ SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
 SUPPORTED_PLATFORMS = {"rfsim", "r2lab", "physical"}
 _TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
+_INSECURE_SSH = re.compile(
+    r"(?:StrictHostKeyChecking\s*=\s*no|UserKnownHostsFile\s*=\s*/dev/null)", re.I
+)
 
 
 def _profile_source(deployment: dict) -> Path:
@@ -17,6 +20,46 @@ def _profile_source(deployment: dict) -> Path:
     return Path("deployment/group_vars/all") / (
         "5g_profile_" + str(deployment.get("profile", "default")) + ".yaml"
     )
+
+
+def _validate_ssh_policy(deployment: dict, host_vars: dict) -> None:
+    for host, values in host_vars.items():
+        if values is not None and not isinstance(values, dict):
+            raise ValueError(f"deployment.host_vars.{host} must be a mapping")
+        values = values or {}
+        for key in ("ansible_ssh_common_args", "ansible_ssh_extra_args"):
+            if _INSECURE_SSH.search(str(values.get(key, ""))):
+                raise ValueError(
+                    f"deployment.host_vars.{host}.{key} disables SSH server verification"
+                )
+        for key in ("ansible_host_key_checking", "ansible_ssh_host_key_checking"):
+            if key in values and str(values[key]).strip().lower() in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }:
+                raise ValueError(
+                    f"deployment.host_vars.{host}.{key} cannot disable SSH server verification"
+                )
+
+    ansible_vars = deployment.get("ansible_vars", {})
+    if ansible_vars is not None and not isinstance(ansible_vars, dict):
+        raise ValueError("deployment.ansible_vars must be a mapping when provided")
+    ansible_vars = ansible_vars or {}
+    for key in ("ansible_ssh_common_args", "ansible_ssh_extra_args"):
+        if _INSECURE_SSH.search(str(ansible_vars.get(key, ""))):
+            raise ValueError(f"deployment.ansible_vars.{key} disables SSH server verification")
+    for key in ("ansible_host_key_checking", "ansible_ssh_host_key_checking"):
+        if key in ansible_vars and str(ansible_vars[key]).strip().lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            raise ValueError(
+                f"deployment.ansible_vars.{key} cannot disable SSH server verification"
+            )
 
 
 def load_scenario(path: str | Path) -> dict:
@@ -56,11 +99,11 @@ def load_scenario(path: str | Path) -> dict:
     host_vars = dep.get("host_vars", {})
     if host_vars is not None and not isinstance(host_vars, dict):
         raise ValueError("deployment.host_vars must be a mapping when provided")
+    host_vars = host_vars or {}
+    _validate_ssh_policy(dep, host_vars)
     for name in ues:
-        values = (host_vars or {}).get(name, {})
-        if values is not None and not isinstance(values, dict):
-            raise ValueError(f"deployment.host_vars.{name} must be a mapping")
-        conflicts = sorted(_TRANSPORT_KEYS & set(values or {}))
+        values = host_vars.get(name, {}) or {}
+        conflicts = sorted(_TRANSPORT_KEYS & set(values))
         if conflicts:
             raise ValueError(
                 f"deployment.host_vars.{name} cannot override canonical UE transport fields: "
