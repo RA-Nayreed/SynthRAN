@@ -76,6 +76,35 @@
       .gnbConfig.cell_cfg.slicing = {{ gnb_slices | to_json }}
     ' "{{ values_file }}"
 
+- name: Disable the unauthenticated srsRAN remote-control listener
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -i
+      - '.gnbConfig.remote_control.enabled = false | .gnbConfig.remote_control.bind_addr = "127.0.0.1"'
+      - "{{ values_file }}"
+  changed_when: true
+
+- name: Read back the effective srsRAN remote-control policy
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -o=json
+      - .gnbConfig.remote_control
+      - "{{ values_file }}"
+  register: synthran_srsran_remote_control
+  changed_when: false
+
+- name: Require the gNB remote-control interface to remain disabled
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - not ((synthran_srsran_remote_control.stdout | from_json).enabled | bool)
+      - (synthran_srsran_remote_control.stdout | from_json).bind_addr == '127.0.0.1'
+    fail_msg: Refusing to deploy srsRAN with an enabled or broadly bound remote-control listener.
+
 - name: Ensure values file has node constraints
   blockinfile:
     path: "{{ values_file }}"
