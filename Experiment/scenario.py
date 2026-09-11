@@ -5,25 +5,45 @@ import re
 import yaml
 from pathlib import Path
 
-from synthran.scenario import load_scenario as load_testbed, redacted
+from synthran.scenario import load_scenario as load_testbed
+
+
+REQUIRED_SECTIONS = ("model", "mqtt", "devices")
+OPTIONAL_SECTIONS = ("measurement",)
+
+
+def _apply_experiment_settings(data: dict, settings: dict) -> None:
+    if not isinstance(settings, dict):
+        raise ValueError("experiment settings must be a mapping")
+    for key in REQUIRED_SECTIONS:
+        if key not in settings:
+            raise ValueError(f"experiment settings require mapping: {key}")
+        data[key] = settings[key]
+    # The selected experiment config is authoritative for optional scientific
+    # settings too. Do not retain a stale wrapper-level measurement section.
+    for key in OPTIONAL_SECTIONS:
+        data.pop(key, None)
+        if key in settings:
+            data[key] = settings[key]
 
 
 def load_scenario(path: str | Path) -> dict:
     source = Path(path).resolve()
     raw = yaml.safe_load(source.read_text())
-    data = load_testbed(source) if isinstance(raw, dict) and 'deployment' in raw else raw
+    data = load_testbed(source) if isinstance(raw, dict) and "deployment" in raw else raw
     if not isinstance(data, dict):
-        raise ValueError('experiment scenario must be a mapping')
-    experiment_config = data.get('experiment', {}).get('config')
+        raise ValueError("experiment scenario must be a mapping")
+    experiment_config = data.get("experiment", {}).get("config")
     if experiment_config:
         source = Path(experiment_config)
         settings = yaml.safe_load(source.read_text())
-        for key in ('model', 'mqtt', 'devices'):
-            data[key] = settings[key]
-    for section in ('model', 'mqtt', 'devices'):
+        _apply_experiment_settings(data, settings)
+    for section in REQUIRED_SECTIONS:
         if not isinstance(data.get(section), dict):
-            raise ValueError(f'experiment requires mapping: {section}')
-    ues = data.get('deployment', {}).get('ues', data.get('gateways', []))
+            raise ValueError(f"experiment requires mapping: {section}")
+    if "measurement" in data and not isinstance(data["measurement"], dict):
+        raise ValueError("experiment measurement must be a mapping")
+    ues = data.get("deployment", {}).get("ues", data.get("gateways", []))
     if not data["devices"]:
         raise ValueError("devices must define at least one sensor")
     for name, device in data["devices"].items():

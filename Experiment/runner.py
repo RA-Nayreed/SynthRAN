@@ -20,16 +20,25 @@ from Experiment.scenario import load_scenario, remap_gateways
 from synthran.scenario import load_scenario as load_testbed
 
 
+SCIENTIFIC_SECTIONS = ("model", "mqtt", "devices", "measurement")
+
+
+def scientific_settings(scenario: dict) -> dict:
+    """Freeze every configured scientific section without inventing defaults."""
+    return {
+        key: scenario[key]
+        for key in SCIENTIFIC_SECTIONS
+        if key in scenario
+    }
+
+
 def configure(config: Path, source: Path) -> None:
     original = load_scenario(source)
     selected = load_testbed(config)
     remap_gateways(original, selected["deployment"]["ues"])
     settings = config.with_name("selected-experiment.yml")
     settings.write_text(
-        yaml.safe_dump(
-            {key: original[key] for key in ("model", "mqtt", "devices")},
-            sort_keys=False,
-        )
+        yaml.safe_dump(scientific_settings(original), sort_keys=False)
     )
     selected["experiment"]["config"] = str(settings.resolve())
     selected.pop("_source_directory", None)
@@ -50,10 +59,7 @@ def prepare(
     # Freeze scientific settings and resolve trace paths before any reservation.
     settings = run / "experiment-input.yml"
     settings.write_text(
-        yaml.safe_dump(
-            {key: scenario[key] for key in ("model", "mqtt", "devices")},
-            sort_keys=False,
-        )
+        yaml.safe_dump(scientific_settings(scenario), sort_keys=False)
     )
     testbed = load_testbed(config)
     testbed["experiment"]["config"] = str(settings.resolve())
