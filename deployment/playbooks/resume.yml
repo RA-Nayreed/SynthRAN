@@ -2,3 +2,4 @@
 - import_playbook: validate_resume.yml
 - import_playbook: attest_deployment.yml
 - import_playbook: connect_ues.yml
+- import_playbook: provenance.yml
