@@ -81,6 +81,7 @@ def prepare(
         "workload/__init__.py",
         "workload/replay.py",
         "workload/bundle.py",
+        "workload/cleanup.py",
     ):
         destination = run / "runtime/Experiment" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +102,7 @@ def prepare(
     (run / "experiment-vars.yml").write_text(yaml.safe_dump(variables, sort_keys=False))
 
 
-def run_workload(run: Path) -> None:
+def _run_playbook(run: Path, playbook: Path) -> None:
     environment = dict(os.environ)
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
     environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "Experiment/deployment/roles")
@@ -117,18 +118,41 @@ def run_workload(run: Path) -> None:
         "@" + str(private / "deployment-vars.yml"),
         "-e",
         "@" + str(run / "experiment-vars.yml"),
-        str(ROOT / "Experiment/deployment/playbooks/mqtt.yml"),
+        str(playbook),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
+
+
+def run_workload(run: Path) -> None:
+    _run_playbook(run, ROOT / "Experiment/deployment/playbooks/mqtt.yml")
+
+
+def cleanup(run: Path) -> None:
+    _run_playbook(run, ROOT / "Experiment/deployment/playbooks/cleanup.yml")
 
 
 def finalize(run: Path) -> None:
     from Experiment.results import reconcile
 
     publishers = run / "publisher.jsonl"
+    sources = [
+        source
+        for source in sorted(run.glob("publisher-*.jsonl"))
+        if source != publishers
+    ]
+    partial = run / "partial-software-publishers.jsonl"
+    if partial.is_file():
+        sources.append(partial)
+
+    # Cleanup may recover records already fetched by the successful path.
+    # Deduplicate exact append-only records while preserving source order.
+    seen: set[str] = set()
     with publishers.open("w") as stream:
-        for source in sorted(run.glob("publisher-*.jsonl")):
+        for source in sources:
             for line in source.read_text().splitlines():
+                if not line.strip() or line in seen:
+                    continue
+                seen.add(line)
                 stream.write(line + "\n")
     summary = reconcile(
         run / "model/events.jsonl",
@@ -143,7 +167,9 @@ def finalize(run: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("configure", "prepare", "run", "finalize"))
+    parser.add_argument(
+        "phase", choices=("configure", "prepare", "run", "cleanup", "finalize")
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--prepared-workload", type=Path)
@@ -162,6 +188,8 @@ def main() -> None:
             prepare(args.config, run, args.prepared_workload, args.resume_from)
         elif args.phase == "run":
             run_workload(run)
+        elif args.phase == "cleanup":
+            cleanup(run)
         else:
             finalize(run)
 

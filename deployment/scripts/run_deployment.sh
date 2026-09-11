@@ -50,6 +50,7 @@ WORKLOAD_ONLY=$5
 shift 5
 DEPLOYMENT_COMMAND=("$@")
 CHILD_PID=""
+EXPERIMENT_STARTED=false
 printf '%s\n' "$$" >"$RUN_DIR/controller.pid"
 
 record_exit() {
@@ -72,12 +73,22 @@ record_exit() {
 }
 
 cancel_worker() {
+  local status=$1
+  local post_status=0
   trap '' INT TERM
   if [[ -n "$CHILD_PID" ]]; then
     kill -TERM -- "-$CHILD_PID" 2>/dev/null || true
     wait "$CHILD_PID" 2>/dev/null || true
+    CHILD_PID=""
   fi
-  exit "$1"
+  if [[ "$EXPERIMENT_STARTED" == true ]]; then
+    echo "Experiment cancelled; preserving partial evidence and cleaning up owned runtime state." >&2
+    experiment_cleanup_and_finalize || post_status=$?
+    if (( post_status != 0 )); then
+      echo "Post-cancellation cleanup/finalization was incomplete (status $post_status); cancellation status $status is preserved." >&2
+    fi
+  fi
+  exit "$status"
 }
 trap record_exit EXIT
 trap 'cancel_worker 130' INT
@@ -92,6 +103,32 @@ run_step() {
   wait "$CHILD_PID" || status=$?
   CHILD_PID=""
   return "$status"
+}
+
+experiment_cleanup_and_finalize() {
+  local cleanup_rc=0
+  local finalize_rc=0
+
+  echo "Cleaning up experiment-owned runtime state and collecting partial artifacts."
+  run_step "$SYNTHRAN_PYTHON" -m synthran.experiment cleanup \
+    --config "$CONFIG" --run-dir "$RUN_DIR" \
+    >>"$RUN_DIR/ansible.log" 2>&1 || cleanup_rc=$?
+
+  echo "Finalizing available experiment evidence."
+  run_step "$SYNTHRAN_PYTHON" -m synthran.experiment finalize \
+    --config "$CONFIG" --run-dir "$RUN_DIR" || finalize_rc=$?
+
+  EXPERIMENT_STARTED=false
+  if (( cleanup_rc != 0 )); then
+    echo "Experiment cleanup was incomplete (status $cleanup_rc)." >&2
+  fi
+  if (( finalize_rc != 0 )); then
+    echo "Experiment finalization was incomplete (status $finalize_rc)." >&2
+  fi
+  if (( cleanup_rc != 0 )); then
+    return "$cleanup_rc"
+  fi
+  return "$finalize_rc"
 }
 
 collect_failure_diagnostics() {
@@ -183,7 +220,21 @@ if [[ "$HAS_EXPERIMENT" != true ]]; then
 fi
 
 echo "Running the selected experiment."
+EXPERIMENT_STARTED=true
+EXPERIMENT_RC=0
 run_step "$SYNTHRAN_PYTHON" -m synthran.experiment run --config "$CONFIG" --run-dir "$RUN_DIR" \
-  >>"$RUN_DIR/ansible.log" 2>&1
-run_step "$SYNTHRAN_PYTHON" -m synthran.experiment finalize --config "$CONFIG" --run-dir "$RUN_DIR"
-echo "Experiment run and finalization completed."
+  >>"$RUN_DIR/ansible.log" 2>&1 || EXPERIMENT_RC=$?
+
+POST_EXPERIMENT_RC=0
+experiment_cleanup_and_finalize || POST_EXPERIMENT_RC=$?
+
+if (( EXPERIMENT_RC != 0 )); then
+  echo "Experiment execution failed with status $EXPERIMENT_RC; partial evidence was retained." >&2
+  exit "$EXPERIMENT_RC"
+fi
+if (( POST_EXPERIMENT_RC != 0 )); then
+  echo "Experiment execution completed, but cleanup/finalization failed with status $POST_EXPERIMENT_RC." >&2
+  exit "$POST_EXPERIMENT_RC"
+fi
+
+echo "Experiment run, cleanup, and finalization completed."

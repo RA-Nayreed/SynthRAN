@@ -29,10 +29,15 @@
 - name: Stop any previous receipt collector
   systemd: {name: synthran-collector, state: stopped}
   when: "'synthran-collector.service' in ansible_facts.services"
-- name: Remove the previous subscription-ready marker
-  file: {path: /var/log/synthran/collector-ready.json, state: absent}
-- name: Initialize receipt artifact
-  copy: {content: "", dest: /var/log/synthran/receipts.jsonl, force: true}
+- name: Remove the current run subscription-ready marker
+  file:
+    path: "/var/log/synthran/collector-ready-{{ run_dir | basename }}.json"
+    state: absent
+- name: Initialize the current run receipt artifact
+  copy:
+    content: ""
+    dest: "/var/log/synthran/receipts-{{ run_dir | basename }}.jsonl"
+    force: true
 - name: Start broker before collector
   service: {name: mosquitto, state: started, enabled: true}
 - name: Apply pending broker configuration
@@ -48,7 +53,7 @@
       Requires=mosquitto.service
       [Service]
       Environment=PYTHONPATH=/opt/synthran-source
-      ExecStart=/opt/synthran-venv/bin/python -m Experiment.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts.jsonl --ready-file /var/log/synthran/collector-ready.json
+      ExecStart=/opt/synthran-venv/bin/python -m Experiment.cli workload collect --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --output /var/log/synthran/receipts-{{ run_dir | basename }}.jsonl --ready-file /var/log/synthran/collector-ready-{{ run_dir | basename }}.json
       Restart=on-failure
       [Install]
       WantedBy=multi-user.target
@@ -59,6 +64,12 @@
   changed_when: false
 
 - name: Require a successful receiving subscription before replay
-  wait_for: {path: /var/log/synthran/collector-ready.json, state: present, timeout: 30}
+  wait_for:
+    path: "/var/log/synthran/collector-ready-{{ run_dir | basename }}.json"
+    state: present
+    timeout: 30
 - name: Retain the receiving subscription evidence
-  fetch: {src: /var/log/synthran/collector-ready.json, dest: "{{ run_dir }}/collector-ready.json", flat: true}
+  fetch:
+    src: "/var/log/synthran/collector-ready-{{ run_dir | basename }}.json"
+    dest: "{{ run_dir }}/collector-ready.json"
+    flat: true

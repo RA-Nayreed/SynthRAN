@@ -55,10 +55,18 @@
   tasks:
     - name: Stop receipt collector to flush its artifact
       systemd: {name: synthran-collector, state: stopped}
-    - name: Fetch broker receipts
-      fetch: {src: /var/log/synthran/receipts.jsonl, dest: "{{ run_dir }}/broker.jsonl", flat: true}
-    - name: Collect broker and receipt-collector logs
-      shell: journalctl -u mosquitto -u synthran-collector --no-pager > /var/log/synthran/services.log
+    - name: Fetch broker receipts for this run
+      fetch:
+        src: "/var/log/synthran/receipts-{{ run_dir | basename }}.jsonl"
+        dest: "{{ run_dir }}/broker.jsonl"
+        flat: true
+    - name: Collect bounded broker and receipt-collector logs
+      shell: >-
+        journalctl -u mosquitto -u synthran-collector -n 300 --no-pager
+        > /var/log/synthran/services-{{ run_dir | basename }}.log
       changed_when: false
     - name: Fetch broker and receipt-collector logs
-      fetch: {src: /var/log/synthran/services.log, dest: "{{ run_dir }}/broker-services.log", flat: true}
+      fetch:
+        src: "/var/log/synthran/services-{{ run_dir | basename }}.log"
+        dest: "{{ run_dir }}/broker-services.log"
+        flat: true

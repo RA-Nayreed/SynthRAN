@@ -36,7 +36,9 @@ def invoke(phase: str, config: str | Path, **options) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("prepare", "run", "finalize", "configure"))
+    parser.add_argument(
+        "phase", choices=("prepare", "run", "cleanup", "finalize", "configure")
+    )
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-dir")
     parser.add_argument("--prepared-workload")
