@@ -46,8 +46,14 @@
   command: python3 -m venv /opt/synthran-venv
   args: {creates: /opt/synthran-venv/bin/python}
 
-- name: Install the lightweight MQTT collector dependency
-  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check "paho-mqtt>=2"
+- name: Install the exact MQTT collector dependency
+  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check --no-input "paho-mqtt==2.1.0"
+
+- name: Verify the exact MQTT collector dependency
+  command: >-
+    /opt/synthran-venv/bin/python -c
+    "import importlib.metadata; assert importlib.metadata.version('paho-mqtt') == '2.1.0'"
+  changed_when: false
 
 - name: Verify the collector does not require the numerical model runtime
   command: /opt/synthran-venv/bin/python -c "from Experiment.workload.replay import collect"
