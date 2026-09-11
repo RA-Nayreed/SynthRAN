@@ -37,7 +37,9 @@
     fail_msg: The physical contract must use the selected DNN on the upstream wwan0 transport.
 
 - name: Attach the physical UE during a full deployment
-  when: not (synthran_workload_only | default(false) | bool)
+  when:
+    - synthran_physical_manage_session | default(true) | bool
+    - not (synthran_workload_only | default(false) | bool)
   block:
     - name: Stop the previous MBIM connection with the R2Lab helper
       ansible.builtin.command: env -u DNN1 stop.sh
@@ -126,8 +128,27 @@
   ansible.builtin.set_fact:
     synthran_physical_binding: "{{ (synthran_physical_probe.stdout | from_json).binding }}"
 
-- name: Install the UPF route during a full deployment
+- name: Install the UPF route during a managed full deployment
   ansible.builtin.command: >-
     ip route replace {{ synthran_physical_upf_address }} dev {{ synthran_physical_interface }}
   changed_when: true
-  when: not (synthran_workload_only | default(false) | bool)
+  when:
+    - synthran_physical_manage_session | default(true) | bool
+    - not (synthran_workload_only | default(false) | bool)
+
+- name: Require interface-bound user-plane reachability to the selected UPF
+  ansible.builtin.command:
+    argv:
+      - ping
+      - -I
+      - "{{ synthran_physical_interface }}"
+      - -c
+      - '1'
+      - -W
+      - '3'
+      - "{{ synthran_physical_upf_address }}"
+  register: synthran_physical_upf_probe
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: synthran_physical_upf_probe.rc == 0
