@@ -4,6 +4,7 @@
     /opt/synthran-venv/bin/python -m Experiment.cli workload replay
     --trace /tmp/synthran-events.jsonl --gateway {{ inventory_hostname }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password
     --interface wwan0
     --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
     --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
@@ -18,6 +19,7 @@
     /opt/synthran-venv/bin/python -m Experiment.cli workload replay
     --trace /tmp/synthran-events.jsonl --gateway {{ inventory_hostname }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password
     --interface {{ synthran_physical_interface }}
     --bind-address {{ synthran_physical_source_address }}
     --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
