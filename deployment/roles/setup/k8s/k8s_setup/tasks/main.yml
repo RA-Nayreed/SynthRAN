@@ -60,11 +60,11 @@
 
 - name: Read installed Kubernetes component versions
   ansible.builtin.command:
-    argv: ["{{ item.command }}", "{{ item.argument }}"]
+    argv: "{{ item.argv }}"
   loop:
-    - {name: kubeadm, command: kubeadm, argument: version}
-    - {name: kubelet, command: kubelet, argument: --version}
-    - {name: kubectl, command: kubectl, argument: version}
+    - {name: kubeadm, argv: [kubeadm, version, -o, short]}
+    - {name: kubelet, argv: [kubelet, --version]}
+    - {name: kubectl, argv: [kubectl, version, --client=true]}
   loop_control:
     label: "{{ item.name }}"
   register: synthran_kubernetes_versions
