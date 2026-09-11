@@ -19,6 +19,26 @@
   roles:
     - setup/k8s/cluster_create
     - setup/k8s/remove_cp_taint
+  tasks:
+    - name: Move the kubeadm join command into the private run directory
+      ansible.builtin.command:
+        argv:
+          - install
+          - -m
+          - '0600'
+          - "{{ playbook_dir }}/.kubeadm_join_command.txt"
+          - "{{ synthran_private_dir }}/kubeadm_join_command.txt"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Remove the staged kubeadm join command
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/.kubeadm_join_command.txt"
+        state: absent
+      delegate_to: localhost
+      become: false
+      no_log: true
 
 - name: Join the RAN host to Kubernetes
   hosts: ran_node

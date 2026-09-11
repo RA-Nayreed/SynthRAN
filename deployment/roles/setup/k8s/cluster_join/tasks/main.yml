@@ -122,23 +122,34 @@
   ansible.builtin.file:
     path: /root/.kube
     state: directory
-    mode: '0755'
+    mode: '0700'
   become: true
 
-- name: Fetch admin.conf from master to control machine
+- name: Fetch admin.conf from master into the private run directory
   ansible.builtin.fetch:
     src: /etc/kubernetes/admin.conf
-    dest: ./admin.conf
-    flat: yes
+    dest: "{{ synthran_private_dir }}/admin.conf"
+    flat: true
   delegate_to: "{{ groups['core_node'][0] }}"
   when: inventory_hostname == groups['k8s_workers'][0]
+  no_log: true
+
+- name: Restrict fetched administrator configuration
+  ansible.builtin.file:
+    path: "{{ synthran_private_dir }}/admin.conf"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+  when: inventory_hostname == groups['k8s_workers'][0]
+  no_log: true
 
 - name: Copy admin.conf to worker node
   ansible.builtin.copy:
-    src: ./admin.conf
+    src: "{{ synthran_private_dir }}/admin.conf"
     dest: /root/.kube/config
-    mode: '0644'
+    mode: '0600'
   become: true
+  no_log: true
 
 - name: Ensure master CORE node is resolvable
   ansible.builtin.lineinfile:
@@ -198,9 +209,10 @@
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
 
-- name: Read join command
+- name: Read join command from the private run directory
   ansible.builtin.set_fact:
-    kubeadm_join_command: "{{ lookup('file', '.kubeadm_join_command.txt') }}"
+    kubeadm_join_command: "{{ lookup('file', synthran_private_dir ~ '/kubeadm_join_command.txt') }}"
+  no_log: true
 
 - name: Report the Kubernetes join target
   ansible.builtin.debug:
@@ -210,6 +222,7 @@
 - name: Join node to the cluster
   ansible.builtin.command: "{{ kubeadm_join_command }} --ignore-preflight-errors=SystemVerification --v=5"
   become: true
+  no_log: true
 
 # === VERIFY COREDNS READINESS (run on control-plane only) =====================
 - name: Wait until CoreDNS pods are Ready
@@ -264,3 +277,18 @@
     kubectl delete pod dns-test-{{ groups['ran_node'][0] }} --ignore-not-found
   changed_when: false
 
+- name: Remove fetched administrator configuration after the join
+  ansible.builtin.file:
+    path: "{{ synthran_private_dir }}/admin.conf"
+    state: absent
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Remove consumed kubeadm join command after the join
+  ansible.builtin.file:
+    path: "{{ synthran_private_dir }}/kubeadm_join_command.txt"
+    state: absent
+  delegate_to: localhost
+  become: false
+  no_log: true
