@@ -29,6 +29,10 @@ def _normalize_docker_hub_repository(repository: str) -> tuple[str, str]:
         if value.startswith(prefix):
             value = value[len(prefix) :]
             break
+    if "/" in value:
+        first = value.split("/", 1)[0]
+        if "." in first or ":" in first or first == "localhost":
+            raise ValueError(f"unsupported Docker Hub repository: {repository!r}")
     if not _REPOSITORY_RE.fullmatch(value):
         raise ValueError(f"unsupported Docker Hub repository: {repository!r}")
     canonical = value if "/" in value else f"library/{value}"
