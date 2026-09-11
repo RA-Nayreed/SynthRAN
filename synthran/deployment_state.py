@@ -174,6 +174,56 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     return True
 
 
+def _parse_observed_at(value: object) -> dt.datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("live deployment evidence has no observation timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("live deployment evidence has an invalid observation timestamp") from error
+    if parsed.tzinfo is None:
+        raise ValueError("live deployment evidence observation timestamp has no timezone")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def validate_live_evidence(
+    candidate_path: str | Path,
+    evidence_path: str | Path,
+    *,
+    max_age_seconds: int | None = 300,
+) -> dict:
+    """Require fresh observed readiness evidence for physical/R2Lab state changes."""
+    candidate = read_json(candidate_path)
+    evidence = read_json(evidence_path)
+    deployment = candidate.get("deployment", {})
+
+    if candidate.get("deployment_hash") != content_hash(deployment):
+        raise ValueError("candidate deployment identity failed its integrity check")
+    if evidence.get("deployment_hash") != candidate.get("deployment_hash"):
+        raise ValueError("live deployment evidence does not match the requested deployment")
+    if evidence.get("cluster_identity_verified") is not True:
+        raise ValueError("live deployment evidence does not prove the cluster identity")
+
+    if deployment.get("platform") in {"physical", "r2lab"}:
+        bindings = evidence.get("bindings")
+        if not isinstance(bindings, list) or not bindings_match_deployment(deployment, bindings):
+            raise ValueError(
+                "live deployment evidence does not contain complete matching UE bindings"
+            )
+        observed_at = _parse_observed_at(evidence.get("observed_at"))
+        if max_age_seconds is not None:
+            if max_age_seconds < 0:
+                raise ValueError("maximum evidence age cannot be negative")
+            age = (dt.datetime.now(dt.timezone.utc) - observed_at).total_seconds()
+            if age < -30:
+                raise ValueError("live deployment evidence is timestamped in the future")
+            if age > max_age_seconds:
+                raise ValueError(
+                    f"live deployment evidence is stale ({age:.0f}s old; maximum {max_age_seconds}s)"
+                )
+    return evidence
+
+
 def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
     deployment = scenario["deployment"]
     platform = str(deployment["platform"]).lower()
@@ -308,17 +358,8 @@ def verify_resume(
         raise ValueError("--resume refused: the failed run has no successful cluster attestation")
     if evidence.get("deployment_hash") != source.get("deployment_hash"):
         raise ValueError("--resume refused: the failed run's attestation evidence does not match its identity")
+    validate_live_evidence(source_path, evidence_path, max_age_seconds=None)
     source_deployment = source.get("deployment", {})
-    source_bindings = evidence.get("bindings", [])
-    if source_bindings:
-        evidence_matches = bindings_match_deployment(
-            source_deployment, source_bindings
-        )
-        if not evidence_matches:
-            raise ValueError(
-                "--resume refused: the failed run's recorded UE bindings do not "
-                "match its deployment contract"
-            )
     if candidate.get("scenario_hash") != source.get("scenario_hash"):
         raise ValueError("--resume refused: the resolved scenario has changed")
     if candidate.get("deployment") == source_deployment:
@@ -337,7 +378,12 @@ def invalidate(active_path: str | Path, run_id: str) -> None:
     _atomic_text(Path(active_path), json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def activate(candidate_path: str | Path, active_path: str | Path) -> dict:
+def activate(
+    candidate_path: str | Path,
+    active_path: str | Path,
+    evidence_path: str | Path,
+) -> dict:
+    validate_live_evidence(candidate_path, evidence_path)
     value = read_json(candidate_path)
     if value.get("schema_version") != SCHEMA_VERSION or value.get("deployment_hash") != content_hash(value.get("deployment", {})):
         raise ValueError("candidate deployment identity failed its integrity check")
@@ -349,10 +395,15 @@ def activate(candidate_path: str | Path, active_path: str | Path) -> dict:
     return value
 
 
-def record_reuse(candidate_path: str | Path, active_path: str | Path) -> dict:
+def record_reuse(
+    candidate_path: str | Path,
+    active_path: str | Path,
+    evidence_path: str | Path,
+) -> dict:
     candidate = read_json(candidate_path)
     active = read_json(active_path)
     assert_reusable(candidate, active)
+    validate_live_evidence(candidate_path, evidence_path)
     candidate["status"] = "reused"
     candidate["live_identity_hash"] = active["deployment_hash"]
     candidate["attested_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -379,9 +430,11 @@ def _parser() -> argparse.ArgumentParser:
     active = commands.add_parser("activate")
     active.add_argument("--candidate", required=True)
     active.add_argument("--active", required=True)
+    active.add_argument("--evidence", required=True)
     reused = commands.add_parser("record-reuse")
     reused.add_argument("--candidate", required=True)
     reused.add_argument("--active", required=True)
+    reused.add_argument("--evidence", required=True)
     return parser
 
 
@@ -397,9 +450,9 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "invalidate":
             invalidate(args.active, args.run_id)
         elif args.command == "activate":
-            activate(args.candidate, args.active)
+            activate(args.candidate, args.active, args.evidence)
         else:
-            record_reuse(args.candidate, args.active)
+            record_reuse(args.candidate, args.active, args.evidence)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
