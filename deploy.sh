@@ -180,47 +180,28 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
   R2LAB_HOST=${R2LAB_SETTINGS[3]}
   R2LAB_USERNAME=${R2LAB_SETTINGS[4]}
   R2LAB_IDENTITY_FILE=${R2LAB_SETTINGS[5]}
-  [[ -n "${R2LAB_USERNAME:-}" && -n "${R2LAB_EMAIL:-}" && -n "${R2LAB_PASSWORD:-}" ]] || {
-    echo "R2Lab username, email, and password must all be set in .r2lab_config" >&2
+  [[ -n "${R2LAB_USERNAME:-}" ]] || {
+    echo "R2Lab username must be set in .r2lab_config or the scenario" >&2
     exit 1
   }
   R2LAB_CLOCK=$(date +'%H%M')
   R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
   R2LAB_START_EPOCH=$(date -d "$R2LAB_START" +%s)
   R2LAB_END=$(date -d "@$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))" +'%Y-%m-%dT%H:%M')
-  printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
-    "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
-  echo "Resolving R2Lab access for $R2LAB_START to $R2LAB_END"
-  # The working pre-refactor reservation deliberately bypassed personal SSH
-  # Host/ProxyJump rules for Faraday. Keep configurable non-default gateways
-  # available, but use the proven direct path for the standard R2Lab gateway.
-  if [[ "$R2LAB_HOST" == faraday.inria.fr ]]; then
-    R2LAB_SSH=(ssh -F /dev/null -o "UserKnownHostsFile=$R2LAB_FARADAY_KNOWN_HOSTS" -o StrictHostKeyChecking=accept-new)
-  else
-    R2LAB_SSH=(ssh)
-  fi
-  if [[ -n "${R2LAB_IDENTITY_FILE:-}" ]]; then
-    R2LAB_SSH+=(-i "$R2LAB_IDENTITY_FILE" -o IdentitiesOnly=yes)
-    echo "Using R2Lab SSH identity: $R2LAB_IDENTITY_FILE"
-  fi
-  echo "Checking SSH access to $R2LAB_USERNAME@$R2LAB_HOST"
-  if ! "${R2LAB_SSH[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
-    "$R2LAB_USERNAME@$R2LAB_HOST" true; then
-    echo "R2Lab SSH authentication failed; no reservation was attempted" >&2
+  echo "Resolving provider-backed R2Lab coverage for $R2LAB_START to $R2LAB_END"
+  if ! printf '%s\n' "${R2LAB_PASSWORD:-}" | \
+    "$SYNTHRAN_PYTHON" deployment/scripts/reserve_r2lab.py \
+      --host "$R2LAB_HOST" \
+      --username "$R2LAB_USERNAME" \
+      --identity-file "$R2LAB_IDENTITY_FILE" \
+      --known-hosts "$R2LAB_FARADAY_KNOWN_HOSTS" \
+      --email "${R2LAB_EMAIL:-}" \
+      --start "$R2LAB_START" \
+      --end "$R2LAB_END" \
+      --output "$RUN_DIR/r2lab-lease.json" \
+      --log "$RUN_DIR/r2lab-reservation.log"; then
+    echo "R2Lab reservation/coverage verification failed; the separate SOP allocation was left intact" >&2
     exit 1
-  fi
-  R2LAB_LEASE_CHECK=$("${R2LAB_SSH[@]}" "$R2LAB_USERNAME@$R2LAB_HOST" \
-    "rhubarbe leases --check" 2>&1) && R2LAB_LEASE_ACTIVE=true || R2LAB_LEASE_ACTIVE=false
-  if $R2LAB_LEASE_ACTIVE; then
-    printf '%s\n' "$R2LAB_LEASE_CHECK" | tee "$RUN_DIR/r2lab-reservation.log"
-    echo "Reusing the active R2Lab lease owned by $R2LAB_USERNAME"
-  else
-    echo "No active owned R2Lab lease was found; requesting a new lease"
-    if ! "${R2LAB_SSH[@]}" "$R2LAB_USERNAME@$R2LAB_HOST" "$R2LAB_REMOTE_COMMAND" \
-    2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
-      echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
-      exit 1
-    fi
   fi
 fi
 
