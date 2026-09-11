@@ -16,6 +16,10 @@ helm_version: "3.22.0"
 helm_sha256:
   amd64: "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb"
   arm64: "0236e2ebea9577799375a236c5e0e98d0eded4b9a3260678e51bfbc9dcca97a1"
+yq_version: "v4.45.1"
+yq_sha256:
+  amd64: "654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049"
+  arm64: "ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d"
 
 # Network bootstrap artifacts are fixed independently of the mutable upstream
 # Helm repository indexes. The CNI archive checksum is published with v1.9.1.
