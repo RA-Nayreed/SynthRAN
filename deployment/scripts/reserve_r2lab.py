@@ -76,13 +76,16 @@ def _remote(
 ) -> subprocess.CompletedProcess[str]:
     target = f"{args.username}@{args.host}"
     command = _ssh_base(args) + [target, shlex.join(argv)]
-    return subprocess.run(
-        command,
-        input=stdin,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    options = {
+        "text": True,
+        "capture_output": True,
+        "check": False,
+    }
+    if stdin is None:
+        options["stdin"] = subprocess.DEVNULL
+    else:
+        options["input"] = stdin
+    return subprocess.run(command, **options)
 
 
 def _query(args: argparse.Namespace) -> dict:
