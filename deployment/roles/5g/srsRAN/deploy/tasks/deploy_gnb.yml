@@ -12,19 +12,18 @@
     - rru in ['benetel1', 'benetel2']
     - venv_python.stat.exists | default(false)
 
-- name: Check if helm exists
-  ansible.builtin.command: helm version --short
+- name: Require the centrally verified Helm runtime
+  ansible.builtin.command:
+    argv: [helm, version, --short]
   register: helm_check
   changed_when: false
-  failed_when: false
 
-- name: Install Helm if missing
-  ansible.builtin.shell: |
-    set -e
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  when: helm_check.rc != 0
-  args:
-    executable: /bin/bash
+- name: Refuse an unexpected Helm runtime
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ helm_version) in helm_check.stdout"
+    fail_msg: "srsRAN requires the checksum-pinned Helm v{{ helm_version }} runtime"
 
 - name: Load common variables
   include_vars:
@@ -70,6 +69,7 @@
 - name: Configure SR-IOV for Benetel with DPDK
   when: rru in ['benetel1', 'benetel2']
   block:
+
     - name: Load ran_node vars
       include_vars:
         file: "{{ playbook_dir }}/../group_vars/ran_node.yml"
@@ -101,7 +101,7 @@
       ansible.builtin.lineinfile:
         path: "{{ values_file }}"
         regexp: '^\s*pciAddress:'
-        line: '  pciAddress: "0000:{{ vf_detect.stdout }}"'
+        line: '    pciAddress: "0000:{{ vf_detect.stdout }}"'
 
     - name: "Update srsRAN config: eal_args with detected VF"
       ansible.builtin.lineinfile:
@@ -214,4 +214,3 @@
   when:
     - rru in ['benetel1', 'benetel2']
     - venv_python.stat.exists | default(false)
-
