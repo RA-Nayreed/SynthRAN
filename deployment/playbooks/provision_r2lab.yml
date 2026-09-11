@@ -21,3 +21,47 @@
   roles:
     - role: r2lab/ue/setup
       when: platform == 'r2lab'
+
+  tasks:
+    - name: Load active 5G profile for R2Lab UE slice configuration
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+      when: platform == 'r2lab'
+
+    - name: Apply the configured DNN and S-NSSAI to each reachable QHAT
+      vars:
+        ue_profile: "{{ ues[item] }}"
+        ue_slice: "{{ slices | selectattr('name', 'equalto', ue_profile.slice) | first }}"
+        qhat_nssai: >-
+          {{ ue_slice.sst if (ue_slice.sd | string | upper) == 'EMPTY'
+             else ue_slice.sst ~ '.' ~ ue_slice.sd }}
+      ansible.builtin.shell: >-
+        ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null root@{{ item }}
+        'qhat-init --mode={{ hostvars[item].mode | default("default") }}
+        --dnn={{ ue_slice.dnn }} --nssai={{ qhat_nssai }}'
+      args:
+        executable: /bin/bash
+      loop: "{{ reachable_ues | default([]) | select('match', '^qhat') | list }}"
+      loop_control:
+        label: "{{ item }} -> {{ ue_profile.slice }} / {{ ue_slice.dnn }} / {{ qhat_nssai }}"
+      register: synthran_qhat_profile_init
+      changed_when: true
+      when:
+        - platform == 'r2lab'
+        - item in ues
+
+    - name: Fail when a requested QHAT could not be initialized with its configured slice
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - item.rc == 0
+        fail_msg: >-
+          R2Lab QHAT {{ item.item }} could not be initialized with the DNN/S-NSSAI
+          selected by the active 5G profile.
+      loop: "{{ synthran_qhat_profile_init.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('unknown') }}"
+      when:
+        - platform == 'r2lab'
+        - item.item is defined
