@@ -6,7 +6,8 @@ from pathlib import Path
 import yaml
 from Experiment.ambient_iot import AmbientIoTRunner
 from Experiment.ambient_iot.evidence import write as write_ambient_iot_evidence
-from Experiment.scenario import load_scenario, redacted
+from Experiment.scenario import load_scenario
+from synthran.scenario import redacted
 from .bundle import digest, write_manifest
 
 
