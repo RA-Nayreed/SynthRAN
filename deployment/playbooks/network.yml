@@ -16,6 +16,34 @@
   hosts: core_node
   become: true
   any_errors_fatal: true
+  module_defaults:
+    kubernetes.core.helm:
+      chart_version: "{{ flannel_chart_version }}"
+  pre_tasks:
+    - name: Resolve the supported CNI plugin architecture
+      ansible.builtin.set_fact:
+        synthran_cni_arch: >-
+          {{ 'amd64' if ansible_architecture in ['x86_64', 'amd64'] else
+             'arm64' if ansible_architecture in ['aarch64', 'arm64'] else '' }}
+
+    - name: Require a pinned CNI artifact for this architecture
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_cni_arch | length > 0
+          - synthran_cni_arch in cni_plugins_sha256
+        fail_msg: >-
+          No checksum-pinned CNI plugin bundle is defined for architecture
+          {{ ansible_architecture }}.
+
+    - name: Stage the checksum-verified CNI plugin bundle
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-{{ synthran_cni_arch }}-v{{ cni_plugins_version }}.tgz
+        dest: /tmp/cni-plugins.tgz
+        mode: '0600'
+        force: true
+        checksum: "sha256:{{ cni_plugins_sha256[synthran_cni_arch] }}"
   roles:
     - setup/k8s/cluster_create
     - setup/k8s/remove_cp_taint
