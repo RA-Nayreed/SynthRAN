@@ -55,7 +55,9 @@
 - name: Freeze the resolved srsRAN image reference
   ansible.builtin.set_fact:
     synthran_srsran_image_reference: "{{ synthran_srsran_image_resolution.stdout | trim }}"
-  when: synthran_srsran_image_resolution is not skipped | default(false)
+  when:
+    - synthran_srsran_image_resolution is defined
+    - not (synthran_srsran_image_resolution.skipped | default(false) | bool)
 
 - name: Require an immutable srsRAN image digest
   ansible.builtin.assert:
