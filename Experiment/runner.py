@@ -74,6 +74,7 @@ def prepare(
         "cli.py",
         "workload/__init__.py",
         "workload/replay.py",
+        "workload/bundle.py",
     ):
         destination = run / "runtime/Experiment" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
