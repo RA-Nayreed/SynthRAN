@@ -4,50 +4,50 @@
 # =========================
 # PLMN
 # =========================
-MCC="{{ plmn['mcc'] }}"
-MNC="{{ plmn['mnc'] }}"
-TAC="{{ plmn['tac'] }}"
+MCC={{ plmn['mcc'] | quote }}
+MNC={{ plmn['mnc'] | quote }}
+TAC={{ plmn['tac'] | quote }}
 
 # =========================
 # DNNs
 # =========================
 {% for dnn in dnns %}
-DNN{{ loop.index0 }}="{{ dnn.name }}"
-DNN{{ loop.index0 }}_PDU_TYPE="{{ dnn.pdu_type }}"
+DNN{{ loop.index0 }}={{ dnn.name | quote }}
+DNN{{ loop.index0 }}_PDU_TYPE={{ dnn.pdu_type | quote }}
 {% endfor %}
 
 # =========================
 # Slices
 # =========================
 {% for slice in slices %}
-SLICE{{ loop.index }}_SST="{{ slice['sst'] }}"
-SLICE{{ loop.index }}_SD="{{ slice['sd'] }}"
-SLICE{{ loop.index }}_5QI="{{ slice['qos']['five_qi'] }}"
-SLICE{{ loop.index }}_ARP_PRIORITY_LEVEL="{{ slice['qos']['arp']['priority_level'] }}"
-SLICE{{ loop.index }}_ARP_PREEMPT_CAP="{{ slice['qos']['arp']['preempt_cap'] }}"
-SLICE{{ loop.index }}_ARP_PREEMPT_VULN="{{ slice['qos']['arp']['preempt_vuln'] }}"
-SLICE{{ loop.index }}_PRIORITY_LEVEL="{{ slice['qos']['priority_level'] }}"
-SLICE{{ loop.index }}_UPLINK="{{ slice['bandwidth']['uplink'] }}"
-SLICE{{ loop.index }}_DOWNLINK="{{ slice['bandwidth']['downlink'] }}"
-SLICE{{ loop.index }}_IP_PREFIX="{{ slice['ip_prefix'] }}"
+SLICE{{ loop.index }}_SST={{ slice['sst'] | quote }}
+SLICE{{ loop.index }}_SD={{ slice['sd'] | quote }}
+SLICE{{ loop.index }}_5QI={{ slice['qos']['five_qi'] | quote }}
+SLICE{{ loop.index }}_ARP_PRIORITY_LEVEL={{ slice['qos']['arp']['priority_level'] | quote }}
+SLICE{{ loop.index }}_ARP_PREEMPT_CAP={{ slice['qos']['arp']['preempt_cap'] | quote }}
+SLICE{{ loop.index }}_ARP_PREEMPT_VULN={{ slice['qos']['arp']['preempt_vuln'] | quote }}
+SLICE{{ loop.index }}_PRIORITY_LEVEL={{ slice['qos']['priority_level'] | quote }}
+SLICE{{ loop.index }}_UPLINK={{ slice['bandwidth']['uplink'] | quote }}
+SLICE{{ loop.index }}_DOWNLINK={{ slice['bandwidth']['downlink'] | quote }}
+SLICE{{ loop.index }}_IP_PREFIX={{ slice['ip_prefix'] | quote }}
 
 {% endfor %}
 
 # =========================
 # Security
 # =========================
-FULL_KEY="{{ security['full_key'] }}"
-OPC="{{ security['opc'] }}"
+FULL_KEY={{ security['full_key'] | quote }}
+OPC={{ security['opc'] | quote }}
 
 # =========================
 # UE → slice mapping
 # =========================
 UE_SLICE_MAP=(
 {% for ue_name, ue in ues.items() %}
-  "{{
+  '{{
     ue['imsi_suffix']
   }}:{{
     (slices | selectattr('name', 'equalto', ue['slice']) | list | first)['name'] | regex_replace('slice','')
-  }}"
+  }}'
 {% endfor %}
 )
