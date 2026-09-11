@@ -1,52 +1,41 @@
-# Experiment scenario catalog
+# Testbed scenario catalog
 
-These scenarios exercise distinct parts of the supported deployment matrix. Node
-availability and RF authorization must be checked immediately before running;
-the files describe requested resources, not a standing reservation.
+These files describe requested infrastructure and select separate configurations
+under `Experiment/configs/`. They are editable examples, not standing
+reservations or evidence that every combination has passed a physical run.
 
-| Scenario | 5G system | UE path | Additional R2Lab resources |
-|---|---|---|---|
-| `rfsim-sidecars-3ue.yml` | Open5GS + srsRAN RF simulator | Three software UE tunnels, each with an injected publisher sidecar | None |
-| `r2lab-n300-qhats-sdr.yml` | Open5GS + srsRAN + N300 | Three physical QHAT UEs on `wwan0` | FIT sensor and edge nodes; `pc01` USRP measurement node |
-| `r2lab-n320-mixed-ues-dual-sdr.yml` | Free5GC + srsRAN + N320 | QMI QHATs plus MBIM QFITs | Two sensors, one edge node, and both documented miniPC USRPs |
-| `r2lab-benetel1-oai.yml` | Open5GS + OAI RAN + Benetel 1 | Two physical QHAT UEs | Sensor, edge, and `pc02` RF measurement |
-| `r2lab-benetel2-sliced.yml` | Open5GS + srsRAN + Benetel 2 | Two physical UEs on different `scenario1` slices | Two sensors, edge, and `pc01` RF measurement |
+| Scenario | Core / RAN / radio | UE selection |
+|---|---|---|
+| `reference.yml` | Open5GS / srsRAN / RFSIM | Two software UEs |
+| `rfsim-sidecars-3ue.yml` | Open5GS / srsRAN / RFSIM | Three software UEs |
+| `r2lab-reference-oai-srsran.yml` | OAI / srsRAN / N320 | Two QHATs |
+| `r2lab-n300-qhats-sdr.yml` | Open5GS / srsRAN / N300 | Three QHATs |
+| `r2lab-n320-mixed-ues-dual-sdr.yml` | Free5GC / srsRAN / N320 | QHAT and QFIT modems |
+| `r2lab-benetel1-oai.yml` | Open5GS / OAI / Benetel 1 | Two QHATs |
+| `r2lab-benetel2-sliced.yml` | Open5GS / srsRAN / Benetel 2 | Physical UEs on separate slices |
 
-Run a selected scenario non-interactively:
-
-```sh
-./deploy.sh --config scenarios/r2lab-n300-qhats-sdr.yml --no-input
-```
-
-Load a scenario and adjust only selected deployment values interactively:
+Historical `sdr` filenames are retained for existing commands. They do not
+provision auxiliary sensor, edge or SDR measurement hosts. A campaign requiring
+additional measurements must implement them under `Experiment/`.
 
 ```sh
-./deploy.sh --config scenarios/r2lab-n300-qhats-sdr.yml --interactive
+./deploy.sh --config scenarios/r2lab-reference-oai-srsran.yml --dry-run
+./deploy.sh --config scenarios/r2lab-reference-oai-srsran.yml --interactive
+./deploy.sh --config scenarios/r2lab-reference-oai-srsran.yml --testbed-only
 ```
 
-Each prompt defaults to the loaded file. Press Enter to keep its value. The
-source scenario is never overwritten; the resolved copy is stored beneath the
-new run directory.
+Interactive prompts edit the loaded defaults; they do not discover live resource
+availability. Confirm the requested POS/R2Lab reservation and hardware access
+before a real run. `--no-reservation` skips booking, while normal infrastructure
+setup still runs. Use `--workload-only` to reuse a healthy matching deployment.
 
-Auxiliary sensor, edge, and RF-measurement hosts are optional and are not needed
-for the core RAN-to-UE transport experiment. The interactive launcher displays
-all `fit01`-`fit37` and `pc01`-`pc04` choices and accepts either host names or
-menu numbers/ranges. Enter `none` to remove a role inherited from an example.
-It also displays the complete SynthRAN-supported R2Lab radio and UE matrix with
-modem and interface details, followed by official R2Lab resources that are
-visible but do not yet have a SynthRAN transport adapter.
+Change testbed hosts, profiles, UEs and connection details under `deployment`.
+Change modeled sensor populations, gateway mapping, traffic and scientific
+settings in the selected `Experiment/configs/` file. Paths in `experiment` are
+relative to the testbed scenario. Node names and radio choices in these examples
+are configuration data, not enforced choices.
 
-Set `R2LAB_USERNAME`, or create `.r2lab_config` through the interactive launcher,
-before using an R2Lab scenario. Remove `--no-input` when you want the launcher to
-select currently available resources. Use `--no-reservation` only when every SOP
-and R2Lab resource in the file is already reserved, imaged, and reachable.
-
-Software UE sidecars apply only to RF-simulated UEs. Physical R2Lab QHAT/QFIT
-workloads run directly on their hosts and bind MQTT to `wwan0`. Extra sensor,
-edge, and RF-measurement nodes receive the frozen Ambient-IoT event trace and collect
-host/SDR evidence, but they do not automatically gain a routed 5G user-plane.
-
-`pc01` and `pc02` are used for RF measurement because the deployment roles have
-explicit USRP power and validation support for those miniPCs. A FIT node should
-only be assigned to `rf_measurement` after confirming that its current R2Lab
-hardware entry includes an SDR.
+R2Lab delegates modem and radio bring-up to the pinned upstream roles. Benetel
+requires preinstalled Faraday preparation scripts and the appropriate NIC/VLAN
+and radio setup; local rendering does not qualify that hardware path. See the
+[root README](../README.md) for SSH, host tuning and reservation pool options.

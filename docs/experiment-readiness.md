@@ -24,8 +24,10 @@ guarantees publication.
 
 ## What this change qualifies
 
-The implementation repairs the model-to-MQTT evidence path. It does not deploy
-the N320, implement the proposed gateway policies, or prove slice enforcement.
+The experiment implements the model-to-MQTT evidence path. The testbed invokes
+pinned upstream N320 bring-up; local validation does not demonstrate radio
+synchronization, attachment or slice enforcement. Proposed gateway mitigation
+policies remain campaign work.
 
 | Layer | Implemented contract |
 | --- | --- |
@@ -67,11 +69,10 @@ warning when supplied. Actual packet overlap controls decoding; periodic
 opportunities and command slots determine listening time. Remove those fields
 from treatment sweeps.
 
-Example sensor mapping within an otherwise complete scenario:
+Example sensor mapping in `Experiment/configs/<name>.yml`, with both gateways
+selected under `deployment.ues` in the testbed scenario:
 
 ```yaml
-deployment:
-  ues: [uesim01, uesim02]
 devices:
   sensor-a: {gateway: uesim01, sensing_interval_ms: 1000, sensing_phase_ms: 125}
   sensor-b: {gateway: uesim01, sensing_interval_ms: 1000, sensing_phase_ms: 625}
@@ -123,25 +124,22 @@ load currents before making a hardware energy claim. `always_powered` holds
 the capacitor rail fixed and reports the ideal external supply energy
 separately; it is not a measured battery model.
 
-## Local acceptance
+## Local validation
+
+No test files are retained. Local checks can render the selected testbed and
+prepare an immutable workload without booking resources:
 
 ```sh
-python -m pip install -e '.[test]'
-python -m unittest discover -s tests -v
-python -m compileall -q synthran
+python -m pip install -e '.[experiment,deployment]'
+python -m compileall -q synthran Experiment
 bash -n deploy.sh
+./deploy.sh --config scenarios/reference.yml --testbed-only --dry-run
+./deploy.sh --config scenarios/reference.yml --dry-run
 ```
 
-The MQTT integration tests start an ephemeral broker bound only to localhost.
-They test real QoS 0 and QoS 1 bursts from two sensors on one gateway, SUBACK
-readiness, byte identity, malformed-message handling and clean collector
-shutdown. Without the `test` dependency these two integration tests are skipped;
-a skipped test is not acceptance. No test contacts or provisions the testbed.
-
-Tests cover hand-solvable capacitor energy balance, sensing period and fractional
-phase, brownout rejection, SIC residual factors including zero and one, slot
-boundaries, timestamp-aware harvesting, immutable interventions, corruption
-rejection, separate ACK records and hand-integrated freshness examples.
+Ansible syntax checks and deterministic model/bundle checks establish local
+consistency. They do not prove live MQTT delivery or physical 5G acceptance.
+The PR records the temporary validation performed for this refactor.
 
 ## Freeze and intervene on one source workload
 
@@ -172,11 +170,6 @@ Validate the prepared-workload deployment path without changing infrastructure:
 ./deploy.sh --config scenarios/reference.yml --prepared-workload results/permuted/model --dry-run
 ```
 
-At the reviewed main commit `deploy.sh` is tracked with mode `100644`, so the
-direct invocation needs an executable-mode correction by the repository owner.
-The dry-run invocation was blocked by that permission in this review; only
-shell syntax and the underlying import/validation functions were tested.
-
 On an already qualified matching deployment, a separately authorized physical
 or software replay uses `--workload-only --prepared-workload <bundle>` with the
 same explicit scenario. This path imports the prepared bundle rather than
@@ -202,7 +195,8 @@ the future. Releases follow a monotonic schedule. A late start is rejected
 instead of compressing overdue events into an unintended burst. The fixed
 source horizon and drain apply even to a gateway with no sensor events.
 
-Configure the measurement contract in the scenario before confirmation:
+Configure the measurement contract under `model.measurement` in the experiment
+configuration:
 
 ```yaml
 measurement:
@@ -236,10 +230,9 @@ source seeds rather than treating packets as independent replications.
 
 Before booking confirmation runs, demonstrate clean N320 attach and routing on
 the chosen fixed core/RAN pair, including the selected MBIM/QMI data interface,
-subscriber/session identity and broker source address. This change makes the
-physical publisher interface configurable and verifies address membership; it
-does not implement the separate N320 secondary-session work in draft PR #7.
-Existing cluster identity checks are not proof of live physical IMSI or DNN.
+subscriber/session identity and broker source address. The R2Lab modem connection follows the pinned upstream implementation; the
+experiment routes its broker through that established interface. Existing
+cluster identity checks are not proof of live physical IMSI or DNN.
 
 Capture effective images/configuration and detect drift before and after each
 run. Establish host clock bounds, pilot release jitter and queue occupancy,
@@ -250,8 +243,8 @@ claiming a larger physical UE population.
 
 Slice names, DNNs and configured ratios alone are not uplink isolation evidence.
 RF robustness needs measured physical SINR/BLER/RSRP and controlled attenuation
-or placement, not a modeled Ambient-IoT distance sweep. Gateway pacing and
-latest-update policies, automated competing traffic, campaign randomization,
-calibrated harvesting, live image/configuration attestation and physical
-qualification remain subsequent work. Stop a campaign if these required gates
+or placement, not a modeled Ambient-IoT distance sweep. Experiment 2 includes a configurable RFSIM competing-traffic pilot. Gateway
+pacing and latest-update policies, physical competing-traffic qualification,
+calibrated harvesting and live image/configuration attestation remain subsequent
+work. Stop a campaign if these required gates
 are absent; report a failed qualification, not a positive scientific result.

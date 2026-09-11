@@ -38,6 +38,20 @@ def prepare(pilot_root: Path, output: Path, plan_path: Path = DEFAULT_PLAN) -> P
         "ues": plan["workload_gateways"] + [competing],
         "reservation": plan["reservation"],
     }
+    for key in (
+        "host_vars",
+        "ansible_vars",
+        "ue_profiles",
+        "profile_file",
+        "topology_file",
+    ):
+        if key in plan:
+            deployment[key] = plan[key]
+    for key in ("profile_file", "topology_file"):
+        if key in deployment:
+            deployment[key] = str(
+                (plan_path.resolve().parent / deployment[key]).resolve()
+            )
     output.parent.mkdir(parents=True, exist_ok=True)
     settings = output.with_name(output.stem + "-experiment.yml")
     if settings.exists():

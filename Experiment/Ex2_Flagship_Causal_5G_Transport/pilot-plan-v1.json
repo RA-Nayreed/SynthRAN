@@ -55,6 +55,11 @@
       "enabled": true,
       "duration_minutes": 120,
       "image": "ubuntu-jammy"
+    },
+    "host_vars": {
+      "sopnode-f3": {
+        "cpu_low_latency": true
+      }
     }
   },
   "transport_calibration": {

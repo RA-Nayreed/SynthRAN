@@ -22,11 +22,9 @@ def scenario(plan: dict, template: dict, count: int, seed: int, spec: dict) -> d
     model = value["model"]
     model.update(seed=seed, duration_seconds=plan["measurement"]["duration_seconds"])
     model["energy"] = {**model["energy"], **plan["energy_source"], **spec}
-    for section in ("protocol", "receiver", "topology"):
-        # The full template defines model details; the plan's explicit overrides
-        # cover the frozen study knobs, not prose summaries of topology.
-        if section != "topology":
-            model[section].update(plan["model"][section])
+    # The template defines topology; the plan overrides the frozen study knobs.
+    for section in ("protocol", "receiver"):
+        model[section].update(plan["model"][section])
     value["devices"] = {
         f"sensor{index:02d}": {
             **plan["sensor"],
