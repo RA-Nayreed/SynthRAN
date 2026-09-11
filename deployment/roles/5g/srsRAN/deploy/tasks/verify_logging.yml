@@ -1,0 +1,61 @@
+---
+- name: Read the deployed srsRAN gNB pod
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ ran_ns }}"
+    label_selectors: "{{ srs_gnb_label_selectors }}"
+  register: synthran_gnb_logging_pods
+  changed_when: false
+  retries: 20
+  delay: 3
+  until:
+    - synthran_gnb_logging_pods.resources | length > 0
+    - >-
+      (synthran_gnb_logging_pods.resources[0].status.containerStatuses | default([]) |
+       selectattr('name', 'equalto', 'gnb') | list | length) == 1
+
+- name: Select the deployed gNB pod for log verification
+  ansible.builtin.set_fact:
+    synthran_gnb_logging_pod: "{{ synthran_gnb_logging_pods.resources[0].metadata.name }}"
+
+- name: Require the gNB process to produce the authoritative log file
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - exec
+      - -n
+      - "{{ ran_ns }}"
+      - "{{ synthran_gnb_logging_pod }}"
+      - -c
+      - gnb
+      - --
+      - test
+      - -s
+      - /var/log/gnb.log
+  register: synthran_gnb_log_file
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: synthran_gnb_log_file.rc == 0
+
+- name: Refresh gNB pod state after log production
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ ran_ns }}"
+    name: "{{ synthran_gnb_logging_pod }}"
+  register: synthran_gnb_logging_state
+  changed_when: false
+
+- name: Require the gNB and configured log sidecar to be running
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        (synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) | list | length) == 1
+      - >-
+        (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
+        ((synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
+          selectattr('name', 'equalto', 'gnb-logs') | selectattr('ready', 'equalto', true) | list | length) == 1)
+    fail_msg: >-
+      srsRAN started without a healthy authoritative /var/log/gnb.log producer/collector path.
