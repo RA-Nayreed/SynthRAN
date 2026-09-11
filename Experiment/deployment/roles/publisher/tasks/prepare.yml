@@ -35,6 +35,23 @@
     PYTHONPATH: /opt/synthran-source
   changed_when: false
 
+- name: Create the protected publisher credential directory
+  ansible.builtin.file:
+    path: /etc/synthran
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the physical publisher password outside process arguments
+  ansible.builtin.copy:
+    dest: /etc/synthran/mqtt-publisher-password
+    owner: root
+    group: root
+    mode: '0600'
+    content: "{{ mqtt_publisher_password }}\n"
+  no_log: true
+
 - name: Reuse the non-R2Lab physical broker endpoint
   set_fact:
     synthran_effective_broker_address: "{{ synthran_physical_broker_ipv4 }}"
