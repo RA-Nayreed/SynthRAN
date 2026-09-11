@@ -140,6 +140,9 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   deployment_section "Resolving the SOP reservation"
   command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
   "$SYNTHRAN_PYTHON" deployment/scripts/reserve_sop.py "$CONFIG" "$RUN_DIR"
+  # The reservation helper may replace SOP nodes. Re-publish the redacted
+  # canonical scenario after that decision so inventory and public evidence agree.
+  write_public_scenario
 fi
 
 REUSE_EXISTING=false
@@ -184,10 +187,35 @@ if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_
     echo "R2Lab username must be set in .r2lab_config or the scenario" >&2
     exit 1
   }
-  R2LAB_CLOCK=$(date +'%H%M')
-  R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
-  R2LAB_START_EPOCH=$(date -d "$R2LAB_START" +%s)
-  R2LAB_END=$(date -d "@$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))" +'%Y-%m-%dT%H:%M')
+
+  # R2Lab/Faraday uses Europe/Paris local lease coordinates. Keep the provider
+  # clock explicit instead of inheriting the controller host timezone.
+  R2LAB_CLOCK=$(TZ=Europe/Paris date +'%H%M')
+  R2LAB_START="$(TZ=Europe/Paris date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
+  R2LAB_START_EPOCH=$(TZ=Europe/Paris date -d "$R2LAB_START" +%s)
+  R2LAB_END_EPOCH=$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))
+
+  if [[ -f "$RUN_DIR/pos-selection.json" ]]; then
+    POS_COVERAGE_END=$("$SYNTHRAN_PYTHON" - "$RUN_DIR/pos-selection.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+print(value.get('coverage_end', ''))
+PY
+)
+    if [[ -n "$POS_COVERAGE_END" ]]; then
+      POS_COVERAGE_END_EPOCH=$(date -d "$POS_COVERAGE_END" +%s)
+      if (( POS_COVERAGE_END_EPOCH <= R2LAB_START_EPOCH )); then
+        echo "Accepted SOP reservation ends before the R2Lab deployment window starts" >&2
+        exit 1
+      fi
+      if (( POS_COVERAGE_END_EPOCH < R2LAB_END_EPOCH )); then
+        R2LAB_END_EPOCH=$POS_COVERAGE_END_EPOCH
+        echo "Capping R2Lab coverage at the accepted SOP reservation end: $POS_COVERAGE_END"
+      fi
+    fi
+  fi
+
+  R2LAB_END=$(TZ=Europe/Paris date -d "@$R2LAB_END_EPOCH" +'%Y-%m-%dT%H:%M')
   echo "Resolving provider-backed R2Lab coverage for $R2LAB_START to $R2LAB_END"
   if ! printf '%s\n' "${R2LAB_PASSWORD:-}" | \
     "$SYNTHRAN_PYTHON" deployment/scripts/reserve_r2lab.py \
