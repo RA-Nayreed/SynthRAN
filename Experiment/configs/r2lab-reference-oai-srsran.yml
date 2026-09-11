@@ -52,7 +52,6 @@ model:
     sic: true
     required_sinr_db: 3
     cancellation_factor: 0.9
-    collision_window_ms: 5
 mqtt:
   port: 1883
   qos: 1
