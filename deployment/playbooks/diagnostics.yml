@@ -30,7 +30,8 @@
               echo "--- ${ns}/${pod} logs ---"
               kubectl -n "$ns" logs "$pod" --all-containers=true --tail=250 2>&1 || true
               echo "--- ${ns}/${pod} /var/log/gnb.log tail ---"
-              kubectl -n "$ns" exec "$pod" -c gnb-logs -- tail -n 250 /var/log/gnb.log 2>&1 || true
+              kubectl -n "$ns" exec "$pod" -c gnb -- tail -n 250 /var/log/gnb.log 2>&1 || \
+                kubectl -n "$ns" exec "$pod" -c gnb-logs -- tail -n 250 /var/log/gnb.log 2>&1 || true
               echo "--- ${ns}/${pod} describe tail ---"
               kubectl -n "$ns" describe pod "$pod" 2>&1 | tail -n 180 || true
               ;;
