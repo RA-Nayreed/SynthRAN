@@ -10,6 +10,12 @@ from synthran.scenario import load_scenario as load_testbed
 
 REQUIRED_SECTIONS = ("model", "mqtt", "devices")
 OPTIONAL_SECTIONS = ("measurement",)
+SCIENTIFIC_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
+
+
+def scientific_settings(scenario: dict) -> dict:
+    """Return the complete configured scientific contract without defaults."""
+    return {key: scenario[key] for key in SCIENTIFIC_SECTIONS if key in scenario}
 
 
 def _apply_experiment_settings(data: dict, settings: dict) -> None:

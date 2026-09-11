@@ -6,10 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from Experiment.scenario import scientific_settings
+
 DEFAULT_PLAN = Path(__file__).with_name("pilot-plan-v1.json")
 
 
@@ -59,10 +64,7 @@ def prepare(pilot_root: Path, output: Path, plan_path: Path = DEFAULT_PLAN) -> P
             f"Refusing to overwrite existing experiment configuration: {settings}"
         )
     settings.write_text(
-        yaml.safe_dump(
-            {key: scenario[key] for key in ("model", "mqtt", "devices")},
-            sort_keys=False,
-        )
+        yaml.safe_dump(scientific_settings(scenario), sort_keys=False)
     )
     value = {
         "deployment": deployment,

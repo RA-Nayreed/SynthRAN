@@ -16,20 +16,8 @@ sys.path.insert(0, str(ROOT))
 
 import yaml
 
-from Experiment.scenario import load_scenario, remap_gateways
+from Experiment.scenario import load_scenario, remap_gateways, scientific_settings
 from synthran.scenario import load_scenario as load_testbed
-
-
-SCIENTIFIC_SECTIONS = ("model", "mqtt", "devices", "measurement")
-
-
-def scientific_settings(scenario: dict) -> dict:
-    """Freeze every configured scientific section without inventing defaults."""
-    return {
-        key: scenario[key]
-        for key in SCIENTIFIC_SECTIONS
-        if key in scenario
-    }
 
 
 def configure(config: Path, source: Path) -> None:
