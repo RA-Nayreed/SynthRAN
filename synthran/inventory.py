@@ -13,8 +13,9 @@ import socket
 
 import yaml
 
-from .deployment_state import build_manifest, build_ue_map
+from .deployment_state import build_manifest, build_ue_map, content_hash
 from .r2lab import access
+from .scenario import redacted
 
 
 def resolve_profile(d: dict) -> tuple[dict, str]:
@@ -116,8 +117,6 @@ def render_inventory(d: dict, ue_map: list[dict]) -> dict:
     children["physical_ues"] = {"hosts": {}}
     children["faraday"] = {"hosts": {}}
     if d["platform"] == "r2lab":
-        import shlex
-
         settings = access(d)
         ssh = ["ssh"]
         if settings["identity_file"]:
@@ -185,11 +184,24 @@ def main(argv=None):
     profile, profile_name = resolve_profile(d)
     ue_map = build_ue_map(c, profile)
     args.run_dir.mkdir(parents=True, exist_ok=True)
+    private_dir = Path(".synthran/execution") / args.run_dir.name
+    private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_dir.chmod(0o700)
+
+    raw_inventory = render_inventory(d, ue_map)
+    private_inventory_path = private_dir / "inventory.yml"
+    private_inventory_path.write_text(yaml.safe_dump(raw_inventory, sort_keys=False))
+    private_inventory_path.chmod(0o600)
     (args.run_dir / "inventory.yml").write_text(
-        yaml.safe_dump(render_inventory(d, ue_map), sort_keys=False)
+        yaml.safe_dump(redacted(raw_inventory), sort_keys=False)
     )
-    effective_profile_path = Path(args.run_dir, "fiveg-profile.yml")
+
+    effective_profile_path = private_dir / "fiveg-profile.yml"
     effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
+    effective_profile_path.chmod(0o600)
+    (args.run_dir / "fiveg-profile.yml").write_text(
+        yaml.safe_dump(redacted(profile), sort_keys=False)
+    )
     topology_source = Path(d.get("topology_file", "deployment/topology.yml"))
     topologies = yaml.safe_load(topology_source.read_text())
     try:
@@ -210,6 +222,13 @@ def main(argv=None):
         n2.pop("amf_ip_split")
     topology["contract_version"] = topologies["schema_version"]
     manifest = build_manifest(c, profile, ue_map, topology)
+    # Arbitrary Ansible/host override values can include credentials. Preserve
+    # their identity contribution without publishing the values themselves.
+    selected = manifest["deployment"]
+    for key in ("ansible_vars", "host_vars"):
+        raw = selected.pop(key, {})
+        selected[f"{key}_hash"] = content_hash(raw)
+    manifest["deployment_hash"] = content_hash(selected)
     manifest_path = Path(args.run_dir, "deployment-fingerprint.json")
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     variables = {
@@ -234,6 +253,7 @@ def main(argv=None):
         "synthran_deployment_contract": manifest,
         "synthran_deployment_contract_file": str(manifest_path.resolve()),
         "synthran_workload_only": workload_only,
+        "synthran_private_dir": str(private_dir.resolve()),
     }
     for option in ("fhi72", "f3_ran", "aw2s"):
         variables.setdefault(option, False)
@@ -241,12 +261,16 @@ def main(argv=None):
         variables["synthran_resume_source_contract"] = json.loads(
             Path(resume_source_contract).read_text()
         )
+    private_vars_path = private_dir / "deployment-vars.yml"
+    private_vars_path.write_text(yaml.safe_dump(variables, sort_keys=False))
+    private_vars_path.chmod(0o600)
     Path(args.run_dir, "deployment-vars.yml").write_text(
-        yaml.safe_dump(variables, sort_keys=False)
+        yaml.safe_dump(redacted(variables), sort_keys=False)
     )
-    # Supply the resolved profile at the exact relative path expected by upstream
-    # roles, without patching those files or rewriting the repository's profiles.
-    context = Path(args.run_dir, "ansible")
+
+    # Supply the raw resolved profile only inside the private execution tree.
+    # The shareable results contain a redacted profile instead.
+    context = private_dir / "ansible"
     shutil.copytree("deployment/playbooks", context / "playbooks", dirs_exist_ok=True)
     shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
     shutil.copyfile(

@@ -31,7 +31,13 @@ if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed s
 if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
 if $RESUME; then
   [[ -d "$RESUME_FROM" ]] || { echo "Resume run directory not found: $RESUME_FROM" >&2; exit 2; }
-  CONFIG="$RESUME_FROM/resolved-scenario.yml"
+  RESUME_ID="$(basename -- "$RESUME_FROM")"
+  PRIVATE_RESUME_CONFIG="$PWD/.synthran/execution/$RESUME_ID/resolved-scenario.yml"
+  if [[ -f "$PRIVATE_RESUME_CONFIG" ]]; then
+    CONFIG="$PRIVATE_RESUME_CONFIG"
+  else
+    CONFIG="$RESUME_FROM/resolved-scenario.yml"
+  fi
   RESUME_SOURCE_CONTRACT="$RESUME_FROM/deployment-fingerprint.json"
   RESUME_SOURCE_EVIDENCE="$RESUME_FROM/live-deployment-evidence.json"
   [[ -f "$RESUME_SOURCE_CONTRACT" ]] || { echo "Resume deployment identity not found: $RESUME_SOURCE_CONTRACT" >&2; exit 2; }
@@ -42,7 +48,12 @@ else
   RESUME_SOURCE_EVIDENCE=""
 fi
 [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
-RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"
+RUN_DIR="results/$RUN_ID"
+PRIVATE_RUN_DIR="$PWD/.synthran/execution/$RUN_ID"
+mkdir -p "$RUN_DIR"
+install -d -m 0700 "$PRIVATE_RUN_DIR"
+export SYNTHRAN_PRIVATE_DIR="$PRIVATE_RUN_DIR"
 git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran .synthran/r2lab
@@ -86,12 +97,13 @@ deployment_section "Preparing the local SynthRAN runtime"
 
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
-  "$SYNTHRAN_PYTHON" -m synthran.configure --source "$CONFIG" --output "$RUN_DIR/selected-scenario.yml"
-  CONFIG="$RUN_DIR/selected-scenario.yml"
+  "$SYNTHRAN_PYTHON" -m synthran.configure --source "$CONFIG" --output "$PRIVATE_RUN_DIR/selected-scenario.yml"
+  CONFIG="$PRIVATE_RUN_DIR/selected-scenario.yml"
 fi
 
 SOURCE_CONFIG="$CONFIG"
-CONFIG="$RUN_DIR/resolved-scenario.yml"
+PUBLIC_CONFIG="$RUN_DIR/resolved-scenario.yml"
+CONFIG="$PRIVATE_RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
   --source "$SOURCE_CONFIG" --output "$CONFIG"
 if $TESTBED_ONLY; then
@@ -103,9 +115,22 @@ data.pop('experiment', None)
 p.write_text(yaml.safe_dump(data, sort_keys=False))
 PYCONFIG
 fi
+write_public_scenario() {
+  "$SYNTHRAN_PYTHON" - "$CONFIG" "$PUBLIC_CONFIG" <<'PYCONFIG'
+import sys, yaml
+from pathlib import Path
+from synthran.scenario import redacted
+source, output = map(Path, sys.argv[1:3])
+data = yaml.safe_load(source.read_text()) or {}
+output.write_text(yaml.safe_dump(redacted(data), sort_keys=False))
+PYCONFIG
+}
+write_public_scenario
+
 deployment_section "Preparing the selected experiment"
 "$SYNTHRAN_PYTHON" -m synthran.experiment prepare --config "$CONFIG" --run-dir "$RUN_DIR" \
   --prepared-workload "$PREPARED_WORKLOAD" --resume-from "$RESUME_FROM"
+write_public_scenario
 if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
     --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
@@ -222,17 +247,17 @@ export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
 if $WORKLOAD_ONLY; then
-  DEPLOYMENT_PLAYBOOK="$RUN_DIR/ansible/playbooks/workload.yml"
+  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/workload.yml"
   echo "The stored deployment identity will be checked before running the experiment"
 elif $RESUME; then
-  DEPLOYMENT_PLAYBOOK="$RUN_DIR/ansible/playbooks/resume.yml"
+  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/resume.yml"
   echo "The failed run's live attestation will be checked before its workload is resumed"
 else
-  DEPLOYMENT_PLAYBOOK="$RUN_DIR/ansible/playbooks/site.yml"
+  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/site.yml"
 fi
-ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.yml"
+ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$PRIVATE_RUN_DIR/inventory.yml"
   -e "@deployment/group_vars/all/all.yml"
-  -e "@$RUN_DIR/deployment-vars.yml"
+  -e "@$PRIVATE_RUN_DIR/deployment-vars.yml"
   "$DEPLOYMENT_PLAYBOOK")
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)

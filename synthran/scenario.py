@@ -36,21 +36,24 @@ def load_scenario(path: str | Path) -> dict:
         raise ValueError("deployment.ues must be a non-empty list of names")
     if len(ues) != len(set(ues)):
         raise ValueError("deployment.ues must contain unique names")
-    for key in ('entrypoint', 'config'):
-        value = data.get('experiment', {}).get(key)
+    for key in ("entrypoint", "config"):
+        value = data.get("experiment", {}).get(key)
         if value:
-            data['experiment'][key] = str((source.parent / value).resolve())
-    for key in ('profile_file', 'topology_file'):
+            data["experiment"][key] = str((source.parent / value).resolve())
+    for key in ("profile_file", "topology_file"):
         if dep.get(key):
             dep[key] = str((source.parent / dep[key]).resolve())
-    data['_source_directory'] = str(source.parent)
+    data["_source_directory"] = str(source.parent)
     return data
 
 
 def redacted(data: dict) -> dict:
     clean = copy.deepcopy(data)
     clean.pop("_source_directory", None)
-    secret = re.compile(r"password|secret|token|credential|private_key", re.I)
+    secret = re.compile(
+        r"password|secret|token|credential|private_key|full_key|(?:^|_)opc(?:$|_)",
+        re.I,
+    )
 
     def walk(value):
         if isinstance(value, dict):

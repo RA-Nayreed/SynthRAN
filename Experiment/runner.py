@@ -99,15 +99,16 @@ def run_workload(run: Path) -> None:
     environment = dict(os.environ)
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
     environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "Experiment/deployment/roles")
+    private = Path(environment["SYNTHRAN_PRIVATE_DIR"])
     executable = Path(sys.executable).with_name("ansible-playbook")
     command = [
         str(executable),
         "-i",
-        str(run / "inventory.yml"),
+        str(private / "inventory.yml"),
         "-e",
         "@" + str(ROOT / "deployment/group_vars/all/all.yml"),
         "-e",
-        "@" + str(run / "deployment-vars.yml"),
+        "@" + str(private / "deployment-vars.yml"),
         "-e",
         "@" + str(run / "experiment-vars.yml"),
         str(ROOT / "Experiment/deployment/playbooks/mqtt.yml"),
