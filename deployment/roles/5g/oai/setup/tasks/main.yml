@@ -1,31 +1,31 @@
 ---
-- name: Check if yq is already installed
-  ansible.builtin.stat:
-    path: "{{ yq_bin_path }}"
-  register: yq_bin
+- name: Verify the centrally installed yq runtime
+  ansible.builtin.command: "{{ yq_bin_path }} --version"
+  register: oai_yq_version
+  changed_when: false
 
-- name: Download yq binary using curl or wget
-  ansible.builtin.shell: |
-    set -e
-    if command -v curl >/dev/null 2>&1; then
-      curl -L --fail "{{ yq_url }}" -o "{{ yq_bin_path }}"
-    elif command -v wget >/dev/null 2>&1; then
-      wget -O "{{ yq_bin_path }}" "{{ yq_url }}"
-    else
-      echo "Neither curl nor wget found" >&2
-      exit 1
-    fi
-  args:
-    creates: "{{ yq_bin_path }}"
-  when: not yq_bin.stat.exists
-  become: true
+- name: Require the checksum-verified yq release
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - yq_version in oai_yq_version.stdout
+    fail_msg: >-
+      OAI setup requires the checksum-verified {{ yq_version }} yq runtime;
+      refusing to download an unchecked replacement.
 
-- name: Ensure yq is executable
-  ansible.builtin.file:
-    path: "{{ yq_bin_path }}"
-    mode: '0755'
-    state: file
-  become: true
+- name: Verify the centrally installed Helm runtime
+  ansible.builtin.command: helm version --short
+  register: oai_helm_version
+  changed_when: false
+
+- name: Require the checksum-verified Helm release
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ helm_version) in oai_helm_version.stdout"
+    fail_msg: >-
+      OAI setup requires the checksum-verified Helm v{{ helm_version }} runtime;
+      refusing to execute a moving installer script.
 
 - name: Remove existing OAI directory if it exists
   ansible.builtin.file:
@@ -38,24 +38,39 @@
     state: directory
     mode: '0755'
 
-- name: Download prepare-demo-oai.sh using curl or wget
-  ansible.builtin.shell: |
-    set -e
-    if command -v curl >/dev/null 2>&1; then
-      curl -L --fail \
-        "https://raw.githubusercontent.com/{{ prefix_oai5g }}/{{ tag_oai5g_rru }}/testing/prepare-demo-oai.sh" \
-        -o "{{ prepare_demo_script }}"
-    elif command -v wget >/dev/null 2>&1; then
-      wget -O "{{ prepare_demo_script }}" \
-        "https://raw.githubusercontent.com/{{ prefix_oai5g }}/{{ tag_oai5g_rru }}/testing/prepare-demo-oai.sh"
-    else
-      echo "Couldn't retrieve prepare-demo-oai.sh script from oai5g-rru repo" >&2
-      exit 1
-    fi
-    chmod 0755 "{{ prepare_demo_script }}"
-  args:
-    creates: "{{ prepare_demo_script }}"
-  become: true
+- name: Checkout the immutable OAI R2Lab helper source
+  ansible.builtin.git:
+    repo: "{{ repo_oai5g_rru }}"
+    dest: "{{ dir_oai }}/.synthran-oai5g-source"
+    version: "{{ tag_oai5g_rru }}"
+    update: false
+    force: true
+
+- name: Read back the OAI helper source revision
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ dir_oai }}/.synthran-oai5g-source"
+      - rev-parse
+      - HEAD
+  register: oai_helper_revision
+  changed_when: false
+
+- name: Require the exact OAI helper source revision
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - oai_helper_revision.stdout | trim == tag_oai5g_rru
+    fail_msg: >-
+      OAI helper checkout does not match pinned revision {{ tag_oai5g_rru }}.
+
+- name: Install prepare-demo-oai.sh from the immutable checkout
+  ansible.builtin.copy:
+    src: "{{ dir_oai }}/.synthran-oai5g-source/testing/prepare-demo-oai.sh"
+    dest: "{{ prepare_demo_script }}"
+    remote_src: true
+    mode: '0755'
 
 - name: Retrieve physical interfaces for multus on the core and ran nodes
   ansible.builtin.set_fact:
@@ -134,7 +149,6 @@
     path: "{{ prepare_demo_script }}"
     regexp: '^LOCAL_CORE_INTERFACE='
     line: "LOCAL_CORE_INTERFACE=\"{{ multus_core_if }}\""
-    #line: "LOCAL_CORE_INTERFACE=\"{{ multus_ran_if if fhi72 | bool else multus_core_if }}\""
     backrefs: true
 
 - name: Update LOCAL_RAN_INTERFACE variable in prepare-demo-oai.sh
@@ -158,7 +172,6 @@
     line: "RUN_MODE=\"{{ 'full' if core == 'oai' else 'gnb-only' }}\""
     backrefs: true
 
-# use extra-var "e.g. with ansible-playbook -e "oai_cn_mode=advance"
 - name: Update CN_MODE variable
   ansible.builtin.lineinfile:
     path: "{{ prepare_demo_script }}"
@@ -167,7 +180,6 @@
     backrefs: true
   when: oai_cn_mode is defined
 
-# use extra-var "e.g. with ansible-playbook -e "oai_gnb_mode=cudu"
 - name: Update GNB_MODE variable
   ansible.builtin.lineinfile:
     path: "{{ prepare_demo_script }}"
@@ -175,7 +187,7 @@
     line: 'GNB_MODE="{{ oai_gnb_mode }}"'
     backrefs: true
   when: oai_gnb_mode is defined
- 
+
 - name: Ensure NAD_TYPE_N2N3 is set to ovs when bridge_enabled
   ansible.builtin.lineinfile:
     path: "{{ prepare_demo_script }}"
@@ -184,7 +196,6 @@
     insertafter: EOF
   when: not (core == 'oai' and core_node_name == ran_node_name and ran != 'ueransim')
 
-# use extra-var "e.g. with ansible-playbook -e "redcap=true"
 - name: Set REDCAP flag when redcap is defined
   ansible.builtin.lineinfile:
     path: "{{ prepare_demo_script }}"
@@ -192,7 +203,7 @@
     line: 'export REDCAP="{{ redcap }}"'
     insertafter: EOF
   when: redcap is defined
- 
+
 - name: Run prepare-demo-oai.sh to pull and configure OAI charts
   ansible.builtin.shell: |
     set -o pipefail
@@ -202,9 +213,6 @@
     chdir: "{{ dir_oai }}"
     executable: /bin/bash
   environment:
-    # GitHub's HTTP/2 smart-HTTP exchange can stall on SOP nodes even though
-    # ordinary HTTPS works. Apply these settings only to this preparation
-    # process and every git child process that it starts.
     GIT_TERMINAL_PROMPT: "0"
     GIT_CONFIG_COUNT: "3"
     GIT_CONFIG_KEY_0: http.version
@@ -223,12 +231,3 @@
     fail_msg: >-
       OAI chart preparation did not report completion. Inspect
       /tmp/output-prepare-demo-oai.txt on {{ inventory_hostname }}.
-
-- name: Ensure Helm is installed, required for demo-oai.sh script
-  ansible.builtin.shell: |
-    if ! command -v helm >/dev/null 2>&1; then
-      curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-    fi
-  args:
-    executable: /bin/bash
-  become: true
