@@ -147,11 +147,36 @@ def automatic_nodes(nodes, candidates):
     return {"core": core, "ran": ran, "broker": broker}
 
 
-def write_resolved_scenario(run_dir, scenario):
-    output = Path(run_dir, "resolved-scenario.yml")
+def write_resolved_scenario(config_path, scenario):
+    """Update the private canonical scenario consumed by inventory and Ansible."""
+    output = Path(config_path)
     temporary = output.with_name(output.name + ".tmp")
     temporary.write_text(yaml.safe_dump(scenario, sort_keys=False))
     os.replace(temporary, output)
+
+
+def common_active_coverage(events, selected, now):
+    """Return the common interval for which every selected node is reserved now."""
+    starts = []
+    ends = []
+    for node in selected:
+        covering = [
+            event
+            for event in events
+            if node in event.get("nodes", [])
+            and stamp(event["start_date"]) <= now < stamp(event["end_date"])
+        ]
+        if not covering:
+            raise SystemExit(
+                f"Selected SOP node {node} has no active calendar coverage"
+            )
+        starts.append(min(stamp(event["start_date"]) for event in covering))
+        ends.append(max(stamp(event["end_date"]) for event in covering))
+    start = max(starts)
+    end = min(ends)
+    if end <= now:
+        raise SystemExit("Selected SOP nodes have no common remaining reservation window")
+    return start, end
 
 
 def classify_allocation(node, allocation):
@@ -214,7 +239,7 @@ def main():
     deployment = scenario["deployment"]
     reservation = deployment.get("reservation", {})
     if not reservation.get("enabled", True):
-        write_resolved_scenario(args.run_dir, scenario)
+        write_resolved_scenario(path, scenario)
         return
     duration = int(reservation.get("duration_minutes", 120))
     image = reservation.get("image", "ubuntu-jammy")
@@ -280,6 +305,9 @@ def main():
                     f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}"
                 )
             selected = list(dict.fromkeys(nodes.values()))
+            coverage_start, coverage_end = common_active_coverage(
+                own_active, selected, now
+            )
             print(
                 f"Keeping the active SOP calendar reservation for {', '.join(selected)}"
             )
@@ -295,13 +323,15 @@ def main():
                 if allocation_states.get(node) != "already-active"
             ]
             deployment["nodes"] = nodes
-            write_resolved_scenario(args.run_dir, scenario)
+            write_resolved_scenario(path, scenario)
             Path(args.run_dir, "pos-selection.json").write_text(
                 json.dumps(
                     {
                         "nodes": nodes,
                         "duration_minutes": duration,
                         "reused": True,
+                        "coverage_start": coverage_start.isoformat(),
+                        "coverage_end": coverage_end.isoformat(),
                         "allocation_states": allocation_states,
                         "reset_nodes": reset_nodes,
                         "preserved_nodes": preserved_nodes,
@@ -375,19 +405,31 @@ def main():
             f"coverage was restored where possible:\n{detail}"
         )
     reservation_id = result.stdout.strip()
-    save_managed_state(reservation_id, selected, now, end)
+    created = next(
+        (
+            event
+            for event in calendars(owner)
+            if str(event.get("id")) == str(reservation_id)
+        ),
+        None,
+    )
+    coverage_start = stamp(created["start_date"]) if created else now
+    coverage_end = stamp(created["end_date"]) if created else end
+    save_managed_state(reservation_id, selected, coverage_start, coverage_end)
     print(
         f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}"
     )
     allocation_states = prepare_nodes(selected, image)
     deployment["nodes"] = nodes
-    write_resolved_scenario(args.run_dir, scenario)
+    write_resolved_scenario(path, scenario)
     Path(args.run_dir, "pos-selection.json").write_text(
         json.dumps(
             {
                 "nodes": nodes,
                 "duration_minutes": duration,
                 "reused": False,
+                "coverage_start": coverage_start.isoformat(),
+                "coverage_end": coverage_end.isoformat(),
                 "allocation_states": allocation_states,
                 "reset_nodes": selected,
             },
