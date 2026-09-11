@@ -8,6 +8,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_REPOSITORY_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
+)
+_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _ACCEPT = ", ".join(
     (
         "application/vnd.oci.image.index.v1+json",
@@ -25,13 +29,8 @@ def _normalize_docker_hub_repository(repository: str) -> tuple[str, str]:
         if value.startswith(prefix):
             value = value[len(prefix) :]
             break
-    if not value or "://" in value or "@" in value:
+    if not _REPOSITORY_RE.fullmatch(value):
         raise ValueError(f"unsupported Docker Hub repository: {repository!r}")
-    first = value.split("/", 1)[0]
-    if "." in first or ":" in first or first == "localhost":
-        raise ValueError(
-            f"only public Docker Hub repositories are supported by this resolver: {repository!r}"
-        )
     canonical = value if "/" in value else f"library/{value}"
     return value, canonical
 
@@ -39,7 +38,7 @@ def _normalize_docker_hub_repository(repository: str) -> tuple[str, str]:
 def resolve_docker_hub(reference_repository: str, tag: str, timeout: float = 20.0) -> str:
     display_repository, canonical_repository = _normalize_docker_hub_repository(reference_repository)
     tag = tag.strip()
-    if not tag or "/" in tag or "@" in tag:
+    if not _TAG_RE.fullmatch(tag):
         raise ValueError(f"invalid Docker image tag: {tag!r}")
 
     query = urlencode(
