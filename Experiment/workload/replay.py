@@ -22,6 +22,22 @@ def _utc(epoch_ns=None):
     ).isoformat()
 
 
+def _mqtt_auth(username, password_file):
+    if bool(username) != bool(password_file):
+        raise ValueError("MQTT username and password file must be provided together")
+    if not username:
+        return None
+    source = Path(password_file)
+    if not source.is_file():
+        raise ValueError("MQTT password file is missing")
+    if source.stat().st_mode & 0o077:
+        raise PermissionError("MQTT password file must not be accessible by group or other")
+    password = source.read_text(encoding="utf-8").rstrip("\r\n")
+    if not password:
+        raise ValueError("MQTT password file is empty")
+    return str(username), password
+
+
 class JsonlLog:
     def __init__(self, path, mode="x"):
         path = Path(path)
@@ -85,6 +101,8 @@ def replay(
     drain_seconds=60.0,
     connect_timeout=15.0,
     horizon_seconds=None,
+    username=None,
+    password_file=None,
 ):
     import paho.mqtt.client as mqtt
     from .bundle import read_events
@@ -116,9 +134,12 @@ def replay(
     if not math.isfinite(drain_seconds) or drain_seconds < 0 or connect_timeout <= 0:
         raise ValueError("invalid replay timeouts")
     address = _bind_address(interface, bind_address)
+    auth = _mqtt_auth(username, password_file)
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv311, clean_session=True
     )
+    if auth:
+        client.username_pw_set(*auth)
     client.max_inflight_messages_set(max_inflight)
     client.max_queued_messages_set(max_queued)
     connected = threading.Event()
@@ -296,7 +317,14 @@ def replay(
 
 
 def collect(
-    broker, topic="synthran/#", port=1883, output="broker.jsonl", ready_file=None
+    broker,
+    topic="synthran/#",
+    port=1883,
+    output="broker.jsonl",
+    ready_file=None,
+    *,
+    username=None,
+    password_file=None,
 ):
     import paho.mqtt.client as mqtt
 
@@ -304,9 +332,12 @@ def collect(
     if destination:
         destination.unlink(missing_ok=True)
     log = JsonlLog(output, "a")
+    auth = _mqtt_auth(username, password_file)
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv311, clean_session=True
     )
+    if auth:
+        client.username_pw_set(*auth)
 
     def connected(active_client, _userdata, _flags, reason, _properties):
         if reason.is_failure:
