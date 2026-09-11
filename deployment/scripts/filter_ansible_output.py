@@ -33,6 +33,7 @@ class Progress:
         self.hide_detail = False
         self.diagnostic = []
         self.waiting = set()
+        self.pending_failure = None
 
     def emit(self, text="", depth=0):
         print("  " * depth + text, file=self.output, flush=True)
@@ -67,8 +68,47 @@ class Progress:
                 self.emit(line, self.depth + 1)
             self.diagnostic.clear()
 
+    @staticmethod
+    def failure_message(detail: str) -> str:
+        try:
+            value = json.loads(detail.partition("=>")[2])
+            message = "\n".join(
+                str(value[key]) for key in ("msg", "stderr") if value.get(key)
+            )
+            if not message:
+                message = str(value.get("stdout", detail))
+            return message
+        except (ValueError, TypeError):
+            return detail.strip()
+
+    def flush_failure(self, ignored=False):
+        if self.pending_failure is None:
+            return
+        host, detail = self.pending_failure
+        self.pending_failure = None
+        self.flush_diagnostic()
+        self.heading()
+        if ignored:
+            status = "IGNORED FAILURE (non-fatal)"
+        else:
+            status = "UNREACHABLE" if "UNREACHABLE!" in detail else "FAILED"
+        self.emit(f"{host}: {status}", self.depth + 1)
+        for text in self.failure_message(detail).splitlines():
+            self.emit(text, self.depth + 2)
+        self.hide_detail = True
+
     def feed(self, raw):
         line = ANSI.sub("", raw.rstrip("\r\n"))
+
+        # Ansible prints an ignored task as a fatal-looking result followed by
+        # a separate "...ignoring" line. Delay rendering by one line so an
+        # intentionally ignored probe is never presented as a fatal failure.
+        if self.pending_failure is not None:
+            if line.strip() == "...ignoring":
+                self.flush_failure(ignored=True)
+                return
+            self.flush_failure(ignored=False)
+
         match = HEADING.match(line)
         if match:
             self.flush_diagnostic()
@@ -88,21 +128,9 @@ class Progress:
         if match:
             status, host, detail = match.groups()
             if status == "fatal":
-                self.flush_diagnostic()
-                self.heading()
-                self.emit(f"{host}: {'UNREACHABLE' if 'UNREACHABLE!' in detail else 'FAILED'}", self.depth + 1)
-                try:
-                    value = json.loads(detail.partition("=>")[2])
-                    message = "\n".join(
-                        str(value[key]) for key in ("msg", "stderr") if value.get(key)
-                    )
-                    if not message:
-                        message = str(value.get("stdout", detail))
-                except (ValueError, TypeError):
-                    message = detail.strip()
-                for text in message.splitlines():
-                    self.emit(text, self.depth + 2)
-            elif status != "skipping":
+                self.pending_failure = (host, detail)
+                return
+            if status != "skipping":
                 # failed_when:false can produce [ERROR] followed by a successful
                 # result. The actual task result is authoritative in that case.
                 self.diagnostic.clear()
@@ -148,6 +176,7 @@ class Progress:
 
     def finish(self):
         # Syntax/inventory errors may terminate Ansible without a fatal result.
+        self.flush_failure(ignored=False)
         self.flush_diagnostic()
 
 

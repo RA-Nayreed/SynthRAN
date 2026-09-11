@@ -48,6 +48,7 @@ CONFIG=$3
 ACTIVE_DEPLOYMENT_STATE=$4
 WORKLOAD_ONLY=$5
 shift 5
+DEPLOYMENT_COMMAND=("$@")
 CHILD_PID=""
 printf '%s\n' "$$" >"$RUN_DIR/controller.pid"
 
@@ -66,7 +67,7 @@ record_exit() {
   fi
 
   printf '%s\n' "$status" >"$RUN_DIR/controller-exit-code"
-  echo "Deployment controller exited with status $status; shareable artifacts retained in $RUN_DIR"
+  echo "SynthRAN controller exited with status $status; shareable artifacts retained in $RUN_DIR"
   exit "$status"
 }
 
@@ -93,13 +94,50 @@ run_step() {
   return "$status"
 }
 
+collect_failure_diagnostics() {
+  local reason=$1
+  local diagnostics_rc=0
+  local replaced=false
+  local i
+  local diagnostics_playbook="${SYNTHRAN_PRIVATE_DIR:-}/ansible/playbooks/diagnostics.yml"
+  local diagnostics_command=("${DEPLOYMENT_COMMAND[@]}")
+
+  if [[ -z "${SYNTHRAN_PRIVATE_DIR:-}" || ! -f "$diagnostics_playbook" ]]; then
+    echo "Failure diagnostics unavailable: staged diagnostics playbook is missing." >&2
+    return 0
+  fi
+
+  for ((i = 0; i < ${#diagnostics_command[@]}; i++)); do
+    case "${diagnostics_command[$i]}" in
+      "$SYNTHRAN_PRIVATE_DIR"/ansible/playbooks/*.yml)
+        diagnostics_command[$i]="$diagnostics_playbook"
+        replaced=true
+        break
+        ;;
+    esac
+  done
+  if [[ "$replaced" != true ]]; then
+    echo "Failure diagnostics unavailable: deployment playbook argument was not found." >&2
+    return 0
+  fi
+
+  echo "Collecting bounded deployment diagnostics after $reason."
+  run_step "${diagnostics_command[@]}" </dev/null >>"$RUN_DIR/ansible.log" 2>&1 || diagnostics_rc=$?
+  if (( diagnostics_rc != 0 )); then
+    echo "Diagnostics collection was incomplete (status $diagnostics_rc); the original failure is preserved." >&2
+  fi
+  echo "Diagnostic artifacts: $RUN_DIR/diagnostics"
+  return 0
+}
+
 if [[ -f "$RUN_DIR/source-revision.txt" ]]; then
   echo "Source revision: $(cat "$RUN_DIR/source-revision.txt")"
 fi
 ANSIBLE_RC=0
-run_step "$@" </dev/null >"$RUN_DIR/ansible.log" 2>&1 || ANSIBLE_RC=$?
+run_step "${DEPLOYMENT_COMMAND[@]}" </dev/null >"$RUN_DIR/ansible.log" 2>&1 || ANSIBLE_RC=$?
 if (( ANSIBLE_RC != 0 )); then
-  echo "Deployment failed; complete Ansible output: $RUN_DIR/ansible.log" >&2
+  echo "Deployment provisioning failed with status $ANSIBLE_RC; complete Ansible output: $RUN_DIR/ansible.log" >&2
+  collect_failure_diagnostics "provisioning failure"
   if [[ -f "$RUN_DIR/live-deployment-evidence.json" ]]; then
     echo "If the attested deployment and UE sessions remain healthy, resume with:" >&2
     echo "  ./deploy.sh --resume $RUN_DIR" >&2
@@ -108,18 +146,44 @@ if (( ANSIBLE_RC != 0 )); then
 fi
 
 if [[ "$WORKLOAD_ONLY" == true ]]; then
+  echo "Reuse verification playbook completed; validating fresh live deployment evidence."
+else
+  echo "Provisioning playbook completed; validating fresh live deployment evidence."
+fi
+
+STATE_RC=0
+if [[ "$WORKLOAD_ONLY" == true ]]; then
   run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_state record-reuse \
     --candidate "$RUN_DIR/deployment-fingerprint.json" \
     --active "$ACTIVE_DEPLOYMENT_STATE" \
-    --evidence "$RUN_DIR/live-deployment-evidence.json"
+    --evidence "$RUN_DIR/live-deployment-evidence.json" || STATE_RC=$?
 else
   run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
     --candidate "$RUN_DIR/deployment-fingerprint.json" \
     --active "$ACTIVE_DEPLOYMENT_STATE" \
-    --evidence "$RUN_DIR/live-deployment-evidence.json"
+    --evidence "$RUN_DIR/live-deployment-evidence.json" || STATE_RC=$?
+fi
+if (( STATE_RC != 0 )); then
+  echo "Live deployment evidence was rejected with status $STATE_RC; deployment was not accepted." >&2
+  collect_failure_diagnostics "live-evidence rejection"
+  exit "$STATE_RC"
 fi
 
-echo "Running the selected experiment"
+echo "Live deployment evidence accepted."
+HAS_EXPERIMENT=$("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
+import sys
+from synthran.scenario import load_scenario
+
+print("true" if load_scenario(sys.argv[1]).get("experiment") else "false")
+PY
+)
+if [[ "$HAS_EXPERIMENT" != true ]]; then
+  echo "Testbed deployment completed; no experiment selected."
+  exit 0
+fi
+
+echo "Running the selected experiment."
 run_step "$SYNTHRAN_PYTHON" -m synthran.experiment run --config "$CONFIG" --run-dir "$RUN_DIR" \
   >>"$RUN_DIR/ansible.log" 2>&1
 run_step "$SYNTHRAN_PYTHON" -m synthran.experiment finalize --config "$CONFIG" --run-dir "$RUN_DIR"
+echo "Experiment run and finalization completed."
