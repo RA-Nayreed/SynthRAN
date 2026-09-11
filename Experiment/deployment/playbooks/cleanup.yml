@@ -34,6 +34,12 @@
       register: synthran_collector_unit
       failed_when: false
 
+    - name: Remove the collector plaintext MQTT credential
+      ansible.builtin.file:
+        path: /etc/synthran/mqtt-collector-password
+        state: absent
+      failed_when: false
+
     - name: Reload systemd after removing the SynthRAN collector
       ansible.builtin.systemd:
         daemon_reload: true
@@ -133,6 +139,12 @@
         - synthran_physical_publisher.content is defined
       failed_when: false
 
+    - name: Remove the physical publisher plaintext MQTT credential
+      ansible.builtin.file:
+        path: /etc/synthran/mqtt-publisher-password
+        state: absent
+      failed_when: false
+
 - name: Stop current software replay processes and retain partial publisher evidence
   hosts: ran_node
   gather_facts: false
@@ -152,6 +164,8 @@
               "$SYNTHRAN_KUBECTL" exec -n "$ns" "$pod" -c synthran-runtime -- \
                 sh -c "cat /tmp/publisher-${SYNTHRAN_RUN_ID}-*.jsonl 2>/dev/null || true" \
                 2>/dev/null || true
+              "$SYNTHRAN_KUBECTL" exec -n "$ns" "$pod" -c synthran-runtime -- \
+                rm -f /opt/synthran-mqtt-password >/dev/null 2>&1 || true
               ;;
           esac
         done
