@@ -44,6 +44,20 @@
       register: synthran_prov_kubernetes_python
       changed_when: false
 
+    - name: Require the host to match the pinned runtime baseline
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - "('v' ~ kubernetes_version) in synthran_prov_kubelet.stdout"
+          - "('v' ~ helm_version) in synthran_prov_helm.stdout"
+          - yq_version in synthran_prov_yq.stdout
+          - synthran_prov_kubernetes_python.stdout | trim == kubernetes_python_version
+        fail_msg: >-
+          {{ inventory_hostname }} does not match the pinned SynthRAN runtime
+          baseline (Kubernetes {{ kubernetes_version }}, Helm {{ helm_version }},
+          yq {{ yq_version }}, kubernetes-python {{ kubernetes_python_version }}).
+          Refusing activation/reuse until the host is provisioned by this baseline.
+
     - name: Read UHD userspace version when available
       ansible.builtin.command: uhd_config_info --version
       register: synthran_prov_uhd
