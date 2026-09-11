@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -90,7 +91,23 @@ def resolve_profile(d: dict) -> tuple[dict, str]:
     return profile, profile_name
 
 
-def render_inventory(d: dict, ue_map: list[dict]) -> dict:
+def _ssh_common_args(known_hosts: Path, extra: str = "") -> str:
+    parts = [
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
+    rendered = shlex.join(parts)
+    return rendered + (f" {extra.strip()}" if extra.strip() else "")
+
+
+def render_inventory(
+    d: dict,
+    ue_map: list[dict],
+    controller_known_hosts: Path,
+    faraday_known_hosts: Path,
+) -> dict:
     nodes = d["nodes"]
     ues = d["ues"]
     # Upstream delegates to this inventory name; an alias such as faraday_host
@@ -101,14 +118,20 @@ def render_inventory(d: dict, ue_map: list[dict]) -> dict:
         ("ran_node", nodes["ran"]),
         ("broker_node", nodes.get("broker", nodes["core"])),
     ]:
-        host = d.get("host_vars", {}).get(name, {})
-        address = host.get("ip") or socket.gethostbyname(host.get("ansible_host", name))
+        host_vars = copy.deepcopy(d.get("host_vars", {}).get(name, {}))
+        extra_ssh = str(host_vars.pop("ansible_ssh_common_args", "") or "")
+        address = host_vars.get("ip") or socket.gethostbyname(
+            host_vars.get("ansible_host", name)
+        )
         children[group] = {
             "hosts": {
                 name: {
                     "ip": address,
                     "ansible_python_interpreter": "/usr/bin/python3",
-                    **d.get("host_vars", {}).get(name, {}),
+                    "ansible_ssh_common_args": _ssh_common_args(
+                        controller_known_hosts, extra_ssh
+                    ),
+                    **host_vars,
                 }
             }
         }
@@ -118,7 +141,13 @@ def render_inventory(d: dict, ue_map: list[dict]) -> dict:
     children["faraday"] = {"hosts": {}}
     if d["platform"] == "r2lab":
         settings = access(d)
-        ssh = ["ssh"]
+        ssh = [
+            "ssh",
+            "-o",
+            f"UserKnownHostsFile={faraday_known_hosts}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ]
         if settings["identity_file"]:
             ssh += ["-i", settings["identity_file"]]
         target = (
@@ -128,6 +157,7 @@ def render_inventory(d: dict, ue_map: list[dict]) -> dict:
         faraday_vars = {
             "ansible_host": settings["host"],
             "ansible_python_interpreter": "/usr/bin/python3",
+            "ansible_ssh_common_args": _ssh_common_args(faraday_known_hosts),
         }
         if settings["username"]:
             faraday_vars["ansible_user"] = settings["username"]
@@ -147,21 +177,32 @@ def render_inventory(d: dict, ue_map: list[dict]) -> dict:
                 raise SystemExit(
                     f"Upstream R2Lab modem workflow requires a qhat or qfit host: {name}"
                 )
+            host_vars = copy.deepcopy(d.get("host_vars", {}).get(name, {}))
+            extra_ssh = str(host_vars.pop("ansible_ssh_common_args", "") or "")
+            proxy_arg = "-o " + shlex.quote("ProxyCommand=" + proxy)
             host = {
                 "ansible_user": "root",
                 "ansible_python_interpreter": "/usr/bin/python3",
-                "ansible_ssh_common_args": "-o " + shlex.quote("ProxyCommand=" + proxy),
+                "ansible_ssh_common_args": _ssh_common_args(
+                    controller_known_hosts,
+                    f"{proxy_arg} {extra_ssh}".strip(),
+                ),
                 "mode": ue["tunnel"]["mode"],
             }
             if settings["identity_file"]:
                 host["ansible_ssh_private_key_file"] = settings["identity_file"]
-            host.update(d.get("host_vars", {}).get(name, {}))
+            host.update(host_vars)
             children[group]["hosts"][name] = host
         children["physical_ues"] = {"children": {"qhats": {}, "qfits": {}}}
     elif d["platform"] == "physical":
-        children["physical_ues"]["hosts"] = {
-            name: d.get("host_vars", {}).get(name, {}) for name in ues
-        }
+        children["physical_ues"]["hosts"] = {}
+        for name in ues:
+            host_vars = copy.deepcopy(d.get("host_vars", {}).get(name, {}))
+            extra_ssh = str(host_vars.pop("ansible_ssh_common_args", "") or "")
+            host_vars["ansible_ssh_common_args"] = _ssh_common_args(
+                controller_known_hosts, extra_ssh
+            )
+            children["physical_ues"]["hosts"][name] = host_vars
     return {"all": {"children": children}}
 
 
@@ -188,7 +229,25 @@ def main(argv=None):
     private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     private_dir.chmod(0o700)
 
-    raw_inventory = render_inventory(d, ue_map)
+    controller_known_hosts = private_dir / "ssh-known-hosts"
+    controller_known_hosts.touch(exist_ok=True)
+    controller_known_hosts.chmod(0o600)
+    faraday_known_hosts = Path(
+        os.environ.get(
+            "R2LAB_FARADAY_KNOWN_HOSTS",
+            ".synthran/r2lab/faraday_known_hosts",
+        )
+    ).expanduser().resolve()
+    faraday_known_hosts.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    faraday_known_hosts.touch(exist_ok=True)
+    faraday_known_hosts.chmod(0o600)
+
+    raw_inventory = render_inventory(
+        d,
+        ue_map,
+        controller_known_hosts.resolve(),
+        faraday_known_hosts,
+    )
     private_inventory_path = private_dir / "inventory.yml"
     private_inventory_path.write_text(yaml.safe_dump(raw_inventory, sort_keys=False))
     private_inventory_path.chmod(0o600)
