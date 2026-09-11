@@ -159,6 +159,7 @@ def validate_ue_profile_overrides(overrides: Any, profile: dict) -> None:
         return
     overrides = _mapping(overrides, "deployment.ue_profiles")
     slice_names = {entry["name"] for entry in profile["slices"]}
+    base_ues = profile.get("ues", {})
     for name, raw in overrides.items():
         _safe_name(name, "deployment.ue_profiles UE name")
         label = f"deployment.ue_profiles.{name}"
@@ -168,4 +169,6 @@ def validate_ue_profile_overrides(overrides: Any, profile: dict) -> None:
             raise ValueError(f"{label}.imsi_suffix must contain exactly 10 digits")
         if "slice" in entry and entry["slice"] not in slice_names:
             raise ValueError(f"{label}.slice references an unknown slice")
-        _validate_transport(entry, label)
+        effective = dict(base_ues.get(name, {}))
+        effective.update(entry)
+        _validate_transport(effective, label)
