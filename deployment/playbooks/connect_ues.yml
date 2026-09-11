@@ -16,9 +16,14 @@
 
 - name: Prepare non-R2Lab physical UE interfaces
   hosts: physical_ues
+  gather_facts: false
   become: true
   any_errors_fatal: true
   tasks:
+    - name: Gather facts for custom physical UEs only
+      ansible.builtin.setup:
+      when: platform == 'physical'
+
     - name: Prepare and validate the custom physical UE session
       ansible.builtin.include_role:
         name: synthran/physical_ue
