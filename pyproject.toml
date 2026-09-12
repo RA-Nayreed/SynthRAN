@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,19 +7,20 @@ name = "synthran"
 version = "0.1.0"
 description = "Energy-aware 6G modeling over real 5G user planes"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "BSD-3-Clause"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-dependencies = ["numpy>=1.24", "pandas>=2", "simpy>=4", "PyYAML>=6", "paho-mqtt>=2"]
+dependencies = ["PyYAML==6.0.3"]
 
 [project.optional-dependencies]
-analysis = ["matplotlib>=3.7", "openpyxl>=3.0"]
-deployment = ["ansible-core>=2.19,<2.20"]
+experiment = ["numpy==2.4.6", "pandas==3.0.5", "simpy==4.1.2", "paho-mqtt==2.1.0"]
+analysis = ["matplotlib==3.11.1", "openpyxl==3.1.5"]
+deployment = ["ansible-core==2.19.13"]
 
 [tool.setuptools.package-data]
-synthran = ["data/*.csv"]
+synthran = ["data/*.csv", "configs/*.yml", "experiment_runtime/**/*.yml", "experiment_runtime/**/*.j2"]
 "synthran.ambient_iot" = ["examples/*.yml", "examples/README.md"]
 
 [tool.setuptools.packages.find]
 include = ["synthran", "synthran.*"]
-exclude = ["deployment*", "scenarios*", "results*", "third_party*"]
+exclude = ["deployment*", "scenarios*", "results*", "third_party*", "Experiment*"]

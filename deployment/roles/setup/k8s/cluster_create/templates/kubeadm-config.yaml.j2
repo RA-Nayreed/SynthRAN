@@ -4,9 +4,10 @@ kind: KubeletConfiguration
 resolvConf: "/run/systemd/resolve/resolv.conf"
 cgroupDriver: systemd
 failSwapOn: false
-featureGates:
-  CPUManager: true
-  CPUManagerPolicyOptions: true
+# CPU Manager is GA in the pinned Kubernetes baseline. Do not add the removed
+# CPUManager feature gate here: Kubernetes 1.36 no longer recognizes it.
+# RAN-specific CPU Manager policy is applied later by k8s_cpu_tuning using the
+# stable cpuManagerPolicy/cpuManagerPolicyOptions configuration fields.
 containerLogMaxSize: 50Mi
 memorySwap: {}
 
@@ -14,7 +15,7 @@ memorySwap: {}
 # --- Cluster Configuration ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
-kubernetesVersion: "v1.32.9"
+kubernetesVersion: "v{{ kubernetes_version }}"
 controlPlaneEndpoint: "{{ hostvars[core_node_name].ip }}:6443"
 networking:
   podSubnet: "10.244.0.0/16"

@@ -7,8 +7,14 @@
   include_tasks: deploy_srsues.yml
   when: rru == 'rfsim'
 
+- name: Harden the final srsRAN runtime before Helm deployment
+  ansible.builtin.include_tasks: "{{ role_path }}/../config/tasks/harden_runtime.yml"
+
 - name: Deploy srsRAN gNB
   include_tasks: deploy_gnb.yml
+
+- name: Verify live srsRAN log production
+  ansible.builtin.include_tasks: verify_logging.yml
 
 - name: Start the RFSIM GNU Radio broker and UE processes
   include_tasks: start_broker.yml

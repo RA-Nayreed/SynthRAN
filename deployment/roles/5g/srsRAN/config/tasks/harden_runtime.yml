@@ -1,0 +1,194 @@
+---
+- name: Read selected srsRAN image repository
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.repository // ""'
+      - "{{ values_file }}"
+  register: synthran_srsran_image_repository
+  changed_when: false
+
+- name: Read selected srsRAN image tag
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.tag // ""'
+      - "{{ values_file }}"
+  register: synthran_srsran_image_tag
+  changed_when: false
+
+- name: Validate the selected srsRAN image coordinates
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_image_repository.stdout | trim | length > 0
+      - >-
+        ('@sha256:' in (synthran_srsran_image_repository.stdout | trim)) or
+        (synthran_srsran_image_tag.stdout | trim | length > 0)
+    fail_msg: "The selected srsRAN values file does not identify a resolvable container image."
+
+- name: Reuse an already immutable srsRAN image reference
+  ansible.builtin.set_fact:
+    synthran_srsran_image_reference: "{{ synthran_srsran_image_repository.stdout | trim }}"
+  when: "'@sha256:' in (synthran_srsran_image_repository.stdout | trim)"
+
+- name: Resolve the selected Docker Hub tag to an immutable digest
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -m
+      - synthran.image_digest
+      - --repository
+      - "{{ synthran_srsran_image_repository.stdout | trim }}"
+      - --tag
+      - "{{ synthran_srsran_image_tag.stdout | trim }}"
+  delegate_to: localhost
+  become: false
+  register: synthran_srsran_image_resolution
+  changed_when: false
+  when: "'@sha256:' not in (synthran_srsran_image_repository.stdout | trim)"
+
+- name: Freeze the resolved srsRAN image reference
+  ansible.builtin.set_fact:
+    synthran_srsran_image_reference: "{{ synthran_srsran_image_resolution.stdout | trim }}"
+  when:
+    - synthran_srsran_image_resolution is defined
+    - not (synthran_srsran_image_resolution.skipped | default(false) | bool)
+
+- name: Require an immutable srsRAN image digest
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_image_reference is match('^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+      - synthran_log_sidecar_image is match('^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+    fail_msg: "srsRAN and its log sidecar must both use immutable sha256 image references."
+
+- name: Make the chart render the frozen gNB image reference directly
+  ansible.builtin.replace:
+    path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
+    regexp: '(^\s*image:\s*)"\{\{\s*\.Values\.image\.repository\s*\}\}:\{\{\s*\.Values\.image\.tag\s*\}\}"'
+    replace: '\1"{{ ''{{'' }} .Values.image.repository {{ ''}}'' }}"'
+  register: synthran_gnb_image_template_patch
+
+- name: Make the chart render the pinned log sidecar image
+  ansible.builtin.replace:
+    path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
+    regexp: '(^\s*image:\s*)busybox\s*$'
+    replace: '\1"{{ ''{{'' }} .Values.logSidecarImage {{ ''}}'' }}"'
+  register: synthran_log_sidecar_template_patch
+
+- name: Require the expected chart image sites to be hardened
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_gnb_image_template_patch.changed
+      - synthran_log_sidecar_template_patch.changed
+    fail_msg: >-
+      The pinned srsRAN chart no longer matches the expected image template shape;
+      refusing deployment instead of silently leaving a mutable image reference.
+
+- name: Freeze image references and the authoritative gNB log path
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -i
+      - >-
+        .image.repository = strenv(SYNTHRAN_GNB_IMAGE_REFERENCE) |
+        .image.tag = "" |
+        .logSidecarImage = strenv(SYNTHRAN_LOG_SIDECAR_IMAGE) |
+        .gnbConfig.log.filename = "/var/log/gnb.log"
+      - "{{ values_file }}"
+  environment:
+    SYNTHRAN_GNB_IMAGE_REFERENCE: "{{ synthran_srsran_image_reference }}"
+    SYNTHRAN_LOG_SIDECAR_IMAGE: "{{ synthran_log_sidecar_image }}"
+  changed_when: true
+
+- name: Read back the hardened srsRAN runtime policy
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -o=json
+      - >-
+        {"image": .image.repository,
+         "image_tag": .image.tag,
+         "log_sidecar_image": .logSidecarImage,
+         "log_filename": .gnbConfig.log.filename,
+         "remote_control": .gnbConfig.remote_control,
+         "logs_enabled": (.start.logs // false)}
+      - "{{ values_file }}"
+  register: synthran_srsran_runtime_policy_json
+  changed_when: false
+
+- name: Decode the hardened srsRAN runtime policy
+  ansible.builtin.set_fact:
+    synthran_srsran_runtime_policy: "{{ synthran_srsran_runtime_policy_json.stdout | from_json }}"
+
+- name: Require hardened srsRAN values before Helm rendering
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_runtime_policy.image == synthran_srsran_image_reference
+      - synthran_srsran_runtime_policy.image_tag == ''
+      - synthran_srsran_runtime_policy.log_sidecar_image == synthran_log_sidecar_image
+      - synthran_srsran_runtime_policy.log_filename == '/var/log/gnb.log'
+      - not (synthran_srsran_runtime_policy.remote_control.enabled | bool)
+      - synthran_srsran_runtime_policy.remote_control.bind_addr == '127.0.0.1'
+    fail_msg: >-
+      Refusing to render srsRAN because image immutability, log-path consistency,
+      or remote-control hardening was lost after configuration.
+
+- name: Render the hardened srsRAN chart as a pre-deployment acceptance gate
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rendered="$(helm template synthran-srsran-gnb \
+      "{{ repo_dest_abs }}/charts/srsran-gnb" \
+      --namespace "{{ ran_ns }}" \
+      -f "{{ values_file }}")"
+    printf '%s\n' "$rendered" | grep -F -- "$SYNTHRAN_GNB_IMAGE_REFERENCE" >/dev/null
+    printf '%s\n' "$rendered" | grep -F -- 'filename: /var/log/gnb.log' >/dev/null
+    if printf '%s\n' "$rendered" | grep -F -- 'filename: /tmp/gnb.log' >/dev/null; then
+      echo 'Rendered chart still contains the obsolete /tmp/gnb.log path.' >&2
+      exit 1
+    fi
+    if [ "$SYNTHRAN_LOGS_ENABLED" = true ]; then
+      printf '%s\n' "$rendered" | grep -F -- "$SYNTHRAN_LOG_SIDECAR_IMAGE" >/dev/null
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    SYNTHRAN_GNB_IMAGE_REFERENCE: "{{ synthran_srsran_image_reference }}"
+    SYNTHRAN_LOG_SIDECAR_IMAGE: "{{ synthran_log_sidecar_image }}"
+    SYNTHRAN_LOGS_ENABLED: "{{ synthran_srsran_runtime_policy.logs_enabled | bool | ternary('true', 'false') }}"
+  changed_when: false
+
+- name: Ensure the shareable provenance directory exists
+  ansible.builtin.file:
+    path: "{{ run_dir }}/provenance"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Retain the resolved srsRAN runtime provenance
+  ansible.builtin.copy:
+    dest: "{{ run_dir }}/provenance/srsran-runtime.json"
+    mode: '0644'
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'source_repository': synthran_srsran_image_repository.stdout | trim,
+           'source_tag': synthran_srsran_image_tag.stdout | trim,
+           'resolved_image': synthran_srsran_image_reference,
+           'log_sidecar_image': synthran_log_sidecar_image,
+           'log_filename': '/var/log/gnb.log',
+           'remote_control_enabled': synthran_srsran_runtime_policy.remote_control.enabled | bool,
+           'remote_control_bind_addr': synthran_srsran_runtime_policy.remote_control.bind_addr
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false

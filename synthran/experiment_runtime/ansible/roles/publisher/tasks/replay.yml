@@ -1,0 +1,21 @@
+---
+- name: Replay through the upstream-managed R2Lab UE
+  command: >-
+    /opt/synthran-venv/bin/python -m synthran.cli workload replay
+    --trace /tmp/synthran-events.jsonl --gateway {{ inventory_hostname }}
+    --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
+    --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password
+    --interface wwan0
+    --start-utc {{ hostvars['localhost'].synthran_r2lab_start_utc }}
+    --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
+    --max-inflight {{ mqtt_max_inflight }} --max-queued {{ mqtt_max_queued }}
+    --output /var/log/synthran-publisher-{{ run_dir | basename }}.jsonl
+  environment:
+    PYTHONPATH: /opt/synthran-source
+  when: platform == 'r2lab'
+
+- name: Fetch publisher records
+  fetch:
+    src: "/var/log/synthran-publisher-{{ run_dir | basename }}.jsonl"
+    dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl"
+    flat: true

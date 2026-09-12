@@ -1,5 +1,0 @@
----
-- name: Prepare the physical publisher runtime
-  ansible.builtin.include_tasks: prepare.yml
-- name: Publish the physical telemetry
-  ansible.builtin.include_tasks: replay.yml

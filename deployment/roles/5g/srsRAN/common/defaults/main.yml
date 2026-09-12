@@ -18,7 +18,9 @@ kubectl_bin: "/usr/bin/kubectl"
 
 yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
-yq_url: "https://github.com/mikefarah/yq/releases/download/{{ yq_version }}/yq_linux_amd64"
+# Normal SynthRAN execution installs checksum-verified yq in network.yml.
+# A standalone role invocation fails instead of downloading unchecked bytes.
+yq_url: ""
 
 # Selected from deployment/topology.yml and included in the deployment hash.
 srsran_network: "{{ synthran_topology.network }}"

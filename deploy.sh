@@ -1,56 +1,93 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; PREPARED_WORKLOAD=""
+CONFIG=""
+CONFIG_EXPLICIT=false
+INTERACTIVE=false
+NO_INPUT=false
+NO_RESERVATION=false
+DRY_RUN=false
+VERBOSE=false
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
-    -i|--interactive) INTERACTIVE=true; shift ;;
-    -n|--no-input) NO_INPUT=true; shift ;;
-    -r|--no-reservation) NO_RESERVATION=true; shift ;;
-    --dry-run) DRY_RUN=true; shift ;;
-    --prepared-workload) PREPARED_WORKLOAD="$2"; shift 2 ;;
-    --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
-    --resume) RESUME=true; RESUME_FROM="$2"; NO_RESERVATION=true; shift 2 ;;
-    -v|--verbose) VERBOSE=true; shift ;;
-    -h|--help) echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--prepared-workload path/to/bundle] [--resume results/<failed-run>] [--dry-run] [--verbose]"; echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; exit 2 ;;
+    --config)
+      [[ $# -ge 2 ]] || { echo "--config requires a path" >&2; exit 2; }
+      CONFIG="$2"
+      CONFIG_EXPLICIT=true
+      shift 2
+      ;;
+    -i|--interactive)
+      INTERACTIVE=true
+      shift
+      ;;
+    -n|--no-input)
+      NO_INPUT=true
+      shift
+      ;;
+    -r|--no-reservation)
+      NO_RESERVATION=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--dry-run] [--verbose]"
+      echo "deploy.sh provisions and verifies the 5G testbed only. Without --config it opens the interactive testbed wizard. Experiments are intentionally handled separately."
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
   esac
 done
-if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
-if [[ -n "$PREPARED_WORKLOAD" ]] && { $RESUME || $INTERACTIVE || ! $CONFIG_EXPLICIT; }; then
-  echo "--prepared-workload requires --config and cannot be combined with --resume or --interactive" >&2
+
+if $INTERACTIVE && $NO_INPUT; then
+  echo "--interactive and --no-input cannot be used together" >&2
   exit 2
 fi
-if $RESUME && $WORKLOAD_ONLY; then echo "--resume and --workload-only cannot be combined" >&2; exit 2; fi
-if $RESUME && $INTERACTIVE; then echo "--resume cannot be combined with --interactive" >&2; exit 2; fi
-if $RESUME && $DRY_RUN; then echo "--resume cannot be combined with --dry-run" >&2; exit 2; fi
-if $RESUME && $CONFIG_EXPLICIT; then echo "--resume uses the failed run's resolved scenario and cannot be combined with --config" >&2; exit 2; fi
-if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed scenario and cannot be interactive" >&2; exit 2; fi
-if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
-if $RESUME; then
-  [[ -d "$RESUME_FROM" ]] || { echo "Resume run directory not found: $RESUME_FROM" >&2; exit 2; }
-  CONFIG="$RESUME_FROM/resolved-scenario.yml"
-  RESUME_SOURCE_CONTRACT="$RESUME_FROM/deployment-fingerprint.json"
-  RESUME_SOURCE_EVIDENCE="$RESUME_FROM/live-deployment-evidence.json"
-  RESUME_SOURCE_MODEL="$RESUME_FROM/model"
-  [[ -f "$RESUME_SOURCE_CONTRACT" ]] || { echo "Resume deployment identity not found: $RESUME_SOURCE_CONTRACT" >&2; exit 2; }
-  [[ -f "$RESUME_SOURCE_EVIDENCE" ]] || { echo "Resume attestation evidence not found: $RESUME_SOURCE_EVIDENCE" >&2; exit 2; }
-  [[ -f "$RESUME_SOURCE_MODEL/events.jsonl" ]] || { echo "Resume workload trace not found: $RESUME_SOURCE_MODEL/events.jsonl" >&2; exit 2; }
-  CONFIG_EXPLICIT=true
-else
-  RESUME_SOURCE_CONTRACT=""
-  RESUME_SOURCE_EVIDENCE=""
-  RESUME_SOURCE_MODEL=""
+if $NO_INPUT && ! $CONFIG_EXPLICIT; then
+  echo "--no-input requires --config because bare deploy is interactive" >&2
+  exit 2
 fi
-[[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
-RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"; RUN_DIR="results/$RUN_ID"; mkdir -p "$RUN_DIR"
+if $CONFIG_EXPLICIT; then
+  [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
+fi
+
+RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"
+RUN_DIR="results/$RUN_ID"
+PRIVATE_RUN_DIR="$PWD/.synthran/execution/$RUN_ID"
+mkdir -p "$RUN_DIR"
+install -d -m 0700 "$PRIVATE_RUN_DIR"
+export SYNTHRAN_PRIVATE_DIR="$PRIVATE_RUN_DIR"
 git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
+
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
-mkdir -p .synthran
-mkdir -p .synthran/r2lab
+ACTIVE_DEPLOYMENT_ENDPOINT="$PWD/.synthran/active-deployment.json"
+mkdir -p .synthran .synthran/r2lab
 R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
 export R2LAB_FARADAY_KNOWN_HOSTS
+
+if [[ -f .r2lab_config ]]; then
+  # shellcheck disable=SC1091
+  source .r2lab_config
+fi
+R2LAB_IDENTITY_FILE=${R2LAB_IDENTITY_FILE:-}
+if [[ -z "$R2LAB_IDENTITY_FILE" && -r "$HOME/.ssh/id_rsa_r2lab_duckburg" ]]; then
+  R2LAB_IDENTITY_FILE="$HOME/.ssh/id_rsa_r2lab_duckburg"
+fi
+if [[ -n "$R2LAB_IDENTITY_FILE" ]]; then
+  [[ -r "$R2LAB_IDENTITY_FILE" ]] || { echo "R2Lab SSH identity is not readable: $R2LAB_IDENTITY_FILE" >&2; exit 1; }
+fi
+export R2LAB_USERNAME="${R2LAB_USERNAME:-}" R2LAB_IDENTITY_FILE
+
 command -v flock >/dev/null || { echo "flock is required to protect deployments from overlapping runs" >&2; exit 1; }
 exec 9>.synthran/deploy.lock
 if ! flock -n 9; then
@@ -59,19 +96,13 @@ if ! flock -n 9; then
   exit 1
 fi
 printf '%s\n' "$$" 1>&9
-R2LAB_IDENTITY_FILE=${R2LAB_IDENTITY_FILE:-}
-if [[ -z "$R2LAB_IDENTITY_FILE" && -r "$HOME/.ssh/id_rsa_r2lab_duckburg" ]]; then
-  R2LAB_IDENTITY_FILE="$HOME/.ssh/id_rsa_r2lab_duckburg"
-fi
-if [[ -n "$R2LAB_IDENTITY_FILE" ]]; then
-  [[ -r "$R2LAB_IDENTITY_FILE" ]] || { echo "R2Lab SSH identity is not readable: $R2LAB_IDENTITY_FILE" >&2; exit 1; }
-  export R2LAB_IDENTITY_FILE
-fi
+
 deployment_section() {
   echo
   echo "$1"
   printf '%*s\n' "${#1}" '' | tr ' ' '-'
 }
+
 if [[ -x .venv/bin/python ]]; then
   SYNTHRAN_PYTHON=.venv/bin/python
 else
@@ -79,12 +110,9 @@ else
   python3 -m venv .venv
   SYNTHRAN_PYTHON=.venv/bin/python
 fi
+
 deployment_section "Preparing the local SynthRAN runtime"
-if ! "$SYNTHRAN_PYTHON" -m pip install --disable-pip-version-check -e '.[deployment]' >"$RUN_DIR/bootstrap.log" 2>&1; then
-  cat "$RUN_DIR/bootstrap.log" >&2
-  echo "Runtime preparation failed; full output: $RUN_DIR/bootstrap.log" >&2
-  exit 1
-fi
+"$SYNTHRAN_PYTHON" -m synthran.runtime deployment --log "$RUN_DIR/bootstrap.log"
 
 choose_sop_node() {
   local label="$1" default_node="$2" node_choice
@@ -105,23 +133,6 @@ choose_sop_node() {
   esac
 }
 
-show_r2lab_hosts() {
-  local index experiment_node
-  echo "R2Lab auxiliary hosts (optional)"
-  for index in $(seq 1 41); do
-    if (( index <= 37 )); then
-      printf -v experiment_node 'fit%02d' "$index"
-    else
-      printf -v experiment_node 'pc%02d' "$((index - 37))"
-    fi
-    printf '%2d) %-6s' "$index" "$experiment_node"
-    if (( index % 4 == 0 )); then echo; else printf '  '; fi
-  done
-  (( 41 % 4 == 0 )) || echo
-  echo "Enter names or numbers/ranges (for example fit01,pc01 or 1,38-39)."
-  echo "Enter 'none' to clear a role. Press Enter to keep its loaded default."
-}
-
 show_r2lab_matrix() {
   cat <<'MATRIX'
 
@@ -130,39 +141,129 @@ R2Lab resource matrix
 5G radio units selectable by SynthRAN
   1) n300      USRP N300, SophiaNode fiber, 2x2 antenna
   2) n320      USRP N320, SophiaNode fiber, 4x4 antenna
-  3) benetel1  RAN550 O-RU, band n78, 4T4R, 100 MHz
-  4) benetel2  RAN550 O-RU, band n78, 4T4R, 100 MHz
 
-Physical 5G UEs selectable by SynthRAN
-  1) qhat01  RM500Q-GL FR1 / MBIM       6) qhat20  RG255C-GL RedCap / QMI
-  2) qhat02  RM500Q-GL FR1 / MBIM       7) qhat21  RG255C-GL RedCap / QMI
-  3) qhat03  RM500Q-GL FR1 / MBIM       8) qhat22  RG255C-GL RedCap / QMI
-  4) qhat10  RM520N-GL FR1 / MBIM       9) qhat23  RG255C-GL RedCap / QMI
-  5) qhat11  RM520N-GL FR1 / MBIM      10) qfit07  RM500Q-GL FR1 / MBIM
- 11) qfit09  RM500Q-GL FR1 / MBIM      12) qfit18  RM500Q-GL FR1 / MBIM
- 13) qfit29  RM500Q-GL FR1 / MBIM      14) qfit32  RM500Q-GL FR1 / MBIM
- 15) qfit34  RM500Q-GL FR1 / MBIM
-
-Auxiliary hosts selectable by SynthRAN
-  fit01-fit37  General compute, Wi-Fi, sensor/workload, edge, or collection
-  pc01-pc02    Ryzen/32 GB compute with controllable USRP B210 (RF eligible)
-  pc03-pc04    MiniPC with RG530F FR2 device (compute roles only)
-
-R2Lab hardware not yet integrated as a SynthRAN transport endpoint
-  Jaguar/Panther AW2S RUs, LITEON FlexFi O-RU, phone1/phone2,
-  rg530f-01/rg530f-02 FR2 UEs, and arbitrary FIT-attached legacy SDRs.
-
-Availability/health is live testbed state and is verified during reservation and provisioning.
+Physical 5G UEs are discovered from the platform-independent UE catalog.
+Availability and health are verified during reservation and provisioning.
 MATRIX
 }
 
-expand_r2lab_ue_selection() {
+discover_network_profiles() {
+  local path name
+  local paths=()
+  shopt -s nullglob
+  paths=(deployment/group_vars/all/network_profile_*.yaml)
+  shopt -u nullglob
+  for path in "${paths[@]}"; do
+    name="$(basename -- "$path")"
+    name="${name#network_profile_}"
+    name="${name%.yaml}"
+    printf '%s\n' "$name"
+  done
+}
+
+choose_network_profile() {
+  local default_profile="$1" profile_choice default_choice=1 index
+  mapfile -t AVAILABLE_NETWORK_PROFILES < <(discover_network_profiles)
+  [[ ${#AVAILABLE_NETWORK_PROFILES[@]} -gt 0 ]] || {
+    echo "No network profiles found under deployment/group_vars/all/network_profile_*.yaml" >&2
+    exit 1
+  }
+
+  for index in "${!AVAILABLE_NETWORK_PROFILES[@]}"; do
+    if [[ "${AVAILABLE_NETWORK_PROFILES[$index]}" == "$default_profile" ]]; then
+      default_choice=$((index + 1))
+      break
+    fi
+  done
+
+  echo
+  echo "Available network profiles"
+  echo "--------------------------"
+  for index in "${!AVAILABLE_NETWORK_PROFILES[@]}"; do
+    printf '  %2d) %s\n' "$((index + 1))" "${AVAILABLE_NETWORK_PROFILES[$index]}"
+  done
+  read -r -p "Select network profile [$default_choice]: " profile_choice
+  profile_choice=${profile_choice:-$default_choice}
+  [[ "$profile_choice" =~ ^[1-9][0-9]*$ ]] || { echo "Network profile choice must be a number" >&2; exit 2; }
+  (( profile_choice >= 1 && profile_choice <= ${#AVAILABLE_NETWORK_PROFILES[@]} )) || {
+    echo "Network profile choice must be within 1-${#AVAILABLE_NETWORK_PROFILES[@]}" >&2
+    exit 2
+  }
+  SELECTED_NETWORK_PROFILE="${AVAILABLE_NETWORK_PROFILES[$((profile_choice - 1))]}"
+}
+
+catalog_ues() {
   "$SYNTHRAN_PYTHON" - "$1" <<'PY'
-import sys
-names = ['qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34']
-value = sys.argv[1].strip().lower()
+import sys, yaml
+from pathlib import Path
+platform = sys.argv[1]
+catalog = Path('deployment/group_vars/all/ue_catalog.yaml')
+data = yaml.safe_load(catalog.read_text()) or {}
+for name, ue in (data.get('ues') or {}).items():
+    if str(ue.get('platform', '')).lower() != platform:
+        continue
+    mode = str(ue.get('mode', 'software' if platform == 'rfsim' else 'mbim')).upper()
+    interface = str(ue.get('interface', '-'))
+    print(f"{name}\t{mode}\t{interface}")
+PY
+}
+
+print_ue_matrix() {
+  local platform="$1"
+  shift
+  local rows=("$@")
+  local entries=()
+  local index ue_name ue_mode ue_interface entry
+  local max_width=0 cell_width terminal_width columns fit row_end
+
+  for index in "${!rows[@]}"; do
+    IFS=$'\t' read -r ue_name ue_mode ue_interface <<<"${rows[$index]}"
+    if [[ "$platform" == r2lab ]]; then
+      printf -v entry '%2d) %s [%s/%s]' "$((index + 1))" "$ue_name" "$ue_mode" "$ue_interface"
+    else
+      printf -v entry '%2d) %s' "$((index + 1))" "$ue_name"
+    fi
+    entries+=("$entry")
+    (( ${#entry} > max_width )) && max_width=${#entry}
+  done
+
+  cell_width=$((max_width + 3))
+  terminal_width=${COLUMNS:-}
+  if [[ ! "$terminal_width" =~ ^[1-9][0-9]*$ ]]; then
+    terminal_width=$(tput cols 2>/dev/null || printf '120')
+  fi
+  fit=$((terminal_width / cell_width))
+  (( fit < 1 )) && fit=1
+  columns=4
+  (( fit < columns )) && columns=$fit
+
+  for index in "${!entries[@]}"; do
+    row_end=false
+    if (( (index + 1) % columns == 0 || index + 1 == ${#entries[@]} )); then
+      row_end=true
+    fi
+    if $row_end; then
+      printf '  %s\n' "${entries[$index]}"
+    else
+      printf '  %-*s' "$cell_width" "${entries[$index]}"
+    fi
+  done
+}
+
+expand_ue_selection() {
+  "$SYNTHRAN_PYTHON" - "$1" "$2" <<'PY'
+import sys, yaml
+from pathlib import Path
+platform, value = sys.argv[1], sys.argv[2].strip().lower()
+data = yaml.safe_load(Path('deployment/group_vars/all/ue_catalog.yaml').read_text()) or {}
+names = [
+    name for name, ue in (data.get('ues') or {}).items()
+    if str(ue.get('platform', '')).lower() == platform
+]
 chosen = []
 for part in value.replace(' ', '').split(','):
+    if not part:
+        continue
     if part in names:
         selected = [part]
     else:
@@ -170,9 +271,9 @@ for part in value.replace(' ', '').split(','):
         try:
             start, stop = int(bounds[0]), int(bounds[-1])
         except ValueError:
-            raise SystemExit(f'Invalid physical UE selection: {part}')
+            raise SystemExit(f'Invalid UE selection: {part}')
         if start > stop or start < 1 or stop > len(names):
-            raise SystemExit(f'Physical UE range must be ascending and within 1-{len(names)}: {part}')
+            raise SystemExit(f'UE range must be ascending and within 1-{len(names)}: {part}')
         selected = names[start - 1:stop]
     for name in selected:
         if name not in chosen:
@@ -181,49 +282,111 @@ print(','.join(chosen))
 PY
 }
 
-expand_r2lab_selection() {
+network_profile_slices() {
   "$SYNTHRAN_PYTHON" - "$1" <<'PY'
-import re, sys
-value = sys.argv[1].strip().lower()
-if value in {'', 'none', '-'}:
-    print('')
-    raise SystemExit
-chosen = []
-for part in value.replace(' ', '').split(','):
-    if re.fullmatch(r'(fit(?:0[1-9]|[12][0-9]|3[0-7])|pc0[1-4])', part):
-        names = [part]
-    else:
-        bounds = part.split('-', 1)
-        try:
-            start, stop = int(bounds[0]), int(bounds[-1])
-        except ValueError:
-            raise SystemExit(f'Invalid R2Lab host selection: {part}')
-        if start > stop or start < 1 or stop > 41:
-            raise SystemExit(f'R2Lab host range must be ascending and within 1-41: {part}')
-        names = [f'fit{number:02d}' if number <= 37 else f'pc{number - 37:02d}' for number in range(start, stop + 1)]
-    for name in names:
-        if name not in chosen:
-            chosen.append(name)
-print(','.join(chosen))
+import sys, yaml
+from pathlib import Path
+path = Path('deployment/group_vars/all') / f'network_profile_{sys.argv[1]}.yaml'
+data = yaml.safe_load(path.read_text()) or {}
+for item in data.get('slices') or []:
+    qos = item.get('qos') or {}
+    bw = item.get('bandwidth') or {}
+    print('\t'.join([
+        str(item.get('name', '')),
+        str(item.get('dnn', '')),
+        str(item.get('sst', '')),
+        str(item.get('sd', '')),
+        str(qos.get('five_qi', '')),
+        str(bw.get('uplink', '')),
+        str(bw.get('downlink', '')),
+    ]))
+PY
+}
+
+base_slice_default() {
+  local base_config="$1" profile="$2" ue="$3"
+  [[ -n "$base_config" && -f "$base_config" ]] || return 0
+  "$SYNTHRAN_PYTHON" - "$base_config" "$profile" "$ue" <<'PY'
+import sys, yaml
+from pathlib import Path
+path, profile, ue = sys.argv[1:]
+data = yaml.safe_load(Path(path).read_text()) or {}
+d = data.get('deployment') or {}
+if d.get('network_profile') == profile:
+    value = (d.get('ue_slices') or {}).get(ue)
+    if value:
+        print(value)
+PY
+}
+
+describe_ue_slice_assignments() {
+  "$SYNTHRAN_PYTHON" - "$1" "$2" <<'PY'
+import sys, yaml
+from pathlib import Path
+profile_name, spec = sys.argv[1:]
+profile = yaml.safe_load((Path('deployment/group_vars/all') / f'network_profile_{profile_name}.yaml').read_text()) or {}
+by_name = {s['name']: s for s in profile.get('slices') or []}
+for pair in filter(None, spec.split(',')):
+    ue, slice_name = pair.split('=', 1)
+    s = by_name[slice_name]
+    print(f"  {ue}: {slice_name} / {s['dnn']} / SST {s['sst']} / SD {s['sd']}")
 PY
 }
 
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   BASE_CONFIG="$CONFIG"
-  mapfile -t SCENARIO_DEFAULTS < <("$SYNTHRAN_PYTHON" - "$BASE_CONFIG" <<'PY'
+
+  DEFAULT_CORE=open5gs
+  DEFAULT_RAN=srsran
+  DEFAULT_PLATFORM=rfsim
+  DEFAULT_RU=rfsim
+  DEFAULT_CORE_NODE=sopnode-f2
+  DEFAULT_RAN_NODE=sopnode-f3
+  DEFAULT_BROKER_NODE=sopnode-f2
+  DEFAULT_NETWORK_PROFILE=default
+  DEFAULT_UES=uesim01,uesim02
+  DEFAULT_RESERVE=true
+  DEFAULT_DURATION=120
+  DEFAULT_POS_IMAGE=ubuntu-jammy
+  DEFAULT_R2LAB_USERNAME=${R2LAB_USERNAME:-}
+  DEFAULT_R2LAB_RESERVE=true
+  DEFAULT_R2LAB_DURATION=120
+
+  if [[ -n "$BASE_CONFIG" ]]; then
+    mapfile -t SCENARIO_DEFAULTS < <("$SYNTHRAN_PYTHON" - "$BASE_CONFIG" <<'PY'
 import sys, yaml
 from pathlib import Path
-d = yaml.safe_load(Path(sys.argv[1]).read_text())['deployment']
-n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservation', {}); extra = d.get('r2lab_experiment_nodes', {})
-values = [d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'), n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')), d.get('profile','default'), ','.join(d.get('ues',[])), str(r.get('enabled',True)).lower(), str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''), str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120)), ','.join(extra.get('sensor',[])), ','.join(extra.get('edge',[])), ','.join(extra.get('rf_measurement',[])), extra.get('image','ubuntu')]
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+d = data.get('deployment') or {}
+n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservation', {})
+values = [
+    d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'),
+    n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')),
+    d.get('network_profile','default'), ','.join(d.get('ues',[])), str(r.get('enabled',True)).lower(),
+    str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''),
+    str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120))
+]
 print('\n'.join(str(value) for value in values))
 PY
-  )
-  DEFAULT_CORE=${SCENARIO_DEFAULTS[0]}; DEFAULT_RAN=${SCENARIO_DEFAULTS[1]}; DEFAULT_PLATFORM=${SCENARIO_DEFAULTS[2]}; DEFAULT_RU=${SCENARIO_DEFAULTS[3]}
-  DEFAULT_CORE_NODE=${SCENARIO_DEFAULTS[4]}; DEFAULT_RAN_NODE=${SCENARIO_DEFAULTS[5]}; DEFAULT_BROKER_NODE=${SCENARIO_DEFAULTS[6]}; DEFAULT_PROFILE=${SCENARIO_DEFAULTS[7]}; DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
-  DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}; DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}; DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}; DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
-  DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}; DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}; DEFAULT_SENSOR_NODES=${SCENARIO_DEFAULTS[15]}; DEFAULT_EDGE_NODES=${SCENARIO_DEFAULTS[16]}; DEFAULT_RF_NODES=${SCENARIO_DEFAULTS[17]}; DEFAULT_R2LAB_IMAGE=${SCENARIO_DEFAULTS[18]}
+    )
+    DEFAULT_CORE=${SCENARIO_DEFAULTS[0]}
+    DEFAULT_RAN=${SCENARIO_DEFAULTS[1]}
+    DEFAULT_PLATFORM=${SCENARIO_DEFAULTS[2]}
+    DEFAULT_RU=${SCENARIO_DEFAULTS[3]}
+    DEFAULT_CORE_NODE=${SCENARIO_DEFAULTS[4]}
+    DEFAULT_RAN_NODE=${SCENARIO_DEFAULTS[5]}
+    DEFAULT_BROKER_NODE=${SCENARIO_DEFAULTS[6]}
+    DEFAULT_NETWORK_PROFILE=${SCENARIO_DEFAULTS[7]}
+    DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
+    DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}
+    DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}
+    DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}
+    DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
+    DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}
+    DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}
+  fi
+
   echo
   printf '\033[1;36m'
   cat <<'BANNER'
@@ -234,26 +397,37 @@ PY
  ____) | |_| | | | | |_| | | | | \ \  / ____ \| |\  |
 |_____/ \__, |_| |_|\__|_| |_|_|  \_\/_/    \_\_| \_|
          __/ |
-        |___/       Energy-aware 5G/6G deployment
+        |___/       5G/6G testbed deployment
 BANNER
   printf '\033[0m'
+
   echo
-  case "$DEFAULT_CORE" in oai) DEFAULT_CORE_CHOICE=1;; open5gs) DEFAULT_CORE_CHOICE=2;; free5gc) DEFAULT_CORE_CHOICE=3;; esac
+  case "$DEFAULT_CORE" in oai) DEFAULT_CORE_CHOICE=1;; open5gs) DEFAULT_CORE_CHOICE=2;; free5gc) DEFAULT_CORE_CHOICE=3;; *) DEFAULT_CORE_CHOICE=2;; esac
   echo "Which CORE do you want to deploy? (default: $DEFAULT_CORE)"
   echo "1) OAI"
   echo "2) Open5GS"
   echo "3) Free5GC"
   read -r -p "Enter choice [1-3]: " CORE_CHOICE
-  case "${CORE_CHOICE:-$DEFAULT_CORE_CHOICE}" in 1) SELECTED_CORE=oai;; 2) SELECTED_CORE=open5gs;; 3) SELECTED_CORE=free5gc;; *) echo "Invalid core choice" >&2; exit 2;; esac
+  case "${CORE_CHOICE:-$DEFAULT_CORE_CHOICE}" in
+    1) SELECTED_CORE=oai ;;
+    2) SELECTED_CORE=open5gs ;;
+    3) SELECTED_CORE=free5gc ;;
+    *) echo "Invalid core choice" >&2; exit 2 ;;
+  esac
 
   echo
-  case "$DEFAULT_RAN" in oai) DEFAULT_RAN_CHOICE=1;; srsran) DEFAULT_RAN_CHOICE=2;; ueransim) DEFAULT_RAN_CHOICE=3;; esac
+  case "$DEFAULT_RAN" in oai) DEFAULT_RAN_CHOICE=1;; srsran) DEFAULT_RAN_CHOICE=2;; ueransim) DEFAULT_RAN_CHOICE=3;; *) DEFAULT_RAN_CHOICE=2;; esac
   echo "Which RAN do you want to deploy? (default: $DEFAULT_RAN)"
   echo "1) OAI"
   echo "2) srsRAN"
   echo "3) UERANSIM"
   read -r -p "Enter choice [1-3]: " RAN_CHOICE
-  case "${RAN_CHOICE:-$DEFAULT_RAN_CHOICE}" in 1) SELECTED_RAN=oai;; 2) SELECTED_RAN=srsran;; 3) SELECTED_RAN=ueransim;; *) echo "Invalid RAN choice" >&2; exit 2;; esac
+  case "${RAN_CHOICE:-$DEFAULT_RAN_CHOICE}" in
+    1) SELECTED_RAN=oai ;;
+    2) SELECTED_RAN=srsran ;;
+    3) SELECTED_RAN=ueransim ;;
+    *) echo "Invalid RAN choice" >&2; exit 2 ;;
+  esac
 
   echo
   [[ "$DEFAULT_PLATFORM" == r2lab ]] && DEFAULT_PLATFORM_CHOICE=2 || DEFAULT_PLATFORM_CHOICE=1
@@ -261,22 +435,35 @@ BANNER
   echo "1) RFSIM"
   echo "2) R2Lab physical radio"
   read -r -p "Enter choice [1-2]: " PLATFORM_CHOICE
-  case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in 1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim;; 2) SELECTED_PLATFORM=r2lab;; *) echo "Invalid platform choice" >&2; exit 2;; esac
+  case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in
+    1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim ;;
+    2) SELECTED_PLATFORM=r2lab ;;
+    *) echo "Invalid platform choice" >&2; exit 2 ;;
+  esac
+  if [[ "$SELECTED_PLATFORM" == r2lab && "$SELECTED_RAN" == ueransim ]]; then
+    echo "UERANSIM is a software RAN and cannot drive an R2Lab physical radio" >&2
+    exit 2
+  fi
 
   if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
     show_r2lab_matrix
     echo
-    case "$DEFAULT_RU" in n300) DEFAULT_RU_CHOICE=1;; n320) DEFAULT_RU_CHOICE=2;; benetel1) DEFAULT_RU_CHOICE=3;; benetel2) DEFAULT_RU_CHOICE=4;; *) DEFAULT_RU_CHOICE=1;; esac
+    case "$DEFAULT_RU" in
+      n300) DEFAULT_RU_CHOICE=1 ;;
+      n320) DEFAULT_RU_CHOICE=2 ;;
+      *) DEFAULT_RU=n300; DEFAULT_RU_CHOICE=1 ;;
+    esac
     echo "Which radio unit do you want to use? (default: $DEFAULT_RU)"
     echo "1) n300"
     echo "2) n320"
-    echo "3) benetel1"
-    echo "4) benetel2"
-    read -r -p "Enter choice [1-4]: " RU_CHOICE
-    case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in 1) SELECTED_RU=n300;; 2) SELECTED_RU=n320;; 3) SELECTED_RU=benetel1;; 4) SELECTED_RU=benetel2;; *) echo "Invalid RU choice" >&2; exit 2;; esac
+    read -r -p "Enter choice [1-2]: " RU_CHOICE
+    case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in
+      1) SELECTED_RU=n300 ;;
+      2) SELECTED_RU=n320 ;;
+      *) echo "Invalid RU choice" >&2; exit 2 ;;
+    esac
+
     if [[ -f .r2lab_config ]]; then
-      # shellcheck disable=SC1091
-      source .r2lab_config
       SELECTED_R2LAB_USERNAME=${R2LAB_USERNAME:-$DEFAULT_R2LAB_USERNAME}
       echo "Using saved R2Lab credentials for ${SELECTED_R2LAB_USERNAME:-unknown}"
     else
@@ -289,8 +476,11 @@ BANNER
         printf 'R2LAB_USERNAME=%q\nR2LAB_EMAIL=%q\nR2LAB_PASSWORD=%q\n' \
           "$SELECTED_R2LAB_USERNAME" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" > .r2lab_config
       )
+      export R2LAB_USERNAME="$SELECTED_R2LAB_USERNAME" R2LAB_EMAIL R2LAB_PASSWORD
     fi
     [[ -n "$SELECTED_R2LAB_USERNAME" ]] || { echo "R2Lab username is required" >&2; exit 2; }
+    export R2LAB_USERNAME="$SELECTED_R2LAB_USERNAME"
+
     [[ "$DEFAULT_R2LAB_RESERVE" == true ]] && R2LAB_RESERVE_PROMPT="Y/n" || R2LAB_RESERVE_PROMPT="y/N"
     read -r -p "Reserve the R2Lab testbed? [$R2LAB_RESERVE_PROMPT]: " R2LAB_RESERVE_CHOICE
     SELECTED_R2LAB_RESERVE=$DEFAULT_R2LAB_RESERVE
@@ -302,416 +492,313 @@ BANNER
       SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-$DEFAULT_R2LAB_DURATION}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
-    echo
-    echo "Extra sensor, edge, and measurement hosts are not required for the 5G/UE experiment."
-    [[ -n "$DEFAULT_SENSOR_NODES$DEFAULT_EDGE_NODES$DEFAULT_RF_NODES" ]] && EXTRA_PROMPT="Y/n" || EXTRA_PROMPT="y/N"
-    read -r -p "Configure optional auxiliary R2Lab hosts? [$EXTRA_PROMPT]: " R2LAB_EXPERIMENT_CHOICE
-    if [[ "${R2LAB_EXPERIMENT_CHOICE:-}" =~ ^[Nn]$ ]]; then
-      SELECTED_R2LAB_SENSOR_NODES=""; SELECTED_R2LAB_EDGE_NODES=""; SELECTED_R2LAB_RF_NODES=""
-      SELECTED_R2LAB_NODE_IMAGE=$DEFAULT_R2LAB_IMAGE
-    elif [[ -n "$DEFAULT_SENSOR_NODES$DEFAULT_EDGE_NODES$DEFAULT_RF_NODES" || "${R2LAB_EXPERIMENT_CHOICE:-}" =~ ^[Yy]$ ]]; then
-      show_r2lab_hosts
-      echo "Sensor/workload: runs auxiliary workloads and receives the frozen event trace."
-      read -r -p "Sensor/workload hosts [$DEFAULT_SENSOR_NODES]: " R2LAB_SENSOR_INPUT
-      [[ -z "$R2LAB_SENSOR_INPUT" ]] && SELECTED_R2LAB_SENSOR_NODES=$DEFAULT_SENSOR_NODES || SELECTED_R2LAB_SENSOR_NODES=$(expand_r2lab_selection "$R2LAB_SENSOR_INPUT")
-      echo "Edge/collector: auxiliary processing and evidence collection; no automatic 5G route."
-      read -r -p "Edge/collector hosts [$DEFAULT_EDGE_NODES]: " R2LAB_EDGE_INPUT
-      [[ -z "$R2LAB_EDGE_INPUT" ]] && SELECTED_R2LAB_EDGE_NODES=$DEFAULT_EDGE_NODES || SELECTED_R2LAB_EDGE_NODES=$(expand_r2lab_selection "$R2LAB_EDGE_INPUT")
-      echo "RF measurement: powers and validates an attached SDR; pc01/pc02 have explicit support."
-      read -r -p "RF-measurement hosts [$DEFAULT_RF_NODES]: " R2LAB_RF_INPUT
-      [[ -z "$R2LAB_RF_INPUT" ]] && SELECTED_R2LAB_RF_NODES=$DEFAULT_RF_NODES || SELECTED_R2LAB_RF_NODES=$(expand_r2lab_selection "$R2LAB_RF_INPUT")
-      read -r -p "R2Lab auxiliary-node image [$DEFAULT_R2LAB_IMAGE]: " SELECTED_R2LAB_NODE_IMAGE
-      SELECTED_R2LAB_NODE_IMAGE=${SELECTED_R2LAB_NODE_IMAGE:-$DEFAULT_R2LAB_IMAGE}
-    else
-      SELECTED_R2LAB_SENSOR_NODES=""; SELECTED_R2LAB_EDGE_NODES=""; SELECTED_R2LAB_RF_NODES=""
-      SELECTED_R2LAB_NODE_IMAGE=$DEFAULT_R2LAB_IMAGE
-    fi
   else
     SELECTED_R2LAB_USERNAME=""
     SELECTED_R2LAB_RESERVE=false
     SELECTED_R2LAB_DURATION=120
-    SELECTED_R2LAB_SENSOR_NODES=""
-    SELECTED_R2LAB_EDGE_NODES=""
-    SELECTED_R2LAB_RF_NODES=""
-    SELECTED_R2LAB_NODE_IMAGE=ubuntu
   fi
 
-  choose_sop_node "core" "$DEFAULT_CORE_NODE"; SELECTED_CORE_NODE="$SELECTED_NODE"
-  choose_sop_node "RAN" "$DEFAULT_RAN_NODE"; SELECTED_RAN_NODE="$SELECTED_NODE"
+  choose_sop_node "core" "$DEFAULT_CORE_NODE"
+  SELECTED_CORE_NODE="$SELECTED_NODE"
+  choose_sop_node "RAN" "$DEFAULT_RAN_NODE"
+  SELECTED_RAN_NODE="$SELECTED_NODE"
   SELECTED_BROKER_NODE="$SELECTED_CORE_NODE"
-  read -r -p "5G profile [$DEFAULT_PROFILE]: " SELECTED_PROFILE; SELECTED_PROFILE=${SELECTED_PROFILE:-$DEFAULT_PROFILE}
+
+  mapfile -t CATALOG_UE_ROWS < <(catalog_ues "$SELECTED_PLATFORM")
+  [[ ${#CATALOG_UE_ROWS[@]} -gt 0 ]] || { echo "UE catalog defines no UEs for platform $SELECTED_PLATFORM" >&2; exit 2; }
+  CATALOG_UE_NAMES=()
+  for index in "${!CATALOG_UE_ROWS[@]}"; do
+    IFS=$'\t' read -r ue_name _ue_mode _ue_interface <<<"${CATALOG_UE_ROWS[$index]}"
+    CATALOG_UE_NAMES+=("$ue_name")
+  done
+  echo
+  if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
+    echo "Available R2Lab UEs"
+  else
+    echo "Available RFSIM UEs"
+  fi
+  echo "--------------------"
+  print_ue_matrix "$SELECTED_PLATFORM" "${CATALOG_UE_ROWS[@]}"
+
+  if [[ "$DEFAULT_PLATFORM" != "$SELECTED_PLATFORM" || -z "$DEFAULT_UES" ]]; then
+    if [[ "$SELECTED_PLATFORM" == rfsim && ${#CATALOG_UE_NAMES[@]} -ge 2 ]]; then
+      DEFAULT_UES="${CATALOG_UE_NAMES[0]},${CATALOG_UE_NAMES[1]}"
+    else
+      DEFAULT_UES="${CATALOG_UE_NAMES[0]}"
+    fi
+  fi
+  read -r -p "UEs [$DEFAULT_UES]: " UE_INPUT
+  if [[ -z "$UE_INPUT" ]]; then
+    SELECTED_UES=$(expand_ue_selection "$SELECTED_PLATFORM" "$DEFAULT_UES")
+  else
+    SELECTED_UES=$(expand_ue_selection "$SELECTED_PLATFORM" "$UE_INPUT")
+  fi
+  [[ -n "$SELECTED_UES" ]] || { echo "At least one UE is required" >&2; exit 2; }
+
+  choose_network_profile "$DEFAULT_NETWORK_PROFILE"
+
+  mapfile -t NETWORK_SLICE_ROWS < <(network_profile_slices "$SELECTED_NETWORK_PROFILE")
+  [[ ${#NETWORK_SLICE_ROWS[@]} -gt 0 ]] || { echo "Selected network profile has no slices" >&2; exit 2; }
+  SLICE_NAMES=()
+  echo
+  echo "Slices in network profile $SELECTED_NETWORK_PROFILE"
+  echo "-----------------------------------------------"
+  for index in "${!NETWORK_SLICE_ROWS[@]}"; do
+    IFS=$'\t' read -r slice_name slice_dnn slice_sst slice_sd slice_5qi slice_ul slice_dl <<<"${NETWORK_SLICE_ROWS[$index]}"
+    SLICE_NAMES+=("$slice_name")
+    printf '  %2d) %-8s DNN=%-10s SST=%s SD=%-6s 5QI=%s UL=%s DL=%s\n' \
+      "$((index + 1))" "$slice_name" "$slice_dnn" "$slice_sst" "$slice_sd" "$slice_5qi" "$slice_ul" "$slice_dl"
+  done
+
+  IFS=',' read -r -a SELECTED_UE_ARRAY <<<"$SELECTED_UES"
+  UE_SLICE_ASSIGNMENTS=()
+  for ue_name in "${SELECTED_UE_ARRAY[@]}"; do
+    default_slice=$(base_slice_default "$BASE_CONFIG" "$SELECTED_NETWORK_PROFILE" "$ue_name")
+    default_slice_index=1
+    if [[ -n "$default_slice" ]]; then
+      for index in "${!SLICE_NAMES[@]}"; do
+        if [[ "${SLICE_NAMES[$index]}" == "$default_slice" ]]; then
+          default_slice_index=$((index + 1))
+          break
+        fi
+      done
+    fi
+    read -r -p "Slice for $ue_name [$default_slice_index]: " slice_choice
+    slice_choice=${slice_choice:-$default_slice_index}
+    [[ "$slice_choice" =~ ^[1-9][0-9]*$ ]] || { echo "Slice choice for $ue_name must be a number" >&2; exit 2; }
+    (( slice_choice >= 1 && slice_choice <= ${#SLICE_NAMES[@]} )) || {
+      echo "Slice choice for $ue_name must be within 1-${#SLICE_NAMES[@]}" >&2
+      exit 2
+    }
+    UE_SLICE_ASSIGNMENTS+=("$ue_name=${SLICE_NAMES[$((slice_choice - 1))]}")
+  done
+  SELECTED_UE_SLICE_SPEC=$(IFS=,; echo "${UE_SLICE_ASSIGNMENTS[*]}")
+
   [[ "$DEFAULT_RESERVE" == true ]] && RESERVE_PROMPT="Y/n" || RESERVE_PROMPT="y/N"
   read -r -p "Ensure selected SOP nodes are reserved? [$RESERVE_PROMPT]: " RESERVE_CHOICE
   SELECTED_RESERVE=$DEFAULT_RESERVE
   [[ "${RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_RESERVE=true
   [[ "${RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_RESERVE=false
   if $SELECTED_RESERVE; then
-    read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION; SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
+    read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION
+    SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
     [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
-    read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
+    read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE
+    SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
   fi
-  SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}; SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
-  if [[ "$SELECTED_PLATFORM" == rfsim ]]; then
-    [[ "$DEFAULT_PLATFORM" == rfsim ]] || DEFAULT_UES="uesim01,uesim02"
-    read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
-    SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
-  else
-    [[ "$DEFAULT_PLATFORM" == r2lab ]] || DEFAULT_UES="qhat01"
-    echo "Choose physical UEs by name or number/range, for example qhat01,qfit07 or 1-3,10."
-    read -r -p "Physical UEs [$DEFAULT_UES]: " R2LAB_UE_INPUT
-    [[ -z "$R2LAB_UE_INPUT" ]] && SELECTED_UES=$DEFAULT_UES || SELECTED_UES=$(expand_r2lab_ue_selection "$R2LAB_UE_INPUT")
-    [[ -n "$SELECTED_UES" ]] || { echo "At least one physical UE is required" >&2; exit 2; }
-  fi
+  SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
+  SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" "$SELECTED_R2LAB_SENSOR_NODES" "$SELECTED_R2LAB_EDGE_NODES" "$SELECTED_R2LAB_RF_NODES" "$SELECTED_R2LAB_NODE_IMAGE" <<'PY'
-import sys, yaml
+  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_NETWORK_PROFILE" "$SELECTED_UES" "$SELECTED_UE_SLICE_SPEC" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
+import copy
+import sys
 from pathlib import Path
-from synthran.scenario import remap_gateways
-source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration, sensor_csv, edge_csv, rf_csv, r2_image = sys.argv[1:]
-scenario = yaml.safe_load(Path(source).read_text())
-trace = scenario.get('model', {}).get('energy', {}).get('trace')
-if trace and not str(trace).startswith('builtin:'):
-    scenario['model']['energy']['trace'] = str((Path(source).resolve().parent / trace).resolve())
-for device in scenario.get('devices', {}).values():
-    trace = device.get('energy', {}).get('trace')
-    if trace and not str(trace).startswith('builtin:'):
-        device['energy']['trace'] = str((Path(source).resolve().parent / trace).resolve())
+import yaml
+
+(
+    source, output, core, ran, platform, ru, core_node, ran_node, broker_node,
+    network_profile, ue_csv, ue_slice_spec, r2lab_username, reserve, duration,
+    pos_image, r2_reserve, r2_duration,
+) = sys.argv[1:]
+source_data = {}
+if source:
+    source_data = yaml.safe_load(Path(source).read_text()) or {}
+dep = copy.deepcopy(source_data.get('deployment') or {})
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
-def r2nodes(value):
-    nodes = list(dict.fromkeys(name.strip() for name in value.split(',') if name.strip()))
-    invalid = [name for name in nodes if not ((name.startswith('fit') and name[3:].isdigit() and 1 <= int(name[3:]) <= 37) or (name.startswith('pc') and name[2:].isdigit() and 1 <= int(name[2:]) <= 4))]
-    if invalid: raise SystemExit('Unsupported R2Lab experiment node(s): ' + ', '.join(invalid))
-    return nodes
-sensor_nodes, edge_nodes, rf_nodes = map(r2nodes, (sensor_csv, edge_csv, rf_csv))
-duplicates = (set(sensor_nodes) & set(edge_nodes)) | (set(sensor_nodes) & set(rf_nodes)) | (set(edge_nodes) & set(rf_nodes))
-if duplicates: raise SystemExit('R2Lab nodes may have only one experiment role: ' + ', '.join(sorted(duplicates)))
-if not ues: raise SystemExit('At least one UE is required')
-physical_ues = {'qhat01','qhat02','qhat03','qhat10','qhat11','qhat20','qhat21','qhat22','qhat23','qfit07','qfit09','qfit18','qfit29','qfit32','qfit34'}
-if platform == 'r2lab' and not set(ues) <= physical_ues: raise SystemExit('Unsupported R2Lab physical UE(s): ' + ', '.join(sorted(set(ues) - physical_ues)))
-if platform == 'r2lab' and ran == 'ueransim': raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
-remap_gateways(scenario, ues)
-scenario['deployment'].update({'core': core, 'ran': ran, 'platform': platform, 'profile': profile, 'ru': ru, 'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node}})
-scenario['deployment']['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
-scenario['deployment']['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
-scenario['deployment']['r2lab_experiment_nodes'] = {'sensor': sensor_nodes, 'edge': edge_nodes, 'rf_measurement': rf_nodes, 'image': r2_image}
-if r2lab_username: scenario['deployment']['r2lab_username'] = r2lab_username
-Path(output).write_text(yaml.safe_dump(scenario, sort_keys=False))
+if not ues:
+    raise SystemExit('At least one UE is required')
+if platform == 'r2lab' and ran == 'ueransim':
+    raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
+ue_slices = {}
+for pair in filter(None, ue_slice_spec.split(',')):
+    name, slice_name = pair.split('=', 1)
+    ue_slices[name] = slice_name
+if set(ue_slices) != set(ues):
+    raise SystemExit('Interactive UE slice assignments do not match selected UEs')
+
+host_vars = dep.get('host_vars', {})
+dep.update({
+    'core': core,
+    'ran': ran,
+    'platform': platform,
+    'network_profile': network_profile,
+    'ru': ru,
+    'nodes': {'core': core_node, 'ran': ran_node, 'broker': broker_node},
+    'ues': ues,
+    'ue_slices': ue_slices,
+})
+dep['host_vars'] = host_vars
+dep['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
+dep['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
+for legacy in ('profile', 'profile_file', 'ue_profiles', 'network_profile_file', 'ue_catalog_file', 'r2lab_experiment_nodes'):
+    dep.pop(legacy, None)
+if r2lab_username:
+    dep['r2lab_username'] = r2lab_username
+else:
+    dep.pop('r2lab_username', None)
+Path(output).write_text(yaml.safe_dump({'deployment': dep}, sort_keys=False))
 PY
 
   echo
   echo "Deployment summary"
-  echo "  Core:     $SELECTED_CORE on $SELECTED_CORE_NODE"
-  echo "  RAN:      $SELECTED_RAN on $SELECTED_RAN_NODE"
-  echo "  Platform: $SELECTED_PLATFORM ($SELECTED_RU)"
-  echo "  UEs:      $SELECTED_UES"
-  echo "  Profile:  $SELECTED_PROFILE"
-  echo "  POS:      $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
-  [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:    $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
-  if [[ "$SELECTED_PLATFORM" == r2lab && -n "$SELECTED_R2LAB_SENSOR_NODES$SELECTED_R2LAB_EDGE_NODES$SELECTED_R2LAB_RF_NODES" ]]; then
-    echo "  Sensors:  ${SELECTED_R2LAB_SENSOR_NODES:-none}"
-    echo "  Edge:     ${SELECTED_R2LAB_EDGE_NODES:-none}"
-    echo "  RF nodes: ${SELECTED_R2LAB_RF_NODES:-none}"
-  fi
+  echo "  Core:            $SELECTED_CORE on $SELECTED_CORE_NODE"
+  echo "  RAN:             $SELECTED_RAN on $SELECTED_RAN_NODE"
+  echo "  Platform:        $SELECTED_PLATFORM ($SELECTED_RU)"
+  echo "  UEs:             $SELECTED_UES"
+  echo "  Network profile: $SELECTED_NETWORK_PROFILE"
+  echo "  UE slices:"
+  describe_ue_slice_assignments "$SELECTED_NETWORK_PROFILE" "$SELECTED_UE_SLICE_SPEC"
+  echo "  POS:             $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+  [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:           $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
 
 SOURCE_CONFIG="$CONFIG"
-CONFIG="$RUN_DIR/resolved-scenario.yml"
+[[ -n "$SOURCE_CONFIG" && -f "$SOURCE_CONFIG" ]] || { echo "No testbed scenario was produced" >&2; exit 2; }
+
+TESTBED_SOURCE_CONFIG="$PRIVATE_RUN_DIR/testbed-source.yml"
+"$SYNTHRAN_PYTHON" - "$SOURCE_CONFIG" "$TESTBED_SOURCE_CONFIG" <<'PY'
+import copy
+import sys
+from pathlib import Path
+import yaml
+
+source, output = map(Path, sys.argv[1:3])
+data = yaml.safe_load(source.read_text()) or {}
+deployment = data.get('deployment')
+if not isinstance(deployment, dict):
+    raise SystemExit('scenario requires mapping: deployment')
+Path(output).write_text(yaml.safe_dump({'deployment': copy.deepcopy(deployment)}, sort_keys=False))
+PY
+
+PUBLIC_CONFIG="$RUN_DIR/resolved-scenario.yml"
+CONFIG="$PRIVATE_RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
-  --source "$SOURCE_CONFIG" --output "$CONFIG"
-if [[ -n "$PREPARED_WORKLOAD" ]]; then
-  deployment_section "Validating and importing the prepared workload"
-  "$SYNTHRAN_PYTHON" -m synthran.cli workload import --source "$PREPARED_WORKLOAD" --config "$CONFIG" --output "$RUN_DIR/model"
-fi
-if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
+  --source "$TESTBED_SOURCE_CONFIG" --output "$CONFIG"
+
+write_public_scenario() {
+  "$SYNTHRAN_PYTHON" - "$CONFIG" "$PUBLIC_CONFIG" <<'PY'
+import sys, yaml
+from pathlib import Path
+from synthran.scenario import redacted
+source, output = map(Path, sys.argv[1:3])
+data = yaml.safe_load(source.read_text()) or {}
+output.write_text(yaml.safe_dump(redacted(data), sort_keys=False))
+PY
+}
+write_public_scenario
+
+if ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
-    --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
+    --active "$ACTIVE_DEPLOYMENT_STATE" \
+    --endpoint "$ACTIVE_DEPLOYMENT_ENDPOINT"
 fi
 
 if ! $NO_RESERVATION && ! $DRY_RUN; then
   deployment_section "Resolving the SOP reservation"
   command -v pos >/dev/null || { echo "POS reservation requested but the pos command is unavailable" >&2; exit 1; }
   "$SYNTHRAN_PYTHON" deployment/scripts/reserve_sop.py "$CONFIG" "$RUN_DIR"
+  write_public_scenario
 fi
 
-if $RESUME; then
-  deployment_section "Reusing the failed run's energy-aware sensor trace"
-  cp -a -- "$RESUME_SOURCE_MODEL" "$RUN_DIR/model"
-elif [[ -n "$PREPARED_WORKLOAD" ]]; then
-  deployment_section "Using the validated prepared workload"
-else
-  deployment_section "Generating the energy-aware sensor trace"
-  "$SYNTHRAN_PYTHON" -m synthran.cli model run --config "$CONFIG" --output "$RUN_DIR/model"
-fi
-REUSE_EXISTING=false
-if $WORKLOAD_ONLY || $RESUME; then REUSE_EXISTING=true; fi
-"$SYNTHRAN_PYTHON" - "$CONFIG" "$RUN_DIR" "$REUSE_EXISTING" "$RESUME_SOURCE_CONTRACT" <<'PY'
-import copy, json, os, re, socket, sys, yaml
-from pathlib import Path
-from synthran.deployment_state import build_manifest, build_ue_map
-c=yaml.safe_load(Path(sys.argv[1]).read_text()); d=c['deployment']; nodes=d['nodes']; ues=d['ues']
-workload_only=sys.argv[3] == 'true'
-resume_source_contract=sys.argv[4]
-if len(ues) != len(set(ues)): raise SystemExit('UE names must be unique: ' + ', '.join(ues))
-# Preserve the upstream 100-port spacing while allowing every representable
-# pair. This is a TCP port-space guard, not the inherited three-UE policy.
-if d['ran'].lower() == 'srsran' and d['platform'] == 'rfsim' and len(ues) > 635:
-    raise SystemExit('srsRAN RFSIM exceeds the available TCP port range (maximum 635 UEs)')
-if d['platform'] == 'r2lab' and d['ran'].lower() == 'ueransim': raise SystemExit('UERANSIM cannot be combined with an R2Lab physical radio')
-if d['platform'] == 'r2lab':
-    r2user = os.environ.get('R2LAB_USERNAME') or d.get('r2lab_username', '')
-    identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
-    faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
-    key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    jump_identity = f" -i {identity}" if identity else ''
-    proxy_command = (
-        f'ssh -F /dev/null{jump_identity} -o BatchMode=yes -o ConnectTimeout=10 '
-        f'-o UserKnownHostsFile={faraday_known_hosts} -o StrictHostKeyChecking=accept-new '
-        f'-W %h:%p {r2user}@faraday.inria.fr'
-    )
-    r2_common = (
-        f"ansible_user=root ansible_python_interpreter=/usr/bin/python3{key_arg} "
-        f"ansible_ssh_common_args='-F /dev/null -o StrictHostKeyChecking=no "
-        f"-o UserKnownHostsFile=/dev/null -o ProxyCommand=\"{proxy_command}\"'"
-    )
-    qhats, qfits = [], []
-    for ue in ues:
-        mode = 'qmi' if ue in {'qhat20', 'qhat21', 'qhat22', 'qhat23'} else 'mbim'
-        entry = f"{ue} {r2_common} mode={mode}"
-        if ue.startswith('qhat'):
-            qhats.append(entry)
-        elif ue.startswith('qfit'):
-            qfits.append(entry)
-        else:
-            raise SystemExit(f'Unsupported R2Lab physical UE: {ue}; expected qhat* or qfit*')
-    physical_hosts = []
-    extra = d.get('r2lab_experiment_nodes', {})
-    sensor_hosts = [f"{name} {r2_common}" for name in extra.get('sensor', [])]
-    edge_hosts = [f"{name} {r2_common}" for name in extra.get('edge', [])]
-    rf_hosts = [f"{name} {r2_common}" for name in extra.get('rf_measurement', [])]
-elif d['platform'] == 'physical':
-    physical_hosts = ues
-else:
-    physical_hosts = []
-def host_entry(name):
-    return f'{name} ip={socket.gethostbyname(name)} ansible_python_interpreter=/usr/bin/python3'
-if d['platform'] == 'r2lab':
-    identity = os.environ.get('R2LAB_IDENTITY_FILE', '')
-    faraday_known_hosts = os.environ['R2LAB_FARADAY_KNOWN_HOSTS']
-    key_arg = f" ansible_ssh_private_key_file={identity}" if identity else ''
-    common_arg = f" ansible_ssh_common_args='-F /dev/null -o UserKnownHostsFile={faraday_known_hosts} -o StrictHostKeyChecking=accept-new'"
-    faraday = [f"faraday_host ansible_host=faraday.inria.fr ansible_user={r2user} ansible_python_interpreter=/usr/bin/python3{key_arg}{common_arg}"]
-else:
-    faraday = []
-lines=['[core_node]', host_entry(nodes['core']), '', '[ran_node]', host_entry(nodes['ran']), '', '[broker_node]', host_entry(nodes.get('broker',nodes['core']))]
-if d['platform'] == 'r2lab':
-    lines += ['', '[qhats]'] + qhats + ['', '[qfits]'] + qfits + ['', '[physical_ues:children]', 'qhats', 'qfits']
-    lines += ['', '[r2lab_sensor_nodes]'] + sensor_hosts + ['', '[r2lab_edge_nodes]'] + edge_hosts + ['', '[r2lab_rf_nodes]'] + rf_hosts
-    lines += ['', '[r2lab_experiment_nodes:children]', 'r2lab_sensor_nodes', 'r2lab_edge_nodes', 'r2lab_rf_nodes']
-else:
-    lines += ['', '[physical_ues]'] + physical_hosts
-    lines += ['', '[r2lab_sensor_nodes]', '', '[r2lab_edge_nodes]', '', '[r2lab_rf_nodes]']
-    lines += ['', '[r2lab_experiment_nodes:children]', 'r2lab_sensor_nodes', 'r2lab_edge_nodes', 'r2lab_rf_nodes']
-lines += ['', '[faraday]'] + faraday + ['', '[k8s_workers:children]', 'ran_node', '', '[sopnodes:children]', 'core_node', 'ran_node']
-Path(sys.argv[2],'inventory.ini').write_text('\n'.join(lines)+'\n')
-profile_name=d.get('profile','default')
-profile_source=Path('deployment/group_vars/all', f'5g_profile_{profile_name}.yaml')
-if not profile_source.is_file():
-    raise SystemExit(f'5G profile not found: {profile_source}')
-profile=yaml.safe_load(profile_source.read_text())
-available_ues=profile.get('ues', {})
-overrides=d.get('ue_profiles', {})
-slice_names=[entry['name'] for entry in profile.get('slices', [])]
-if not slice_names:
-    raise SystemExit(f'5G profile {profile_name!r} defines no slices')
-selected_ues={}
-if not isinstance(overrides, dict):
-    raise SystemExit('deployment.ue_profiles must be a mapping when provided')
-for name in ues:
-    if name in available_ues:
-        ue_profile=copy.deepcopy(available_ues[name])
-    elif name in overrides:
-        ue_profile={}
-    elif d['platform'] == 'rfsim' and d['ran'].lower() == 'srsran':
-        match=re.fullmatch(r'uesim([0-9]+)', name)
-        if not match or int(match.group(1)) < 1:
-            raise SystemExit(
-                f"Software UE {name!r} is absent from {profile_source}; "
-                "define it there or use a name such as uesim04"
-            )
-        suffix_value=1120 + int(match.group(1))
-        if suffix_value > 9_999_999_999:
-            raise SystemExit(f'Cannot derive a 10-digit IMSI suffix for {name!r}')
-        ue_profile={'imsi_suffix': f'{suffix_value:010d}', 'slice': slice_names[0]}
-    elif d['platform'] == 'r2lab':
-        raise SystemExit(f'Physical UE {name!r} is absent from {profile_source}')
-    else:
-        raise SystemExit(
-            f"Software UE {name!r} is absent from {profile_source}; "
-            f"automatic UE generation is supported by the srsRAN RFSIM backend, not {d['ran']}"
-        )
-    ue_profile.update(copy.deepcopy(overrides.get(name, {})))
-    suffix=str(ue_profile.get('imsi_suffix', ''))
-    if not re.fullmatch(r'[0-9]{10}', suffix):
-        raise SystemExit(f'UE {name!r} must have a 10-digit imsi_suffix, got {suffix!r}')
-    if ue_profile.get('slice') not in slice_names:
-        raise SystemExit(
-            f"UE {name!r} references unknown slice {ue_profile.get('slice')!r}; "
-            f"available slices: {', '.join(slice_names)}"
-        )
-    ue_profile['imsi_suffix']=suffix
-    selected_ues[name]=ue_profile
-suffix_owners={}
-for name, ue_profile in selected_ues.items():
-    suffix_owners.setdefault(ue_profile['imsi_suffix'], []).append(name)
-duplicates={suffix:names for suffix,names in suffix_owners.items() if len(names) > 1}
-if duplicates:
-    raise SystemExit('Selected UEs have duplicate IMSI suffixes: ' + repr(duplicates))
-profile=copy.deepcopy(profile)
-profile['ues']=selected_ues
-ue_map=build_ue_map(c, profile)
-effective_profile_path=Path(sys.argv[2], 'fiveg-profile.yml')
-effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
-topology_source=Path('deployment/topology.yml')
-topologies=yaml.safe_load(topology_source.read_text())
-try:
-    topology=copy.deepcopy(topologies['rans'][d['ran'].lower()][d['core'].lower()])
-except KeyError as error:
-    raise SystemExit(f"No asserted topology contract for {d['ran']} + {d['core']}") from error
-if d['ran'].lower() == 'srsran' and d['core'].lower() == 'free5gc':
-    n2=topology['network']['n2']
-    endpoint='amf_ip_colocated' if nodes['core'] == nodes['ran'] else 'amf_ip_split'
-    n2['amf_ip']=n2[endpoint]
-    n2.pop('amf_ip_colocated')
-    n2.pop('amf_ip_split')
-topology['contract_version']=topologies['schema_version']
-manifest=build_manifest(c, profile, ue_map, topology)
-manifest_path=Path(sys.argv[2], 'deployment-fingerprint.json')
-manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
-reservation_evidence=Path(sys.argv[2], 'pos-selection.json')
-destructive_reset_authorized=reservation_evidence.exists() or bool(d.get('allow_destructive_node_reset', False))
-variables={'core':d['core'],'ran':d['ran'],'rru':'rfsim' if d['platform']=='rfsim' else d.get('ru',d['platform']),'platform':d['platform'],'fiveg_profile':profile_name,'fiveg_profile_file':str(effective_profile_path.resolve()),'core_node_name':nodes['core'],'ran_node_name':nodes['ran'],'broker_node_name':nodes.get('broker',nodes['core']),'bridge_enabled':d.get('bridge_enabled',True),'open5gs_webui_enabled':d.get('open5gs_webui_enabled',False),'fhi72':False,'f3_ran':False,'aw2s':False,'run_dir':str(Path(sys.argv[2]).resolve()),'scenario_file':str(Path(sys.argv[1]).resolve()),'r2lab_experiment_image':d.get('r2lab_experiment_nodes',{}).get('image','ubuntu'),'mqtt_start_delay_seconds':c['mqtt'].get('start_delay_seconds',30),'mqtt_broker_address':c['mqtt'].get('broker_address'),'mqtt_port':c['mqtt'].get('port',1883),'mqtt_qos':c['mqtt'].get('qos',1),'mqtt_topic_prefix':c['mqtt'].get('topic_prefix','synthran'),'ue_count':len(ues),'synthran_ue_map':ue_map,'synthran_topology':topology,'synthran_deployment_contract':manifest,'synthran_deployment_contract_file':str(manifest_path.resolve()),'synthran_workload_only':workload_only,'synthran_destructive_reset_authorized':destructive_reset_authorized,'synthran_authorized_reset_nodes':list(dict.fromkeys(nodes.values()))}
-source_manifest = json.loads(Path(sys.argv[2], 'model', 'source-manifest.json').read_text()) if Path(sys.argv[2], 'model', 'source-manifest.json').exists() else {}
-variables.update({
-    'mqtt_drain_seconds': c['mqtt'].get('drain_seconds', 60),
-    'mqtt_max_inflight': c['mqtt'].get('max_inflight', 20),
-    'mqtt_max_queued': c['mqtt'].get('max_queued', 10000),
-    'synthran_replay_horizon_seconds': source_manifest.get('duration_seconds', c['model'].get('duration_ms', c['model'].get('duration_seconds', 60) * 1000) / 1000),
-})
-if resume_source_contract:
-    variables['synthran_resume_source_contract']=json.loads(Path(resume_source_contract).read_text())
-Path(sys.argv[2],'deployment-vars.yml').write_text(yaml.safe_dump(variables,sort_keys=False))
-PY
-if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
+"$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR"
 
-if $WORKLOAD_ONLY; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-reuse \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-fi
-if $RESUME; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-resume \
-    --source "$RESUME_SOURCE_CONTRACT" \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --evidence "$RESUME_SOURCE_EVIDENCE"
+if $DRY_RUN; then
+  echo "Prepared testbed deployment in $RUN_DIR; provisioning skipped"
+  exit 0
 fi
 
 mapfile -t R2LAB_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
 import sys, yaml
+from synthran.r2lab import access
 d = yaml.safe_load(open(sys.argv[1]))['deployment']
 r = d.get('r2lab_reservation', {})
+a = access(d)
 print(d.get('platform', 'rfsim'))
 print('true' if r.get('enabled', True) else 'false')
 print(int(r.get('duration_minutes', 120)))
+print(a['host'])
+print(a['username'])
+print(a['identity_file'])
 PY
 )
 if [[ "${R2LAB_SETTINGS[0]}" == r2lab && "${R2LAB_SETTINGS[1]}" == true && "$NO_RESERVATION" == false ]]; then
   deployment_section "Preparing the R2Lab reservation"
   R2LAB_DURATION=${R2LAB_SETTINGS[2]}
-  [[ -f .r2lab_config ]] || { echo "R2Lab credentials are missing from .r2lab_config" >&2; exit 1; }
-  # shellcheck disable=SC1091
-  source .r2lab_config
-  [[ -n "${R2LAB_USERNAME:-}" && -n "${R2LAB_EMAIL:-}" && -n "${R2LAB_PASSWORD:-}" ]] || {
-    echo "R2Lab username, email, and password must all be set in .r2lab_config" >&2
-    exit 1
-  }
-  R2LAB_CLOCK=$(date +'%H%M')
-  R2LAB_START="$(date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
-  R2LAB_START_EPOCH=$(date -d "$R2LAB_START" +%s)
-  R2LAB_END=$(date -d "@$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))" +'%Y-%m-%dT%H:%M')
-  printf -v R2LAB_REMOTE_COMMAND 'rhubarbe book %q %q -e %q -p %q -s %q -v' \
-    "$R2LAB_START" "$R2LAB_END" "$R2LAB_EMAIL" "$R2LAB_PASSWORD" "$R2LAB_USERNAME"
-  echo "Resolving R2Lab access for $R2LAB_START to $R2LAB_END"
-  # Match the original 5g_ansible flow: use the operator's normal SSH
-  # configuration and run rhubarbe directly on Faraday. Select Duckburg's
-  # non-standard R2Lab identity explicitly when it is present.
-  # Faraday is reached directly. Ignore personal Host/ProxyJump entries so an
-  # old ephemeral SOP-node key cannot hijack or block the R2Lab control path.
-  R2LAB_SSH=(ssh -F /dev/null -o "UserKnownHostsFile=$R2LAB_FARADAY_KNOWN_HOSTS" -o StrictHostKeyChecking=accept-new)
-  if [[ -n "${R2LAB_IDENTITY_FILE:-}" ]]; then
-    R2LAB_SSH+=(-i "$R2LAB_IDENTITY_FILE" -o IdentitiesOnly=yes)
-    echo "Using R2Lab SSH identity: $R2LAB_IDENTITY_FILE"
-  fi
-  echo "Checking SSH access to $R2LAB_USERNAME@faraday.inria.fr"
-  if ! "${R2LAB_SSH[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
-    "$R2LAB_USERNAME@faraday.inria.fr" true; then
-    echo "R2Lab SSH authentication failed; no reservation was attempted" >&2
-    exit 1
-  fi
-  R2LAB_LEASE_CHECK=$("${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" \
-    "rhubarbe leases --check" 2>&1) && R2LAB_LEASE_ACTIVE=true || R2LAB_LEASE_ACTIVE=false
-  if $R2LAB_LEASE_ACTIVE; then
-    printf '%s\n' "$R2LAB_LEASE_CHECK" | tee "$RUN_DIR/r2lab-reservation.log"
-    echo "Reusing the active R2Lab lease owned by $R2LAB_USERNAME"
-  else
-    echo "No active owned R2Lab lease was found; requesting a new lease"
-    if ! "${R2LAB_SSH[@]}" "$R2LAB_USERNAME@faraday.inria.fr" "$R2LAB_REMOTE_COMMAND" \
-    2>&1 | tee "$RUN_DIR/r2lab-reservation.log"; then
-      echo "R2Lab reservation failed; the separate SOP allocation was left intact" >&2
-      exit 1
+  R2LAB_HOST=${R2LAB_SETTINGS[3]}
+  R2LAB_USERNAME=${R2LAB_SETTINGS[4]}
+  R2LAB_IDENTITY_FILE=${R2LAB_SETTINGS[5]}
+  [[ -n "${R2LAB_USERNAME:-}" ]] || { echo "R2Lab username must be set in .r2lab_config or the scenario" >&2; exit 1; }
+
+  R2LAB_CLOCK=$(TZ=Europe/Paris date +'%H%M')
+  R2LAB_START="$(TZ=Europe/Paris date +'%Y-%m-%dT')${R2LAB_CLOCK:0:2}:${R2LAB_CLOCK:2:1}0"
+  R2LAB_START_EPOCH=$(TZ=Europe/Paris date -d "$R2LAB_START" +%s)
+  R2LAB_END_EPOCH=$((R2LAB_START_EPOCH + R2LAB_DURATION * 60))
+
+  if [[ -f "$RUN_DIR/pos-selection.json" ]]; then
+    POS_COVERAGE_END=$("$SYNTHRAN_PYTHON" - "$RUN_DIR/pos-selection.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+print(value.get('coverage_end', ''))
+PY
+)
+    if [[ -n "$POS_COVERAGE_END" ]]; then
+      POS_COVERAGE_END_EPOCH=$(date -d "$POS_COVERAGE_END" +%s)
+      if (( POS_COVERAGE_END_EPOCH <= R2LAB_START_EPOCH )); then
+        echo "Accepted SOP reservation ends before the R2Lab deployment window starts" >&2
+        exit 1
+      fi
+      if (( POS_COVERAGE_END_EPOCH < R2LAB_END_EPOCH )); then
+        R2LAB_END_EPOCH=$POS_COVERAGE_END_EPOCH
+        echo "Capping R2Lab coverage at the accepted SOP reservation end: $POS_COVERAGE_END"
+      fi
     fi
+  fi
+
+  R2LAB_END=$(TZ=Europe/Paris date -d "@$R2LAB_END_EPOCH" +'%Y-%m-%dT%H:%M')
+  echo "Resolving provider-backed R2Lab coverage for $R2LAB_START to $R2LAB_END"
+  if ! printf '%s\n' "${R2LAB_PASSWORD:-}" | \
+    "$SYNTHRAN_PYTHON" deployment/scripts/reserve_r2lab.py \
+      --host "$R2LAB_HOST" \
+      --username "$R2LAB_USERNAME" \
+      --identity-file "$R2LAB_IDENTITY_FILE" \
+      --known-hosts "$R2LAB_FARADAY_KNOWN_HOSTS" \
+      --email "${R2LAB_EMAIL:-}" \
+      --start "$R2LAB_START" \
+      --end "$R2LAB_END" \
+      --output "$RUN_DIR/r2lab-lease.json" \
+      --log "$RUN_DIR/r2lab-reservation.log"; then
+    echo "R2Lab reservation/coverage verification failed; the separate SOP allocation was left intact" >&2
+    exit 1
   fi
 fi
 
 deployment_section "Preparing Ansible dependencies"
 ANSIBLE_GALAXY="$PWD/.venv/bin/ansible-galaxy"
 ANSIBLE_PLAYBOOK="$PWD/.venv/bin/ansible-playbook"
-[[ -x "$ANSIBLE_GALAXY" && -x "$ANSIBLE_PLAYBOOK" ]] || {
-  echo "The isolated Ansible runtime was not installed correctly" >&2
-  exit 1
-}
+[[ -x "$ANSIBLE_GALAXY" && -x "$ANSIBLE_PLAYBOOK" ]] || { echo "The isolated Ansible runtime was not installed correctly" >&2; exit 1; }
 if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements.yml >"$RUN_DIR/ansible-galaxy.log" 2>&1; then
   cat "$RUN_DIR/ansible-galaxy.log" >&2
   echo "Ansible dependency preparation failed; full output: $RUN_DIR/ansible-galaxy.log" >&2
   exit 1
 fi
 
-if $WORKLOAD_ONLY || $RESUME; then
-  deployment_section "Replaying telemetry on the existing 5G stack"
-else
-  deployment_section "Provisioning nodes and deploying the selected 5G stack"
-fi
+deployment_section "Provisioning nodes and deploying the selected 5G stack"
+export ANSIBLE_ROLES_PATH="$PWD/deployment/roles"
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
-if $WORKLOAD_ONLY; then
-  DEPLOYMENT_PLAYBOOK=deployment/playbooks/workload.yml
-  echo "The stored deployment identity will be checked before telemetry replay"
-elif $RESUME; then
-  DEPLOYMENT_PLAYBOOK=deployment/playbooks/resume.yml
-  echo "The failed run's live attestation will be checked before its workload is resumed"
-else
-  DEPLOYMENT_PLAYBOOK=deployment/playbooks/site.yml
-fi
-ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$RUN_DIR/inventory.ini"
+DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/site.yml"
+ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$PRIVATE_RUN_DIR/inventory.yml"
   -e "@deployment/group_vars/all/all.yml"
-  -e "@$RUN_DIR/deployment-vars.yml"
+  -e "@$PRIVATE_RUN_DIR/deployment-vars.yml"
   "$DEPLOYMENT_PLAYBOOK")
 if $VERBOSE; then
   ANSIBLE_COMMAND+=(--verbose)
 fi
+
 exec bash deployment/scripts/run_deployment.sh \
-  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$CONFIG" "$ACTIVE_DEPLOYMENT_STATE" \
-  "$WORKLOAD_ONLY" "${ANSIBLE_COMMAND[@]}"
+  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$ACTIVE_DEPLOYMENT_STATE" \
+  "${ANSIBLE_COMMAND[@]}"

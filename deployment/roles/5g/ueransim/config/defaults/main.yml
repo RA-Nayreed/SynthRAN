@@ -7,9 +7,9 @@ ueransim_root: "/root/open5gs-k8s/ueransim"
 # for free5gc and oai
 ueransim_chart_path: "/root/free5gc-helm/charts/ueransim"
 
-# NOTA: for oai, free5gc that includes ueransim not already cloned
+# for OAI deployments where the Free5GC chart tree provides UERANSIM
 free5gc_repo_url: "https://github.com/sopnode/free5gc-helm.git"
 free5gc_repo_dest: "/root/free5gc-helm"
-free5gc_repo_branch: "main"
+free5gc_repo_branch: "499ad3d6b0c0c8879f49edcc174f306ee72a4ff4"
 
-nad_manifests_path: "{{ ueransim_chart_path }}/nad"  
+nad_manifests_path: "{{ ueransim_chart_path }}/nad"

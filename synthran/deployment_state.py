@@ -1,4 +1,3 @@
-"""Durable desired/live identity contract for SynthRAN deployments."""
 from __future__ import annotations
 
 import argparse
@@ -17,8 +16,8 @@ import yaml
 from .scenario import load_scenario
 
 
-SCHEMA_VERSION = 1
-R2LAB_QMI_DEVICES = {"qhat20", "qhat21", "qhat22", "qhat23"}
+SCHEMA_VERSION = 2
+ACTIVE_ENDPOINT_SCHEMA_VERSION = 1
 
 
 def _canonical(value: Any) -> bytes:
@@ -55,13 +54,13 @@ def resolve_scenario(source: str | Path, output: str | Path) -> dict:
     return data
 
 
-def _slice_map(profile: dict) -> dict[str, dict]:
-    slices = profile.get("slices", [])
+def _slice_map(network_profile: dict) -> dict[str, dict]:
+    slices = network_profile.get("slices", [])
     if not isinstance(slices, list):
-        raise ValueError("5G profile slices must be a list")
+        raise ValueError("network profile slices must be a list")
     result = {entry.get("name"): entry for entry in slices if isinstance(entry, dict)}
     if None in result or len(result) != len(slices):
-        raise ValueError("5G profile slices must have unique names")
+        raise ValueError("network profile slices must have unique names")
     return result
 
 
@@ -86,28 +85,19 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
         release = "oai-nr-ue" if index == 1 else f"oai-nr-ue{index}"
         return {
             "namespace": core,
-            # OAI gives the primary PDU-session interface this name inside
-            # every NR-UE pod. The numbered Helm release/pod, rather than the
-            # interface name, distinguishes UE2 and UE3 from UE1.
             "interface": "oaitun_ue1",
             "pod_name_prefix": release + "-",
         }
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
 
 
-def _physical_mode(platform: str, device: str) -> str:
-    if platform == "r2lab" and device in R2LAB_QMI_DEVICES:
-        return "qmi"
-    return "mbim"
-
-
-def _physical_tunnel(platform: str, device: str) -> dict:
-    mode = _physical_mode(platform, device)
+def _r2lab_tunnel(device: str, ue_definition: dict) -> dict:
+    mode = ue_definition.get("mode", "mbim")
     return {
         "host": device,
-        "interface": "wwan0",
+        "interface": ue_definition.get("interface", "wwan0"),
         "mode": mode,
-        "mbim_session": 0 if mode == "mbim" else None,
+        "mbim_session": ue_definition.get("mbim_session", 0) if mode == "mbim" else None,
     }
 
 
@@ -126,7 +116,6 @@ def _transport_value(item: dict, key: str) -> Any:
 
 
 def binding_identity(item: dict) -> tuple:
-    """Normalize desired/live UE transport identity into one comparable tuple."""
     mode = _transport_value(item, "mode")
     session = _transport_value(item, "mbim_session")
     if mode != "mbim":
@@ -146,14 +135,11 @@ def binding_identity(item: dict) -> tuple:
 
 
 def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
-    """Require complete UE identity, interface/session, and slice-address evidence."""
-    if deployment.get("platform") not in {"rfsim", "r2lab", "physical"}:
-        return True
-
+    if deployment.get("platform") not in {"rfsim", "r2lab"}:
+        return False
     expected = deployment.get("ues", [])
     if len(bindings) != len(expected):
         return False
-
     by_device = {
         str(item.get("device")): item
         for item in bindings
@@ -161,12 +147,11 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     }
     if len(by_device) != len(bindings):
         return False
-
     for contract in expected:
         live = by_device.get(str(contract.get("device")))
         if live is None or binding_identity(live) != binding_identity(contract):
             return False
-        if deployment.get("platform") in {"r2lab", "physical"} and live.get("modem_verified") is not True:
+        if deployment.get("platform") == "r2lab" and live.get("modem_verified") is not True:
             return False
         cidr = contract.get("address_cidr")
         address = live.get("address")
@@ -181,35 +166,61 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     return True
 
 
-def _normalize_legacy_oai_deployment(deployment: dict) -> dict | None:
-    """Return the supported legacy OAI tunnel correction, if applicable."""
-    normalized = copy.deepcopy(deployment)
-    source_ues = normalized.get("ues", [])
-    if (
-        normalized.get("platform") == "rfsim"
-        and normalized.get("ran") == "oai"
-        and source_ues
-        and all(
-            ue.get("tunnel", {}).get("interface") == f"oaitun_ue{ue.get('index')}"
-            for ue in source_ues
-        )
-    ):
-        for ue in source_ues:
-            ue["tunnel"]["interface"] = "oaitun_ue1"
-        return normalized
-    return None
+def _parse_observed_at(value: object) -> dt.datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("live deployment evidence has no observation timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("live deployment evidence has an invalid observation timestamp") from error
+    if parsed.tzinfo is None:
+        raise ValueError("live deployment evidence observation timestamp has no timezone")
+    return parsed.astimezone(dt.timezone.utc)
 
 
-def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
+def validate_live_evidence(
+    candidate_path: str | Path,
+    evidence_path: str | Path,
+    *,
+    max_age_seconds: int | None = 300,
+) -> dict:
+    candidate = read_json(candidate_path)
+    evidence = read_json(evidence_path)
+    deployment = candidate.get("deployment", {})
+    if candidate.get("deployment_hash") != content_hash(deployment):
+        raise ValueError("candidate deployment identity failed its integrity check")
+    if evidence.get("deployment_hash") != candidate.get("deployment_hash"):
+        raise ValueError("live deployment evidence does not match the requested deployment")
+    if evidence.get("cluster_identity_verified") is not True:
+        raise ValueError("live deployment evidence does not prove the cluster identity")
+    if deployment.get("platform") == "r2lab":
+        bindings = evidence.get("bindings")
+        if not isinstance(bindings, list) or not bindings_match_deployment(deployment, bindings):
+            raise ValueError("live deployment evidence does not contain complete matching UE bindings")
+        observed_at = _parse_observed_at(evidence.get("observed_at"))
+        if max_age_seconds is not None:
+            if max_age_seconds < 0:
+                raise ValueError("maximum evidence age cannot be negative")
+            age = (dt.datetime.now(dt.timezone.utc) - observed_at).total_seconds()
+            if age < -30:
+                raise ValueError("live deployment evidence is timestamped in the future")
+            if age > max_age_seconds:
+                raise ValueError(
+                    f"live deployment evidence is stale ({age:.0f}s old; maximum {max_age_seconds}s)"
+                )
+    return evidence
+
+
+def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
     deployment = scenario["deployment"]
     platform = str(deployment["platform"]).lower()
     ran = str(deployment["ran"]).lower()
     core = str(deployment["core"]).lower()
-    plmn = profile["plmn"]
-    slices = _slice_map(profile)
+    plmn = network_profile["plmn"]
+    slices = _slice_map(network_profile)
     result = []
     for index, device in enumerate(deployment["ues"], 1):
-        ue = profile["ues"][device]
+        ue = network_profile["ues"][device]
         selected_slice = slices[ue["slice"]]
         entry = {
             "device": device,
@@ -224,36 +235,40 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
+        elif platform == "r2lab":
+            entry["tunnel"] = _r2lab_tunnel(device, ue)
         else:
-            entry["tunnel"] = _physical_tunnel(platform, device)
+            raise ValueError(f"unsupported platform: {platform}")
         result.append(entry)
     return result
 
 
 def build_manifest(
     scenario: dict,
-    profile: dict,
+    network_profile: dict,
     ue_map: list[dict],
     topology: dict | None = None,
 ) -> dict:
     clean_scenario = copy.deepcopy(scenario)
     clean_scenario.pop("_source_directory", None)
     deployment = clean_scenario["deployment"]
+    network_definition = copy.deepcopy(network_profile)
+    network_definition.pop("ues", None)
     selected = {
         "core": str(deployment["core"]).lower(),
         "ran": str(deployment["ran"]).lower(),
         "platform": str(deployment["platform"]).lower(),
         "radio_unit": "rfsim" if deployment["platform"] == "rfsim" else deployment.get("ru", deployment["platform"]),
-        "radio": copy.deepcopy(deployment.get("radio", {})),
+        "ansible_vars": copy.deepcopy(deployment.get("ansible_vars", {})),
+        "host_vars": copy.deepcopy(deployment.get("host_vars", {})),
         "nodes": copy.deepcopy(deployment["nodes"]),
         "bridge_enabled": bool(deployment.get("bridge_enabled", True)),
-        "profile": deployment.get("profile", "default"),
-        "profile_hash": content_hash(profile),
-        "plmn": copy.deepcopy(profile["plmn"]),
-        "slices": copy.deepcopy(profile.get("slices", [])),
+        "network_profile": deployment["network_profile"],
+        "network_profile_hash": content_hash(network_definition),
+        "plmn": copy.deepcopy(network_profile["plmn"]),
+        "slices": copy.deepcopy(network_profile.get("slices", [])),
         "ues": copy.deepcopy(ue_map),
         "topology": copy.deepcopy(topology or {"namespace": str(deployment["core"]).lower()}),
-        "r2lab_experiment_nodes": copy.deepcopy(deployment.get("r2lab_experiment_nodes", {})),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -264,134 +279,73 @@ def build_manifest(
     }
 
 
-def _flatten(value: Any, prefix: str = "deployment") -> dict[str, Any]:
-    if isinstance(value, dict):
-        result = {}
-        for key in sorted(value):
-            result.update(_flatten(value[key], f"{prefix}.{key}"))
-        return result
-    if isinstance(value, list):
-        result = {}
-        for index, item in enumerate(value):
-            result.update(_flatten(item, f"{prefix}[{index}]"))
-        return result
-    return {prefix: value}
-
-
-def assert_reusable(candidate: dict, active: dict) -> None:
-    if candidate.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("requested deployment identity has an unsupported schema")
-    if candidate.get("deployment_hash") != content_hash(candidate.get("deployment", {})):
-        raise ValueError("requested deployment identity failed its integrity check")
-    if active.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(
-            f"active deployment identity schema is {active.get('schema_version')!r}; "
-            f"expected {SCHEMA_VERSION}"
-        )
-    if active.get("status") != "active":
-        raise ValueError(f"deployment identity is not active (status={active.get('status')!r})")
-    if active.get("deployment_hash") != content_hash(active.get("deployment", {})):
-        raise ValueError("active deployment identity failed its integrity check")
-    if candidate.get("deployment_hash") == active.get("deployment_hash"):
-        return
-    wanted = _flatten(candidate.get("deployment", {}))
-    running = _flatten(active.get("deployment", {}))
-    differences = []
-    for key in sorted(set(wanted) | set(running)):
-        if wanted.get(key) != running.get(key):
-            differences.append(f"  {key}: requested={wanted.get(key)!r}, active={running.get(key)!r}")
-    detail = "\n".join(differences[:20]) or "  deployment hash differs"
-    raise ValueError(
-        "--workload-only refused: the requested 5G deployment does not match the active identity:\n"
-        + detail
-    )
-
-
-def verify_reuse(candidate_path: str | Path, active_path: str | Path) -> None:
-    candidate = read_json(candidate_path)
-    active = read_json(active_path)
-    assert_reusable(candidate, active)
-
-
-def verify_resume(
-    source_path: str | Path,
-    candidate_path: str | Path,
-    evidence_path: str | Path,
-) -> None:
-    source = read_json(source_path)
-    candidate = read_json(candidate_path)
-    evidence = read_json(evidence_path)
-    for label, value in (("source", source), ("candidate", candidate)):
-        if value.get("schema_version") != SCHEMA_VERSION:
-            raise ValueError(f"resume {label} identity has an unsupported schema")
-        if value.get("deployment_hash") != content_hash(value.get("deployment", {})):
-            raise ValueError(f"resume {label} identity failed its integrity check")
-    if not evidence.get("cluster_identity_verified"):
-        raise ValueError("--resume refused: the failed run has no successful cluster attestation")
-    if evidence.get("deployment_hash") != source.get("deployment_hash"):
-        raise ValueError("--resume refused: the failed run's attestation evidence does not match its identity")
-    source_deployment = source.get("deployment", {})
-    normalized_source = _normalize_legacy_oai_deployment(source_deployment)
-    source_bindings = evidence.get("bindings", [])
-    if source_bindings:
-        evidence_matches = bindings_match_deployment(
-            source_deployment, source_bindings
-        )
-        if not evidence_matches and normalized_source is not None:
-            evidence_matches = bindings_match_deployment(
-                normalized_source, source_bindings
-            )
-        if not evidence_matches:
-            raise ValueError(
-                "--resume refused: the failed run's recorded UE bindings do not "
-                "match its deployment contract"
-            )
-    if candidate.get("scenario_hash") != source.get("scenario_hash"):
-        raise ValueError("--resume refused: the resolved scenario has changed")
-    if candidate.get("deployment") == source_deployment:
-        return
-
-    # Allow the narrowly scoped correction from numbered OAI interfaces to the
-    # actual per-pod interface name. No deployed infrastructure field changes.
-    if normalized_source is not None and candidate.get("deployment") == normalized_source:
-        return
-    raise ValueError(
-        "--resume refused: current code would change the failed run's deployment "
-        "identity beyond the supported OAI per-pod tunnel correction"
-    )
-
-
-def invalidate(active_path: str | Path, run_id: str) -> None:
+def invalidate(active_path: str | Path, endpoint_path: str | Path | None = None) -> None:
     value = {
         "schema_version": SCHEMA_VERSION,
         "status": "invalidated",
         "invalidated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "invalidated_by_run": run_id,
     }
     _atomic_text(Path(active_path), json.dumps(value, indent=2, sort_keys=True) + "\n")
+    if endpoint_path is not None:
+        try:
+            Path(endpoint_path).unlink()
+        except FileNotFoundError:
+            pass
 
 
-def activate(candidate_path: str | Path, active_path: str | Path) -> dict:
+def _active_endpoint(
+    candidate_path: Path,
+    active_path: Path,
+    evidence_path: Path,
+    private_dir: Path,
+    deployment_hash: str,
+) -> dict:
+    return {
+        "schema_version": ACTIVE_ENDPOINT_SCHEMA_VERSION,
+        "status": "active",
+        "deployment_hash": deployment_hash,
+        "run_id": candidate_path.parent.name,
+        "identity_file": str(active_path.resolve()),
+        "evidence_file": str(evidence_path.resolve()),
+        "private_execution_dir": str(private_dir.resolve()),
+        "result_dir": str(candidate_path.parent.resolve()),
+        "published_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+def activate(
+    candidate_path: str | Path,
+    active_path: str | Path,
+    evidence_path: str | Path,
+    endpoint_path: str | Path,
+    private_dir: str | Path,
+) -> dict:
+    candidate_path = Path(candidate_path)
+    active_path = Path(active_path)
+    evidence_path = Path(evidence_path)
+    private_dir = Path(private_dir)
+    validate_live_evidence(candidate_path, evidence_path)
     value = read_json(candidate_path)
     if value.get("schema_version") != SCHEMA_VERSION or value.get("deployment_hash") != content_hash(value.get("deployment", {})):
         raise ValueError("candidate deployment identity failed its integrity check")
+    required_private = [private_dir / "inventory.yml", private_dir / "deployment-vars.yml"]
+    missing = [str(path) for path in required_private if not path.is_file()]
+    if missing:
+        raise ValueError("cannot publish active deployment endpoint; missing private execution files: " + ", ".join(missing))
     value["status"] = "active"
     value["attested_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     text = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    _atomic_text(Path(candidate_path), text)
-    _atomic_text(Path(active_path), text)
+    _atomic_text(candidate_path, text)
+    _atomic_text(active_path, text)
+    endpoint = _active_endpoint(
+        candidate_path,
+        active_path,
+        evidence_path,
+        private_dir,
+        value["deployment_hash"],
+    )
+    _atomic_text(Path(endpoint_path), json.dumps(endpoint, indent=2, sort_keys=True) + "\n")
     return value
-
-
-def record_reuse(candidate_path: str | Path, active_path: str | Path) -> dict:
-    candidate = read_json(candidate_path)
-    active = read_json(active_path)
-    assert_reusable(candidate, active)
-    candidate["status"] = "reused"
-    candidate["live_identity_hash"] = active["deployment_hash"]
-    candidate["attested_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
-    _atomic_text(Path(candidate_path), json.dumps(candidate, indent=2, sort_keys=True) + "\n")
-    return candidate
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -400,22 +354,15 @@ def _parser() -> argparse.ArgumentParser:
     resolve = commands.add_parser("resolve")
     resolve.add_argument("--source", required=True)
     resolve.add_argument("--output", required=True)
-    verify = commands.add_parser("verify-reuse")
-    verify.add_argument("--candidate", required=True)
-    verify.add_argument("--active", required=True)
-    resume = commands.add_parser("verify-resume")
-    resume.add_argument("--source", required=True)
-    resume.add_argument("--candidate", required=True)
-    resume.add_argument("--evidence", required=True)
     invalid = commands.add_parser("invalidate")
     invalid.add_argument("--active", required=True)
-    invalid.add_argument("--run-id", required=True)
+    invalid.add_argument("--endpoint")
     active = commands.add_parser("activate")
     active.add_argument("--candidate", required=True)
     active.add_argument("--active", required=True)
-    reused = commands.add_parser("record-reuse")
-    reused.add_argument("--candidate", required=True)
-    reused.add_argument("--active", required=True)
+    active.add_argument("--evidence", required=True)
+    active.add_argument("--endpoint", required=True)
+    active.add_argument("--private-dir", required=True)
     return parser
 
 
@@ -424,16 +371,16 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "resolve":
             resolve_scenario(args.source, args.output)
-        elif args.command == "verify-reuse":
-            verify_reuse(args.candidate, args.active)
-        elif args.command == "verify-resume":
-            verify_resume(args.source, args.candidate, args.evidence)
         elif args.command == "invalidate":
-            invalidate(args.active, args.run_id)
-        elif args.command == "activate":
-            activate(args.candidate, args.active)
+            invalidate(args.active, args.endpoint)
         else:
-            record_reuse(args.candidate, args.active)
+            activate(
+                args.candidate,
+                args.active,
+                args.evidence,
+                args.endpoint,
+                args.private_dir,
+            )
     except ValueError as error:
         raise SystemExit(str(error)) from error
 

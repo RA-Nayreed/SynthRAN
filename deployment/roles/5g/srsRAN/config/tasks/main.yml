@@ -46,15 +46,19 @@
 
 - name: Select values filename from rru
   ansible.builtin.set_fact:
-    values_filename: "{{ rru_file_map[(rru | default('rfsim') | string | trim | lower)] | default('values.yaml') }}"
+    values_filename: "{{ rru_file_map[(rru | string | trim | lower)] }}"
   vars:
     rru_file_map:
-      benetel1: values-benetel1.yaml
-      benetel2: values-benetel2.yaml
-      liteon: values-liteon.yaml
       n300: values-n300-n78-20MHz.yaml # values-n300.yaml is original FDD, band 3
       n320: values-n320-n78-20MHz.yaml # values-n320.yaml is original FDD, band 3
       rfsim: values-rfsim.yaml
+
+- name: Require a supported srsRAN radio mode
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (rru | string | trim | lower) in ['rfsim', 'n300', 'n320']
+    fail_msg: "srsRAN supports only rfsim, n300, or n320 in SynthRAN"
 
 - name: Build absolute values_file path
   ansible.builtin.set_fact:
@@ -96,8 +100,8 @@
     - core == 'free5gc'
     - core_node_name != ran_node_name
 
-- name: Apply 5G profile to gNB and UE configs
-  include_tasks: apply_5g_profile.yaml
+- name: Apply network profile to gNB and UE configs
+  ansible.builtin.include_tasks: apply_network_profile.yaml
 
 - name: Report the srsRAN AMF endpoint
   debug:
@@ -137,18 +141,16 @@
 - name: Configure srsRAN interoperability with an OAI core
   ansible.builtin.include_tasks: oai_core_network.yml
   when: core == 'oai'
-  
+
 # --- rfsim only: UE list + srsue values file ---
 
-- name: Load 5G profile vars
+- name: Load resolved network profile vars for RFSIM UE rendering
   ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    file: "{{ network_profile_file }}"
     name: fiveg
   when: rru == 'rfsim'
 
-- name: Validate every selected software UE against the effective 5G profile
+- name: Validate every selected software UE against the effective network profile
   ansible.builtin.assert:
     quiet: true
     that:

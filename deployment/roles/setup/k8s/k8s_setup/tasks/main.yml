@@ -9,22 +9,22 @@
 
 - name: Download Kubernetes GPG key
   ansible.builtin.shell: |
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | \
-      gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    set -euo pipefail
+    curl -fsSL "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor }}/deb/Release.key" | \
+      gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
   args:
-    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    executable: /bin/bash
   become: true
   when: ansible_facts.os_family == 'Debian'
 
-- name: Add Kubernetes APT repository (v1.32)
-  ansible.builtin.apt_repository:
-    repo: >-
+- name: Configure the exact Kubernetes minor APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: '0644'
+    content: >-
       deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }} signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg]
-      https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /
-    state: present
-    filename: kubernetes
-    update_cache: yes
+      https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor }}/deb/ /
   become: true
   when: ansible_facts.os_family == 'Debian'
 
@@ -34,14 +34,18 @@
   become: true
   when: ansible_facts.os_family == 'Debian'
 
-- name: Install kubelet, kubeadm, kubectl (exact version 1.32.9)
+# APT handles both fresh installation and held upgrades. dpkg_selections cannot
+# unhold a package that a freshly booted image has never installed.
+- name: Install exact supported kubelet, kubeadm, and kubectl versions
   ansible.builtin.apt:
     name:
-      - kubelet=1.32.9-1.1
-      - kubeadm=1.32.9-1.1
-      - kubectl=1.32.9-1.1
+      - "kubelet={{ kubernetes_package_version }}"
+      - "kubeadm={{ kubernetes_package_version }}"
+      - "kubectl={{ kubernetes_package_version }}"
     state: present
     update_cache: no
+    allow_change_held_packages: true
+    force_apt_get: true
   become: true
   register: k8s_install
   retries: 5
@@ -49,12 +53,30 @@
   until: k8s_install is succeeded
   when: ansible_facts.os_family == 'Debian'
 
-- name: Verify kubeadm is installed
-  ansible.builtin.command: kubeadm version
-  become: true
-  register: kubeadm_check
+- name: Read installed Kubernetes component versions
+  ansible.builtin.command:
+    argv: "{{ item.argv }}"
+  loop:
+    - {name: kubeadm, argv: [kubeadm, version, -o, short]}
+    - {name: kubelet, argv: [kubelet, --version]}
+    - {name: kubectl, argv: [kubectl, version, --client=true]}
+  loop_control:
+    label: "{{ item.name }}"
+  register: synthran_kubernetes_versions
   changed_when: false
-  failed_when: kubeadm_check.rc != 0
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Require every Kubernetes binary to match the pinned patch release
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ kubernetes_version) in item.stdout"
+    fail_msg: >-
+      {{ item.item.name }} does not match the pinned Kubernetes v{{ kubernetes_version }} baseline:
+      {{ item.stdout | default(item.stderr) }}
+  loop: "{{ synthran_kubernetes_versions.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('kubernetes-component') }}"
   when: ansible_facts.os_family == 'Debian'
 
 - name: Hold Kubernetes packages
@@ -74,33 +96,97 @@
     creates: /opt/ansible-venv/bin/python
   become: true
 
-- name: Check the Kubernetes Python client
-  ansible.builtin.command: /opt/ansible-venv/bin/python -c "import kubernetes"
+- name: Read the installed Kubernetes Python client version
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/python
+      - -c
+      - "import importlib.metadata; print(importlib.metadata.version('kubernetes'))"
   register: kubernetes_python_client
   changed_when: false
   failed_when: false
 
-- name: Install the Kubernetes Python client
-  ansible.builtin.command: /opt/ansible-venv/bin/pip install --disable-pip-version-check kubernetes
+- name: Install the exact Kubernetes Python client
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/pip
+      - install
+      - --disable-pip-version-check
+      - --no-input
+      - "kubernetes=={{ kubernetes_python_version }}"
   become: true
-  when: kubernetes_python_client.rc != 0
+  when: kubernetes_python_client.stdout | default('') | trim != kubernetes_python_version
+
+- name: Verify the Kubernetes Python client version
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible-venv/bin/python
+      - -c
+      - "import importlib.metadata; assert importlib.metadata.version('kubernetes') == '{{ kubernetes_python_version }}'"
+  changed_when: false
 
 - name: Use the shared Kubernetes-enabled Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
 
-- name: Check whether Helm is installed
-  ansible.builtin.command: helm version --short
-  register: helm_version
+- name: Resolve Helm release architecture
+  ansible.builtin.set_fact:
+    synthran_helm_arch: >-
+      {{ 'amd64' if ansible_architecture == 'x86_64'
+         else 'arm64' if ansible_architecture in ['aarch64', 'arm64']
+         else '' }}
+
+- name: Require a checksum-pinned Helm architecture
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_helm_arch in helm_sha256
+    fail_msg: "No pinned Helm checksum for architecture {{ ansible_architecture }}"
+
+- name: Read the installed Helm version
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: synthran_helm_installed
   changed_when: false
   failed_when: false
 
-- name: Install Helm on the Kubernetes host
-  ansible.builtin.shell: |
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+- name: Download the checksum-pinned Helm release
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    dest: "/tmp/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    mode: '0644'
+    checksum: "sha256:{{ helm_sha256[synthran_helm_arch] }}"
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
   become: true
-  when: helm_version.rc != 0
 
-- name: Verify Helm is available
-  ansible.builtin.command: helm version --short
+- name: Extract the checksum-verified Helm release
+  ansible.builtin.unarchive:
+    src: "/tmp/helm-v{{ helm_version }}-linux-{{ synthran_helm_arch }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
+  become: true
+
+- name: Install the exact Helm binary
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ synthran_helm_arch }}/helm"
+    dest: /usr/local/bin/helm
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  when: "('v' ~ helm_version) not in (synthran_helm_installed.stdout | default(''))"
+  become: true
+
+- name: Verify the exact Helm version
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: synthran_helm_verified
   changed_when: false
+
+- name: Require the checksum-pinned Helm release
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ helm_version) in synthran_helm_verified.stdout"
+    fail_msg: "Helm does not match the pinned v{{ helm_version }} baseline"

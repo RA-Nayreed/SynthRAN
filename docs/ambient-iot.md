@@ -1,6 +1,6 @@
 # Native Ambient-IoT architecture
 
-SynthRAN's native scientific model lives in `synthran/model/`. It originated
+SynthRAN's native scientific model lives in `Experiment/model/`. It originated
 from Amber commit `08dd6bd445e607ad3accf4e9a2dff51a499ebdf9` and is now maintained
 as part of SynthRAN. Attribution, license, and import provenance are recorded in
 `third_party/amber/`.
@@ -18,8 +18,8 @@ evidence under `model/ambient_iot/`. The simulation runs on the orchestrator bef
 publisher runtime.
 
 The implementation is not maintained as an upstream mirror. Changes are made
-directly in `synthran/model/` and `synthran/ambient_iot/`; the historical Amber
+directly in `Experiment/model/` and `Experiment/ambient_iot/`; the historical Amber
 record remains immutable provenance rather than an update mechanism.
 
 Runnable protocol scenarios live beside the integration code under
-`synthran/ambient_iot/examples/`.
+`Experiment/ambient_iot/examples/`.

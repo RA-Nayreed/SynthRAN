@@ -1,0 +1,47 @@
+---
+- name: Verify the CNI DHCP binary is installed
+  ansible.builtin.stat:
+    path: /opt/cni/bin/dhcp
+  register: synthran_cni_dhcp_binary
+
+- name: Require the CNI DHCP binary before enabling its service
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_cni_dhcp_binary.stat.exists
+      - synthran_cni_dhcp_binary.stat.executable
+    fail_msg: /opt/cni/bin/dhcp must exist before the CNI DHCP daemon can be enabled.
+
+- name: Install the CNI DHCP systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/cni-dhcp.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=CNI DHCP Daemon
+      After=network.target
+
+      [Service]
+      ExecStart=/opt/cni/bin/dhcp daemon
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Enable and start the CNI DHCP daemon
+  ansible.builtin.systemd:
+    name: cni-dhcp.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Require the CNI DHCP daemon to be active
+  ansible.builtin.command: systemctl is-active cni-dhcp.service
+  register: synthran_cni_dhcp_active
+  changed_when: false
+  retries: 6
+  delay: 2
+  until: synthran_cni_dhcp_active.rc == 0

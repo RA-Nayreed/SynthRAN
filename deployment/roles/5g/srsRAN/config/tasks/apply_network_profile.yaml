@@ -1,0 +1,97 @@
+---
+
+- name: Require the centrally verified yq runtime
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - --version
+  register: synthran_srsran_yq_version
+  changed_when: false
+
+- name: Refuse an unexpected yq runtime
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - yq_version in synthran_srsran_yq_version.stdout
+    fail_msg: "srsRAN requires the checksum-pinned {{ yq_version }} yq runtime"
+
+- name: Load the resolved network profile
+  ansible.builtin.include_vars:
+    file: "{{ network_profile_file }}"
+    name: fiveg
+
+- name: Report the active network profile
+  ansible.builtin.debug:
+    msg:
+      - "Using network profile: {{ network_profile }}"
+      - "PLMN: {{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}"
+      - "TAC: {{ fiveg.plmn.tac }}"
+
+- name: Initialize gNB and AMF slice lists
+  ansible.builtin.set_fact:
+    gnb_slices: []
+    amf_slices: []
+
+- name: Map network slices strictly for gNB and AMF
+  ansible.builtin.set_fact:
+    gnb_slices: "{{ (gnb_slices | default([])) + [ slice_entry ] }}"
+    amf_slices: "{{ (amf_slices | default([])) + [ slice_entry ] }}"
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    loop_var: sl_item
+    label: "{{ sl_item.name }}"
+  vars:
+    slice_entry:
+      sst: "{{ sl_item.sst | int }}"
+      sd: >-
+        {{ 16777215
+           if (sl_item.sd | string | upper) == 'EMPTY'
+           else (sl_item.sd | string | regex_replace('^0x', '') | int(base=16)) }}
+
+- name: Write typed slice values into the gNB configuration
+  ansible.builtin.shell: >
+    {{ yq_bin_path }} eval -i '
+      .gnbConfig.cu_cp.amf.supported_tracking_areas[0].plmn_list[0].tai_slice_support_list = {{ amf_slices | to_json }} |
+      .gnbConfig.cell_cfg.plmn = "{{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}" |
+      .gnbConfig.cell_cfg.tac = {{ fiveg.plmn.tac | int }} |
+      .gnbConfig.cell_cfg.slicing = {{ gnb_slices | to_json }}
+    ' "{{ values_file }}"
+
+- name: Disable the unauthenticated srsRAN remote-control listener
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -i
+      - '.gnbConfig.remote_control.enabled = false | .gnbConfig.remote_control.bind_addr = "127.0.0.1"'
+      - "{{ values_file }}"
+  changed_when: true
+
+- name: Read back the effective srsRAN remote-control policy
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -o=json
+      - .gnbConfig.remote_control
+      - "{{ values_file }}"
+  register: synthran_srsran_remote_control
+  changed_when: false
+
+- name: Require the gNB remote-control interface to remain disabled
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - not ((synthran_srsran_remote_control.stdout | from_json).enabled | bool)
+      - (synthran_srsran_remote_control.stdout | from_json).bind_addr == '127.0.0.1'
+    fail_msg: Refusing to deploy srsRAN with an enabled or broadly bound remote-control listener.
+
+- name: Ensure values file has node constraints
+  ansible.builtin.blockinfile:
+    path: "{{ values_file }}"
+    marker: "# {mark} ANSIBLE MANAGED NODE SELECTOR"
+    insertafter: EOF
+    block: |
+      nodeSelector:
+        kubernetes.io/hostname: "{{ ran_node_name }}"
+      nodeName: {{ ran_node_name }}

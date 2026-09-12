@@ -1,0 +1,261 @@
+---
+- name: Prepare the shareable runtime provenance directory
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create the run provenance directory
+      ansible.builtin.file:
+        path: "{{ run_dir }}/provenance"
+        state: directory
+        mode: '0755'
+
+- name: Record bounded host runtime provenance
+  hosts: sopnodes
+  gather_facts: true
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Read kubelet version
+      ansible.builtin.command: kubelet --version
+      register: synthran_prov_kubelet
+      changed_when: false
+
+    - name: Read containerd version
+      ansible.builtin.command: containerd --version
+      register: synthran_prov_containerd
+      changed_when: false
+
+    - name: Read Helm version
+      ansible.builtin.command: helm version --short
+      register: synthran_prov_helm
+      changed_when: false
+
+    - name: Read yq version
+      ansible.builtin.command: /usr/local/bin/yq --version
+      register: synthran_prov_yq
+      changed_when: false
+
+    - name: Read Kubernetes Python client version
+      ansible.builtin.command:
+        argv:
+          - /opt/ansible-venv/bin/python
+          - -c
+          - 'import kubernetes; print(kubernetes.__version__)'
+      register: synthran_prov_kubernetes_python
+      changed_when: false
+
+    - name: Require the host to match the pinned runtime baseline
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - "('v' ~ kubernetes_version) in synthran_prov_kubelet.stdout"
+          - "('v' ~ helm_version) in synthran_prov_helm.stdout"
+          - yq_version in synthran_prov_yq.stdout
+          - synthran_prov_kubernetes_python.stdout | trim == kubernetes_python_version
+        fail_msg: >-
+          {{ inventory_hostname }} does not match the pinned SynthRAN runtime
+          baseline (Kubernetes {{ kubernetes_version }}, Helm {{ helm_version }},
+          yq {{ yq_version }}, kubernetes-python {{ kubernetes_python_version }}).
+          Refusing activation/reuse until the host is provisioned by this baseline.
+
+    - name: Read installed Debian package versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort
+      args:
+        executable: /bin/bash
+      register: synthran_prov_packages
+      changed_when: false
+      when: ansible_os_family == 'Debian'
+
+    - name: Read UHD userspace version when available
+      ansible.builtin.command: uhd_config_info --version
+      register: synthran_prov_uhd
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == ran_node_name and (rru | lower) in ['n300', 'n320']
+
+    - name: Retain sanitized host provenance
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ run_dir }}/provenance/host-{{ inventory_hostname }}.json"
+        content: >-
+          {{ {
+               'schema_version': 1,
+               'host': inventory_hostname,
+               'distribution': ansible_distribution,
+               'distribution_version': ansible_distribution_version,
+               'kernel': ansible_kernel,
+               'architecture': ansible_architecture,
+               'kubelet': synthran_prov_kubelet.stdout,
+               'containerd': synthran_prov_containerd.stdout,
+               'helm': synthran_prov_helm.stdout,
+               'yq': synthran_prov_yq.stdout,
+               'kubernetes_python': synthran_prov_kubernetes_python.stdout,
+               'packages': synthran_prov_packages.stdout_lines | default([]),
+               'uhd': (synthran_prov_uhd.stdout | default(''))
+             } | to_nice_json }}
+
+- name: Record cluster, Helm and actual image provenance
+  hosts: core_node
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Build a sanitized cluster provenance document
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import hashlib
+        import json
+        import subprocess
+
+        def output(argv):
+            return subprocess.check_output(argv, text=True)
+
+        pods = json.loads(output(['kubectl', 'get', 'pods', '-A', '-o', 'json']))
+        images = []
+        for pod in pods.get('items', []):
+            namespace = pod.get('metadata', {}).get('namespace', '')
+            pod_name = pod.get('metadata', {}).get('name', '')
+            for status_key, kind in (
+                ('initContainerStatuses', 'init'),
+                ('containerStatuses', 'container'),
+                ('ephemeralContainerStatuses', 'ephemeral'),
+            ):
+                for status in pod.get('status', {}).get(status_key, []) or []:
+                    images.append({
+                        'namespace': namespace,
+                        'pod': pod_name,
+                        'kind': kind,
+                        'container': status.get('name', ''),
+                        'image': status.get('image', ''),
+                        'imageID': status.get('imageID', ''),
+                    })
+
+        nodes_raw = json.loads(output(['kubectl', 'get', 'nodes', '-o', 'json']))
+        nodes = []
+        for node in nodes_raw.get('items', []):
+            info = node.get('status', {}).get('nodeInfo', {})
+            nodes.append({
+                'name': node.get('metadata', {}).get('name', ''),
+                'architecture': info.get('architecture', ''),
+                'osImage': info.get('osImage', ''),
+                'kernelVersion': info.get('kernelVersion', ''),
+                'containerRuntimeVersion': info.get('containerRuntimeVersion', ''),
+                'kubeletVersion': info.get('kubeletVersion', ''),
+            })
+
+        releases = json.loads(output(['helm', 'list', '-A', '-o', 'json']))
+        helm_releases = []
+        for release in releases:
+            name = release.get('name', '')
+            namespace = release.get('namespace', '')
+            rendered = output(['helm', 'get', 'values', name, '-n', namespace, '-a', '-o', 'yaml'])
+            helm_releases.append({
+                'name': name,
+                'namespace': namespace,
+                'chart': release.get('chart', ''),
+                'app_version': release.get('app_version', ''),
+                'status': release.get('status', ''),
+                'values_sha256': hashlib.sha256(rendered.encode()).hexdigest(),
+            })
+
+        version = json.loads(output(['kubectl', 'version', '-o', 'json']))
+        image_provenance_complete = bool(images) and all(
+            item.get('imageID') and 'sha256:' in item.get('imageID', '')
+            for item in images
+        )
+        document = {
+            'schema_version': 1,
+            'kubernetes': version,
+            'nodes': sorted(nodes, key=lambda item: item['name']),
+            'helm_releases': sorted(helm_releases, key=lambda item: (item['namespace'], item['name'])),
+            'images': sorted(images, key=lambda item: (item['namespace'], item['pod'], item['kind'], item['container'])),
+            'image_provenance_complete': image_provenance_complete,
+        }
+        print(json.dumps(document, sort_keys=True))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: synthran_cluster_provenance
+      changed_when: false
+
+    - name: Decode cluster provenance for acceptance checks
+      ansible.builtin.set_fact:
+        synthran_cluster_provenance_document: "{{ synthran_cluster_provenance.stdout | from_json }}"
+
+    - name: Require actual container image digests before accepting deployment
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_cluster_provenance_document.image_provenance_complete | bool
+          - synthran_cluster_provenance_document.nodes | length > 0
+        fail_msg: >-
+          Runtime provenance is incomplete: every observed Kubernetes container
+          must expose an immutable sha256 imageID before this deployment can be accepted.
+
+    - name: Retain sanitized cluster provenance
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ run_dir }}/provenance/cluster.json"
+        content: "{{ synthran_cluster_provenance_document | to_nice_json }}"
+
+    - name: Retain OAI source revisions when resolved in this provisioning invocation
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ run_dir }}/provenance/oai-sources.json"
+        content: >-
+          {{ {
+               'schema_version': 1,
+               'oai5g_rru_revision': '9d7f2df8e98527c1a3b05c6352b167e8e9ce7c19',
+               'oai_charts_revision': hostvars[ran_node_name].synthran_oai_charts_revision
+             } | to_nice_json }}
+      when:
+        - core == 'oai' or ran == 'oai'
+        - hostvars[ran_node_name].synthran_oai_charts_revision is defined
+        - hostvars[ran_node_name].synthran_oai_charts_revision | string | length > 0
+
+- name: Record non-mutating physical UE helper provenance
+  hosts: physical_ues
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Hash installed modem helper identities without changing modem state
+      ansible.builtin.shell: |
+        set -e
+        for helper in qhat-check qhat-init start.sh stop.sh quectel-CM ci_ctl_qtel.py; do
+          path="$(command -v "$helper" 2>/dev/null || true)"
+          if [ -n "$path" ] && [ -f "$path" ]; then
+            printf '%s ' "$helper"
+            sha256sum "$path" | awk '{print $1}'
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: synthran_modem_helper_hashes
+      changed_when: false
+      when: platform in ['r2lab', 'physical']
+
+    - name: Retain physical UE helper provenance
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ run_dir }}/provenance/ue-{{ inventory_hostname }}.json"
+        content: >-
+          {{ {
+               'schema_version': 1,
+               'host': inventory_hostname,
+               'helper_sha256_lines': synthran_modem_helper_hashes.stdout_lines | default([])
+             } | to_nice_json }}
+      when: platform in ['r2lab', 'physical']

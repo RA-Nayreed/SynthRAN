@@ -1,22 +1,10 @@
 ---
-- name: Recheck destructive-reset authorization before control-plane cleanup
-  ansible.builtin.include_role:
-    name: setup/destructive_guard
-
-- name: Normalize booleans for current host
+- name: Normalize deployment boolean for current host
   ansible.builtin.set_fact:
-    fhi72: "{{ fhi72 | default(false) | bool }}"
     bridge_enabled: "{{ bridge_enabled | default(false) | bool }}"
-    f3_ran: "{{ f3_ran | default(false) | bool }}"
-
 
 # === CLEANUP PHASE ============================================================
 
-# FIX: stop kubelet and containerd BEFORE kubeadm reset — otherwise static pods
-#      (apiserver, controller-manager) keep running and hold ports 6443/10259,
-#      causing kubeadm init to fail with [ERROR Port-6443] / [ERROR Port-10259].
-#      The original role deleted /var/lib/kubelet first, which prevented kubelet
-#      from cleanly terminating its pods before reset.
 - name: Stop kubelet before reset
   ansible.builtin.systemd:
     name: kubelet
@@ -24,9 +12,6 @@
   become: true
   failed_when: false
 
-# FIX: kube-apiserver and other static pod processes can survive as orphan processes
-#      outside containerd (crictl ps returns empty) after kubelet stops — they hold
-#      ports 6443/10259 and block kubeadm init. Kill them directly by name.
 - name: Kill orphan static pod processes (apiserver, controller-manager, scheduler, etcd)
   ansible.builtin.shell: |
     for proc in kube-apiserver kube-controller-manager kube-scheduler etcd; do
@@ -75,10 +60,6 @@
   loop_control:
     label: "{{ item }}"
 
-# FIX: kubeadm reset and previous Ansible runs pollute /etc/fstab with tmpfs
-#      and ext4 entries for /var/lib/containerd. systemd replays them at containerd
-#      restart creating stacked mounts. Fix: purge fstab entries, unmount all
-#      stacked mounts, then remount the real disk using direct shell mount (no fstab).
 - name: Remove all /var/lib/containerd entries from fstab after reset
   ansible.builtin.lineinfile:
     path: /etc/fstab
@@ -152,10 +133,6 @@
   delay: 1
   until: containerd_ready_before_wipe.rc == 0
 
-# FIX: full containerd data wipe — partial purges leave metadata/snapshots that
-#      reference deleted blobs, causing kubeadm init to fail with "blob not found".
-#      Stop containerd, wipe all data under /var/lib/containerd, restart clean.
-#      The real disk stays mounted — only the containerd-managed subdirs are removed.
 - name: Stop containerd before full data wipe
   ansible.builtin.systemd:
     name: containerd
@@ -188,7 +165,6 @@
   delay: 1
   until: containerd_ready_after_wipe.rc == 0
 
-# FIX: bind-mount overlayfs snapshotter dir so containerd 1.7 reports capacityBytes via CRI
 - name: Create overlayfs snapshotter directory
   ansible.builtin.file:
     path: /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
@@ -196,7 +172,7 @@
     mode: '0755'
   become: true
 
-- name: Bind-mount overlayfs snapshotter dir as a separate mountpoint (fix CRI capacityBytes)
+- name: Bind-mount overlayfs snapshotter dir as a separate mountpoint
   ansible.builtin.shell: |
     findmnt /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs &>/dev/null || \
       mount --bind /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs \
@@ -215,11 +191,6 @@
   register: kubeadm_init
   become: true
 
-# FIX: kubeadm init recreates /var/lib/kubelet with a fresh config.yaml that
-#      does not contain the evictionHard/imageGC settings written by pre_k8s
-#      (pre_k8s ran before the cleanup which deleted /var/lib/kubelet).
-#      Re-apply the storage eviction settings here via lineinfile so they are
-#      merged into the kubeadm-generated config without overwriting it entirely.
 - name: Remove rootDir from kubeadm-generated kubelet config if present
   ansible.builtin.lineinfile:
     path: /var/lib/kubelet/config.yaml
@@ -246,7 +217,7 @@
     daemon_reload: yes
   become: true
 
-# === KUBE-PROXY ================================================
+# === KUBE-PROXY ===============================================================
 - name: Wait until at least one kube-proxy pod exists
   ansible.builtin.shell: |
     until kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system get pod -l k8s-app=kube-proxy --no-headers 2>/dev/null | grep .; do
@@ -265,7 +236,6 @@
     kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system wait pod -l k8s-app=kube-proxy --for=condition=Ready --timeout=180s || true
   become: true
 
-# ---- Sanitize kubelet extra args: remove deprecated CNI flags if present ----
 - name: Check for deprecated kubelet flags in /etc/default/kubelet
   ansible.builtin.shell: |
     if [ -f /etc/default/kubelet ]; then
@@ -289,7 +259,7 @@
   when: kubelet_extra_check.stdout == "DEPRECATED_FOUND"
   become: true
 
-- name: Sanitize /etc/default/kubelet (write only the resolvConf) if deprecated flags found or file missing
+- name: Sanitize /etc/default/kubelet if deprecated flags found or file missing
   ansible.builtin.copy:
     dest: /etc/default/kubelet
     content: 'KUBELET_EXTRA_ARGS="--resolv-conf=/run/systemd/resolve/resolv.conf"'
@@ -297,7 +267,7 @@
   when: kubelet_extra_check.stdout != "CLEAN"
   become: true
 
-- name: Ensure kubelet systemd sees the change (daemon-reload)
+- name: Ensure kubelet systemd sees the change
   ansible.builtin.systemd:
     daemon_reload: yes
   become: true
@@ -309,7 +279,6 @@
   when: kubelet_extra_check.stdout != "CLEAN"
   become: true
 
-# === FIX: Force kubelet to use correct resolv.conf ============================
 - name: Ensure kubelet uses systemd-resolved DNS
   ansible.builtin.copy:
     dest: /etc/default/kubelet
@@ -317,7 +286,6 @@
       KUBELET_EXTRA_ARGS=--resolv-conf=/run/systemd/resolve/resolv.conf
     mode: "0644"
   become: true
-
 
 - name: Restart kubelet to apply DNS config
   ansible.builtin.systemd:
@@ -363,7 +331,6 @@
     - /var/lib/cni
   become: true
 
-# --- CLEAN old/conflicting CNI config files (Multus/old Flannel) -------------
 - name: Clean old or conflicting CNI configs
   ansible.builtin.file:
     path: "{{ item }}"
@@ -402,14 +369,7 @@
       }
   become: true
 
-- name: Download CNI plugins tarball via curl (for any Ubuntu 22.04+)
-  ansible.builtin.shell: |
-    curl -fsSL -o /tmp/cni-plugins.tgz https://github.com/containernetworking/plugins/releases/download/v1.5.1/cni-plugins-linux-amd64-v1.5.1.tgz
-  args:
-    creates: /tmp/cni-plugins.tgz
-  become: true
-
-- name: Extract CNI plugins
+- name: Extract the checksum-verified CNI plugin bundle staged by network.yml
   ansible.builtin.unarchive:
     src: /tmp/cni-plugins.tgz
     dest: /opt/cni/bin
@@ -447,7 +407,6 @@
       flannel:
         iface: "{{ hostvars[inventory_hostname].nic_interface | default('eth0') }}"
 
-# === FIX CNI INITIALIZATION ===================================================
 - name: Restart containerd and kubelet to reload CNI
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -468,7 +427,6 @@
   until: wait_ready.rc == 0
   become: true
 
-# === COREDNS & FINALIZATION ===================================================
 - name: Wait for CoreDNS pods to be Ready
   ansible.builtin.shell: |
     kubectl wait -n kube-system --for=condition=Ready pod -l k8s-app=kube-dns --timeout=300s
@@ -483,18 +441,16 @@
   ansible.builtin.shell: |
     kubectl run dns-test --image=busybox:1.36 --restart=Never --command -- \
       sh -c 'nslookup kubernetes.default.svc.cluster.local' || true
-        echo "Cleaning up test pods..."
+    echo "Cleaning up test pods..."
     kubectl delete pod dns-test --ignore-not-found
   changed_when: false
 
-# === JOIN COMMAND =============================================================
 - name: Generate join command
   ansible.builtin.shell: kubeadm token create --print-join-command
   register: join_cmd
   delegate_to: "{{ groups['core_node'][0] }}"
   run_once: true
 
-# Do not save file on /tmp/ in localhost since multi-users, use HOME instead
 - name: Save join command locally
   ansible.builtin.copy:
     content: "{{ join_cmd.stdout }}"

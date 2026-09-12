@@ -1,122 +1,190 @@
 #!/usr/bin/env python3
-"""Render a small, live Ansible progress stream while preserving the full log."""
+"""Render Ansible plays, nested roles, tasks and host results as a live hierarchy."""
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 
+HEADING = re.compile(r"^(TASK|RUNNING HANDLER|PLAY) \[(.*?)](?:\s+\*+)?$")
+RESULT = re.compile(r"^(ok|changed|skipping|fatal): \[([^]]+)](.*)$")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+NAMES = {
+    "5g": "5G",
+    "r2lab": "R2Lab",
+    "k8s": "Kubernetes",
+    "oai": "OAI",
+    "srsRAN": "srsRAN",
+}
 
-TASK = re.compile(r"^(?:TASK|RUNNING HANDLER) \[(.*?)](?:\s+\*+)?$")
-PLAY = re.compile(r"^PLAY \[(.*?)](?:\s+\*+)?$")
-ROUTINE_RESULT = re.compile(r"^(ok|changed|skipping|included): \[")
+
+def label(part: str) -> str:
+    return NAMES.get(part, part.replace("_", " ").replace("-", " "))
 
 
-def emit(line: str = "") -> None:
-    print(line, flush=True)
+class Progress:
+    def __init__(self, output):
+        self.output = output
+        self.play = None
+        self.task = None
+        self.role = ()
+        self.depth = 1
+        self.hide_detail = False
+        self.diagnostic = []
+        self.waiting = set()
+        self.pending_failure = None
 
+    def emit(self, text="", depth=0):
+        print("  " * depth + text, file=self.output, flush=True)
 
-def main() -> None:
-    hiding_result = False
-    hiding_error_detail = False
-    retry_reported = False
-    pending_play: str | None = None
-    pending_task: str | None = None
+    def heading(self):
+        if self.play is not None:
+            self.emit()
+            self.emit(self.play)
+            self.play = None
+            self.role = ()
+        if self.task is None:
+            return
+        role, separator, task = self.task.partition(" : ")
+        parts = tuple(role.split("/")) if separator else ()
+        shared = 0
+        while (
+            shared < min(len(parts), len(self.role))
+            and parts[shared] == self.role[shared]
+        ):
+            shared += 1
+        for index in range(shared, len(parts)):
+            self.emit(label(parts[index]), index + 1)
+        self.role = parts
+        self.depth = len(parts) + 1
+        self.emit(task if separator else role, self.depth)
+        self.task = None
 
-    def emit_pending() -> None:
-        nonlocal pending_play, pending_task
-        if pending_play is not None:
-            emit(f"\n== {pending_play} ==")
-            pending_play = None
-        if pending_task is not None:
-            emit(f"  -> {pending_task}")
-            pending_task = None
+    def flush_diagnostic(self):
+        if self.diagnostic:
+            self.heading()
+            for line in self.diagnostic:
+                self.emit(line, self.depth + 1)
+            self.diagnostic.clear()
 
-    for raw in sys.stdin:
-        line = raw.rstrip("\r\n")
+    @staticmethod
+    def failure_message(detail: str) -> str:
+        try:
+            value = json.loads(detail.partition("=>")[2])
+            message = "\n".join(
+                str(value[key]) for key in ("msg", "stderr") if value.get(key)
+            )
+            if not message:
+                message = str(value.get("stdout", detail))
+            return message
+        except (ValueError, TypeError):
+            return detail.strip()
 
-        match = PLAY.match(line)
+    def flush_failure(self, ignored=False):
+        if self.pending_failure is None:
+            return
+        host, detail = self.pending_failure
+        self.pending_failure = None
+        self.flush_diagnostic()
+        self.heading()
+        if ignored:
+            status = "IGNORED FAILURE (non-fatal)"
+        else:
+            status = "UNREACHABLE" if "UNREACHABLE!" in detail else "FAILED"
+        self.emit(f"{host}: {status}", self.depth + 1)
+        for text in self.failure_message(detail).splitlines():
+            self.emit(text, self.depth + 2)
+        self.hide_detail = True
+
+    def feed(self, raw):
+        line = ANSI.sub("", raw.rstrip("\r\n"))
+
+        # Ansible prints an ignored task as a fatal-looking result followed by
+        # a separate "...ignoring" line. Delay rendering by one line so an
+        # intentionally ignored probe is never presented as a fatal failure.
+        if self.pending_failure is not None:
+            if line.strip() == "...ignoring":
+                self.flush_failure(ignored=True)
+                return
+            self.flush_failure(ignored=False)
+
+        match = HEADING.match(line)
         if match:
-            hiding_result = False
-            hiding_error_detail = False
-            retry_reported = False
-            # Do not announce a play until at least one of its tasks actually
-            # runs. Ansible still parses plays whose inventory groups are empty.
-            pending_play = match.group(1)
-            pending_task = None
-            continue
-
-        match = TASK.match(line)
-        if match:
-            hiding_result = False
-            hiding_error_detail = False
-            retry_reported = False
-            # The result tells us whether this task ran or was skipped. Holding
-            # the heading prevents inactive core, RAN, and platform choices from
-            # appearing in the concise progress stream.
-            pending_task = match.group(1)
-            continue
-
-        if line.startswith("FAILED - RETRYING:"):
-            hiding_result = False
-            hiding_error_detail = False
-            retry_task = pending_task or ""
-            emit_pending()
-            if not retry_reported:
-                if retry_task.endswith("Wait for publishers"):
-                    emit("     publishers still running...")
-                else:
-                    emit("     waiting for readiness...")
-                retry_reported = True
-            continue
-
-        # Newer Ansible versions emit an [ERROR] diagnostic even when a task's
-        # failed_when expression deliberately converts the result to success.
-        # A following fatal: result is the authoritative terminal failure.
+            self.flush_diagnostic()
+            self.hide_detail = False
+            self.waiting.clear()
+            if match[1] == "PLAY":
+                self.play = match[2]
+                self.task = None
+            else:
+                self.task = match[2]
+            return
         if line.startswith("[ERROR]"):
-            hiding_error_detail = True
-            continue
-
-        if line.startswith("fatal:") or "UNREACHABLE!" in line:
-            hiding_result = False
-            hiding_error_detail = False
-            emit_pending()
-            emit(f"     ERROR: {line}")
-            continue
-
-        if line.startswith(("NO MORE HOSTS LEFT", "PLAY RECAP")):
-            hiding_result = False
-            pending_play = None
-            pending_task = None
-            emit(line)
-            continue
-
-        if line.startswith(("[WARNING]", "[DEPRECATION WARNING]")):
-            hiding_result = False
-            emit_pending()
-            emit(f"     {line}")
-            continue
-
-        match = ROUTINE_RESULT.match(line)
+            self.flush_diagnostic()
+            self.diagnostic = [line]
+            return
+        match = RESULT.match(line)
         if match:
-            hiding_error_detail = False
-            hiding_result = line.endswith("=> {")
-            if match.group(1) != "skipping":
-                emit_pending()
-            continue
-
+            status, host, detail = match.groups()
+            if status == "fatal":
+                self.pending_failure = (host, detail)
+                return
+            if status != "skipping":
+                # failed_when:false can produce [ERROR] followed by a successful
+                # result. The actual task result is authoritative in that case.
+                self.diagnostic.clear()
+                self.heading()
+                self.emit(f"{host}: {status}", self.depth + 1)
+            else:
+                self.diagnostic.clear()
+            self.hide_detail = True
+            return
+        if line.startswith("FAILED - RETRYING:"):
+            self.diagnostic.clear()
+            self.heading()
+            host = line.partition("[")[2].partition("]")[0] or "task"
+            if host not in self.waiting:
+                self.emit(f"{host}: waiting", self.depth + 1)
+                self.waiting.add(host)
+            return
         if line.startswith("skipping: no hosts matched"):
-            hiding_result = False
-            hiding_error_detail = False
-            pending_play = None
-            pending_task = None
-            continue
+            self.play = self.task = None
+            return
+        if line.startswith("included:"):
+            self.diagnostic.clear()
+            self.hide_detail = True
+            return
+        if line.startswith("PLAY RECAP"):
+            self.flush_diagnostic()
+            self.play = self.task = None
+            self.hide_detail = False
+            self.emit("\nRun summary")
+            return
+        if line.startswith(
+            ("NO MORE HOSTS LEFT", "[WARNING]", "[DEPRECATION WARNING]")
+        ):
+            self.flush_diagnostic()
+            self.heading()
+            self.hide_detail = False
+            self.emit(line, self.depth + 1)
+            return
+        if self.diagnostic:
+            self.diagnostic.append(line)
+        elif line.strip() and not self.hide_detail:
+            self.emit(line)
 
-        if hiding_result or hiding_error_detail or not line.strip():
-            continue
+    def finish(self):
+        # Syntax/inventory errors may terminate Ansible without a fatal result.
+        self.flush_failure(ignored=False)
+        self.flush_diagnostic()
 
-        emit_pending()
-        emit(line)
+
+def main():
+    progress = Progress(sys.stdout)
+    for line in sys.stdin:
+        progress.feed(line)
+    progress.finish()
 
 
 if __name__ == "__main__":

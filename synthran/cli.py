@@ -4,6 +4,11 @@ import argparse
 import json
 
 
+def _mqtt_auth_arguments(command) -> None:
+    command.add_argument("--username")
+    command.add_argument("--password-file")
+
+
 def parser():
     root = argparse.ArgumentParser(prog="synthran")
     commands = root.add_subparsers(dest="area", required=True)
@@ -22,6 +27,7 @@ def parser():
     replay.add_argument("--interface")
     replay.add_argument("--bind-address")
     replay.add_argument("--start-utc")
+    _mqtt_auth_arguments(replay)
     filtering = replay.add_mutually_exclusive_group()
     filtering.add_argument("--device")
     filtering.add_argument("--gateway")
@@ -36,6 +42,7 @@ def parser():
     collect.add_argument("--topic", default="synthran/#")
     collect.add_argument("--output", default="broker.jsonl")
     collect.add_argument("--ready-file")
+    _mqtt_auth_arguments(collect)
     transform = workload.add_parser("transform")
     transform.add_argument("--source", required=True)
     transform.add_argument("--output", required=True)
@@ -87,11 +94,21 @@ def main(argv=None):
             max_queued=args.max_queued,
             drain_seconds=args.drain_seconds,
             horizon_seconds=args.horizon_seconds,
+            username=args.username,
+            password_file=args.password_file,
         )
     elif (args.area, args.command) == ("workload", "collect"):
         from .workload.replay import collect
 
-        collect(args.broker, args.topic, args.port, args.output, args.ready_file)
+        collect(
+            args.broker,
+            args.topic,
+            args.port,
+            args.output,
+            args.ready_file,
+            username=args.username,
+            password_file=args.password_file,
+        )
     elif (args.area, args.command) == ("workload", "transform"):
         from .workload.bundle import transform_bundle
 

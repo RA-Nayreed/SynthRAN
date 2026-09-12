@@ -1,0 +1,88 @@
+---
+- name: Resolve the R2Lab UE deployment-contract entry
+  ansible.builtin.set_fact:
+    synthran_r2lab_contract_matches: >-
+      {{ synthran_ue_map
+         | selectattr('device', 'equalto', inventory_hostname)
+         | list }}
+
+- name: Require one R2Lab UE deployment-contract entry
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_r2lab_contract_matches | length == 1
+    fail_msg: >-
+      Expected exactly one deployment-contract entry for {{ inventory_hostname }},
+      found {{ synthran_r2lab_contract_matches | length }}.
+
+- name: Record the R2Lab UE deployment-contract entry
+  ansible.builtin.set_fact:
+    synthran_r2lab_contract_ue: "{{ synthran_r2lab_contract_matches | first }}"
+
+- name: Resolve the R2Lab transport from the deployment contract
+  ansible.builtin.set_fact:
+    synthran_r2lab_interface: "{{ synthran_r2lab_contract_ue.tunnel.interface }}"
+    synthran_r2lab_upf_address: >-
+      {{ synthran_r2lab_contract_ue.address_cidr | regex_replace('\.0/[0-9]+$', '.1') }}
+
+- name: Require the supported upstream R2Lab transport
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_r2lab_contract_ue.tunnel.host == inventory_hostname
+      - synthran_r2lab_interface == 'wwan0'
+      - synthran_r2lab_contract_ue.tunnel.mode == (mode | default('mbim'))
+      - (mode | default('mbim')) != 'mbim' or synthran_r2lab_contract_ue.tunnel.mbim_session | int == 0
+    fail_msg: The R2Lab contract must use the upstream wwan0 modem transport.
+
+- name: Read the live R2Lab SIM, DNN configuration, and modem session
+  ansible.builtin.script:
+    cmd: >-
+      {{ role_path }}/../../../scripts/probe_r2lab_ue.py
+      --contract {{ synthran_r2lab_contract_ue | to_json | quote }}
+    executable: /usr/bin/python3
+  register: synthran_r2lab_probe
+  changed_when: false
+  failed_when: false
+  until: synthran_r2lab_probe.rc == 0
+  retries: 6
+  delay: 5
+
+- name: Retain R2Lab modem evidence before accepting the binding
+  ansible.builtin.copy:
+    content: |
+      {{ synthran_r2lab_probe.stdout | default('') }}
+      {{ synthran_r2lab_probe.stderr | default('') }}
+    dest: "{{ run_dir }}/r2lab-ue-{{ inventory_hostname }}.log"
+  delegate_to: localhost
+  become: false
+
+- name: Require the observed R2Lab modem to match the deployment contract
+  ansible.builtin.assert:
+    quiet: true
+    that: synthran_r2lab_probe.rc == 0
+    fail_msg: >-
+      R2Lab UE validation failed after allowing the modem state to settle.
+      See r2lab-ue-{{ inventory_hostname }}.log. UE attachment is owned by the
+      upstream R2Lab connect role; verification does not repair or reattach modem state.
+
+- name: Record the observed R2Lab UE binding
+  ansible.builtin.set_fact:
+    synthran_r2lab_binding: "{{ (synthran_r2lab_probe.stdout | from_json).binding }}"
+
+- name: Require interface-bound R2Lab user-plane reachability to the selected UPF
+  ansible.builtin.command:
+    argv:
+      - ping
+      - -I
+      - "{{ synthran_r2lab_interface }}"
+      - -c
+      - '1'
+      - -W
+      - '3'
+      - "{{ synthran_r2lab_upf_address }}"
+  register: synthran_r2lab_upf_probe
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: synthran_r2lab_upf_probe.rc == 0

@@ -1,29 +1,26 @@
 ---
-- name: Load 5G profile variables
+- name: Load resolved network profile variables
   ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    file: "{{ network_profile_file }}"
 
 - name: Ensure 5G config directory exists
-  file:
+  ansible.builtin.file:
     path: /etc/oai
     state: directory
     mode: '0755'
 
 - name: Report the selected OAI PLMN
-  debug:
+  ansible.builtin.debug:
     msg: "PLMN={{ plmn }}"
-    
-- name: Render 5G environment file
-  template:
+
+- name: Render network environment file
+  ansible.builtin.template:
     src: 5g-env.sh.j2
     dest: /etc/oai/5g-env.sh
     mode: '0644'
-  register: fiveg_env
+  register: network_env
 
-- name: Report updated OAI parameters
-  debug:
-    msg: "5G parameters updated"
-  when: fiveg_env.changed
-
+- name: Report updated OAI network parameters
+  ansible.builtin.debug:
+    msg: "Network parameters updated"
+  when: network_env.changed
