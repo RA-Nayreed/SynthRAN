@@ -1,5 +1,4 @@
 ---
-
 - name: Reload and restart kubelet
   ansible.builtin.shell: |
     systemctl daemon-reload
@@ -48,7 +47,7 @@
     name: "{{ open5gs_ns }}"
     state: present
 
-- name: Force Open5GS workloads on core_node (nodeName)
+- name: Force Open5GS workloads on core_node
   ansible.builtin.copy:
     dest: "{{ repo_dest }}/{{ deployment_option }}/open5gs-node-patch.yaml"
     content: |
@@ -91,30 +90,23 @@
   ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/networks5g" -n {{ open5gs_ns }}
 
 - name: Wait for kube-apiserver to be responsive
-  shell: kubectl get --raw='/healthz'
+  ansible.builtin.command: kubectl get --raw=/healthz
   register: api_health
   retries: 30
   delay: 10
   until: api_health.rc == 0
   changed_when: false
 
-- name: Wait for CRDs registration to be ready
-  shell: kubectl get crds
+- name: Wait for CRD registration to be ready
+  ansible.builtin.command: kubectl get crds
   register: crd_list
   retries: 20
   delay: 5
   until: "'network-attachment-definitions.k8s.cni.cncf.io' in crd_list.stdout"
   changed_when: false
 
-- name: Install jq
-  ansible.builtin.apt:
-    name: jq
-    state: present
-    update_cache: yes
-  become: yes
-
 - name: Wait for Multus CRD
-  ansible.builtin.shell: kubectl get crd network-attachment-definitions.k8s.cni.cncf.io
+  ansible.builtin.command: kubectl get crd network-attachment-definitions.k8s.cni.cncf.io
   register: multus_crd_check
   retries: 60
   delay: 5
@@ -123,7 +115,7 @@
   failed_when: false
 
 - name: Patch NADs to use unique interface names
-  shell: |
+  ansible.builtin.shell: |
     set -eu
     for nad in n2network n3network n4network; do
       case "$nad" in
@@ -156,78 +148,33 @@
   loop: "{{ nad_list }}"
   when: item not in (nad_info.resources | map(attribute='metadata.name') | list)
 
-- name: Ensure OVS bridges exist and are up for FHI72
-  block:
-    - name: Create OVS bridges if they don't exist
-      ansible.builtin.shell: |
-        ovs-vsctl --no-headings list-br | grep -q "n2br" || ovs-vsctl add-br n2br
-        ovs-vsctl --no-headings list-br | grep -q "n3br" || ovs-vsctl add-br n3br
-        ovs-vsctl --no-headings list-br | grep -q "n4br" || ovs-vsctl add-br n4br
-      become: true
-      changed_when: false
-
-    - name: Bring OVS bridges up
-      ansible.builtin.shell: |
-        ip link set dev n2br up || true
-        ip link set dev n3br up || true
-        ip link set dev n4br up || true
-      become: true
-      changed_when: false
-
-    - name: Remove any stale veth ports from bridges
-      ansible.builtin.shell: |
-        for br in n2br n3br n4br; do
-          for port in $(ovs-vsctl list-ports "$br" 2>/dev/null | grep veth); do
-            ovs-vsctl del-port "$br" "$port" || true
-          done
-        done
-      become: true
-      changed_when: false
-
-  when: core_node_name == ran_node_name and core == "open5gs" and fhi72
-
-- name: Bring OVS bridges up if single-node Open5GS (non-FHI72)
+- name: Bring OVS bridges up for single-node Open5GS
   ansible.builtin.shell: |
     ip link set dev n2br up
     ip link set dev n3br up
     ip link set dev n4br up
     for br in n2br n3br n4br; do
-      for port in $(ovs-vsctl list-ports $br | grep veth); do
-         ovs-vsctl del-port $br $port || true
+      for port in $(ovs-vsctl list-ports "$br" 2>/dev/null | grep veth || true); do
+        ovs-vsctl del-port "$br" "$port" || true
       done
     done
   become: true
-  when: core_node_name == ran_node_name and core == "open5gs" and not fhi72
+  changed_when: false
+  when: core_node_name == ran_node_name and core == 'open5gs'
 
-- name: Assign Gateway IPs to OVS bridges for Single-Node SCTP bind
+- name: Assign gateway IPs to OVS bridges for single-node SCTP bind
   ansible.builtin.shell: |
     ip addr add 10.10.2.254/24 dev n2br || true
     ip addr add 10.10.3.254/24 dev n3br || true
     ip addr add 10.10.4.254/24 dev n4br || true
   become: true
-  when: core_node_name == ran_node_name and core == "open5gs"
-
-- name: Wait for OVS resource registration on Node (optional for FHI72)
-  ansible.builtin.shell: |
-    kubectl get node {{ inventory_hostname }} -o json | grep -q "ovs-cni.network.kubevirt.io/n3br"
-  register: ovs_res_check
-  until: ovs_res_check.rc == 0
-  retries: 10
-  delay: 5
   changed_when: false
-  failed_when: false
-  when: core_node_name == ran_node_name and core == "open5gs" and fhi72
-
-- name: Warn if OVS resources not available (FHI72 only)
-  ansible.builtin.debug:
-    msg: "OVS device resources not registered - OK for FHI72 single-node setups"
-  when:
-    - core_node_name == ran_node_name and core == "open5gs" and fhi72
-    - ovs_res_check is failed
+  when: core_node_name == ran_node_name and core == 'open5gs'
 
 - name: Force cleanup existing Open5GS pods
   ansible.builtin.shell: kubectl delete pods -n {{ open5gs_ns }} -l app=open5gs --force --grace-period=0 || true
-  when: core_node_name == ran_node_name and core == "open5gs"
+  when: core_node_name == ran_node_name and core == 'open5gs'
+  changed_when: false
 
 - name: Apply Open5GS NFs with Kustomize
   ansible.builtin.command: kubectl apply -k "{{ repo_dest }}/{{ deployment_option }}" -n {{ open5gs_ns }}
@@ -289,10 +236,10 @@
   until: amf_ngap_check.rc == 0
   retries: 15
   delay: 5
-  when: core == "open5gs"
+  when: core == 'open5gs'
   changed_when: false
 
-- name: Install python3-venv, python3-pip, setuptools and wheel
+- name: Install Open5GS subscriber tooling
   ansible.builtin.apt:
     name:
       - python3-venv
@@ -300,28 +247,28 @@
       - python3-setuptools
       - python3-wheel
     state: present
-  become: yes
+  become: true
 
-- name: Create Python virtual environment (idempotent)
+- name: Create Python virtual environment
   ansible.builtin.command:
     cmd: python3 -m venv "{{ repo_dest }}/venv"
     creates: "{{ repo_dest }}/venv/bin/activate"
-  become: yes
+  become: true
 
 - name: Bootstrap pip, setuptools and wheel in venv
   ansible.builtin.command:
     cmd: "{{ repo_dest }}/venv/bin/python -m ensurepip --upgrade"
-  become: yes
+  become: true
 
 - name: Upgrade pip, setuptools and wheel explicitly in venv
   ansible.builtin.command:
     cmd: "{{ repo_dest }}/venv/bin/pip install --upgrade pip setuptools wheel"
-  become: yes
+  become: true
 
 - name: Install Python requirements in venv
   ansible.builtin.command:
     cmd: "{{ repo_dest }}/venv/bin/pip install -r {{ repo_dest }}/requirements.txt"
-  become: yes
+  become: true
 
 - name: Generate the selected Open5GS subscriber records
   ansible.builtin.command:
@@ -332,11 +279,6 @@
   register: open5gs_subscriber_generation
   changed_when: true
 
-# The upstream add-subscribers.py deliberately skips IMSIs that already exist.
-# MongoDB is persistent, so a repeated full deployment would otherwise retain
-# stale authentication sequence/profile state and every freshly started srsUE
-# could be rejected. Replace only this run's selected subscribers; do not wipe
-# unrelated records from a shared database.
 - name: Remove stale records for the selected Open5GS subscribers
   ansible.builtin.command:
     argv: >-
