@@ -41,7 +41,7 @@
 - name: Checkout the immutable OAI R2Lab helper source
   ansible.builtin.git:
     repo: "{{ repo_oai5g_rru }}"
-    dest: "{{ dir_oai }}/.synthran-oai5g-source"
+    dest: "{{ repo_dest }}"
     version: "{{ tag_oai5g_rru }}"
     update: false
     force: true
@@ -51,7 +51,7 @@
     argv:
       - git
       - -C
-      - "{{ dir_oai }}/.synthran-oai5g-source"
+      - "{{ repo_dest }}"
       - rev-parse
       - HEAD
   register: oai_helper_revision
@@ -65,12 +65,46 @@
     fail_msg: >-
       OAI helper checkout does not match pinned revision {{ tag_oai5g_rru }}.
 
-- name: Install prepare-demo-oai.sh from the immutable checkout
+- name: Checkout the immutable OAI charts source
+  ansible.builtin.git:
+    repo: "{{ repo_oai_cn5g_fed }}"
+    dest: "{{ dir_oai }}/charts"
+    version: "{{ tag_oai_cn5g_fed }}"
+    update: false
+    force: true
+
+- name: Read back the OAI charts source revision
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ dir_oai }}/charts"
+      - rev-parse
+      - HEAD
+  register: oai_charts_revision
+  changed_when: false
+
+- name: Require the exact OAI charts source revision
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - oai_charts_revision.stdout | trim == tag_oai_cn5g_fed
+    fail_msg: >-
+      OAI charts checkout does not match pinned revision {{ tag_oai_cn5g_fed }}.
+
+- name: Install OAI helper scripts from the immutable checkout
   ansible.builtin.copy:
-    src: "{{ dir_oai }}/.synthran-oai5g-source/testing/prepare-demo-oai.sh"
-    dest: "{{ prepare_demo_script }}"
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
     remote_src: true
     mode: '0755'
+  loop:
+    - src: "{{ repo_dest }}/testing/prepare-demo-oai.sh"
+      dest: "{{ prepare_demo_script }}"
+    - src: "{{ repo_dest }}/configure-demo-oai.sh"
+      dest: "{{ dir_oai }}/configure-demo-oai.sh"
+    - src: "{{ repo_dest }}/demo-oai.sh"
+      dest: "{{ demo_oai_script }}"
 
 - name: Retrieve physical interfaces for multus on the core and ran nodes
   ansible.builtin.set_fact:
@@ -202,23 +236,34 @@
     insertafter: EOF
   when: redcap is defined
 
-- name: Run prepare-demo-oai.sh to pull and configure OAI charts
+- name: Require staged OAI helper and charts inputs before configuration
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ repo_dest }}"
+    - "{{ dir_oai }}/charts"
+    - "{{ dir_oai }}/configure-demo-oai.sh"
+    - "{{ demo_oai_script }}"
+  register: oai_staged_inputs
+
+- name: Refuse OAI configuration with missing staged inputs
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - oai_staged_inputs.results | map(attribute='stat.exists') | min
+    fail_msg: >-
+      OAI source staging is incomplete; refusing to run the upstream configurator.
+
+- name: Configure the staged immutable OAI sources
   ansible.builtin.shell: |
     set -o pipefail
-    timeout --signal=TERM 30m ./prepare-demo-oai.sh -a 2>&1 |
+    timeout --signal=TERM 30m bash -e ./prepare-demo-oai.sh -c 2>&1 |
       tee /tmp/output-prepare-demo-oai.txt
   args:
     chdir: "{{ dir_oai }}"
     executable: /bin/bash
   environment:
     GIT_TERMINAL_PROMPT: "0"
-    GIT_CONFIG_COUNT: "3"
-    GIT_CONFIG_KEY_0: http.version
-    GIT_CONFIG_VALUE_0: HTTP/1.1
-    GIT_CONFIG_KEY_1: http.lowSpeedLimit
-    GIT_CONFIG_VALUE_1: "1024"
-    GIT_CONFIG_KEY_2: http.lowSpeedTime
-    GIT_CONFIG_VALUE_2: "60"
   register: prepare_script
   changed_when: "'OAI5G charts are now configured' in prepare_script.stdout"
 
