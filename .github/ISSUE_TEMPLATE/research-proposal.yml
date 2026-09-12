@@ -1,0 +1,77 @@
+name: Research / experiment proposal
+description: Propose a scientific study or experiment-layer extension
+labels:
+  - research
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The experiment layer is under active construction. Use this form to make the scientific question, controls, evidence, and required testbed resources explicit before implementation.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Research question
+      description: State the question in a form that can be answered by evidence rather than by implementation alone.
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis / expected mechanism
+      description: What effect do you expect, and why?
+    validations:
+      required: true
+
+  - type: textarea
+    id: variables
+    attributes:
+      label: Treatments, controls, and fixed variables
+      description: Identify what changes, what stays fixed, and what must be matched between runs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: resources
+    attributes:
+      label: Required SynthRAN resources
+      description: Core, RAN, RFSIM/R2Lab path, radio, UE set, slice/QoS requirements, broker placement, or other infrastructure needs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements and acceptance criteria
+      description: Define the observations/KPIs and what evidence would support or reject the hypothesis.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility plan
+      description: Describe seeds, configuration identity, workload identity, deployment identity, repetitions, and artefacts that must be preserved.
+    validations:
+      required: true
+
+  - type: textarea
+    id: limitations
+    attributes:
+      label: Known limitations / confounders
+      description: Separate simulated/modelled effects from measured network or radio effects where relevant.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: discipline
+    attributes:
+      label: Claim discipline
+      options:
+        - label: The proposal distinguishes planned work from implemented capability.
+          required: true
+        - label: The proposal distinguishes implementation validation from scientific evidence.
+          required: true
+        - label: The proposal does not assume a scenario preset is proof that a physical configuration has been accepted.
+          required: true
