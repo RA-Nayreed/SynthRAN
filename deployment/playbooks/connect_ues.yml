@@ -7,13 +7,13 @@
     - name: Resolve the run-scoped nested SSH trust directory
       ansible.builtin.set_fact:
         synthran_nested_ssh_dir: "/tmp/synthran-ssh-{{ run_dir | basename }}"
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
     - name: Require the secured nested SSH wrapper prepared during provisioning
       ansible.builtin.stat:
         path: "{{ synthran_nested_ssh_dir }}/bin/ssh"
       register: synthran_nested_ssh_wrapper
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
     - name: Refuse R2Lab connection without the nested SSH verification boundary
       ansible.builtin.assert:
@@ -22,7 +22,7 @@
           - synthran_nested_ssh_wrapper.stat.exists
           - synthran_nested_ssh_wrapper.stat.executable
         fail_msg: The secured nested SSH wrapper is missing on Faraday; refusing unverified UE connection.
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
     - name: Connect UEs on R2Lab to 5G network
       ansible.builtin.include_role:
@@ -33,26 +33,24 @@
             SYNTHRAN_SSH_KNOWN_HOSTS: "{{ synthran_nested_ssh_dir }}/known_hosts"
       vars:
         ue_item: "{{ item }}"
-        # Upstream intentionally defaults this to true. SynthRAN requires every
-        # requested UE, so an attachment command failure is fatal here.
         ignore_task_errors: false
-      loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) + (groups['phones'] | default([])) }}"
+      loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}"
       loop_control:
         label: "{{ item }}"
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
     - name: Retain nested R2Lab SSH host keys with the run
       ansible.builtin.fetch:
         src: "{{ synthran_nested_ssh_dir }}/known_hosts"
         dest: "{{ run_dir }}/r2lab-nested-known-hosts"
         flat: true
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
     - name: Remove the run-scoped nested SSH wrapper from Faraday
       ansible.builtin.file:
         path: "{{ synthran_nested_ssh_dir }}"
         state: absent
-      when: platform == 'r2lab' and not (synthran_workload_only | bool)
+      when: platform == 'r2lab'
 
 - name: Verify R2Lab modem sessions without changing upstream modem state
   hosts: physical_ues
