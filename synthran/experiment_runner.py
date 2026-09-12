@@ -20,8 +20,42 @@ from synthran.experiment_scenario import load_scenario, remap_gateways, scientif
 from synthran.scenario import load_scenario as load_testbed
 
 
+def _configure_source(source: Path) -> dict:
+    """Load either a full experiment scenario or standalone scientific settings."""
+    raw = yaml.safe_load(source.read_text())
+    if not isinstance(raw, dict):
+        raise ValueError("experiment configuration must be a mapping")
+    if "deployment" in raw:
+        return load_scenario(source)
+
+    for section in ("model", "mqtt", "devices"):
+        if not isinstance(raw.get(section), dict):
+            raise ValueError(f"experiment settings require mapping: {section}")
+    if not raw["devices"]:
+        raise ValueError("devices must define at least one sensor")
+
+    logical_gateways = []
+    for name, device in raw["devices"].items():
+        if not isinstance(device, dict):
+            raise ValueError("devices must map sensor names to configurations")
+        gateway = device.get("gateway", name)
+        device["gateway"] = gateway
+        if gateway not in logical_gateways:
+            logical_gateways.append(gateway)
+    raw["deployment"] = {"ues": logical_gateways}
+
+    trace = raw["model"].get("energy", {}).get("trace")
+    if trace and not str(trace).startswith("builtin:"):
+        raw["model"]["energy"]["trace"] = str((source.resolve().parent / trace).resolve())
+    for device in raw["devices"].values():
+        trace = device.get("energy", {}).get("trace")
+        if trace and not str(trace).startswith("builtin:"):
+            device["energy"]["trace"] = str((source.resolve().parent / trace).resolve())
+    return raw
+
+
 def configure(config: Path, source: Path) -> None:
-    original = load_scenario(source)
+    original = _configure_source(source)
     selected = load_testbed(config)
     remap_gateways(original, selected["deployment"]["ues"])
     settings = config.with_name("selected-experiment.yml")
