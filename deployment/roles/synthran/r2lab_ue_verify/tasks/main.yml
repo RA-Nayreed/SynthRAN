@@ -44,6 +44,9 @@
   register: synthran_r2lab_probe
   changed_when: false
   failed_when: false
+  until: synthran_r2lab_probe.rc == 0
+  retries: 6
+  delay: 5
 
 - name: Retain R2Lab modem evidence before accepting the binding
   ansible.builtin.copy:
@@ -59,9 +62,9 @@
     quiet: true
     that: synthran_r2lab_probe.rc == 0
     fail_msg: >-
-      R2Lab UE validation failed. See r2lab-ue-{{ inventory_hostname }}.log.
-      UE attachment is owned by the upstream R2Lab connect role; verification
-      does not repair or reattach modem state.
+      R2Lab UE validation failed after allowing the modem state to settle.
+      See r2lab-ue-{{ inventory_hostname }}.log. UE attachment is owned by the
+      upstream R2Lab connect role; verification does not repair or reattach modem state.
 
 - name: Record the observed R2Lab UE binding
   ansible.builtin.set_fact:
