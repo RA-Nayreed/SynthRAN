@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import yaml
-from Experiment.workload.bundle import validate_bundle
-from Experiment.workload.trace import generate
+from synthran.workload.bundle import validate_bundle
+from synthran.workload.trace import generate
 
 
 def scenario(plan: dict, template: dict, count: int, seed: int, spec: dict) -> dict:

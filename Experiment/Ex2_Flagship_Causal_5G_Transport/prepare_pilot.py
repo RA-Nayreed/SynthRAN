@@ -13,7 +13,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from Experiment.workload.bundle import transform_bundle, validate_bundle
+from synthran.workload.bundle import transform_bundle, validate_bundle
 
 DEFAULT_RESULTS = Path("results/exp1-energy-correlation")
 DEFAULT_OUTPUT = Path("results/exp2-matched-trace/pilot-seed1001")

@@ -22,5 +22,5 @@ deployment:
     enabled: true
     duration_minutes: 120
 experiment:
-  entrypoint: ../Experiment/runner.py
-  config: ../Experiment/configs/r2lab-reference-oai-srsran.yml
+  entrypoint: ../synthran/experiment_runner.py
+  config: ../synthran/configs/r2lab-reference-oai-srsran.yml

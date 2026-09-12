@@ -13,7 +13,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from Experiment.scenario import scientific_settings
+from synthran.experiment_scenario import scientific_settings
 
 DEFAULT_PLAN = Path(__file__).with_name("pilot-plan-v1.json")
 
@@ -69,7 +69,7 @@ def prepare(pilot_root: Path, output: Path, plan_path: Path = DEFAULT_PLAN) -> P
     value = {
         "deployment": deployment,
         "experiment": {
-            "entrypoint": str(ROOT / "Experiment/runner.py"),
+            "entrypoint": str(ROOT / "synthran/experiment_runner.py"),
             "config": str(settings.resolve()),
         },
     }

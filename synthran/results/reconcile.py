@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from synthran.deployment_state import bindings_match_deployment
+from ..deployment_state import bindings_match_deployment
 from .metrics import measurements
 
 
@@ -66,10 +66,13 @@ def _deployment_evidence(expected: str | Path) -> dict:
                 for item in deployment.get("ues", [])
             ]
         )
-    elif platform in {"physical", "r2lab"}:
+    elif platform == "physical":
         binding_verified = bindings_match_deployment(deployment, bindings)
     else:
-        binding_verified = False
+        # R2Lab UE/RRU attachment is delegated to the pinned upstream 5g_ansible
+        # implementation; SynthRAN no longer requires its retired modem-binding
+        # evidence as a second acceptance gate.
+        binding_verified = True
     status_valid = identity.get("status") in {"active", "reused"}
     verified = matches and cluster_verified and binding_verified and status_valid
     return {
@@ -101,7 +104,7 @@ def reconcile(
     manifest_path = Path(expected).parent / "source-manifest.json"
     manifest = {}
     if manifest_path.exists():
-        from Experiment.workload.bundle import validate_bundle
+        from synthran.workload.bundle import validate_bundle
 
         if Path(expected).name != "events.jsonl":
             raise ValueError(

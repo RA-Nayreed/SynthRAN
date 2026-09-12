@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import yaml
 
-from Experiment.scenario import load_scenario, remap_gateways, scientific_settings
+from synthran.experiment_scenario import load_scenario, remap_gateways, scientific_settings
 from synthran.scenario import load_scenario as load_testbed
 
 
@@ -39,9 +39,9 @@ def prepare(
     from synthran.runtime import ensure
 
     ensure("experiment", run / "experiment-bootstrap.log")
-    from Experiment.mqtt_auth import write_credentials
-    from Experiment.workload.bundle import import_bundle
-    from Experiment.workload.trace import generate
+    from synthran.mqtt_auth import write_credentials
+    from synthran.workload.bundle import import_bundle
+    from synthran.workload.trace import generate
 
     scenario = load_scenario(config)
     run.mkdir(parents=True, exist_ok=True)
@@ -74,7 +74,7 @@ def prepare(
         "workload/bundle.py",
         "workload/cleanup.py",
     ):
-        destination = run / "runtime/Experiment" / relative
+        destination = run / "runtime/synthran" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(Path(__file__).parent / relative, destination)
     mqtt = scenario["mqtt"]
@@ -96,7 +96,7 @@ def prepare(
 def _run_playbook(run: Path, playbook: Path) -> None:
     environment = dict(os.environ)
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
-    environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "Experiment/deployment/roles")
+    environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "synthran/deployment/roles")
     private = Path(environment["SYNTHRAN_PRIVATE_DIR"])
     secrets_file = private / "experiment-secrets.yml"
     if not secrets_file.is_file():
@@ -120,15 +120,15 @@ def _run_playbook(run: Path, playbook: Path) -> None:
 
 
 def run_workload(run: Path) -> None:
-    _run_playbook(run, ROOT / "Experiment/deployment/playbooks/mqtt.yml")
+    _run_playbook(run, ROOT / "synthran/deployment/playbooks/mqtt.yml")
 
 
 def cleanup(run: Path) -> None:
-    _run_playbook(run, ROOT / "Experiment/deployment/playbooks/cleanup.yml")
+    _run_playbook(run, ROOT / "synthran/deployment/playbooks/cleanup.yml")
 
 
 def finalize(run: Path) -> None:
-    from Experiment.results import reconcile
+    from synthran.results import reconcile
 
     publishers = run / "publisher.jsonl"
     sources = [

@@ -136,7 +136,7 @@
   command: >-
     kubectl exec -n {{ item.namespace }} {{ item.pod }} -c synthran-runtime --
     env PYTHONPATH=/opt/synthran-runtime python3 -c
-    "from Experiment.workload.replay import replay"
+    "from synthran.workload.replay import replay"
   loop: "{{ synthran_software_pods }}"
   loop_control: {label: "{{ item.namespace }}/{{ item.pod }}"}
   changed_when: false
@@ -231,7 +231,7 @@
   command: >-
     kubectl exec -n {{ synthran_assigned_tunnels[item.index - 1].namespace }}
     {{ synthran_assigned_tunnels[item.index - 1].pod }} -c synthran-runtime --
-    env PYTHONPATH=/opt/synthran-runtime python3 -m Experiment.cli workload replay
+    env PYTHONPATH=/opt/synthran-runtime python3 -m synthran.cli workload replay
     --trace /opt/synthran-events.jsonl --gateway {{ item.device }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --username {{ mqtt_publisher_username }} --password-file /opt/synthran-mqtt-password

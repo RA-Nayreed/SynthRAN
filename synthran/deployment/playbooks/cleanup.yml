@@ -106,7 +106,7 @@
         argv:
           - /opt/synthran-venv/bin/python
           - -m
-          - Experiment.workload.cleanup
+          - synthran.workload.cleanup
           - --marker
           - "synthran-publisher-{{ run_dir | basename }}.jsonl"
       environment:
@@ -159,7 +159,7 @@
           case " $containers " in
             *" synthran-runtime "*)
               "$SYNTHRAN_KUBECTL" exec -n "$ns" "$pod" -c synthran-runtime -- \
-                env PYTHONPATH=/opt/synthran-runtime python3 -m Experiment.workload.cleanup \
+                env PYTHONPATH=/opt/synthran-runtime python3 -m synthran.workload.cleanup \
                 --marker "publisher-${SYNTHRAN_RUN_ID}-" >/dev/null 2>&1 || true
               "$SYNTHRAN_KUBECTL" exec -n "$ns" "$pod" -c synthran-runtime -- \
                 sh -c "cat /tmp/publisher-${SYNTHRAN_RUN_ID}-*.jsonl 2>/dev/null || true" \

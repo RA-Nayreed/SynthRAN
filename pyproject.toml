@@ -18,9 +18,9 @@ analysis = ["matplotlib==3.11.1", "openpyxl==3.1.5"]
 deployment = ["ansible-core==2.19.13"]
 
 [tool.setuptools.package-data]
-Experiment = ["data/*.csv", "configs/*.yml", "Ex*/*.json", "Ex*/*.yml", "Ex*/*.md", "deployment/**/*.yml", "deployment/**/*.j2"]
-"Experiment.ambient_iot" = ["examples/*.yml", "examples/README.md"]
+synthran = ["data/*.csv", "configs/*.yml", "deployment/**/*.yml", "deployment/**/*.j2"]
+"synthran.ambient_iot" = ["examples/*.yml", "examples/README.md"]
 
 [tool.setuptools.packages.find]
-include = ["synthran", "synthran.*", "Experiment", "Experiment.*"]
-exclude = ["deployment*", "scenarios*", "results*", "third_party*"]
+include = ["synthran", "synthran.*"]
+exclude = ["deployment*", "scenarios*", "results*", "third_party*", "Experiment*"]

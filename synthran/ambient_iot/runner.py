@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import simpy
-from Experiment.model import (
+from synthran.model import (
     backscatter,
     bsengine,
     capacitor,

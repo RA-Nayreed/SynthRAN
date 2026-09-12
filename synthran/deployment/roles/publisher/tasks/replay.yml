@@ -1,7 +1,7 @@
 ---
 - name: Replay through the upstream-managed R2Lab UE
   command: >-
-    /opt/synthran-venv/bin/python -m Experiment.cli workload replay
+    /opt/synthran-venv/bin/python -m synthran.cli workload replay
     --trace /tmp/synthran-events.jsonl --gateway {{ inventory_hostname }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password
@@ -16,7 +16,7 @@
 
 - name: Replay through a non-R2Lab physical UE
   command: >-
-    /opt/synthran-venv/bin/python -m Experiment.cli workload replay
+    /opt/synthran-venv/bin/python -m synthran.cli workload replay
     --trace /tmp/synthran-events.jsonl --gateway {{ inventory_hostname }}
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password

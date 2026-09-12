@@ -230,7 +230,7 @@ def udp_probe(ran, broker, b, dst, rate, seconds, packet_bytes, port):
 
 
 def calibrate(plan, scenario, baseline, outdir):
-    from Experiment.scenario import load_scenario
+    from synthran.experiment_scenario import load_scenario
 
     cfg = load_scenario(scenario)
     nodes = cfg["deployment"]["nodes"]
@@ -340,7 +340,7 @@ def finish_bg(tx, rx, timeout):
 
 
 def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b, dst):
-    from Experiment.scenario import load_scenario
+    from synthran.experiment_scenario import load_scenario
 
     cfg = load_scenario(scenario)
     mqtt = cfg.get("mqtt", {})

@@ -23,5 +23,5 @@ deployment:
     enabled: true
     duration_minutes: 180
 experiment:
-  entrypoint: ../Experiment/runner.py
-  config: ../Experiment/configs/r2lab-n300-qhats-sdr.yml
+  entrypoint: ../synthran/experiment_runner.py
+  config: ../synthran/configs/r2lab-n300-qhats-sdr.yml

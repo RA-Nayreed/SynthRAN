@@ -56,7 +56,7 @@
   changed_when: false
 
 - name: Verify the collector does not require the numerical model runtime
-  command: /opt/synthran-venv/bin/python -c "from Experiment.workload.replay import collect"
+  command: /opt/synthran-venv/bin/python -c "from synthran.workload.replay import collect"
   environment:
     PYTHONPATH: /opt/synthran-source
   changed_when: false
@@ -179,7 +179,7 @@
       User=synthran-mqtt
       Group=synthran-mqtt
       Environment=PYTHONPATH=/opt/synthran-source
-      ExecStart=/opt/synthran-venv/bin/python -m Experiment.cli workload collect --broker {{ synthran_mqtt_listener_address }} --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --username {{ mqtt_collector_username }} --password-file /etc/synthran/mqtt-collector-password --output /var/log/synthran/receipts-{{ run_dir | basename }}.jsonl --ready-file /var/log/synthran/collector-ready-{{ run_dir | basename }}.json
+      ExecStart=/opt/synthran-venv/bin/python -m synthran.cli workload collect --broker {{ synthran_mqtt_listener_address }} --port {{ mqtt_port }} --topic {{ mqtt_topic_prefix }}/# --username {{ mqtt_collector_username }} --password-file /etc/synthran/mqtt-collector-password --output /var/log/synthran/receipts-{{ run_dir | basename }}.jsonl --ready-file /var/log/synthran/collector-ready-{{ run_dir | basename }}.json
       Restart=on-failure
       NoNewPrivileges=true
       PrivateTmp=true
