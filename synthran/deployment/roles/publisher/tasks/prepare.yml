@@ -1,0 +1,89 @@
+---
+- name: Prepare the non-R2Lab physical broker route
+  include_tasks: physical_route.yml
+  when: platform == 'physical'
+
+- name: Install physical publisher Python runtime
+  package: {name: [python3, python3-pip, python3-venv], state: present}
+
+- name: Remove any previous staged SynthRAN publisher source
+  file:
+    path: /opt/synthran-source
+    state: absent
+
+- name: Copy SynthRAN package
+  copy: {src: "{{ run_dir }}/runtime/", dest: /opt/synthran-source/}
+
+- name: Create isolated publisher runtime
+  command: python3 -m venv /opt/synthran-venv
+  args: {creates: /opt/synthran-venv/bin/python}
+
+- name: Install the exact MQTT publisher dependency
+  command: /opt/synthran-venv/bin/pip install --disable-pip-version-check --no-input "paho-mqtt==2.1.0"
+
+- name: Verify the exact MQTT publisher dependency
+  command: >-
+    /opt/synthran-venv/bin/python -c
+    "import importlib.metadata; assert importlib.metadata.version('paho-mqtt') == '2.1.0'"
+  changed_when: false
+
+- name: Copy immutable trace
+  copy: {src: "{{ run_dir }}/model/events.jsonl", dest: /tmp/synthran-events.jsonl}
+
+- name: Verify the staged replay dependency closure against the actual trace
+  command: >-
+    /opt/synthran-venv/bin/python -c
+    "from Experiment.workload.replay import replay;
+    from Experiment.workload.bundle import read_events;
+    events = read_events('/tmp/synthran-events.jsonl');
+    assert isinstance(events, list)"
+  environment:
+    PYTHONPATH: /opt/synthran-source
+  changed_when: false
+
+- name: Create the protected publisher credential directory
+  ansible.builtin.file:
+    path: /etc/synthran
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the physical publisher password outside process arguments
+  ansible.builtin.copy:
+    dest: /etc/synthran/mqtt-publisher-password
+    owner: root
+    group: root
+    mode: '0600'
+    content: "{{ mqtt_publisher_password }}\n"
+  no_log: true
+
+- name: Reuse the non-R2Lab physical broker endpoint
+  set_fact:
+    synthran_effective_broker_address: "{{ synthran_physical_broker_ipv4 }}"
+  when: platform == 'physical'
+
+- name: Resolve the R2Lab N6 broker endpoint
+  set_fact:
+    synthran_r2lab_broker_endpoint: >-
+      {{ mqtt_broker_address if mqtt_broker_address else
+         hostvars[groups['broker_node'][0]].ansible_default_ipv4.address }}
+  when: platform == 'r2lab'
+
+- name: Resolve the R2Lab broker endpoint to IPv4
+  command:
+    argv: [getent, ahostsv4, "{{ synthran_r2lab_broker_endpoint }}"]
+  register: synthran_r2lab_broker_lookup
+  changed_when: false
+  when: platform == 'r2lab'
+
+- name: Record the R2Lab broker IPv4 address
+  set_fact:
+    synthran_effective_broker_address: "{{ synthran_r2lab_broker_lookup.stdout_lines[0].split()[0] }}"
+  when: platform == 'r2lab'
+
+- name: Route the SynthRAN broker through the upstream R2Lab wwan0 session
+  command: >-
+    ip route replace {{ synthran_effective_broker_address }}/32 dev wwan0
+  changed_when: true
+  when: platform == 'r2lab'
