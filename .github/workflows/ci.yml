@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Check deploy.sh syntax
+        run: bash -n deploy.sh
+
+      - name: Compile Python sources
+        run: python -m compileall -q synthran
+
+      - name: Validate project metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          project = data["project"]
+          assert project["name"] == "synthran"
+          assert project["version"]
+          assert project["requires-python"]
+          print(f"validated pyproject.toml for {project['name']} {project['version']}")
+          PY
+
+      - name: Install package and configuration parser
+        run: |
+          python -m pip install --disable-pip-version-check --no-deps -e .
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: Import SynthRAN package
+        run: python -c "import synthran; print('synthran import OK')"
+
+      - name: Parse versioned YAML configuration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          paths = sorted(Path("scenarios").glob("*.yml"))
+          paths += sorted(Path("deployment/group_vars/all").glob("network_profile_*.yaml"))
+          paths.append(Path("deployment/group_vars/all/ue_catalog.yaml"))
+          paths.append(Path("CITATION.cff"))
+
+          for path in paths:
+              if not path.is_file():
+                  raise SystemExit(f"missing expected configuration: {path}")
+              with path.open("r", encoding="utf-8") as handle:
+                  yaml.safe_load(handle)
+
+          print(f"parsed {len(paths)} YAML/CFF files")
+          PY
+
+      - name: Ensure README artwork is not required
+        run: |
+          if grep -qE 'readme-(hero|architecture).*\.svg' README.md; then
+            echo "README still references removed presentation artwork" >&2
+            exit 1
+          fi
