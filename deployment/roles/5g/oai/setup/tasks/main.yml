@@ -257,7 +257,7 @@
 - name: Configure the staged immutable OAI sources
   ansible.builtin.shell: |
     set -o pipefail
-    timeout --signal=TERM 30m bash -e ./prepare-demo-oai.sh -c 2>&1 |
+    timeout --signal=TERM 30m bash ./prepare-demo-oai.sh -c 2>&1 |
       tee /tmp/output-prepare-demo-oai.txt
   args:
     chdir: "{{ dir_oai }}"
@@ -267,10 +267,34 @@
   register: prepare_script
   changed_when: "'OAI5G charts are now configured' in prepare_script.stdout"
 
+- name: Check configured OAI deployment artifacts
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ repo_dest }}/patch-mysql/oai_db-basic.sql"
+    - "{{ charts_base }}/oai-5g-core/oai-5g-{{ oai_cn_mode | default('basic') }}/values.yaml"
+    - "{{ charts_base }}/oai-5g-core/oai-5g-{{ oai_cn_mode | default('basic') }}/config.yaml"
+    - "{{ charts_base }}/oai-5g-ran"
+  register: oai_configured_artifacts
+
+- name: Check for unresolved OAI template placeholders
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -q
+      - '@DEF_'
+      - "{{ demo_oai_script }}"
+  register: oai_unresolved_placeholders
+  changed_when: false
+  failed_when: false
+
 - name: Verify OAI preparation completed
   ansible.builtin.assert:
+    quiet: true
     that:
       - "'OAI5G charts are now configured' in prepare_script.stdout"
+      - oai_configured_artifacts.results | map(attribute='stat.exists') | min
+      - oai_unresolved_placeholders.rc != 0
     fail_msg: >-
-      OAI chart preparation did not report completion. Inspect
-      /tmp/output-prepare-demo-oai.txt on {{ inventory_hostname }}.
+      OAI configuration did not produce a complete runnable deployment tree.
+      Inspect /tmp/output-prepare-demo-oai.txt on {{ inventory_hostname }}.
