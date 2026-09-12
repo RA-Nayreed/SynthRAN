@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Build and execute SynthRAN's native Ambient-IoT model."""
 
 from __future__ import annotations
