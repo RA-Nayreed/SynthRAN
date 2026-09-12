@@ -3,7 +3,7 @@ deployment:
   ran: srsran
   platform: r2lab
   ru: n320
-  profile: scenario1
+  network_profile: default
   nodes:
     core: sopnode-f2
     ran: sopnode-f3
@@ -12,8 +12,11 @@ deployment:
     sopnode-f3:
       cpu_low_latency: true
   ues:
-  - qhat01
-  - qhat03
+    - qhat01
+    - qhat03
+  ue_slices:
+    qhat01: slice1
+    qhat03: slice2
   reservation:
     enabled: true
     duration_minutes: 120

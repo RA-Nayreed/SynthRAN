@@ -1,0 +1,49 @@
+plmn:
+  mcc: "001"
+  mnc: "01"
+  tac: "1"
+
+dnns:
+  - name: internet
+    pdu_type: IPV4
+  - name: streaming
+    pdu_type: IPV4
+  - name: ims
+    pdu_type: IPV4V6
+
+slices:
+  - name: slice1
+    dnn: internet
+    sst: "1"
+    sd: "EMPTY"
+    qos:
+      five_qi: "9"
+      arp:
+        priority_level: "8"
+        preempt_cap: NOT_PREEMPT
+        preempt_vuln: PREEMPTABLE
+      priority_level: "1"
+    bandwidth:
+      uplink: 20Mbps
+      downlink: 40Mbps
+    ip_prefix: "12.1.1"
+
+  - name: slice2
+    dnn: streaming
+    sst: "1"
+    sd: "100000"
+    qos:
+      five_qi: "5"
+      arp:
+        priority_level: "1"
+        preempt_cap: NOT_PREEMPT
+        preempt_vuln: PREEMPTABLE
+      priority_level: "1"
+    bandwidth:
+      uplink: 30Mbps
+      downlink: 50Mbps
+    ip_prefix: "14.1.1"
+
+security:
+  full_key: "fec86ba6eb707ed08905757b1bb44b8f"
+  opc: "C42449363BBAD02B66D16BC975D77CC1"

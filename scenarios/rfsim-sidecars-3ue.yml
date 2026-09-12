@@ -3,7 +3,7 @@ deployment:
   ran: srsran
   platform: rfsim
   ru: rfsim
-  profile: default
+  network_profile: default
   nodes:
     core: sopnode-f2
     ran: sopnode-f3
@@ -12,9 +12,13 @@ deployment:
     sopnode-f3:
       cpu_low_latency: true
   ues:
-  - uesim01
-  - uesim02
-  - uesim03
+    - uesim01
+    - uesim02
+    - uesim03
+  ue_slices:
+    uesim01: slice1
+    uesim02: slice2
+    uesim03: slice1
   reservation:
     enabled: true
     duration_minutes: 120

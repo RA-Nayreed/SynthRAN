@@ -3,7 +3,11 @@ import copy, re
 from pathlib import Path
 import yaml
 
-from .profile_validation import validate_profile, validate_ue_profile_overrides
+from .profile_validation import (
+    validate_network_profile,
+    validate_ue_catalog,
+    validate_ue_slice_assignments,
+)
 
 SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
@@ -13,14 +17,18 @@ _TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
 _INSECURE_SSH = re.compile(
     r"(?:StrictHostKeyChecking\s*=\s*no|UserKnownHostsFile\s*=\s*/dev/null)", re.I
 )
+_SAFE_PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 
-def _profile_source(deployment: dict) -> Path:
-    if deployment.get("profile_file"):
-        return Path(deployment["profile_file"])
-    return Path("deployment/group_vars/all") / (
-        "5g_profile_" + str(deployment.get("profile", "default")) + ".yaml"
-    )
+def _network_profile_source(deployment: dict) -> Path:
+    if deployment.get("network_profile_file"):
+        return Path(deployment["network_profile_file"])
+    name = str(deployment.get("network_profile", ""))
+    return Path("deployment/group_vars/all") / f"network_profile_{name}.yaml"
+
+
+def _ue_catalog_source(deployment: dict) -> Path:
+    return Path(deployment.get("ue_catalog_file") or "deployment/group_vars/all/ue_catalog.yaml")
 
 
 def _validate_ssh_policy(deployment: dict, host_vars: dict) -> None:
@@ -69,10 +77,18 @@ def load_scenario(path: str | Path) -> dict:
         data = yaml.safe_load(stream)
     if not isinstance(data, dict):
         raise ValueError("scenario must be a mapping")
-    for section in ("deployment",):
-        if not isinstance(data.get(section), dict):
-            raise ValueError(f"scenario requires mapping: {section}")
+    if not isinstance(data.get("deployment"), dict):
+        raise ValueError("scenario requires mapping: deployment")
     dep = data["deployment"]
+
+    legacy = sorted(key for key in ("profile", "profile_file", "ue_profiles") if key in dep)
+    if legacy:
+        raise ValueError(
+            "legacy deployment fields are no longer supported: "
+            + ", ".join(legacy)
+            + "; use network_profile and explicit ue_slices"
+        )
+
     if dep.get("core") not in SUPPORTED_CORES:
         raise ValueError("unsupported core")
     if str(dep.get("ran", "")).lower() not in SUPPORTED_RANS:
@@ -93,19 +109,15 @@ def load_scenario(path: str | Path) -> dict:
             "use documented deployment fields/ansible_vars that are actually rendered"
         )
 
-    # Disabled legacy capability: older SynthRAN revisions could reserve and
-    # provision arbitrary R2Lab FIT/PC hosts as sensor, edge, or RF-measurement
-    # experiment nodes. Current experiments use logical Ambient-IoT sensors and
-    # the generic testbed backend no longer consumes those auxiliary roles.
-    # Keep the concept documented here so stale scenarios fail explicitly rather
-    # than silently reviving a partially removed deployment path. If a future
-    # experiment genuinely needs extra R2Lab hosts, add them through that
-    # experiment's explicit resource contract instead of the global launcher.
     if "r2lab_experiment_nodes" in dep:
         raise ValueError(
             "deployment.r2lab_experiment_nodes is disabled; auxiliary R2Lab "
             "sensor/edge/RF hosts are not part of the current testbed contract"
         )
+
+    profile_name = dep.get("network_profile")
+    if not isinstance(profile_name, str) or not _SAFE_PROFILE_NAME.fullmatch(profile_name):
+        raise ValueError("deployment.network_profile must be a safe non-empty profile name")
 
     ues = dep.get("ues", [])
     if (
@@ -132,23 +144,40 @@ def load_scenario(path: str | Path) -> dict:
             raise ValueError(
                 f"deployment.host_vars.{name} cannot override canonical UE transport fields: "
                 + ", ".join(conflicts)
-                + "; configure physical transport in the selected 5G profile"
+                + "; configure UE transport in deployment/group_vars/all/ue_catalog.yaml"
             )
 
     for key in ("entrypoint", "config"):
         value = data.get("experiment", {}).get(key)
         if value:
             data["experiment"][key] = str((source.parent / value).resolve())
-    for key in ("profile_file", "topology_file"):
+    for key in ("network_profile_file", "ue_catalog_file", "topology_file"):
         if dep.get(key):
             dep[key] = str((source.parent / dep[key]).resolve())
 
-    profile_source = _profile_source(dep)
-    if not profile_source.is_file():
-        raise ValueError(f"5G profile not found: {profile_source}")
-    profile = yaml.safe_load(profile_source.read_text(encoding="utf-8"))
-    validate_profile(profile)
-    validate_ue_profile_overrides(dep.get("ue_profiles", {}), profile)
+    network_profile_source = _network_profile_source(dep)
+    if not network_profile_source.is_file():
+        raise ValueError(f"network profile not found: {network_profile_source}")
+    network_profile = yaml.safe_load(network_profile_source.read_text(encoding="utf-8"))
+    validate_network_profile(network_profile)
+
+    catalog_source = _ue_catalog_source(dep)
+    if not catalog_source.is_file():
+        raise ValueError(f"UE catalog not found: {catalog_source}")
+    catalog = yaml.safe_load(catalog_source.read_text(encoding="utf-8"))
+    validate_ue_catalog(catalog)
+    catalog_ues = catalog["ues"]
+    for name in ues:
+        if name not in catalog_ues:
+            raise ValueError(f"selected UE {name!r} is absent from the UE catalog")
+        ue_platform = str(catalog_ues[name].get("platform", "")).lower()
+        if ue_platform != dep["platform"]:
+            raise ValueError(
+                f"selected UE {name!r} belongs to platform {ue_platform!r}, "
+                f"not {dep['platform']!r}"
+            )
+
+    validate_ue_slice_assignments(dep.get("ue_slices"), ues, network_profile)
 
     data["_source_directory"] = str(source.parent)
     return data

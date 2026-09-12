@@ -16,7 +16,7 @@ import yaml
 from .scenario import load_scenario
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ACTIVE_ENDPOINT_SCHEMA_VERSION = 1
 
 
@@ -54,13 +54,13 @@ def resolve_scenario(source: str | Path, output: str | Path) -> dict:
     return data
 
 
-def _slice_map(profile: dict) -> dict[str, dict]:
-    slices = profile.get("slices", [])
+def _slice_map(network_profile: dict) -> dict[str, dict]:
+    slices = network_profile.get("slices", [])
     if not isinstance(slices, list):
-        raise ValueError("5G profile slices must be a list")
+        raise ValueError("network profile slices must be a list")
     result = {entry.get("name"): entry for entry in slices if isinstance(entry, dict)}
     if None in result or len(result) != len(slices):
-        raise ValueError("5G profile slices must have unique names")
+        raise ValueError("network profile slices must have unique names")
     return result
 
 
@@ -91,13 +91,13 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
 
 
-def _r2lab_tunnel(device: str, profile: dict) -> dict:
-    mode = profile.get("mode", "mbim")
+def _r2lab_tunnel(device: str, ue_definition: dict) -> dict:
+    mode = ue_definition.get("mode", "mbim")
     return {
         "host": device,
-        "interface": profile.get("interface", "wwan0"),
+        "interface": ue_definition.get("interface", "wwan0"),
         "mode": mode,
-        "mbim_session": profile.get("mbim_session", 0) if mode == "mbim" else None,
+        "mbim_session": ue_definition.get("mbim_session", 0) if mode == "mbim" else None,
     }
 
 
@@ -211,16 +211,16 @@ def validate_live_evidence(
     return evidence
 
 
-def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
+def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
     deployment = scenario["deployment"]
     platform = str(deployment["platform"]).lower()
     ran = str(deployment["ran"]).lower()
     core = str(deployment["core"]).lower()
-    plmn = profile["plmn"]
-    slices = _slice_map(profile)
+    plmn = network_profile["plmn"]
+    slices = _slice_map(network_profile)
     result = []
     for index, device in enumerate(deployment["ues"], 1):
-        ue = profile["ues"][device]
+        ue = network_profile["ues"][device]
         selected_slice = slices[ue["slice"]]
         entry = {
             "device": device,
@@ -245,13 +245,15 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
 
 def build_manifest(
     scenario: dict,
-    profile: dict,
+    network_profile: dict,
     ue_map: list[dict],
     topology: dict | None = None,
 ) -> dict:
     clean_scenario = copy.deepcopy(scenario)
     clean_scenario.pop("_source_directory", None)
     deployment = clean_scenario["deployment"]
+    network_definition = copy.deepcopy(network_profile)
+    network_definition.pop("ues", None)
     selected = {
         "core": str(deployment["core"]).lower(),
         "ran": str(deployment["ran"]).lower(),
@@ -261,10 +263,10 @@ def build_manifest(
         "host_vars": copy.deepcopy(deployment.get("host_vars", {})),
         "nodes": copy.deepcopy(deployment["nodes"]),
         "bridge_enabled": bool(deployment.get("bridge_enabled", True)),
-        "profile": deployment.get("profile", "default"),
-        "profile_hash": content_hash(profile),
-        "plmn": copy.deepcopy(profile["plmn"]),
-        "slices": copy.deepcopy(profile.get("slices", [])),
+        "network_profile": deployment["network_profile"],
+        "network_profile_hash": content_hash(network_definition),
+        "plmn": copy.deepcopy(network_profile["plmn"]),
+        "slices": copy.deepcopy(network_profile.get("slices", [])),
         "ues": copy.deepcopy(ue_map),
         "topology": copy.deepcopy(topology or {"namespace": str(deployment["core"]).lower()}),
     }

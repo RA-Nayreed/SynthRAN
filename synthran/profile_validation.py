@@ -1,4 +1,4 @@
-"""Strict validation for data-only 5G profile fields used by deployment templates."""
+"""Strict validation for network profiles and UE catalog data used by deployment."""
 from __future__ import annotations
 
 import ipaddress
@@ -49,7 +49,7 @@ def _validate_transport(entry: dict, label: str) -> None:
         raise ValueError(f"{label}.mode must be mbim or qmi")
     interface = entry.get("interface", "wwan0")
     if interface != "wwan0":
-        raise ValueError(f"{label}.interface must be wwan0 for the supported physical workflow")
+        raise ValueError(f"{label}.interface must be wwan0 for the supported R2Lab workflow")
     if "mbim_session" in entry:
         try:
             session = int(entry["mbim_session"])
@@ -59,10 +59,10 @@ def _validate_transport(entry: dict, label: str) -> None:
             raise ValueError(f"{label}.mbim_session is supported only as session 0 in mbim mode")
 
 
-def validate_profile(profile: Any) -> None:
-    """Reject malformed or shell-active telecom profile values before rendering."""
-    profile = _mapping(profile, "5G profile")
-    _exact_keys(profile, {"plmn", "dnns", "slices", "security", "ues"}, "5G profile")
+def validate_network_profile(profile: Any) -> None:
+    """Reject malformed or shell-active network-profile values before rendering."""
+    profile = _mapping(profile, "network profile")
+    _exact_keys(profile, {"plmn", "dnns", "slices", "security"}, "network profile")
 
     plmn = _mapping(profile.get("plmn"), "plmn")
     _exact_keys(plmn, {"mcc", "mnc", "tac"}, "plmn")
@@ -139,36 +139,63 @@ def validate_profile(profile: Any) -> None:
         if not _HEX_128.fullmatch(str(security.get(key, ""))):
             raise ValueError(f"security.{key} must be exactly 32 hexadecimal digits")
 
-    ues = _mapping(profile.get("ues"), "ues")
+
+def validate_ue_catalog(catalog: Any) -> None:
+    """Validate stable UE identity/transport metadata independently of network service policy."""
+    catalog = _mapping(catalog, "UE catalog")
+    _exact_keys(catalog, {"ues"}, "UE catalog")
+    ues = _mapping(catalog.get("ues"), "UE catalog.ues")
     if not ues:
-        raise ValueError("ues must define at least one UE")
+        raise ValueError("UE catalog must define at least one UE")
+
+    suffix_owners: dict[str, list[str]] = {}
     for name, raw in ues.items():
         _safe_name(name, "UE name")
-        label = f"ues.{name}"
+        label = f"UE catalog.ues.{name}"
         entry = _mapping(raw, label)
-        _exact_keys(entry, {"imsi_suffix", "slice", "mode", "interface", "mbim_session"}, label)
-        if not re.fullmatch(r"[0-9]{10}", str(entry.get("imsi_suffix", ""))):
+        _exact_keys(entry, {"platform", "imsi_suffix", "mode", "interface", "mbim_session"}, label)
+        platform = str(entry.get("platform", "")).lower()
+        if platform not in {"rfsim", "r2lab"}:
+            raise ValueError(f"{label}.platform must be rfsim or r2lab")
+        suffix = str(entry.get("imsi_suffix", ""))
+        if not re.fullmatch(r"[0-9]{10}", suffix):
             raise ValueError(f"{label}.imsi_suffix must contain exactly 10 digits")
-        if entry.get("slice") not in slice_names:
-            raise ValueError(f"{label}.slice references an unknown slice")
-        _validate_transport(entry, label)
+        suffix_owners.setdefault(suffix, []).append(name)
+
+        transport_keys = {"mode", "interface", "mbim_session"} & set(entry)
+        if platform == "r2lab":
+            if not name.startswith(("qhat", "qfit")):
+                raise ValueError(f"{label} must use a qhat/qfit name for the supported R2Lab workflow")
+            _validate_transport(entry, label)
+        elif transport_keys:
+            raise ValueError(
+                f"{label} is an RFSIM UE and cannot define physical transport fields: "
+                + ", ".join(sorted(transport_keys))
+            )
+
+    duplicates = {suffix: names for suffix, names in suffix_owners.items() if len(names) > 1}
+    if duplicates:
+        raise ValueError("UE catalog contains duplicate IMSI suffixes: " + repr(duplicates))
 
 
-def validate_ue_profile_overrides(overrides: Any, profile: dict) -> None:
-    if overrides is None:
-        return
-    overrides = _mapping(overrides, "deployment.ue_profiles")
+def validate_ue_slice_assignments(assignments: Any, selected_ues: list[str], profile: dict) -> None:
+    assignments = _mapping(assignments, "deployment.ue_slices")
+    selected = set(selected_ues)
+    assigned = set(assignments)
+    missing = sorted(selected - assigned)
+    extra = sorted(assigned - selected)
+    if missing or extra:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if extra:
+            details.append("not selected: " + ", ".join(extra))
+        raise ValueError("deployment.ue_slices must assign exactly the selected UEs (" + "; ".join(details) + ")")
     slice_names = {entry["name"] for entry in profile["slices"]}
-    base_ues = profile.get("ues", {})
-    for name, raw in overrides.items():
-        _safe_name(name, "deployment.ue_profiles UE name")
-        label = f"deployment.ue_profiles.{name}"
-        entry = _mapping(raw, label)
-        _exact_keys(entry, {"imsi_suffix", "slice", "mode", "interface", "mbim_session"}, label)
-        if "imsi_suffix" in entry and not re.fullmatch(r"[0-9]{10}", str(entry["imsi_suffix"])):
-            raise ValueError(f"{label}.imsi_suffix must contain exactly 10 digits")
-        if "slice" in entry and entry["slice"] not in slice_names:
-            raise ValueError(f"{label}.slice references an unknown slice")
-        effective = dict(base_ues.get(name, {}))
-        effective.update(entry)
-        _validate_transport(effective, label)
+    for name in selected_ues:
+        _safe_name(name, "deployment.ue_slices UE name")
+        value = assignments[name]
+        if not isinstance(value, str) or value not in slice_names:
+            raise ValueError(
+                f"deployment.ue_slices.{name} must name one of: " + ", ".join(sorted(slice_names))
+            )

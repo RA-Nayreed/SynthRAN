@@ -1,0 +1,96 @@
+ues:
+  qhat01:
+    platform: r2lab
+    imsi_suffix: "0000000006"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qhat02:
+    platform: r2lab
+    imsi_suffix: "0000000007"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qhat03:
+    platform: r2lab
+    imsi_suffix: "0000000008"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qhat10:
+    platform: r2lab
+    imsi_suffix: "0000000013"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qhat11:
+    platform: r2lab
+    imsi_suffix: "0000000014"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qhat20:
+    platform: r2lab
+    imsi_suffix: "0000000009"
+    mode: qmi
+    interface: wwan0
+  qhat21:
+    platform: r2lab
+    imsi_suffix: "0000000010"
+    mode: qmi
+    interface: wwan0
+  qhat22:
+    platform: r2lab
+    imsi_suffix: "0000000011"
+    mode: qmi
+    interface: wwan0
+  qhat23:
+    platform: r2lab
+    imsi_suffix: "0000000012"
+    mode: qmi
+    interface: wwan0
+  qfit07:
+    platform: r2lab
+    imsi_suffix: "0000000003"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qfit09:
+    platform: r2lab
+    imsi_suffix: "0000000004"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qfit18:
+    platform: r2lab
+    imsi_suffix: "0000000005"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qfit29:
+    platform: r2lab
+    imsi_suffix: "0000000019"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qfit32:
+    platform: r2lab
+    imsi_suffix: "0000000020"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  qfit34:
+    platform: r2lab
+    imsi_suffix: "0000000021"
+    mode: mbim
+    interface: wwan0
+    mbim_session: 0
+  uesim01:
+    platform: rfsim
+    imsi_suffix: "0000001121"
+  uesim02:
+    platform: rfsim
+    imsi_suffix: "0000001122"
+  uesim03:
+    platform: rfsim
+    imsi_suffix: "0000001123"

@@ -7,7 +7,6 @@ import copy
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import shutil
 import socket
@@ -15,80 +14,55 @@ import socket
 import yaml
 
 from .deployment_state import build_manifest, build_ue_map, content_hash
+from .profile_validation import validate_network_profile, validate_ue_catalog
 from .r2lab import access
 from .scenario import redacted
 
 
-def resolve_profile(d: dict) -> tuple[dict, str]:
-    ues = d["ues"]
-    profile_name = d.get("profile", "default")
+def resolve_network_profile(d: dict) -> tuple[dict, str]:
+    """Build the effective network profile for only the selected UEs.
+
+    Network policy (PLMN/DNN/slices/QoS/security) is independent of UE identity.
+    Stable UE identity/transport metadata comes from the UE catalog, while the
+    scenario explicitly assigns one slice from the selected network profile to
+    every selected UE.
+    """
+    profile_name = d["network_profile"]
     profile_source = Path(
-        d.get("profile_file")
-        or Path("deployment/group_vars/all", f"5g_profile_{profile_name}.yaml")
+        d.get("network_profile_file")
+        or Path("deployment/group_vars/all", f"network_profile_{profile_name}.yaml")
+    )
+    catalog_source = Path(
+        d.get("ue_catalog_file") or "deployment/group_vars/all/ue_catalog.yaml"
     )
     if not profile_source.is_file():
-        raise SystemExit(f"5G profile not found: {profile_source}")
+        raise SystemExit(f"network profile not found: {profile_source}")
+    if not catalog_source.is_file():
+        raise SystemExit(f"UE catalog not found: {catalog_source}")
+
     profile = yaml.safe_load(profile_source.read_text())
-    available_ues = profile.get("ues", {})
-    overrides = d.get("ue_profiles", {})
-    slice_names = [entry["name"] for entry in profile.get("slices", [])]
-    if not slice_names:
-        raise SystemExit(f"5G profile {profile_name!r} defines no slices")
+    catalog = yaml.safe_load(catalog_source.read_text())
+    validate_network_profile(profile)
+    validate_ue_catalog(catalog)
+
     selected_ues = {}
-    if not isinstance(overrides, dict):
-        raise SystemExit("deployment.ue_profiles must be a mapping when provided")
-    for name in ues:
-        if name in available_ues:
-            ue_profile = copy.deepcopy(available_ues[name])
-        elif name in overrides:
-            ue_profile = {}
-        elif d["platform"] == "rfsim" and d["ran"].lower() == "srsran":
-            match = re.fullmatch(r"uesim([0-9]+)", name)
-            if not match or int(match.group(1)) < 1:
-                raise SystemExit(
-                    f"Software UE {name!r} is absent from {profile_source}; "
-                    "define it there or use a name such as uesim04"
-                )
-            suffix_value = 1120 + int(match.group(1))
-            if suffix_value > 9_999_999_999:
-                raise SystemExit(f"Cannot derive a 10-digit IMSI suffix for {name!r}")
-            ue_profile = {
-                "imsi_suffix": f"{suffix_value:010d}",
-                "slice": slice_names[0],
-            }
-        elif d["platform"] == "r2lab":
-            raise SystemExit(f"Physical UE {name!r} is absent from {profile_source}")
-        else:
+    assignments = d["ue_slices"]
+    for name in d["ues"]:
+        if name not in catalog["ues"]:
+            raise SystemExit(f"selected UE {name!r} is absent from {catalog_source}")
+        ue_profile = copy.deepcopy(catalog["ues"][name])
+        ue_platform = ue_profile.pop("platform")
+        if ue_platform != d["platform"]:
             raise SystemExit(
-                f"Software UE {name!r} is absent from {profile_source}; "
-                f"automatic UE generation is supported by the srsRAN RFSIM backend, not {d['ran']}"
+                f"selected UE {name!r} belongs to platform {ue_platform!r}, "
+                f"not {d['platform']!r}"
             )
-        ue_profile.update(copy.deepcopy(overrides.get(name, {})))
-        suffix = str(ue_profile.get("imsi_suffix", ""))
-        if not re.fullmatch(r"[0-9]{10}", suffix):
-            raise SystemExit(
-                f"UE {name!r} must have a 10-digit imsi_suffix, got {suffix!r}"
-            )
-        if ue_profile.get("slice") not in slice_names:
-            raise SystemExit(
-                f"UE {name!r} references unknown slice {ue_profile.get('slice')!r}; "
-                f"available slices: {', '.join(slice_names)}"
-            )
-        ue_profile["imsi_suffix"] = suffix
+        ue_profile["slice"] = assignments[name]
         selected_ues[name] = ue_profile
-    suffix_owners = {}
-    for name, ue_profile in selected_ues.items():
-        suffix_owners.setdefault(ue_profile["imsi_suffix"], []).append(name)
-    duplicates = {
-        suffix: names for suffix, names in suffix_owners.items() if len(names) > 1
-    }
-    if duplicates:
-        raise SystemExit(
-            "Selected UEs have duplicate IMSI suffixes: " + repr(duplicates)
-        )
-    profile = copy.deepcopy(profile)
-    profile["ues"] = selected_ues
-    return profile, profile_name
+
+    effective = copy.deepcopy(profile)
+    effective["ues"] = selected_ues
+    return effective, profile_name
 
 
 def _ssh_common_args(known_hosts: Path, extra: str = "") -> str:
@@ -206,7 +180,8 @@ def main(argv=None):
         raise ValueError("srsRAN RFSIM exceeds the available TCP port range")
     if d["platform"] == "r2lab" and d["ran"].lower() == "ueransim":
         raise ValueError("UERANSIM cannot drive an R2Lab physical radio")
-    profile, profile_name = resolve_profile(d)
+
+    profile, profile_name = resolve_network_profile(d)
     ue_map = build_ue_map(c, profile)
     args.run_dir.mkdir(parents=True, exist_ok=True)
     private_dir = Path(".synthran/execution") / args.run_dir.name
@@ -239,12 +214,13 @@ def main(argv=None):
         yaml.safe_dump(redacted(raw_inventory), sort_keys=False)
     )
 
-    effective_profile_path = private_dir / "fiveg-profile.yml"
+    effective_profile_path = private_dir / "network-profile.yml"
     effective_profile_path.write_text(yaml.safe_dump(profile, sort_keys=False))
     effective_profile_path.chmod(0o600)
-    (args.run_dir / "fiveg-profile.yml").write_text(
+    (args.run_dir / "network-profile.yml").write_text(
         yaml.safe_dump(redacted(profile), sort_keys=False)
     )
+
     topology_source = Path(d.get("topology_file", "deployment/topology.yml"))
     topologies = yaml.safe_load(topology_source.read_text())
     try:
@@ -263,6 +239,7 @@ def main(argv=None):
         n2["amf_ip"] = n2[endpoint]
         n2.pop("amf_ip_colocated")
         n2.pop("amf_ip_split")
+
     topology["contract_version"] = topologies["schema_version"]
     manifest = build_manifest(c, profile, ue_map, topology)
     selected = manifest["deployment"]
@@ -272,6 +249,7 @@ def main(argv=None):
     manifest["deployment_hash"] = content_hash(selected)
     manifest_path = Path(args.run_dir, "deployment-fingerprint.json")
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
     variables = {
         **d.get("ansible_vars", {}),
         "synthran_root": str(Path.cwd()),
@@ -279,8 +257,8 @@ def main(argv=None):
         "ran": "srsRAN" if d["ran"].lower() == "srsran" else d["ran"],
         "rru": "rfsim" if d["platform"] == "rfsim" else d.get("ru", d["platform"]),
         "platform": d["platform"],
-        "fiveg_profile": "resolved",
-        "fiveg_profile_file": str(effective_profile_path.resolve()),
+        "network_profile": "resolved",
+        "network_profile_file": str(effective_profile_path.resolve()),
         "core_node_name": nodes["core"],
         "ran_node_name": nodes["ran"],
         "broker_node_name": nodes.get("broker", nodes["core"]),
@@ -306,7 +284,7 @@ def main(argv=None):
     shutil.copytree("deployment/playbooks", context / "playbooks", dirs_exist_ok=True)
     shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
     shutil.copyfile(
-        effective_profile_path, context / "group_vars/all/5g_profile_resolved.yaml"
+        effective_profile_path, context / "group_vars/all/network_profile_resolved.yaml"
     )
     if not (context / "roles").exists():
         (context / "roles").symlink_to(
