@@ -70,6 +70,7 @@ export SYNTHRAN_PRIVATE_DIR="$PRIVATE_RUN_DIR"
 git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
 
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
+ACTIVE_DEPLOYMENT_ENDPOINT="$PWD/.synthran/active-deployment.json"
 mkdir -p .synthran .synthran/r2lab
 R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
 export R2LAB_FARADAY_KNOWN_HOSTS
@@ -502,9 +503,6 @@ fi
 SOURCE_CONFIG="$CONFIG"
 [[ -n "$SOURCE_CONFIG" && -f "$SOURCE_CONFIG" ]] || { echo "No testbed scenario was produced" >&2; exit 2; }
 
-# deploy.sh is deliberately testbed-only. Even when an explicit legacy scenario
-# still contains an experiment block, strip it before validation/resolution so
-# deployment never imports, configures, prepares, runs, or validates experiment code.
 TESTBED_SOURCE_CONFIG="$PRIVATE_RUN_DIR/testbed-source.yml"
 "$SYNTHRAN_PYTHON" - "$SOURCE_CONFIG" "$TESTBED_SOURCE_CONFIG" <<'PY'
 import copy
@@ -539,7 +537,8 @@ write_public_scenario
 
 if ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
-    --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
+    --active "$ACTIVE_DEPLOYMENT_STATE" \
+    --endpoint "$ACTIVE_DEPLOYMENT_ENDPOINT"
 fi
 
 if ! $NO_RESERVATION && ! $DRY_RUN; then
@@ -549,7 +548,7 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   write_public_scenario
 fi
 
-"$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR" false
+"$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR"
 
 if $DRY_RUN; then
   echo "Prepared testbed deployment in $RUN_DIR; provisioning skipped"
