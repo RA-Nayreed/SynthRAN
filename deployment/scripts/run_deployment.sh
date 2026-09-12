@@ -96,14 +96,36 @@ collect_failure_diagnostics() {
   local reason=$1
   local diagnostics_rc=0
   local replaced=false
-  local i
+  local skip_next=false
+  local i arg
   local diagnostics_playbook="${SYNTHRAN_PRIVATE_DIR:-}/ansible/playbooks/diagnostics.yml"
   local diagnostics_command=("${DEPLOYMENT_COMMAND[@]}")
+  local filtered_command=()
 
   if [[ -z "${SYNTHRAN_PRIVATE_DIR:-}" || ! -f "$diagnostics_playbook" ]]; then
     echo "Failure diagnostics unavailable: staged diagnostics playbook is missing." >&2
     return 0
   fi
+
+  # Resume selectors are valid for the deployment playbook but not for the
+  # independent diagnostics playbook. Strip them before replacing the playbook.
+  for arg in "${diagnostics_command[@]}"; do
+    if [[ "$skip_next" == true ]]; then
+      skip_next=false
+      continue
+    fi
+    case "$arg" in
+      --start-at-task)
+        skip_next=true
+        continue
+        ;;
+      --start-at-task=*)
+        continue
+        ;;
+    esac
+    filtered_command+=("$arg")
+  done
+  diagnostics_command=("${filtered_command[@]}")
 
   for ((i = 0; i < ${#diagnostics_command[@]}; i++)); do
     case "${diagnostics_command[$i]}" in
