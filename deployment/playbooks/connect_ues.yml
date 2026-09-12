@@ -33,7 +33,13 @@
             SYNTHRAN_SSH_KNOWN_HOSTS: "{{ synthran_nested_ssh_dir }}/known_hosts"
       vars:
         ue_item: "{{ item }}"
-        ignore_task_errors: false
+        # The upstream role deliberately treats modem bring-up as best effort.
+        # SynthRAN's read-only verification role below is the acceptance gate.
+        ignore_task_errors: true
+        # Upstream embeds phone_ssh in a task name inside a conditionally skipped
+        # phone block. Seed it so non-phone UEs do not emit undefined-template
+        # warnings before that block's set_fact would run.
+        phone_ssh: ""
       loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}"
       loop_control:
         label: "{{ item }}"
