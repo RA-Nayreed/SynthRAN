@@ -4,31 +4,6 @@
   args:
     chdir: "{{ repo_dest }}"
 
-# -----------------------------------------------------------------
-# PHASE 1 - Before gNB start: constrain system services to
-#           housekeeping CPUs so new pods inherit the right affinity
-# -----------------------------------------------------------------
-- name: AW2S pre-start - constrain system services to housekeeping CPUs
-  block:
-    - name: Set containerd AllowedCPUs
-      ansible.builtin.command: >
-        systemctl set-property containerd.service AllowedCPUs={{ housekeeping_cpus }}
-      changed_when: true
-
-    - name: Set kubelet AllowedCPUs
-      ansible.builtin.command: >
-        systemctl set-property kubelet.service AllowedCPUs={{ housekeeping_cpus }}
-      changed_when: true
-
-    - name: Reload systemd after property changes
-      ansible.builtin.systemd:
-        daemon_reload: yes
-  when: rru == "jaguar" or rru == "panther"
-
-# -----------------------------------------------------------------
-# gNB launch
-# -----------------------------------------------------------------
-
 - name: Launch OAI gNB pod
   ansible.builtin.command: "{{ demo_oai_script }} start-gnb"
   args:
@@ -36,10 +11,7 @@
   register: gnb_script
   changed_when: "'When you finish' in gnb_script.stdout"
 
-# -----------------------------------------------------------------
-# gNB sync check (USRP N3XX only)
-# -----------------------------------------------------------------
-- name: Monitor gNB logs for sync
+- name: Monitor N3xx gNB logs for synchronization
   block:
     - name: Set pod label based on OAI mode
       ansible.builtin.set_fact:
@@ -63,7 +35,8 @@
       delay: 10
       failed_when: false
 
-    - name: Handle sync failure
+    - name: Retry N3xx synchronization after swapping the USRP IP
+      when: gnb_log_check.rc != 0
       block:
         - name: Stop gNB after failed sync
           ansible.builtin.command: "{{ demo_oai_script }} stop-gnb"
@@ -91,56 +64,9 @@
           retries: 6
           delay: 10
           failed_when: gnb_log_check_retry.rc != 0
-      when: gnb_log_check.rc != 0
-  when: rru == "n300" or rru == "n320"
+  when: rru in ['n300', 'n320']
 
-# -----------------------------------------------------------------
-# PHASE 2 - After gNB sync: IRQ pinning and ru_thread affinity
-#           IRQs and ru_thread only exist once the gNB fronthaul
-#           is active, so this must run after Frame.Slot appears
-# -----------------------------------------------------------------
-- name: AW2S post-sync - IRQ and CPU pinning
-  block:
-    - name: Deploy IRQ setup script from template
-      ansible.builtin.template:
-        src: oai-irq-setup.sh.j2
-        dest: /usr/local/bin/oai-irq-setup.sh
-        mode: '0755'
-
-    - name: Deploy systemd service for persistent IRQ pinning
-      ansible.builtin.template:
-        src: oai-irq-pinning.service.j2
-        dest: /etc/systemd/system/oai-irq-pinning.service
-
-    - name: Enable IRQ pinning service
-      ansible.builtin.systemd:
-        name: oai-irq-pinning
-        enabled: yes
-        daemon_reload: yes
-
-    - name: Wait for gNB sync before applying IRQ pinning
-      ansible.builtin.shell: |
-        GNB_POD_NAME=$(kubectl get pods --namespace {{ core }} \
-          -l "app.kubernetes.io/name=oai-gnb,app.kubernetes.io/instance=oai-gnb" \
-          -o jsonpath="{.items[0].metadata.name}")
-        kubectl logs --namespace {{ core }} $GNB_POD_NAME \
-          | grep '\[NR_MAC\] I Frame.Slot'
-      register: aw2s_sync_check
-      until: aw2s_sync_check.rc == 0
-      retries: 12
-      delay: 10
-      failed_when: aw2s_sync_check.rc != 0
-
-    - name: Run IRQ setup script
-      ansible.builtin.command: /usr/local/bin/oai-irq-setup.sh
-      changed_when: true
-
-  when: rru == "jaguar" or rru == "panther"
-
-# -----------------------------------------------------------------
-# NR-UE launch (rfsim only)
-# -----------------------------------------------------------------
-- name: Launch OAI NR-UE pods (conditional)
+- name: Launch OAI NR-UE pods for RFSIM
   ansible.builtin.command: "{{ demo_oai_script }} {{ ue_cmd }}"
   args:
     chdir: "{{ repo_dest }}"
@@ -152,4 +78,4 @@
       {{ 'start-nr-ue' if ue_index == 1 else 'start-nr-ue' ~ ue_index }}
   register: nr_ue_scripts
   changed_when: "'condition met' in nr_ue_scripts.stdout"
-  when: rru == "rfsim"
+  when: rru == 'rfsim'
