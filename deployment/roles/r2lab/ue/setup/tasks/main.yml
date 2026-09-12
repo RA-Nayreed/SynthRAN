@@ -90,19 +90,6 @@
     msg: "UEs not reachable after boot: {{ failed_ues }}"
   when: failed_ues | length > 0
 
-# This role deliberately stops at hardware boot/readiness. Network policy is
-# applied exactly once by provision_r2lab.yml after this role returns.
-- name: Run qhat-check
-  ansible.builtin.shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ item }} 'qhat-check'
-  delegate_to: faraday.inria.fr
-  loop: "{{ reachable_ues }}"
-  register: check_results
-  changed_when: false
-  ignore_errors: true
-
-- name: Display qhat-check
-  ansible.builtin.debug:
-    msg:
-      - "UE: {{ item.item }}"
-      - "{{ item.stdout_lines }}"
-  loop: "{{ check_results.results }}"
+# This role deliberately stops at power/host readiness. Network-specific modem
+# initialization is owned by provision_r2lab.yml and actual attachment by
+# r2lab/ue/connect.
