@@ -13,7 +13,7 @@
 
 - name: Verify N3xx gNB RF-device readiness
   block:
-    - name: Set pod label based on OAI mode
+    - name: Set RAN pod selector and container based on OAI mode
       ansible.builtin.set_fact:
         pod_label_selector: >-
           {% if (oai_gnb_mode | default('')) in ['cudu', 'cucpup'] %}
@@ -21,6 +21,8 @@
           {% else %}
           app.kubernetes.io/name=oai-gnb,app.kubernetes.io/instance=oai-gnb
           {% endif %}
+        ran_container_name: >-
+          {{ 'du' if (oai_gnb_mode | default('')) in ['cudu', 'cucpup'] else 'gnb' }}
 
     - name: Wait for the gNB to open the N3xx RF device
       ansible.builtin.shell: |
@@ -31,7 +33,7 @@
         test -n "$GNB_POD_NAME"
         kubectl wait --namespace {{ core }} \
           --for=condition=Ready "pod/${GNB_POD_NAME}" --timeout=5s >/dev/null
-        kubectl logs --namespace {{ core }} "$GNB_POD_NAME" -c gnb \
+        kubectl logs --namespace {{ core }} "$GNB_POD_NAME" -c {{ ran_container_name }} \
           | grep -E 'RU [0-9]+ rf device ready'
       args:
         executable: /bin/bash
@@ -58,9 +60,9 @@
           ansible.builtin.assert:
             quiet: true
             that:
-              - current_ip_cmd.stdout | trim | length > 0
-              - new_usrp_ip | trim | length > 0
-              - current_ip_cmd.stdout | trim != new_usrp_ip | trim
+              - (current_ip_cmd.stdout | trim | length) > 0
+              - (new_usrp_ip | trim | length) > 0
+              - (current_ip_cmd.stdout | trim) != (new_usrp_ip | trim)
             fail_msg: >-
               N3xx RF initialization failed, but the pinned IP-swap fallback could not
               select a different USRP endpoint from {{ current_ip_cmd.stdout | trim }}.
@@ -89,7 +91,7 @@
             test -n "$GNB_POD_NAME"
             kubectl wait --namespace {{ core }} \
               --for=condition=Ready "pod/${GNB_POD_NAME}" --timeout=5s >/dev/null
-            kubectl logs --namespace {{ core }} "$GNB_POD_NAME" -c gnb \
+            kubectl logs --namespace {{ core }} "$GNB_POD_NAME" -c {{ ran_container_name }} \
               | grep -E 'RU [0-9]+ rf device ready'
           args:
             executable: /bin/bash
@@ -106,9 +108,9 @@
             that:
               - gnb_rf_ready_retry.rc == 0
             fail_msg: >-
-              The OAI gNB pod became available but did not report successful N3xx RF-device
+              The OAI RAN pod became available but did not report successful N3xx RF-device
               initialization after trying both configured USRP endpoints. Failure diagnostics
-              will retain the gNB logs; do not treat a missing pre-UE Frame.Slot line as the
+              will retain the RAN logs; do not treat a missing pre-UE Frame.Slot line as the
               synchronization criterion.
   when: rru in ['n300', 'n320']
 
