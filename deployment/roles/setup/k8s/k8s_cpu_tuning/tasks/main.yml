@@ -32,7 +32,7 @@
     cmd: sysctl -p
   changed_when: false
 
-- name: Ensure python3 and PyYAML are installed
+- name: Ensure Python and PyYAML are installed
   become: true
   ansible.builtin.apt:
     name:
@@ -41,125 +41,202 @@
     state: present
     update_cache: yes
 
-# CPU Manager is a stable kubelet capability in the pinned Kubernetes baseline.
-# Kubernetes 1.36 no longer recognizes the old CPUManager feature gate, so CPU
-# policy must be configured through the stable KubeletConfiguration fields only.
-# Stop kubelet and clear its checkpoint before changing policy, as required by
-# the Kubernetes CPU Manager policy-change procedure.
-- name: Stop kubelet before changing CPU Manager policy
+- name: Verify kubelet configuration exists before CPU Manager tuning
   become: true
-  ansible.builtin.systemd:
-    name: kubelet
-    state: stopped
+  ansible.builtin.stat:
+    path: /var/lib/kubelet/config.yaml
+  register: kubelet_config_before_cpu_tuning
 
-- name: Remove stale CPU Manager checkpoint before changing policy
+- name: Require kubelet configuration before CPU Manager tuning
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - kubelet_config_before_cpu_tuning.stat.exists
+      - kubelet_config_before_cpu_tuning.stat.isreg | default(false)
+    fail_msg: /var/lib/kubelet/config.yaml is missing; refusing CPU Manager tuning.
+
+- name: Back up kubelet configuration for CPU Manager rollback
   become: true
-  ansible.builtin.file:
-    path: /var/lib/kubelet/cpu_manager_state
-    state: absent
+  ansible.builtin.copy:
+    src: /var/lib/kubelet/config.yaml
+    dest: /var/lib/kubelet/config.yaml.synthran-before-cpu-manager
+    remote_src: true
+    mode: preserve
 
-- name: Merge stable CPU Manager settings into kubelet config
-  become: true
-  ansible.builtin.shell: |
-    python3 - <<'EOF'
-    import os
-    import yaml
+# CPU Manager is stable in the pinned Kubernetes baseline. Kubernetes 1.36 no
+# longer recognizes the old CPUManager feature gate, so configure only stable
+# KubeletConfiguration fields. The mutation is passed as a direct python argv
+# value rather than a shell heredoc so Ansible never has to parse embedded Jinja
+# as shell syntax.
+- name: Apply and validate stable CPU Manager policy
+  block:
+    - name: Stop kubelet before changing CPU Manager policy
+      become: true
+      ansible.builtin.systemd:
+        name: kubelet
+        state: stopped
 
-    cfg = "/var/lib/kubelet/config.yaml"
-    patch = {
-        "cgroupDriver": "systemd",
-        "cpuManagerPolicy": "static",
-        "cpuManagerPolicyOptions": {"full-pcpus-only": "true"},
-        "reservedSystemCPUs": "0-15",
-        "failSwapOn": False,
-    }
+    - name: Remove stale CPU Manager checkpoint before changing policy
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/kubelet/cpu_manager_state
+        state: absent
 
-    # Storage eviction settings are owned by pre_k8s. On a shared core+RAN
-    # node only, retain the tighter shared-node thresholds used by this role.
-    is_shared_node = {{ True if (ran_node_name == core_node_name) else False }}
-    if is_shared_node:
-        patch["evictionHard"] = {
-            "nodefs.available": "2%",
-            "imagefs.available": "2%",
-        }
-        patch["evictionMinimumReclaim"] = {
-            "nodefs.available": "500Mi",
-        }
+    - name: Merge stable CPU Manager settings into kubelet config
+      become: true
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import copy
+            import os
+            import yaml
 
-    if not os.path.exists(cfg):
-        raise SystemExit("ERROR: kubelet config not found")
+            cfg = "/var/lib/kubelet/config.yaml"
+            shared_node = os.environ.get("SYNTHRAN_SHARED_NODE") == "1"
 
-    with open(cfg) as handle:
-        data = yaml.safe_load(handle) or {}
+            with open(cfg) as handle:
+                data = yaml.safe_load(handle) or {}
+            original = copy.deepcopy(data)
 
-    # Sanitize legacy values as well as avoiding new ones. This makes a rerun
-    # safe even if /var/lib/kubelet/config.yaml came from an older SynthRAN run.
-    feature_gates = data.get("featureGates")
-    if isinstance(feature_gates, dict):
-        feature_gates.pop("CPUManager", None)
-        feature_gates.pop("CPUManagerPolicyOptions", None)
-        if not feature_gates:
-            data.pop("featureGates", None)
+            feature_gates = data.get("featureGates")
+            if isinstance(feature_gates, dict):
+                feature_gates.pop("CPUManager", None)
+                feature_gates.pop("CPUManagerPolicyOptions", None)
+                if not feature_gates:
+                    data.pop("featureGates", None)
 
-    # rootDir is kubelet's state directory and must never point at containerd.
-    data.pop("rootDir", None)
+            data.pop("rootDir", None)
+            data.update(
+                {
+                    "cgroupDriver": "systemd",
+                    "cpuManagerPolicy": "static",
+                    "cpuManagerPolicyOptions": {"full-pcpus-only": "true"},
+                    "reservedSystemCPUs": "0-15",
+                    "failSwapOn": False,
+                }
+            )
 
-    for key, value in patch.items():
-        data[key] = value
+            if shared_node:
+                data["evictionHard"] = {
+                    "nodefs.available": "2%",
+                    "imagefs.available": "2%",
+                }
+                data["evictionMinimumReclaim"] = {
+                    "nodefs.available": "500Mi",
+                }
 
-    tmp = cfg + ".tmp"
-    with open(tmp, "w") as handle:
-        yaml.safe_dump(data, handle, default_flow_style=False, sort_keys=False)
-    os.replace(tmp, cfg)
-    print("APPLIED")
-    EOF
-  register: merge_result
-  changed_when: "'APPLIED' in merge_result.stdout"
+            if data == original:
+                print("UNCHANGED")
+                raise SystemExit(0)
 
-- name: Validate CPU Manager kubelet configuration before restart
-  become: true
-  ansible.builtin.shell: |
-    python3 - <<'EOF'
-    import yaml
+            mode = os.stat(cfg).st_mode & 0o777
+            tmp = cfg + ".tmp"
+            with open(tmp, "w") as handle:
+                yaml.safe_dump(data, handle, default_flow_style=False, sort_keys=False)
+            os.chmod(tmp, mode)
+            os.replace(tmp, cfg)
+            print("CHANGED")
+      environment:
+        SYNTHRAN_SHARED_NODE: "{{ '1' if ran_node_name == core_node_name else '0' }}"
+      register: merge_result
+      changed_when: merge_result.stdout | trim == 'CHANGED'
 
-    cfg = "/var/lib/kubelet/config.yaml"
-    with open(cfg) as handle:
-        data = yaml.safe_load(handle) or {}
+    - name: Validate CPU Manager kubelet configuration before restart
+      become: true
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import os
+            import yaml
 
-    gates = data.get("featureGates") or {}
-    forbidden = [
-        name for name in ("CPUManager", "CPUManagerPolicyOptions")
-        if name in gates
-    ]
-    if forbidden:
-        raise SystemExit(
-            "removed/obsolete kubelet feature gates remain: " + ", ".join(forbidden)
-        )
-    if data.get("cpuManagerPolicy") != "static":
-        raise SystemExit("cpuManagerPolicy must be static")
-    if (data.get("cpuManagerPolicyOptions") or {}).get("full-pcpus-only") != "true":
-        raise SystemExit("full-pcpus-only CPU Manager policy option is missing")
-    if data.get("reservedSystemCPUs") != "0-15":
-        raise SystemExit("reservedSystemCPUs does not match the SynthRAN RAN baseline")
-    if "rootDir" in data:
-        raise SystemExit("rootDir must not be present in kubelet configuration")
-    print("VALID")
-    EOF
-  register: cpu_manager_config_validation
-  changed_when: false
+            cfg = "/var/lib/kubelet/config.yaml"
+            shared_node = os.environ.get("SYNTHRAN_SHARED_NODE") == "1"
+            with open(cfg) as handle:
+                data = yaml.safe_load(handle) or {}
 
-- name: Start kubelet with the validated CPU Manager policy
-  become: true
-  ansible.builtin.systemd:
-    name: kubelet
-    state: started
-    daemon_reload: yes
+            gates = data.get("featureGates") or {}
+            forbidden = [
+                name
+                for name in ("CPUManager", "CPUManagerPolicyOptions")
+                if name in gates
+            ]
+            if forbidden:
+                raise SystemExit(
+                    "removed kubelet feature gates remain: " + ", ".join(forbidden)
+                )
+            if data.get("cgroupDriver") != "systemd":
+                raise SystemExit("cgroupDriver must be systemd")
+            if data.get("cpuManagerPolicy") != "static":
+                raise SystemExit("cpuManagerPolicy must be static")
+            if (data.get("cpuManagerPolicyOptions") or {}).get("full-pcpus-only") != "true":
+                raise SystemExit("full-pcpus-only CPU Manager policy option is missing")
+            if data.get("reservedSystemCPUs") != "0-15":
+                raise SystemExit("reservedSystemCPUs does not match the SynthRAN RAN baseline")
+            if data.get("failSwapOn") is not False:
+                raise SystemExit("failSwapOn must be false")
+            if "rootDir" in data:
+                raise SystemExit("rootDir must not be present in kubelet configuration")
+            if shared_node:
+                eviction = data.get("evictionHard") or {}
+                reclaim = data.get("evictionMinimumReclaim") or {}
+                if eviction.get("nodefs.available") != "2%":
+                    raise SystemExit("shared-node nodefs eviction threshold is incorrect")
+                if eviction.get("imagefs.available") != "2%":
+                    raise SystemExit("shared-node imagefs eviction threshold is incorrect")
+                if reclaim.get("nodefs.available") != "500Mi":
+                    raise SystemExit("shared-node nodefs minimum reclaim is incorrect")
+            print("VALID")
+      environment:
+        SYNTHRAN_SHARED_NODE: "{{ '1' if ran_node_name == core_node_name else '0' }}"
+      register: cpu_manager_config_validation
+      changed_when: false
 
-- name: Require kubelet to remain active after CPU Manager tuning
-  become: true
-  ansible.builtin.command: systemctl is-active kubelet
-  register: kubelet_active_after_cpu_tuning
-  changed_when: false
-  retries: 12
-  delay: 5
-  until: kubelet_active_after_cpu_tuning.stdout | trim == 'active'
+    - name: Start kubelet with the validated CPU Manager policy
+      become: true
+      ansible.builtin.systemd:
+        name: kubelet
+        state: started
+        daemon_reload: yes
+
+    - name: Require kubelet to remain active after CPU Manager tuning
+      become: true
+      ansible.builtin.command: systemctl is-active kubelet
+      register: kubelet_active_after_cpu_tuning
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: kubelet_active_after_cpu_tuning.stdout | trim == 'active'
+
+  rescue:
+    - name: Restore kubelet configuration after CPU Manager tuning failure
+      become: true
+      ansible.builtin.copy:
+        src: /var/lib/kubelet/config.yaml.synthran-before-cpu-manager
+        dest: /var/lib/kubelet/config.yaml
+        remote_src: true
+        mode: preserve
+
+    - name: Restart kubelet with the restored configuration
+      become: true
+      ansible.builtin.systemd:
+        name: kubelet
+        state: started
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Fail after restoring the previous kubelet configuration
+      ansible.builtin.fail:
+        msg: >-
+          CPU Manager tuning failed. The previous kubelet configuration was
+          restored and a kubelet restart was attempted.
+
+  always:
+    - name: Remove temporary CPU Manager rollback configuration
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/kubelet/config.yaml.synthran-before-cpu-manager
+        state: absent
