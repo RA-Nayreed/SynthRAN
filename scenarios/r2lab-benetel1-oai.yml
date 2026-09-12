@@ -21,6 +21,3 @@ deployment:
   r2lab_reservation:
     enabled: true
     duration_minutes: 180
-experiment:
-  entrypoint: ../synthran/experiment_runner.py
-  config: ../synthran/configs/r2lab-benetel1-oai.yml
