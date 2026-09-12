@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ambient-IoT experiment lifecycle called by the generic testbed controller."""
+"""Reusable Ambient-IoT experiment lifecycle for an accepted SynthRAN testbed."""
 
 from __future__ import annotations
 
@@ -18,6 +18,38 @@ import yaml
 
 from synthran.experiment_scenario import load_scenario, remap_gateways, scientific_settings
 from synthran.scenario import load_scenario as load_testbed
+
+ACTIVE_DEPLOYMENT_ENDPOINT = ROOT / ".synthran/active-deployment.json"
+EXPERIMENT_ANSIBLE = ROOT / "synthran/experiment_runtime/ansible"
+
+
+def _active_private_dir() -> Path:
+    configured = os.environ.get("SYNTHRAN_PRIVATE_DIR")
+    if configured:
+        private = Path(configured).resolve()
+    else:
+        if not ACTIVE_DEPLOYMENT_ENDPOINT.is_file():
+            raise FileNotFoundError(
+                "no accepted deployment endpoint exists; run ./deploy.sh successfully first"
+            )
+        endpoint = json.loads(ACTIVE_DEPLOYMENT_ENDPOINT.read_text(encoding="utf-8"))
+        if endpoint.get("status") != "active":
+            raise ValueError("the saved deployment endpoint is not active")
+        identity_path = Path(endpoint.get("identity_file", ""))
+        if not identity_path.is_file():
+            raise FileNotFoundError("the active deployment identity referenced by the endpoint is missing")
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        if identity.get("status") != "active" or identity.get("deployment_hash") != endpoint.get("deployment_hash"):
+            raise ValueError("the active deployment endpoint does not match the active deployment identity")
+        private = Path(endpoint.get("private_execution_dir", "")).resolve()
+        os.environ["SYNTHRAN_PRIVATE_DIR"] = str(private)
+    required = (private / "inventory.yml", private / "deployment-vars.yml")
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "the accepted deployment execution context is incomplete: " + ", ".join(missing)
+        )
+    return private
 
 
 def _configure_source(source: Path) -> dict:
@@ -79,9 +111,8 @@ def prepare(
 
     scenario = load_scenario(config)
     run.mkdir(parents=True, exist_ok=True)
-    private = Path(os.environ["SYNTHRAN_PRIVATE_DIR"])
+    private = _active_private_dir()
     write_credentials(private)
-    # Freeze scientific settings and resolve trace paths before any reservation.
     settings = run / "experiment-input.yml"
     settings.write_text(
         yaml.safe_dump(scientific_settings(scenario), sort_keys=False)
@@ -130,11 +161,12 @@ def prepare(
 def _run_playbook(run: Path, playbook: Path) -> None:
     environment = dict(os.environ)
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
-    environment["ANSIBLE_ROLES_PATH"] = str(ROOT / "synthran/deployment/roles")
-    private = Path(environment["SYNTHRAN_PRIVATE_DIR"])
+    environment["ANSIBLE_ROLES_PATH"] = str(EXPERIMENT_ANSIBLE / "roles")
+    private = _active_private_dir()
+    environment["SYNTHRAN_PRIVATE_DIR"] = str(private)
     secrets_file = private / "experiment-secrets.yml"
     if not secrets_file.is_file():
-        raise FileNotFoundError("private MQTT credentials are missing")
+        raise FileNotFoundError("private MQTT credentials are missing; prepare the experiment first")
     executable = Path(sys.executable).with_name("ansible-playbook")
     command = [
         str(executable),
@@ -154,11 +186,11 @@ def _run_playbook(run: Path, playbook: Path) -> None:
 
 
 def run_workload(run: Path) -> None:
-    _run_playbook(run, ROOT / "synthran/deployment/playbooks/mqtt.yml")
+    _run_playbook(run, EXPERIMENT_ANSIBLE / "playbooks/mqtt.yml")
 
 
 def cleanup(run: Path) -> None:
-    _run_playbook(run, ROOT / "synthran/deployment/playbooks/cleanup.yml")
+    _run_playbook(run, EXPERIMENT_ANSIBLE / "playbooks/cleanup.yml")
 
 
 def finalize(run: Path) -> None:
@@ -174,8 +206,6 @@ def finalize(run: Path) -> None:
     if partial.is_file():
         sources.append(partial)
 
-    # Cleanup may recover records already fetched by the successful path.
-    # Deduplicate exact append-only records while preserving source order.
     seen: set[str] = set()
     with publishers.open("w") as stream:
         for source in sources:
