@@ -4,6 +4,10 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
+    - name: START_SYNTHRAN_R2LAB_UE_CONNECTION
+      ansible.builtin.meta: noop
+      when: platform == 'r2lab'
+
     - name: Resolve the run-scoped nested SSH trust directory
       ansible.builtin.set_fact:
         synthran_nested_ssh_dir: "/tmp/synthran-ssh-{{ run_dir | basename }}"
