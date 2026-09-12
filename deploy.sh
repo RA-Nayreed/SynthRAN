@@ -1,62 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="scenarios/reference.yml"; CONFIG_EXPLICIT=false; INTERACTIVE=false; NO_INPUT=false; NO_RESERVATION=false; DRY_RUN=false; VERBOSE=false; WORKLOAD_ONLY=false; RESUME=false; RESUME_FROM=""; PREPARED_WORKLOAD=""
+CONFIG=""
+CONFIG_EXPLICIT=false
+INTERACTIVE=false
+NO_INPUT=false
+NO_RESERVATION=false
+DRY_RUN=false
+VERBOSE=false
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --config) CONFIG="$2"; CONFIG_EXPLICIT=true; shift 2 ;;
-    -i|--interactive) INTERACTIVE=true; shift ;;
-    -n|--no-input) NO_INPUT=true; shift ;;
-    -r|--no-reservation) NO_RESERVATION=true; shift ;;
-    --dry-run) DRY_RUN=true; shift ;;
-    --prepared-workload) PREPARED_WORKLOAD="$2"; shift 2 ;;
-    --workload-only) WORKLOAD_ONLY=true; NO_RESERVATION=true; shift ;;
-    --resume) RESUME=true; RESUME_FROM="$2"; NO_RESERVATION=true; shift 2 ;;
-    -v|--verbose) VERBOSE=true; shift ;;
+    --config)
+      [[ $# -ge 2 ]] || { echo "--config requires a path" >&2; exit 2; }
+      CONFIG="$2"
+      CONFIG_EXPLICIT=true
+      shift 2
+      ;;
+    -i|--interactive)
+      INTERACTIVE=true
+      shift
+      ;;
+    -n|--no-input)
+      NO_INPUT=true
+      shift
+      ;;
+    -r|--no-reservation)
+      NO_RESERVATION=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
     -h|--help)
-      echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--workload-only] [--prepared-workload path/to/bundle] [--resume results/<failed-run>] [--dry-run] [--verbose]"
-      echo "Without options, deployment choices are prompted interactively. --interactive uses an explicit scenario as the prompt defaults. --workload-only reuses an already healthy matching 5G deployment. --resume safely continues an attested deployment that failed during the workload stage."
+      echo "Usage: ./deploy.sh [--config scenarios/<scenario>.yml] [--interactive] [--no-input] [--no-reservation] [--dry-run] [--verbose]"
+      echo "deploy.sh provisions and verifies the 5G testbed only. Without --config it opens the interactive testbed wizard. Experiments are intentionally handled separately."
       exit 0
       ;;
-    *) echo "Unknown option: $1" >&2; exit 2 ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
-if $INTERACTIVE && $NO_INPUT; then echo "--interactive and --no-input cannot be used together" >&2; exit 2; fi
-if [[ -n "$PREPARED_WORKLOAD" ]] && { $RESUME || $INTERACTIVE || ! $CONFIG_EXPLICIT; }; then
-  echo "--prepared-workload requires --config and cannot be combined with --resume or --interactive" >&2
+if $INTERACTIVE && $NO_INPUT; then
+  echo "--interactive and --no-input cannot be used together" >&2
   exit 2
 fi
-if $RESUME && $WORKLOAD_ONLY; then echo "--resume and --workload-only cannot be combined" >&2; exit 2; fi
-if $RESUME && $INTERACTIVE; then echo "--resume cannot be combined with --interactive" >&2; exit 2; fi
-if $RESUME && $DRY_RUN; then echo "--resume cannot be combined with --dry-run" >&2; exit 2; fi
-if $RESUME && $CONFIG_EXPLICIT; then echo "--resume uses the failed run's resolved scenario and cannot be combined with --config" >&2; exit 2; fi
-if $WORKLOAD_ONLY && $INTERACTIVE; then echo "--workload-only requires a fixed scenario and cannot be interactive" >&2; exit 2; fi
-if $WORKLOAD_ONLY && ! $CONFIG_EXPLICIT; then echo "--workload-only requires --config so the reused deployment can be validated against an explicit scenario" >&2; exit 2; fi
-
-if $RESUME; then
-  [[ -d "$RESUME_FROM" ]] || { echo "Resume run directory not found: $RESUME_FROM" >&2; exit 2; }
-  RESUME_ID="$(basename -- "$RESUME_FROM")"
-  PRIVATE_RESUME_CONFIG="$PWD/.synthran/execution/$RESUME_ID/resolved-scenario.yml"
-  if [[ -f "$PRIVATE_RESUME_CONFIG" ]]; then
-    CONFIG="$PRIVATE_RESUME_CONFIG"
-  else
-    CONFIG="$RESUME_FROM/resolved-scenario.yml"
-  fi
-  RESUME_SOURCE_CONTRACT="$RESUME_FROM/deployment-fingerprint.json"
-  RESUME_SOURCE_EVIDENCE="$RESUME_FROM/live-deployment-evidence.json"
-  RESUME_SOURCE_MODEL="$RESUME_FROM/model"
-  [[ -f "$RESUME_SOURCE_CONTRACT" ]] || { echo "Resume deployment identity not found: $RESUME_SOURCE_CONTRACT" >&2; exit 2; }
-  [[ -f "$RESUME_SOURCE_EVIDENCE" ]] || { echo "Resume attestation evidence not found: $RESUME_SOURCE_EVIDENCE" >&2; exit 2; }
-  [[ -f "$RESUME_SOURCE_MODEL/events.jsonl" ]] || { echo "Resume workload trace not found: $RESUME_SOURCE_MODEL/events.jsonl" >&2; exit 2; }
-  CONFIG_EXPLICIT=true
-else
-  RESUME_SOURCE_CONTRACT=""
-  RESUME_SOURCE_EVIDENCE=""
-  RESUME_SOURCE_MODEL=""
+if $NO_INPUT && ! $CONFIG_EXPLICIT; then
+  echo "--no-input requires --config because bare deploy is interactive" >&2
+  exit 2
+fi
+if $CONFIG_EXPLICIT; then
+  [[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 fi
 
-[[ -f "$CONFIG" ]] || { echo "Scenario not found: $CONFIG" >&2; exit 2; }
 RUN_ID="$(date -u +%Y%m%dT%H%M%S%NZ)"
 RUN_DIR="results/$RUN_ID"
 PRIVATE_RUN_DIR="$PWD/.synthran/execution/$RUN_ID"
@@ -64,12 +68,12 @@ mkdir -p "$RUN_DIR"
 install -d -m 0700 "$PRIVATE_RUN_DIR"
 export SYNTHRAN_PRIVATE_DIR="$PRIVATE_RUN_DIR"
 git rev-parse HEAD >"$RUN_DIR/source-revision.txt" 2>/dev/null || printf 'unknown\n' >"$RUN_DIR/source-revision.txt"
+
 ACTIVE_DEPLOYMENT_STATE="$PWD/.synthran/deployment-fingerprint.json"
 mkdir -p .synthran .synthran/r2lab
 R2LAB_FARADAY_KNOWN_HOSTS=${R2LAB_FARADAY_KNOWN_HOSTS:-$PWD/.synthran/r2lab/faraday_known_hosts}
 export R2LAB_FARADAY_KNOWN_HOSTS
 
-# Load R2Lab access before inventory rendering, including --no-reservation runs.
 if [[ -f .r2lab_config ]]; then
   # shellcheck disable=SC1091
   source .r2lab_config
@@ -144,6 +148,51 @@ Availability and health are verified during reservation and provisioning.
 MATRIX
 }
 
+discover_5g_profiles() {
+  local path name
+  local paths=()
+  shopt -s nullglob
+  paths=(deployment/group_vars/all/5g_profile_*.yaml)
+  shopt -u nullglob
+  for path in "${paths[@]}"; do
+    name="$(basename -- "$path")"
+    name="${name#5g_profile_}"
+    name="${name%.yaml}"
+    printf '%s\n' "$name"
+  done
+}
+
+choose_5g_profile() {
+  local default_profile="$1" profile_choice default_choice=1 index
+  mapfile -t AVAILABLE_PROFILES < <(discover_5g_profiles)
+  [[ ${#AVAILABLE_PROFILES[@]} -gt 0 ]] || {
+    echo "No 5G profiles found under deployment/group_vars/all/5g_profile_*.yaml" >&2
+    exit 1
+  }
+
+  for index in "${!AVAILABLE_PROFILES[@]}"; do
+    if [[ "${AVAILABLE_PROFILES[$index]}" == "$default_profile" ]]; then
+      default_choice=$((index + 1))
+      break
+    fi
+  done
+
+  echo
+  echo "Available 5G profiles"
+  echo "---------------------"
+  for index in "${!AVAILABLE_PROFILES[@]}"; do
+    printf '  %2d) %s\n' "$((index + 1))" "${AVAILABLE_PROFILES[$index]}"
+  done
+  read -r -p "Select 5G profile [$default_choice]: " profile_choice
+  profile_choice=${profile_choice:-$default_choice}
+  [[ "$profile_choice" =~ ^[1-9][0-9]*$ ]] || { echo "Profile choice must be a number" >&2; exit 2; }
+  (( profile_choice >= 1 && profile_choice <= ${#AVAILABLE_PROFILES[@]} )) || {
+    echo "Profile choice must be within 1-${#AVAILABLE_PROFILES[@]}" >&2
+    exit 2
+  }
+  SELECTED_PROFILE="${AVAILABLE_PROFILES[$((profile_choice - 1))]}"
+}
+
 profile_physical_ues() {
   "$SYNTHRAN_PYTHON" - "$1" <<'PY'
 import sys, yaml
@@ -189,10 +238,29 @@ PY
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   BASE_CONFIG="$CONFIG"
-  mapfile -t SCENARIO_DEFAULTS < <("$SYNTHRAN_PYTHON" - "$BASE_CONFIG" <<'PY'
+
+  DEFAULT_CORE=open5gs
+  DEFAULT_RAN=srsran
+  DEFAULT_PLATFORM=rfsim
+  DEFAULT_RU=rfsim
+  DEFAULT_CORE_NODE=sopnode-f2
+  DEFAULT_RAN_NODE=sopnode-f3
+  DEFAULT_BROKER_NODE=sopnode-f2
+  DEFAULT_PROFILE=default
+  DEFAULT_UES=uesim01,uesim02
+  DEFAULT_RESERVE=true
+  DEFAULT_DURATION=120
+  DEFAULT_POS_IMAGE=ubuntu-jammy
+  DEFAULT_R2LAB_USERNAME=${R2LAB_USERNAME:-}
+  DEFAULT_R2LAB_RESERVE=true
+  DEFAULT_R2LAB_DURATION=120
+
+  if [[ -n "$BASE_CONFIG" ]]; then
+    mapfile -t SCENARIO_DEFAULTS < <("$SYNTHRAN_PYTHON" - "$BASE_CONFIG" <<'PY'
 import sys, yaml
 from pathlib import Path
-d = yaml.safe_load(Path(sys.argv[1]).read_text())['deployment']
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+d = data.get('deployment') or {}
 n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservation', {})
 values = [
     d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'),
@@ -203,11 +271,23 @@ values = [
 ]
 print('\n'.join(str(value) for value in values))
 PY
-  )
-  DEFAULT_CORE=${SCENARIO_DEFAULTS[0]}; DEFAULT_RAN=${SCENARIO_DEFAULTS[1]}; DEFAULT_PLATFORM=${SCENARIO_DEFAULTS[2]}; DEFAULT_RU=${SCENARIO_DEFAULTS[3]}
-  DEFAULT_CORE_NODE=${SCENARIO_DEFAULTS[4]}; DEFAULT_RAN_NODE=${SCENARIO_DEFAULTS[5]}; DEFAULT_BROKER_NODE=${SCENARIO_DEFAULTS[6]}; DEFAULT_PROFILE=${SCENARIO_DEFAULTS[7]}; DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
-  DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}; DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}; DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}; DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
-  DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}; DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}
+    )
+    DEFAULT_CORE=${SCENARIO_DEFAULTS[0]}
+    DEFAULT_RAN=${SCENARIO_DEFAULTS[1]}
+    DEFAULT_PLATFORM=${SCENARIO_DEFAULTS[2]}
+    DEFAULT_RU=${SCENARIO_DEFAULTS[3]}
+    DEFAULT_CORE_NODE=${SCENARIO_DEFAULTS[4]}
+    DEFAULT_RAN_NODE=${SCENARIO_DEFAULTS[5]}
+    DEFAULT_BROKER_NODE=${SCENARIO_DEFAULTS[6]}
+    DEFAULT_PROFILE=${SCENARIO_DEFAULTS[7]}
+    DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
+    DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}
+    DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}
+    DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}
+    DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
+    DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}
+    DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}
+  fi
 
   echo
   printf '\033[1;36m'
@@ -219,7 +299,7 @@ PY
  ____) | |_| | | | | |_| | | | | \ \  / ____ \| |\  |
 |_____/ \__, |_| |_|\__|_| |_|_|  \_\/_/    \_\_| \_|
          __/ |
-        |___/       Energy-aware 5G/6G deployment
+        |___/       5G/6G testbed deployment
 BANNER
   printf '\033[0m'
 
@@ -230,7 +310,12 @@ BANNER
   echo "2) Open5GS"
   echo "3) Free5GC"
   read -r -p "Enter choice [1-3]: " CORE_CHOICE
-  case "${CORE_CHOICE:-$DEFAULT_CORE_CHOICE}" in 1) SELECTED_CORE=oai;; 2) SELECTED_CORE=open5gs;; 3) SELECTED_CORE=free5gc;; *) echo "Invalid core choice" >&2; exit 2;; esac
+  case "${CORE_CHOICE:-$DEFAULT_CORE_CHOICE}" in
+    1) SELECTED_CORE=oai ;;
+    2) SELECTED_CORE=open5gs ;;
+    3) SELECTED_CORE=free5gc ;;
+    *) echo "Invalid core choice" >&2; exit 2 ;;
+  esac
 
   echo
   case "$DEFAULT_RAN" in oai) DEFAULT_RAN_CHOICE=1;; srsran) DEFAULT_RAN_CHOICE=2;; ueransim) DEFAULT_RAN_CHOICE=3;; *) DEFAULT_RAN_CHOICE=2;; esac
@@ -239,7 +324,12 @@ BANNER
   echo "2) srsRAN"
   echo "3) UERANSIM"
   read -r -p "Enter choice [1-3]: " RAN_CHOICE
-  case "${RAN_CHOICE:-$DEFAULT_RAN_CHOICE}" in 1) SELECTED_RAN=oai;; 2) SELECTED_RAN=srsran;; 3) SELECTED_RAN=ueransim;; *) echo "Invalid RAN choice" >&2; exit 2;; esac
+  case "${RAN_CHOICE:-$DEFAULT_RAN_CHOICE}" in
+    1) SELECTED_RAN=oai ;;
+    2) SELECTED_RAN=srsran ;;
+    3) SELECTED_RAN=ueransim ;;
+    *) echo "Invalid RAN choice" >&2; exit 2 ;;
+  esac
 
   echo
   [[ "$DEFAULT_PLATFORM" == r2lab ]] && DEFAULT_PLATFORM_CHOICE=2 || DEFAULT_PLATFORM_CHOICE=1
@@ -247,7 +337,11 @@ BANNER
   echo "1) RFSIM"
   echo "2) R2Lab physical radio"
   read -r -p "Enter choice [1-2]: " PLATFORM_CHOICE
-  case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in 1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim;; 2) SELECTED_PLATFORM=r2lab;; *) echo "Invalid platform choice" >&2; exit 2;; esac
+  case "${PLATFORM_CHOICE:-$DEFAULT_PLATFORM_CHOICE}" in
+    1) SELECTED_PLATFORM=rfsim; SELECTED_RU=rfsim ;;
+    2) SELECTED_PLATFORM=r2lab ;;
+    *) echo "Invalid platform choice" >&2; exit 2 ;;
+  esac
   if [[ "$SELECTED_PLATFORM" == r2lab && "$SELECTED_RAN" == ueransim ]]; then
     echo "UERANSIM is a software RAN and cannot drive an R2Lab physical radio" >&2
     exit 2
@@ -269,7 +363,13 @@ BANNER
     echo "3) benetel1"
     echo "4) benetel2"
     read -r -p "Enter choice [1-4]: " RU_CHOICE
-    case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in 1) SELECTED_RU=n300;; 2) SELECTED_RU=n320;; 3) SELECTED_RU=benetel1;; 4) SELECTED_RU=benetel2;; *) echo "Invalid RU choice" >&2; exit 2;; esac
+    case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in
+      1) SELECTED_RU=n300 ;;
+      2) SELECTED_RU=n320 ;;
+      3) SELECTED_RU=benetel1 ;;
+      4) SELECTED_RU=benetel2 ;;
+      *) echo "Invalid RU choice" >&2; exit 2 ;;
+    esac
 
     if [[ -f .r2lab_config ]]; then
       SELECTED_R2LAB_USERNAME=${R2LAB_USERNAME:-$DEFAULT_R2LAB_USERNAME}
@@ -300,19 +400,19 @@ BANNER
       SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-$DEFAULT_R2LAB_DURATION}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
-    echo "Auxiliary R2Lab sensor/edge/RF host roles from the old launcher are not available in the current deployment backend; skipping them."
   else
     SELECTED_R2LAB_USERNAME=""
     SELECTED_R2LAB_RESERVE=false
     SELECTED_R2LAB_DURATION=120
   fi
 
-  choose_sop_node "core" "$DEFAULT_CORE_NODE"; SELECTED_CORE_NODE="$SELECTED_NODE"
-  choose_sop_node "RAN" "$DEFAULT_RAN_NODE"; SELECTED_RAN_NODE="$SELECTED_NODE"
+  choose_sop_node "core" "$DEFAULT_CORE_NODE"
+  SELECTED_CORE_NODE="$SELECTED_NODE"
+  choose_sop_node "RAN" "$DEFAULT_RAN_NODE"
+  SELECTED_RAN_NODE="$SELECTED_NODE"
   SELECTED_BROKER_NODE="$SELECTED_CORE_NODE"
-  read -r -p "5G profile [$DEFAULT_PROFILE]: " SELECTED_PROFILE
-  SELECTED_PROFILE=${SELECTED_PROFILE:-$DEFAULT_PROFILE}
-  [[ -f "deployment/group_vars/all/5g_profile_${SELECTED_PROFILE}.yaml" ]] || { echo "5G profile not found: $SELECTED_PROFILE" >&2; exit 2; }
+
+  choose_5g_profile "$DEFAULT_PROFILE"
 
   [[ "$DEFAULT_RESERVE" == true ]] && RESERVE_PROMPT="Y/n" || RESERVE_PROMPT="y/N"
   read -r -p "Ensure selected SOP nodes are reserved? [$RESERVE_PROMPT]: " RESERVE_CHOICE
@@ -330,7 +430,9 @@ BANNER
   SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
 
   if [[ "$SELECTED_PLATFORM" == rfsim ]]; then
-    [[ "$DEFAULT_PLATFORM" == rfsim ]] || DEFAULT_UES="uesim01,uesim02"
+    if [[ "$DEFAULT_PLATFORM" != rfsim ]]; then
+      DEFAULT_UES="uesim01,uesim02"
+    fi
     read -r -p "UEs, comma-separated [$DEFAULT_UES]: " SELECTED_UES
     SELECTED_UES=${SELECTED_UES:-$DEFAULT_UES}
   else
@@ -340,24 +442,36 @@ BANNER
     for index in "${!PROFILE_PHYSICAL_UES[@]}"; do
       printf '  %2d) %s\n' "$((index + 1))" "${PROFILE_PHYSICAL_UES[$index]}"
     done
-    if [[ "$DEFAULT_PLATFORM" != r2lab ]]; then DEFAULT_UES="${PROFILE_PHYSICAL_UES[0]}"; fi
+    if [[ "$DEFAULT_PLATFORM" != r2lab ]]; then
+      DEFAULT_UES="${PROFILE_PHYSICAL_UES[0]}"
+    fi
     read -r -p "Physical UEs [$DEFAULT_UES]: " R2LAB_UE_INPUT
-    [[ -z "$R2LAB_UE_INPUT" ]] && SELECTED_UES=$DEFAULT_UES || SELECTED_UES=$(expand_r2lab_ue_selection "$SELECTED_PROFILE" "$R2LAB_UE_INPUT")
+    if [[ -z "$R2LAB_UE_INPUT" ]]; then
+      SELECTED_UES=$DEFAULT_UES
+    else
+      SELECTED_UES=$(expand_r2lab_ue_selection "$SELECTED_PROFILE" "$R2LAB_UE_INPUT")
+    fi
     [[ -n "$SELECTED_UES" ]] || { echo "At least one physical UE is required" >&2; exit 2; }
   fi
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
   "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_PROFILE" "$SELECTED_UES" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
-import sys, yaml
+import copy
+import sys
 from pathlib import Path
+import yaml
+
 source, output, core, ran, platform, ru, core_node, ran_node, broker_node, profile, ue_csv, r2lab_username, reserve, duration, pos_image, r2_reserve, r2_duration = sys.argv[1:]
-scenario = yaml.safe_load(Path(source).read_text()) or {}
+source_data = {}
+if source:
+    source_data = yaml.safe_load(Path(source).read_text()) or {}
+dep = copy.deepcopy(source_data.get('deployment') or {})
 ues = [name.strip() for name in ue_csv.split(',') if name.strip()]
 if not ues:
     raise SystemExit('At least one UE is required')
 if platform == 'r2lab' and ran == 'ueransim':
     raise SystemExit('UERANSIM is a software RAN and cannot drive an R2Lab physical radio')
-dep = scenario.setdefault('deployment', {})
+
 host_vars = dep.get('host_vars', {})
 dep.update({
     'core': core,
@@ -371,15 +485,14 @@ dep.update({
 dep['host_vars'] = host_vars
 dep['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 dep['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
+dep.pop('profile_file', None)
 dep.pop('r2lab_experiment_nodes', None)
 if r2lab_username:
     dep['r2lab_username'] = r2lab_username
-Path(output).write_text(yaml.safe_dump(scenario, sort_keys=False))
+else:
+    dep.pop('r2lab_username', None)
+Path(output).write_text(yaml.safe_dump({'deployment': dep}, sort_keys=False))
 PY
-
-  # The experiment owns sensor-to-UE remapping now. The generic dispatcher
-  # resolves experiment.config and passes it to the current experiment runner.
-  "$SYNTHRAN_PYTHON" -m synthran.experiment configure --config "$CONFIG"
 
   echo
   echo "Deployment summary"
@@ -395,10 +508,30 @@ PY
 fi
 
 SOURCE_CONFIG="$CONFIG"
+[[ -n "$SOURCE_CONFIG" && -f "$SOURCE_CONFIG" ]] || { echo "No testbed scenario was produced" >&2; exit 2; }
+
+# deploy.sh is deliberately testbed-only. Even when an explicit legacy scenario
+# still contains an experiment block, strip it before validation/resolution so
+# deployment never imports, configures, prepares, runs, or validates experiment code.
+TESTBED_SOURCE_CONFIG="$PRIVATE_RUN_DIR/testbed-source.yml"
+"$SYNTHRAN_PYTHON" - "$SOURCE_CONFIG" "$TESTBED_SOURCE_CONFIG" <<'PY'
+import copy
+import sys
+from pathlib import Path
+import yaml
+
+source, output = map(Path, sys.argv[1:3])
+data = yaml.safe_load(source.read_text()) or {}
+deployment = data.get('deployment')
+if not isinstance(deployment, dict):
+    raise SystemExit('scenario requires mapping: deployment')
+Path(output).write_text(yaml.safe_dump({'deployment': copy.deepcopy(deployment)}, sort_keys=False))
+PY
+
 PUBLIC_CONFIG="$RUN_DIR/resolved-scenario.yml"
 CONFIG="$PRIVATE_RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
-  --source "$SOURCE_CONFIG" --output "$CONFIG"
+  --source "$TESTBED_SOURCE_CONFIG" --output "$CONFIG"
 
 write_public_scenario() {
   "$SYNTHRAN_PYTHON" - "$CONFIG" "$PUBLIC_CONFIG" <<'PY'
@@ -412,22 +545,7 @@ PY
 }
 write_public_scenario
 
-HAS_EXPERIMENT=$("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
-import sys, yaml
-value = yaml.safe_load(open(sys.argv[1])) or {}
-print('true' if value.get('experiment') else 'false')
-PY
-)
-if [[ "$HAS_EXPERIMENT" == true ]]; then
-  deployment_section "Preparing the selected experiment"
-fi
-EXPERIMENT_PREPARE=("$SYNTHRAN_PYTHON" -m synthran.experiment prepare --config "$CONFIG" --run-dir "$RUN_DIR")
-if [[ -n "$PREPARED_WORKLOAD" ]]; then EXPERIMENT_PREPARE+=(--prepared-workload "$PREPARED_WORKLOAD"); fi
-if $RESUME; then EXPERIMENT_PREPARE+=(--resume-from "$RESUME_FROM"); fi
-"${EXPERIMENT_PREPARE[@]}"
-write_public_scenario
-
-if ! $WORKLOAD_ONLY && ! $RESUME && ! $DRY_RUN; then
+if ! $DRY_RUN; then
   "$SYNTHRAN_PYTHON" -m synthran.deployment_state invalidate \
     --active "$ACTIVE_DEPLOYMENT_STATE" --run-id "$RUN_ID"
 fi
@@ -439,22 +557,11 @@ if ! $NO_RESERVATION && ! $DRY_RUN; then
   write_public_scenario
 fi
 
-REUSE_EXISTING=false
-if $WORKLOAD_ONLY || $RESUME; then REUSE_EXISTING=true; fi
-"$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR" "$REUSE_EXISTING" "$RESUME_SOURCE_CONTRACT"
+"$SYNTHRAN_PYTHON" -m synthran.inventory "$CONFIG" "$RUN_DIR" false
 
-if $DRY_RUN; then echo "Prepared $RUN_DIR; deployment skipped"; exit 0; fi
-
-if $WORKLOAD_ONLY; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-reuse \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --active "$ACTIVE_DEPLOYMENT_STATE"
-fi
-if $RESUME; then
-  "$SYNTHRAN_PYTHON" -m synthran.deployment_state verify-resume \
-    --source "$RESUME_SOURCE_CONTRACT" \
-    --candidate "$RUN_DIR/deployment-fingerprint.json" \
-    --evidence "$RESUME_SOURCE_EVIDENCE"
+if $DRY_RUN; then
+  echo "Prepared testbed deployment in $RUN_DIR; provisioning skipped"
+  exit 0
 fi
 
 mapfile -t R2LAB_SETTINGS < <("$SYNTHRAN_PYTHON" - "$CONFIG" <<'PY'
@@ -532,30 +639,20 @@ if ! "$ANSIBLE_GALAXY" collection install -r deployment/collections/requirements
   exit 1
 fi
 
-if $WORKLOAD_ONLY || $RESUME; then
-  deployment_section "Reusing the existing 5G stack"
-else
-  deployment_section "Provisioning nodes and deploying the selected 5G stack"
-fi
+deployment_section "Provisioning nodes and deploying the selected 5G stack"
 export ANSIBLE_ROLES_PATH="$PWD/deployment/roles"
 export ANSIBLE_CONFIG="$PWD/deployment/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=0
 export PYTHONUNBUFFERED=1
-if $WORKLOAD_ONLY; then
-  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/workload.yml"
-  echo "The stored deployment identity will be checked before running the experiment"
-elif $RESUME; then
-  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/resume.yml"
-  echo "The failed run's live attestation will be checked before its workload is resumed"
-else
-  DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/site.yml"
-fi
+DEPLOYMENT_PLAYBOOK="$PRIVATE_RUN_DIR/ansible/playbooks/site.yml"
 ANSIBLE_COMMAND=("$ANSIBLE_PLAYBOOK" -i "$PRIVATE_RUN_DIR/inventory.yml"
   -e "@deployment/group_vars/all/all.yml"
   -e "@$PRIVATE_RUN_DIR/deployment-vars.yml"
   "$DEPLOYMENT_PLAYBOOK")
-if $VERBOSE; then ANSIBLE_COMMAND+=(--verbose); fi
+if $VERBOSE; then
+  ANSIBLE_COMMAND+=(--verbose)
+fi
 
 exec bash deployment/scripts/run_deployment.sh \
-  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$CONFIG" "$ACTIVE_DEPLOYMENT_STATE" \
-  "$WORKLOAD_ONLY" "${ANSIBLE_COMMAND[@]}"
+  "$RUN_DIR" "$SYNTHRAN_PYTHON" "$ACTIVE_DEPLOYMENT_STATE" \
+  "${ANSIBLE_COMMAND[@]}"
