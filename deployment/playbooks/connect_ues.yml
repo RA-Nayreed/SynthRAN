@@ -5,7 +5,9 @@
   any_errors_fatal: true
   tasks:
     - name: START_SYNTHRAN_R2LAB_UE_CONNECTION
-      ansible.builtin.meta: noop
+      ansible.builtin.debug:
+        msg: Resume boundary for R2Lab UE connection.
+      changed_when: false
       when: platform == 'r2lab'
 
     - name: Resolve the run-scoped nested SSH trust directory
