@@ -5,8 +5,6 @@
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
 <p>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RA-Nayreed/SynthRAN/ci.yml?branch=main&label=CI&logo=githubactions" alt="CI status"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/RA-Nayreed/SynthRAN/codeql.yml?branch=main&label=CodeQL&logo=githubactions" alt="CodeQL status"></a>
   <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&logo=python&logoColor=white" alt="Python requirement"></a>
   <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version" alt="Project version"></a>
   <a href="https://github.com/RA-Nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/RA-Nayreed/SynthRAN?branch=main&label=last%20commit" alt="Last commit"></a>
