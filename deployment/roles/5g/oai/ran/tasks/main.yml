@@ -61,15 +61,30 @@
               N3xx RF initialization failed, but the pinned IP-swap fallback could not
               select a different USRP endpoint from {{ current_ip_cmd.stdout | trim }}.
 
-        - name: Verify the swapped USRP endpoint in both OAI RAN charts
-          ansible.builtin.command:
-            argv:
-              - grep
-              - -F
-              - "mgmt_addr={{ new_usrp_ip | trim }},addr={{ new_usrp_ip | trim }}"
-              - "{{ item }}"
+        - name: Read the swapped USRP endpoint from both OAI RAN charts
+          ansible.builtin.shell: >-
+            grep 'sdr_addrs:' {{ item | quote }} |
+            grep -oP '\d+\.\d+\.\d+\.\d+' |
+            head -n 1
+          args:
+            executable: /bin/bash
           loop: "{{ target_files }}"
+          register: swapped_usrp_endpoints
           changed_when: false
+          failed_when: false
+
+        - name: Require both OAI RAN charts to use the swapped USRP endpoint
+          ansible.builtin.assert:
+            quiet: true
+            that:
+              - item.rc == 0
+              - (item.stdout | trim) == (new_usrp_ip | trim)
+            fail_msg: >-
+              {{ item.item }} does not resolve to the swapped N3xx endpoint
+              {{ new_usrp_ip | trim }}; parsed endpoint was {{ item.stdout | trim | default('missing', true) }}.
+          loop: "{{ swapped_usrp_endpoints.results }}"
+          loop_control:
+            label: "{{ item.item }}"
 
         - name: Restart OAI gNB pod with the swapped USRP endpoint
           ansible.builtin.command: "{{ demo_oai_script }} start-gnb"
