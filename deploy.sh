@@ -208,6 +208,48 @@ for name, ue in (data.get('ues') or {}).items():
 PY
 }
 
+print_ue_matrix() {
+  local platform="$1"
+  shift
+  local rows=("$@")
+  local entries=()
+  local index ue_name ue_mode ue_interface entry
+  local max_width=0 cell_width terminal_width columns fit row_end
+
+  for index in "${!rows[@]}"; do
+    IFS=$'\t' read -r ue_name ue_mode ue_interface <<<"${rows[$index]}"
+    if [[ "$platform" == r2lab ]]; then
+      printf -v entry '%2d) %s [%s/%s]' "$((index + 1))" "$ue_name" "$ue_mode" "$ue_interface"
+    else
+      printf -v entry '%2d) %s' "$((index + 1))" "$ue_name"
+    fi
+    entries+=("$entry")
+    (( ${#entry} > max_width )) && max_width=${#entry}
+  done
+
+  cell_width=$((max_width + 3))
+  terminal_width=${COLUMNS:-}
+  if [[ ! "$terminal_width" =~ ^[1-9][0-9]*$ ]]; then
+    terminal_width=$(tput cols 2>/dev/null || printf '120')
+  fi
+  fit=$((terminal_width / cell_width))
+  (( fit < 1 )) && fit=1
+  columns=4
+  (( fit < columns )) && columns=$fit
+
+  for index in "${!entries[@]}"; do
+    row_end=false
+    if (( (index + 1) % columns == 0 || index + 1 == ${#entries[@]} )); then
+      row_end=true
+    fi
+    if $row_end; then
+      printf '  %s\n' "${entries[$index]}"
+    else
+      printf '  %-*s' "$cell_width" "${entries[$index]}"
+    fi
+  done
+}
+
 expand_ue_selection() {
   "$SYNTHRAN_PYTHON" - "$1" "$2" <<'PY'
 import sys, yaml
@@ -465,6 +507,10 @@ BANNER
   mapfile -t CATALOG_UE_ROWS < <(catalog_ues "$SELECTED_PLATFORM")
   [[ ${#CATALOG_UE_ROWS[@]} -gt 0 ]] || { echo "UE catalog defines no UEs for platform $SELECTED_PLATFORM" >&2; exit 2; }
   CATALOG_UE_NAMES=()
+  for index in "${!CATALOG_UE_ROWS[@]}"; do
+    IFS=$'\t' read -r ue_name _ue_mode _ue_interface <<<"${CATALOG_UE_ROWS[$index]}"
+    CATALOG_UE_NAMES+=("$ue_name")
+  done
   echo
   if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
     echo "Available R2Lab UEs"
@@ -472,15 +518,7 @@ BANNER
     echo "Available RFSIM UEs"
   fi
   echo "--------------------"
-  for index in "${!CATALOG_UE_ROWS[@]}"; do
-    IFS=$'\t' read -r ue_name ue_mode ue_interface <<<"${CATALOG_UE_ROWS[$index]}"
-    CATALOG_UE_NAMES+=("$ue_name")
-    if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
-      printf '  %2d) %-9s %-4s / %s\n' "$((index + 1))" "$ue_name" "$ue_mode" "$ue_interface"
-    else
-      printf '  %2d) %s\n' "$((index + 1))" "$ue_name"
-    fi
-  done
+  print_ue_matrix "$SELECTED_PLATFORM" "${CATALOG_UE_ROWS[@]}"
 
   if [[ "$DEFAULT_PLATFORM" != "$SELECTED_PLATFORM" || -z "$DEFAULT_UES" ]]; then
     if [[ "$SELECTED_PLATFORM" == rfsim && ${#CATALOG_UE_NAMES[@]} -ge 2 ]]; then
