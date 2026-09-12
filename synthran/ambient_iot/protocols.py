@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Reusable protocol definitions for Ambient-IoT simulations."""
 
 from __future__ import annotations
