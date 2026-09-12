@@ -5,11 +5,12 @@ in `deploy.sh`, `deployment/`, and the deployment-facing parts of `synthran/`.
 Scientific campaigns live under `Experiment/` and are intentionally **not** run
 by `deploy.sh`.
 
-For R2Lab, the hardware roles listed in
-[`SOURCE.json`](third_party/sopnode-5g-ansible/SOURCE.json) are pinned from the
-`sopnode/5g_ansible` implementation. They own radio power/configuration, N3xx
-IP swapping, gNB deployment, and modem setup/connection. SynthRAN supplies the
-inventory, selected 5G profile, reservations, deployment orchestration, and live
+For R2Lab, the hardware files listed in
+[`SOURCE.json`](third_party/sopnode-5g-ansible/SOURCE.json) remain pinned from the
+`sopnode/5g_ansible` implementation where exact upstream parity is useful.
+SynthRAN narrows the physical-radio deployment contract to the N300 and N320
+networked USRP paths and supplies the inventory, selected 5G profile,
+reservations, deployment orchestration, radio/gNB integration, and live
 deployment attestation.
 
 ## Deploy a testbed
@@ -42,7 +43,7 @@ deployment/group_vars/all/5g_profile_*.yaml
 
 They are presented as numbered choices. For R2Lab, physical QHAT/QFIT UE choices
 are then read from the selected profile rather than from a duplicated hard-coded
-list in the launcher.
+list in the launcher. The supported R2Lab radio choices are `n300` and `n320`.
 
 `--no-reservation` skips POS/R2Lab booking while normal infrastructure setup
 still runs. `--dry-run` resolves the testbed configuration and rendered inventory
