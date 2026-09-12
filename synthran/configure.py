@@ -18,8 +18,6 @@ DEFAULT_SOP_NODES = ["sopnode-f1", "sopnode-f2", "sopnode-f3", "sopnode-w3"]
 R2LAB_RADIOS = [
     ("n300", "USRP N300, SophiaNode fiber, 2x2 antenna"),
     ("n320", "USRP N320, SophiaNode fiber, 4x4 antenna"),
-    ("benetel1", "RAN550 O-RU, band n78, 4T4R, 100 MHz"),
-    ("benetel2", "RAN550 O-RU, band n78, 4T4R, 100 MHz"),
 ]
 BANNER = r"""
   _____             _   _     _____            _   _
