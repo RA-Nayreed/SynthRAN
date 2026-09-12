@@ -1,0 +1,72 @@
+---
+- name: Deploy the MQTT broker and receipt collector
+  hosts: broker_node
+  become: true
+  any_errors_fatal: true
+  roles: [broker]
+
+- name: Replay telemetry through software UE tunnels
+  hosts: ran_node
+  any_errors_fatal: true
+  tasks:
+    - name: Run the software UE publisher
+      ansible.builtin.include_role:
+        name: software_ue_publish
+      when:
+        - platform == 'rfsim'
+        - ran | lower in ['srsran', 'ueransim', 'oai']
+
+- name: Prepare R2Lab UE publisher runtimes
+  hosts: physical_ues
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Prepare the R2Lab UE publisher
+      ansible.builtin.include_role:
+        name: publisher
+        tasks_from: prepare.yml
+      when: platform == 'r2lab'
+
+- name: Select a shared R2Lab telemetry start time
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Choose one shared UTC start after every R2Lab UE is ready
+      ansible.builtin.set_fact:
+        synthran_r2lab_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
+      when: platform == 'r2lab'
+
+- name: Replay telemetry through R2Lab UE interfaces
+  hosts: physical_ues
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Run the R2Lab UE publisher
+      ansible.builtin.include_role:
+        name: publisher
+        tasks_from: replay.yml
+      when: platform == 'r2lab'
+
+- name: Collect MQTT receipt artifacts
+  hosts: broker_node
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop receipt collector to flush its artifact
+      systemd: {name: synthran-collector, state: stopped}
+    - name: Fetch broker receipts for this run
+      fetch:
+        src: "/var/log/synthran/receipts-{{ run_dir | basename }}.jsonl"
+        dest: "{{ run_dir }}/broker.jsonl"
+        flat: true
+    - name: Collect bounded broker and receipt-collector logs
+      shell: >-
+        journalctl -u mosquitto -u synthran-collector -n 300 --no-pager
+        > /var/log/synthran/services-{{ run_dir | basename }}.log
+      changed_when: false
+    - name: Fetch broker and receipt-collector logs
+      fetch:
+        src: "/var/log/synthran/services-{{ run_dir | basename }}.log"
+        dest: "{{ run_dir }}/broker-services.log"
+        flat: true
