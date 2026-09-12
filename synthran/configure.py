@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import os
 import re
 from pathlib import Path
@@ -64,8 +63,6 @@ def numbered(label: str, options: list[tuple[str, str]], default: str) -> str:
     values = [value for value, _description in options]
     if default not in values:
         options = [(default, "loaded configuration"), *options]
-        values = [value for value, _description in options]
-    default_index = values.index(default) + 1
     print()
     print(f"{label} (default: {default})")
     for index, (value, description) in enumerate(options, 1):
@@ -107,9 +104,10 @@ def text(label: str, default: str = "") -> str:
 
 
 def available_profiles() -> list[str]:
-    names = []
-    for path in sorted(PROFILE_DIR.glob("5g_profile_*.yaml")):
-        names.append(path.stem.removeprefix("5g_profile_"))
+    names = [
+        path.stem.removeprefix("5g_profile_")
+        for path in sorted(PROFILE_DIR.glob("5g_profile_*.yaml"))
+    ]
     if not names:
         raise ValueError("No 5G profiles are available")
     return names
@@ -166,13 +164,21 @@ def choose_ues(deployment: dict, original_platform: str) -> list[str]:
         selected = text("UEs, comma-separated", rendered)
         names = [name.strip() for name in selected.split(",") if name.strip()]
     elif platform == "r2lab":
-        physical = [name for name in available if re.fullmatch(r"q(?:hat|fit)[A-Za-z0-9_.-]+", name)]
+        physical = [
+            name
+            for name in available
+            if re.fullmatch(r"q(?:hat|fit)[A-Za-z0-9_.-]+", name)
+        ]
         if not physical:
             raise ValueError("Selected 5G profile contains no supported R2Lab physical UEs")
         print("\nPhysical 5G UEs")
         for index, name in enumerate(physical, 1):
             print(f"  {index:2d}) {name}")
-        default = current if original_platform == "r2lab" and set(current) <= set(physical) else [physical[0]]
+        default = (
+            current
+            if original_platform == "r2lab" and set(current) <= set(physical)
+            else [physical[0]]
+        )
         rendered = ",".join(default)
         selected = text(
             "Physical UEs by name or number/range (for example qhat01,qfit07 or 1-3,10)",
@@ -207,10 +213,7 @@ def show_r2lab_matrix() -> None:
 
 
 def configure(args: argparse.Namespace) -> None:
-    if args.source:
-        scenario = load_scenario(args.source)
-    else:
-        scenario = default_scenario()
+    scenario = load_scenario(args.source) if args.source else default_scenario()
     if args.testbed_only:
         scenario.pop("experiment", None)
 
@@ -245,9 +248,11 @@ def configure(args: argparse.Namespace) -> None:
         dep["ru"] = "rfsim"
     elif dep["platform"] == "r2lab":
         show_r2lab_matrix()
-        radio_options = list(R2LAB_RADIOS)
-        current_ru = dep.get("ru", "n300")
-        dep["ru"] = numbered("Which radio unit do you want to use?", radio_options, current_ru)
+        dep["ru"] = numbered(
+            "Which radio unit do you want to use?",
+            list(R2LAB_RADIOS),
+            dep.get("ru", "n300"),
+        )
         username = os.environ.get("R2LAB_USERNAME") or dep.get("r2lab_username", "")
         dep["r2lab_username"] = text(
             "R2Lab username / slice name (blank uses SSH configuration)", username
@@ -257,14 +262,24 @@ def configure(args: argparse.Namespace) -> None:
 
     node_choices = [(name, "") for name in sop_nodes(dep)]
     nodes = dep.setdefault("nodes", {})
+    old_ran_node = nodes.get("ran", "sopnode-f3")
+    old_ran_vars = dict((dep.get("host_vars") or {}).get(old_ran_node, {}) or {})
     nodes["core"] = numbered(
-        "Which SOP node should host the core?", node_choices, nodes.get("core", "sopnode-f2")
+        "Which SOP node should host the core?",
+        node_choices,
+        nodes.get("core", "sopnode-f2"),
     )
     nodes["ran"] = numbered(
-        "Which SOP node should host the RAN?", node_choices, nodes.get("ran", "sopnode-f3")
+        "Which SOP node should host the RAN?",
+        node_choices,
+        old_ran_node,
     )
     # Preserve the old interactive behavior: broker/N6 endpoint follows the core.
     nodes["broker"] = nodes["core"]
+    if "cpu_low_latency" in old_ran_vars:
+        dep.setdefault("host_vars", {}).setdefault(nodes["ran"], {})[
+            "cpu_low_latency"
+        ] = old_ran_vars["cpu_low_latency"]
 
     if not dep.get("profile_file"):
         profiles = available_profiles()
@@ -308,13 +323,21 @@ def configure(args: argparse.Namespace) -> None:
     print(f"  UEs:        {', '.join(dep['ues'])}")
     print(
         "  SOP reserve: "
-        + (f"yes, {reservation.get('duration_minutes', 120)}m" if reservation["enabled"] else "no")
+        + (
+            f"yes, {reservation.get('duration_minutes', 120)}m"
+            if reservation["enabled"]
+            else "no"
+        )
     )
     if dep["platform"] == "r2lab":
         r2 = dep["r2lab_reservation"]
         print(
             "  R2Lab:      "
-            + (f"yes, {r2.get('duration_minutes', 120)}m" if r2.get("enabled") else "no")
+            + (
+                f"yes, {r2.get('duration_minutes', 120)}m"
+                if r2.get("enabled")
+                else "no"
+            )
         )
     if scenario.get("experiment"):
         print(f"  Experiment: {scenario['experiment'].get('config', 'configured')}")
