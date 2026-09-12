@@ -14,7 +14,9 @@ tag_oai_cn5g_fed: "{{ synthran_oai_charts_revision }}"
 conf: "{{ hostvars[groups['faraday'][0]].conf }}"
 prepare_demo_script: "{{ dir_oai }}/prepare-demo-oai.sh"
 demo_oai_script: "{{ dir_oai }}/demo-oai.sh"
-charts_base: "{{ repo_dest }}/charts"
+# prepare-demo-oai.sh and demo-oai.sh expect the charts checkout beside the
+# oai5g-rru repository under the deployment prefix.
+charts_base: "{{ dir_oai }}/charts"
 
 # yq is installed centrally from a checksum-pinned release before this role.
 yq_version: "v4.45.1"
