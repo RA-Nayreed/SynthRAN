@@ -1,5 +1,20 @@
 # Third-party notices
 
+## Scope of the root license
+
+The repository-level [`LICENSE`](LICENSE) contains the unmodified BSD 3-Clause
+license text for **SynthRAN-original code**.
+
+That license does not replace, broaden, or reinterpret the terms that apply to
+third-party code, derived files, vendored material, or upstream assets in this
+repository. Each such component remains subject to its own provenance and
+licensing status described below and, where present, in the corresponding
+`third_party/` record.
+
+In particular, the root BSD 3-Clause license must not be read as creating a
+license grant for upstream-derived material whose original project did not
+publish one.
+
 ## Amber-derived Ambient-IoT model (`Experiment/model/`)
 
 SynthRAN's native Ambient-IoT scientific primitives in `Experiment/model/`
@@ -52,8 +67,8 @@ SynthRAN reorganized the selected upstream files beneath `deployment/`, removed
 unneeded upstream components, and substantially adapted the retained roles for
 scenario-driven multi-core/multi-RAN deployment. SynthRAN also added its own
 network playbooks, POS and R2Lab reservation/provisioning, MQTT broker and UE
-publisher roles, physical-UE handling, immutable Ambient-IoT trace replay, evidence
-collection, logging, and result reconciliation.
+publisher roles, physical-UE handling, immutable Ambient-IoT trace replay,
+evidence collection, logging, and result reconciliation.
 
 **License status:** neither `sopnode/5g_ansible` nor its parent repository
 declared a repository-level license at the comparison reference. This notice
