@@ -83,6 +83,21 @@ def load_scenario(path: str | Path) -> dict:
             "deployment.radio is not a supported effective configuration surface; "
             "use documented deployment fields/ansible_vars that are actually rendered"
         )
+
+    # Disabled legacy capability: older SynthRAN revisions could reserve and
+    # provision arbitrary R2Lab FIT/PC hosts as sensor, edge, or RF-measurement
+    # experiment nodes. Current experiments use logical Ambient-IoT sensors and
+    # the generic testbed backend no longer consumes those auxiliary roles.
+    # Keep the concept documented here so stale scenarios fail explicitly rather
+    # than silently reviving a partially removed deployment path. If a future
+    # experiment genuinely needs extra R2Lab hosts, add them through that
+    # experiment's explicit resource contract instead of the global launcher.
+    if "r2lab_experiment_nodes" in dep:
+        raise ValueError(
+            "deployment.r2lab_experiment_nodes is disabled; auxiliary R2Lab "
+            "sensor/edge/RF hosts are not part of the current testbed contract"
+        )
+
     ues = dep.get("ues", [])
     if (
         not isinstance(ues, list)
