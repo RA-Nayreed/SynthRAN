@@ -85,6 +85,7 @@
         checksum: "sha256:{{ cni_plugins_sha256[synthran_cni_arch] }}"
   roles:
     - setup/k8s/cluster_create
+    - setup/k8s/cni_dhcp
     - setup/k8s/remove_cp_taint
   tasks:
     - name: Move the kubeadm join command into the private run directory
@@ -114,6 +115,8 @@
   roles:
     - role: setup/k8s/cluster_join
       when: inventory_hostname != groups['core_node'][0]
+    - role: setup/k8s/cni_dhcp
+      when: inventory_hostname != groups['core_node'][0]
 
 - name: Reserve only a split RAN node for RAN workloads
   hosts: core_node
@@ -138,13 +141,12 @@
     - role: setup/storage
       when: core == 'open5gs' or core == 'free5gc'
 
-- name: Apply the upstream RAN-node CPU and kubelet tuning
+- name: Apply the supported RAN-node CPU and kubelet tuning
   hosts: ran_node
   become: true
   any_errors_fatal: true
   roles:
-    - role: setup/k8s/k8s_cpu_tuning
-      when: not (fhi72 | default(false) | bool)
+    - setup/k8s/k8s_cpu_tuning
 
 - name: Configure core-side transport
   hosts: core_node
