@@ -252,7 +252,7 @@ SynthRAN/
 ├── CITATION.cff         # machine-readable software citation
 ├── CONTRIBUTING.md      # contribution and validation rules
 ├── SECURITY.md          # vulnerability-reporting guidance
-└── LICENSE              # project license
+└── LICENSE              # Apache License 2.0
 ```
 
 ---
@@ -300,4 +300,8 @@ Contribution and validation expectations are documented in [`CONTRIBUTING.md`](C
 
 ## License
 
-See [`LICENSE`](LICENSE) for the project license.
+**Copyright © 2026 Rezwan Ahmad Nayreed.**
+
+SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text.
+
+Third-party and upstream-derived material keeps its own copyright, licensing, and provenance information under [`third_party/`](third_party/).
