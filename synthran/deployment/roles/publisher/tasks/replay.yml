@@ -6,7 +6,7 @@
     --broker {{ synthran_effective_broker_address }} --port {{ mqtt_port }} --qos {{ mqtt_qos }}
     --username {{ mqtt_publisher_username }} --password-file /etc/synthran/mqtt-publisher-password
     --interface wwan0
-    --start-utc {{ hostvars['localhost'].synthran_physical_start_utc }}
+    --start-utc {{ hostvars['localhost'].synthran_r2lab_start_utc }}
     --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
     --max-inflight {{ mqtt_max_inflight }} --max-queued {{ mqtt_max_queued }}
     --output /var/log/synthran-publisher-{{ run_dir | basename }}.jsonl
