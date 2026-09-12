@@ -3,17 +3,17 @@
 # mode (mbim|qmi) comes from the inventory host vars; defaults to mbim.
 #
 # Every connectable UE (Quectel or phone) MUST be declared in fiveg.ues, so a
-# single profile-presence gate covers both. Phones (hosts in the [phones]
-# group) are handled by a dedicated sub-branch: the SSH target IS the Mac the
-# handset is tethered to (ansible_host=macphoneN), and "connecting" the UE just
-# means turning airplane mode OFF over adb. APN/RAT are not set here.
+# single resolved-network-profile presence gate covers both. Phones (hosts in
+# the [phones] group) are handled by a dedicated sub-branch: the SSH target IS
+# the Mac the handset is tethered to (ansible_host=macphoneN), and "connecting"
+# the UE just means turning airplane mode OFF over adb. APN/RAT are not set here.
 
 - name: START_UE_CONNECT
   ansible.builtin.meta: noop
-  
-- name: Load active 5G profile variables
+
+- name: Load resolved network profile variables
   ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+    file: "{{ network_profile_file }}"
     name: fiveg
 
 - name: Resolve UE connection mode
@@ -24,7 +24,7 @@
   set_fact:
     is_phone: "{{ ue_item in (groups['phones'] | default([])) }}"
 
-- name: "Skip {{ ue_item }} (not in 5G profile)"
+- name: "Skip {{ ue_item }} (not in resolved network profile)"
   debug:
     msg: "UE {{ ue_item }} is not in fiveg.ues - skipping connect."
   when: fiveg.ues[ue_item] is not defined
