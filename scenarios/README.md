@@ -2,8 +2,8 @@
 
 These files describe **testbed infrastructure only**: core, RAN, radio/platform,
 SOP-node placement, UE selection, network profile, explicit UE-to-slice
-assignment, and reservation defaults. They do not select or run a scientific
-experiment.
+assignment, and reservation defaults. They do not currently select or run a
+scientific experiment.
 
 They are editable presets, not standing reservations or evidence that every
 combination has passed a physical run.
@@ -43,12 +43,14 @@ each chosen UE is explicitly assigned to one of that profile's slices.
 setup still runs. `--dry-run` resolves the testbed configuration and rendered
 inventory without provisioning hardware.
 
-Scientific experiments are intentionally outside this launcher. A separate
-experiment runner will attach to an already accepted SynthRAN deployment and
-own experiment selection, preparation, execution, cleanup, and result
-finalization.
+Scientific experiment orchestration is under active construction. Until that
+integration is ready, scenarios remain infrastructure-only and `deploy.sh`
+stops at an accepted testbed. The intended public workflow is to expose the
+experiment layer through the same repository entry point rather than require
+normal users to invoke internal `synthran.cli` commands directly.
 
 R2Lab physical deployment currently supports the N300 and N320 networked USRP
 paths. Radio power, N3xx handling, gNB deployment, and modem bring-up remain
 integrated with the retained upstream-derived hardware logic. See the
-[root README](../README.md) for SSH, host tuning, and reservation configuration.
+[root README](../README.md) for SSH, host tuning, reservation, project-status,
+and experiment-boundary guidance.
