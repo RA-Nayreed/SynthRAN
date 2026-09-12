@@ -16,37 +16,37 @@
         - platform == 'rfsim'
         - ran | lower in ['srsran', 'ueransim', 'oai']
 
-- name: Prepare physical publisher runtimes
+- name: Prepare R2Lab physical publisher runtimes
   hosts: physical_ues
   become: true
   any_errors_fatal: true
   tasks:
-    - name: Prepare the physical UE publisher
+    - name: Prepare the R2Lab UE publisher
       ansible.builtin.include_role:
         name: publisher
         tasks_from: prepare.yml
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'r2lab'
 
-- name: Select a shared physical telemetry start time
+- name: Select a shared R2Lab telemetry start time
   hosts: localhost
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Choose one shared UTC start after every physical UE is ready
+    - name: Choose one shared UTC start after every R2Lab UE is ready
       ansible.builtin.set_fact:
         synthran_physical_start_utc: "{{ lookup('pipe', 'date -u -d +' ~ (mqtt_start_delay_seconds | string) ~ 'seconds +%Y-%m-%dT%H:%M:%SZ') }}"
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'r2lab'
 
-- name: Replay telemetry through physical UE interfaces
+- name: Replay telemetry through R2Lab UE interfaces
   hosts: physical_ues
   become: true
   any_errors_fatal: true
   tasks:
-    - name: Run the physical UE publisher
+    - name: Run the R2Lab UE publisher
       ansible.builtin.include_role:
         name: publisher
         tasks_from: replay.yml
-      when: platform in ['r2lab', 'physical']
+      when: platform == 'r2lab'
 
 - name: Collect MQTT receipt artifacts
   hosts: broker_node
