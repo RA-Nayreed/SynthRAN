@@ -184,9 +184,7 @@ def choose_ues(deployment: dict, original_platform: str) -> list[str]:
         )
         names = parse_index_selection(selected, physical)
     else:
-        rendered = ",".join(current)
-        selected = text("Physical UE host names, comma-separated", rendered)
-        names = [name.strip() for name in selected.split(",") if name.strip()]
+        raise ValueError(f"Unsupported platform: {platform}")
     if not names:
         raise ValueError("At least one UE is required")
     if len(names) != len(set(names)):
@@ -235,7 +233,6 @@ def configure(args: argparse.Namespace) -> None:
         [
             ("rfsim", "software RF simulation"),
             ("r2lab", "R2Lab physical radio"),
-            ("physical", "externally managed physical hosts"),
         ],
         dep.get("platform", "rfsim"),
     )
@@ -244,7 +241,7 @@ def configure(args: argparse.Namespace) -> None:
 
     if dep["platform"] == "rfsim":
         dep["ru"] = "rfsim"
-    elif dep["platform"] == "r2lab":
+    else:
         show_r2lab_matrix()
         dep["ru"] = numbered(
             "Which radio unit do you want to use?",
@@ -255,8 +252,6 @@ def configure(args: argparse.Namespace) -> None:
         dep["r2lab_username"] = text(
             "R2Lab username / slice name (blank uses SSH configuration)", username
         )
-    else:
-        dep["ru"] = text("Physical radio unit identifier", dep.get("ru", "physical"))
 
     node_choices = [(name, "") for name in sop_nodes(dep)]
     nodes = dep.setdefault("nodes", {})
