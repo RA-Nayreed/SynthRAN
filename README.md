@@ -5,20 +5,11 @@
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
 <p>
-  <img src="https://img.shields.io/badge/Ambient%20IoT-Research-7B61FF" alt="Ambient IoT">
-  <img src="https://img.shields.io/badge/Energy%20Harvesting-Model-2EA44F" alt="Energy Harvesting">
-  <img src="https://img.shields.io/badge/Backscatter-Radio-0A84FF" alt="Backscatter">
-  <img src="https://img.shields.io/badge/5G-Open%20RAN-6F42C1" alt="5G Open RAN">
-  <img src="https://img.shields.io/badge/RFSIM-Virtual-555555" alt="RFSIM">
-  <img src="https://img.shields.io/badge/R2Lab-Physical-D73A49" alt="R2Lab">
-</p>
-
-<p>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml"><img src="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL"></a>
-  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/version-0.1.0-informational" alt="Version 0.1.0">
-  <img src="https://img.shields.io/badge/status-research%20software-orange" alt="Research software">
+  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RA-Nayreed/SynthRAN/ci.yml?branch=main&label=CI&logo=githubactions" alt="CI status"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/RA-Nayreed/SynthRAN/codeql.yml?branch=main&label=CodeQL&logo=githubactions" alt="CodeQL status"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&logo=python&logoColor=white" alt="Python requirement"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version" alt="Project version"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/RA-Nayreed/SynthRAN?branch=main&label=last%20commit" alt="Last commit"></a>
 </p>
 
 </div>
