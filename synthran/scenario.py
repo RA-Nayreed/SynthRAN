@@ -8,6 +8,7 @@ from .profile_validation import validate_profile, validate_ue_profile_overrides
 SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
 SUPPORTED_PLATFORMS = {"rfsim", "r2lab", "physical"}
+SUPPORTED_R2LAB_RADIOS = {"n300", "n320"}
 _TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
 _INSECURE_SSH = re.compile(
     r"(?:StrictHostKeyChecking\s*=\s*no|UserKnownHostsFile\s*=\s*/dev/null)", re.I
@@ -78,6 +79,11 @@ def load_scenario(path: str | Path) -> dict:
         raise ValueError("unsupported RAN")
     if dep.get("platform") not in SUPPORTED_PLATFORMS:
         raise ValueError("unsupported platform")
+    if dep.get("platform") == "r2lab" and dep.get("ru") not in SUPPORTED_R2LAB_RADIOS:
+        raise ValueError(
+            "unsupported R2Lab radio; supported radios are: "
+            + ", ".join(sorted(SUPPORTED_R2LAB_RADIOS))
+        )
     if dep.get("radio") not in (None, {}):
         raise ValueError(
             "deployment.radio is not a supported effective configuration surface; "
