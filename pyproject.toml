@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Ambient-IoT modelling and reproducible 5G research experimentation"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "BSD-3-Clause"
-license-files = ["LICENSE", "third_party/NOTICE.md", "third_party/amber/LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "third_party/NOTICE.md", "third_party/amber/LICENSE"]
 dependencies = ["PyYAML==6.0.3"]
 
 [project.optional-dependencies]
