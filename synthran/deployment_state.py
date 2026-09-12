@@ -94,7 +94,7 @@ def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     raise ValueError(f"no software-tunnel identity rule for RAN {ran!r}")
 
 
-def _physical_tunnel(device: str, profile: dict) -> dict:
+def _r2lab_tunnel(device: str, profile: dict) -> dict:
     mode = profile.get("mode", "mbim")
     return {
         "host": device,
@@ -140,8 +140,8 @@ def binding_identity(item: dict) -> tuple:
 
 def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     """Require complete UE identity, interface/session, and slice-address evidence."""
-    if deployment.get("platform") not in {"rfsim", "r2lab", "physical"}:
-        return True
+    if deployment.get("platform") not in {"rfsim", "r2lab"}:
+        return False
 
     expected = deployment.get("ues", [])
     if len(bindings) != len(expected):
@@ -159,7 +159,7 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
         live = by_device.get(str(contract.get("device")))
         if live is None or binding_identity(live) != binding_identity(contract):
             return False
-        if deployment.get("platform") in {"r2lab", "physical"} and live.get("modem_verified") is not True:
+        if deployment.get("platform") == "r2lab" and live.get("modem_verified") is not True:
             return False
         cidr = contract.get("address_cidr")
         address = live.get("address")
@@ -192,7 +192,7 @@ def validate_live_evidence(
     *,
     max_age_seconds: int | None = 300,
 ) -> dict:
-    """Require fresh observed readiness evidence for physical/R2Lab state changes."""
+    """Require fresh observed readiness evidence for R2Lab state changes."""
     candidate = read_json(candidate_path)
     evidence = read_json(evidence_path)
     deployment = candidate.get("deployment", {})
@@ -204,7 +204,7 @@ def validate_live_evidence(
     if evidence.get("cluster_identity_verified") is not True:
         raise ValueError("live deployment evidence does not prove the cluster identity")
 
-    if deployment.get("platform") in {"physical", "r2lab"}:
+    if deployment.get("platform") == "r2lab":
         bindings = evidence.get("bindings")
         if not isinstance(bindings, list) or not bindings_match_deployment(deployment, bindings):
             raise ValueError(
@@ -248,8 +248,10 @@ def build_ue_map(scenario: dict, profile: dict) -> list[dict]:
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
+        elif platform == "r2lab":
+            entry["tunnel"] = _r2lab_tunnel(device, ue)
         else:
-            entry["tunnel"] = _physical_tunnel(device, ue)
+            raise ValueError(f"unsupported platform: {platform}")
         result.append(entry)
     return result
 
