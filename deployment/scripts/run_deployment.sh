@@ -150,11 +150,14 @@ fi
 
 echo "Provisioning, UE verification, and runtime provenance completed; validating fresh live deployment evidence."
 
+ACTIVE_DEPLOYMENT_ENDPOINT="$PWD/.synthran/active-deployment.json"
 STATE_RC=0
 run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
   --candidate "$RUN_DIR/deployment-fingerprint.json" \
   --active "$ACTIVE_DEPLOYMENT_STATE" \
-  --evidence "$RUN_DIR/live-deployment-evidence.json" || STATE_RC=$?
+  --evidence "$RUN_DIR/live-deployment-evidence.json" \
+  --endpoint "$ACTIVE_DEPLOYMENT_ENDPOINT" \
+  --private-dir "$SYNTHRAN_PRIVATE_DIR" || STATE_RC=$?
 if (( STATE_RC != 0 )); then
   echo "Live deployment evidence was rejected with status $STATE_RC; deployment was not accepted." >&2
   collect_failure_diagnostics "live-evidence rejection"
@@ -162,4 +165,5 @@ if (( STATE_RC != 0 )); then
 fi
 
 echo "Live deployment evidence accepted."
+echo "Active deployment endpoint: $ACTIVE_DEPLOYMENT_ENDPOINT"
 echo "Testbed deployment completed and marked active."
