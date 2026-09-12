@@ -80,8 +80,8 @@
 
 - name: Retrieve bridge interfaces for multus on the core and ran nodes
   ansible.builtin.set_fact:
-    multus_core_if: "n3br"
-    multus_ran_if: "n3br"
+    multus_core_if: n3br
+    multus_ran_if: n3br
   when: bridge_enabled or (core == 'oai' and ran == 'ueransim')
 
 - name: Update NS variable in prepare-demo-oai.sh
@@ -94,12 +94,10 @@
 - name: Determine HOST_AMF_UPF value
   ansible.builtin.set_fact:
     host_amf_upf_value: >-
-      {%- if core == 'open5gs' -%}
-        {{ synthran_topology.network.amf_ip }}
-      {%- elif core == 'free5gc' -%}
+      {%- if core in ['open5gs', 'free5gc'] -%}
         {{ synthran_topology.network.amf_ip }}
       {%- else -%}
-        {{ ran_node_name if fhi72 | bool else core_node_name }}
+        {{ core_node_name }}
       {%- endif -%}
 
 - name: Update HOST_AMF_UPF variable in prepare-demo-oai.sh
