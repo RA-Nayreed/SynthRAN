@@ -76,8 +76,9 @@
         ue_profile: "{{ ues[item] }}"
         ue_slice: "{{ slices | selectattr('name', 'equalto', ue_profile.slice) | first }}"
         ue_nssai: >-
-          {{ ue_slice.sst if (ue_slice.sd | string | upper) == 'EMPTY'
-             else ue_slice.sst ~ '.' ~ ue_slice.sd }}
+          {{ ('%02d' | format(ue_slice.sst | int))
+             if (ue_slice.sd | string | upper) in ['EMPTY', 'FFFFFF']
+             else (('%02d' | format(ue_slice.sst | int)) ~ '.' ~ (ue_slice.sd | string | upper)) }}
       ansible.builtin.shell: >-
         ssh -o ConnectTimeout=5 -o BatchMode=yes
         -o StrictHostKeyChecking=accept-new
