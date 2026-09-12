@@ -5,7 +5,7 @@
     dest: /etc/netplan/50-radio.yaml
     owner: root
     group: root
-    mode: '0644'
+    mode: '0600'
   become: true
 
 - name: Generate netplan config
