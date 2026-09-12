@@ -16,7 +16,3 @@ network:
       id: 3010
       link: rrus
       dhcp4: true
-    r2lab_aw2s:
-      id: 3011
-      link: rrus
-      dhcp4: true
