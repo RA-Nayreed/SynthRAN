@@ -15,19 +15,60 @@
         synthran_nested_ssh_dir: "/tmp/synthran-ssh-{{ run_dir | basename }}"
       when: platform == 'r2lab'
 
-    - name: Require the secured nested SSH wrapper prepared during provisioning
-      ansible.builtin.stat:
-        path: "{{ synthran_nested_ssh_dir }}/bin/ssh"
-      register: synthran_nested_ssh_wrapper
+    - name: Ensure the run-scoped nested SSH wrapper directory exists
+      ansible.builtin.file:
+        path: "{{ synthran_nested_ssh_dir }}/bin"
+        state: directory
+        mode: '0700'
       when: platform == 'r2lab'
 
-    - name: Refuse R2Lab connection without the nested SSH verification boundary
+    - name: Reinstall the SynthRAN nested SSH verification wrapper
+      ansible.builtin.copy:
+        src: "{{ synthran_root }}/deployment/scripts/secure_ssh_wrapper.py"
+        dest: "{{ synthran_nested_ssh_dir }}/bin/ssh"
+        mode: '0755'
+      when: platform == 'r2lab'
+
+    - name: Check for live nested R2Lab SSH host keys
+      ansible.builtin.stat:
+        path: "{{ synthran_nested_ssh_dir }}/known_hosts"
+      register: synthran_nested_known_hosts
+      when: platform == 'r2lab'
+
+    - name: Check for retained run-scoped R2Lab SSH host keys
+      ansible.builtin.stat:
+        path: "{{ run_dir }}/r2lab-nested-known-hosts"
+      delegate_to: localhost
+      register: synthran_retained_nested_known_hosts
+      when:
+        - platform == 'r2lab'
+        - not synthran_nested_known_hosts.stat.exists
+
+    - name: Restore retained nested R2Lab SSH host keys on resume
+      ansible.builtin.copy:
+        src: "{{ run_dir }}/r2lab-nested-known-hosts"
+        dest: "{{ synthran_nested_ssh_dir }}/known_hosts"
+        mode: '0600'
+      when:
+        - platform == 'r2lab'
+        - not synthran_nested_known_hosts.stat.exists
+        - synthran_retained_nested_known_hosts.stat.exists | default(false)
+
+    - name: Re-check the nested R2Lab SSH host-key boundary
+      ansible.builtin.stat:
+        path: "{{ synthran_nested_ssh_dir }}/known_hosts"
+      register: synthran_nested_known_hosts_ready
+      when: platform == 'r2lab'
+
+    - name: Refuse R2Lab connection without retained host-key verification
       ansible.builtin.assert:
         quiet: true
         that:
-          - synthran_nested_ssh_wrapper.stat.exists
-          - synthran_nested_ssh_wrapper.stat.executable
-        fail_msg: The secured nested SSH wrapper is missing on Faraday; refusing unverified UE connection.
+          - synthran_nested_known_hosts_ready.stat.exists
+          - synthran_nested_known_hosts_ready.stat.isreg
+        fail_msg: >-
+          The run-scoped nested R2Lab SSH host keys are unavailable both on Faraday
+          and in the retained run artifacts; refusing to recreate trust implicitly.
       when: platform == 'r2lab'
 
     - name: Connect UEs on R2Lab to 5G network
