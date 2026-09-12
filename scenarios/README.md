@@ -1,8 +1,9 @@
 # Testbed scenario catalog
 
 These files describe **testbed infrastructure only**: core, RAN, radio/platform,
-SOP-node placement, 5G profile, UE selection, and reservation defaults. They do
-not select or run a scientific experiment.
+SOP-node placement, UE selection, network profile, explicit UE-to-slice
+assignment, and reservation defaults. They do not select or run a scientific
+experiment.
 
 They are editable presets, not standing reservations or evidence that every
 combination has passed a physical run.
@@ -32,9 +33,11 @@ for the interactive wizard:
 ./deploy.sh --config scenarios/r2lab-reference-oai-srsran.yml --dry-run
 ```
 
-The interactive wizard discovers 5G profiles from
-`deployment/group_vars/all/5g_profile_*.yaml` and lists them as numbered
-choices. Physical R2Lab UEs are then listed from the selected profile.
+The interactive wizard first lists UEs dynamically from
+`deployment/group_vars/all/ue_catalog.yaml`, filtered by the selected platform.
+It then discovers network profiles from
+`deployment/group_vars/all/network_profile_*.yaml`. After a profile is selected,
+each chosen UE is explicitly assigned to one of that profile's slices.
 
 `--no-reservation` skips POS/R2Lab booking while the normal infrastructure
 setup still runs. `--dry-run` resolves the testbed configuration and rendered
