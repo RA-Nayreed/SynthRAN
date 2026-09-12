@@ -13,8 +13,6 @@ combination has passed a physical run.
 | `r2lab-reference-oai-srsran.yml` | OAI / srsRAN / N320 | Two QHATs |
 | `r2lab-n300-qhats-sdr.yml` | Open5GS / srsRAN / N300 | Three QHATs |
 | `r2lab-n320-mixed-ues-dual-sdr.yml` | Free5GC / srsRAN / N320 | QHAT and QFIT modems |
-| `r2lab-benetel1-oai.yml` | Open5GS / OAI / Benetel 1 | Two QHATs |
-| `r2lab-benetel2-sliced.yml` | Open5GS / srsRAN / Benetel 2 | Physical UEs on separate slices |
 
 Historical `sdr` filenames are retained for existing commands. They do not
 provision auxiliary sensor, edge, or SDR-measurement hosts.
@@ -47,8 +45,7 @@ experiment runner will attach to an already accepted SynthRAN deployment and
 own experiment selection, preparation, execution, cleanup, and result
 finalization.
 
-R2Lab delegates modem and radio bring-up to the pinned upstream roles. Benetel
-requires the corresponding Faraday/NIC/VLAN/radio preparation provided by the
-upstream environment; local rendering alone does not qualify that hardware
-path. See the [root README](../README.md) for SSH, host tuning, and reservation
-configuration.
+R2Lab physical deployment currently supports the N300 and N320 networked USRP
+paths. Radio power, N3xx handling, gNB deployment, and modem bring-up remain
+integrated with the retained upstream-derived hardware logic. See the
+[root README](../README.md) for SSH, host tuning, and reservation configuration.
