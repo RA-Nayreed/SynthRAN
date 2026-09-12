@@ -109,7 +109,6 @@ def render_inventory(
     faraday_known_hosts: Path,
 ) -> dict:
     nodes = d["nodes"]
-    ues = d["ues"]
     # Upstream delegates to this inventory name; an alias such as faraday_host
     # silently loses the configured connection variables on delegated tasks.
     children = {}
@@ -194,15 +193,6 @@ def render_inventory(
             host.update(host_vars)
             children[group]["hosts"][name] = host
         children["physical_ues"] = {"children": {"qhats": {}, "qfits": {}}}
-    elif d["platform"] == "physical":
-        children["physical_ues"]["hosts"] = {}
-        for name in ues:
-            host_vars = copy.deepcopy(d.get("host_vars", {}).get(name, {}))
-            extra_ssh = str(host_vars.pop("ansible_ssh_common_args", "") or "")
-            host_vars["ansible_ssh_common_args"] = _ssh_common_args(
-                controller_known_hosts, extra_ssh
-            )
-            children["physical_ues"]["hosts"][name] = host_vars
     return {"all": {"children": children}}
 
 
