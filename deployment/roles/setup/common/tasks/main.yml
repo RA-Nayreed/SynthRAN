@@ -1,17 +1,8 @@
 ---
-- name: Resolve deployment feature flags on every host
+- name: Normalize the deployment bridge flag
   ansible.builtin.set_fact:
-    fhi72: "{{ (hostvars[item].get('fhi72', False) | bool) }}"
-    aw2s: "{{ (hostvars[item].get('aw2s', False) | bool) }}"
-    f3_ran: "{{ (hostvars[item].get('f3_ran', False) | bool) }}"
-    bridge_enabled: "{{ (hostvars[item].get('bridge_enabled', False) | bool) }}"
-  loop: "{{ groups['all'] }}"
-  delegate_to: "{{ item }}"
-  run_once: true
-  loop_control:
-    label: "{{ item }}"
+    bridge_enabled: "{{ bridge_enabled | default(false) | bool }}"
 
-# fix ubuntu mirror issue
 - name: Record the Ubuntu release codename
   ansible.builtin.set_fact:
     os_codename: "{{ ansible_distribution_release }}"
@@ -45,9 +36,9 @@
     apt -f install -y
   become: true
   changed_when: false
-  
+
 - name: Install required system packages
-  apt:
+  ansible.builtin.apt:
     name:
       - emacs
       - tmux
@@ -56,14 +47,14 @@
       - iproute2
       - tcpdump
       - python3-pip
-      - python3-venv        # Replaces virtualenv (PEP-668 safe)
+      - python3-venv
       - jq
     state: present
     update_cache: yes
     cache_valid_time: 3600
 
 - name: Disable swap
-  shell: |
+  ansible.builtin.shell: |
     changed=false
     if swapon --noheadings | grep -q .; then
       swapoff -a
@@ -79,7 +70,7 @@
   changed_when: swap_result.stdout | trim == 'true'
 
 - name: Load kernel modules for Kubernetes networking
-  modprobe:
+  community.general.modprobe:
     name: "{{ item }}"
     state: present
   loop:
@@ -88,7 +79,7 @@
   become: true
 
 - name: Ensure kernel modules are loaded on boot
-  copy:
+  ansible.builtin.copy:
     dest: /etc/modules-load.d/k8s.conf
     content: |
       overlay
@@ -96,7 +87,7 @@
   become: true
 
 - name: Set sysctl parameters for Kubernetes networking
-  copy:
+  ansible.builtin.copy:
     dest: /etc/sysctl.d/k8s.conf
     content: |
       net.bridge.bridge-nf-call-iptables = 1
@@ -105,57 +96,25 @@
   become: true
 
 - name: Apply the managed Kubernetes sysctl parameters
-  command: sysctl --load=/etc/sysctl.d/k8s.conf
+  ansible.builtin.command: sysctl --load=/etc/sysctl.d/k8s.conf
   become: true
   changed_when: false
 
-# Keep every infrastructure timestamp in UTC for reproducible correlation.
 - name: Read the configured timezone
-  command: timedatectl show --property=Timezone --value
+  ansible.builtin.command: timedatectl show --property=Timezone --value
   register: configured_timezone
   changed_when: false
 
 - name: Set the infrastructure time zone to UTC
-  command: timedatectl set-timezone Etc/UTC
+  ansible.builtin.command: timedatectl set-timezone Etc/UTC
   become: true
   when: configured_timezone.stdout | trim != 'Etc/UTC'
-  
+
 - name: Read clock synchronization status
-  command: timedatectl show --property=Timezone --property=NTPSynchronized
+  ansible.builtin.command: timedatectl show --property=Timezone --property=NTPSynchronized
   register: timedatectl_output
   changed_when: false
 
 - name: Confirm synchronized system clock
-  debug:
+  ansible.builtin.debug:
     msg: "{{ timedatectl_output.stdout_lines | join(', ') }}"
-
-# install dhp service on the node, required later for k8s dhcp cni
-- name: Install systemd service for CNI DHCP daemon
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/cni-dhcp.service
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=CNI DHCP Daemon
-      After=network.target
-
-      [Service]
-      ExecStart=/opt/cni/bin/dhcp daemon
-      Restart=always
-      RestartSec=5
-
-      [Install]
-      WantedBy=multi-user.target
-  become: true
-
-- name: Reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: yes
-  become: true
-
-- name: Enable and start CNI DHCP daemon
-  ansible.builtin.systemd:
-    name: cni-dhcp.service
-    enabled: yes
-    state: started
-  become: true
