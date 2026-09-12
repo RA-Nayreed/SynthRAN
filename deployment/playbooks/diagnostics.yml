@@ -19,31 +19,33 @@
   tasks:
     - name: Read package, runtime, storage, and clock failure evidence
       ansible.builtin.shell: |
-        echo '=== host and UTC time ==='
-        hostname
-        date -u --iso-8601=seconds
-        echo '=== operating system ==='
-        cat /etc/os-release
-        echo '=== installed infrastructure packages ==='
-        dpkg-query -W -f='${binary:Package}\t${Version}\t${db:Status-Abbrev}\n' kubelet kubeadm kubectl containerd runc 2>&1 || true
-        echo '=== package selections ==='
-        dpkg --get-selections kubelet kubeadm kubectl containerd 2>&1 || true
-        echo '=== APT candidates ==='
-        timeout 15s apt-cache policy kubelet kubeadm kubectl containerd 2>&1 || true
-        echo '=== Kubernetes repository ==='
-        cat /etc/apt/sources.list.d/kubernetes.list 2>&1 || true
-        echo '=== container runtime ==='
-        containerd --version 2>&1 || true
-        timeout 15s ctr plugins ls 2>&1 || true
-        echo '=== current service state ==='
-        timeout 15s systemctl show containerd kubelet cni-dhcp --property=Id,LoadState,ActiveState,SubState,Result,ExecMainStatus 2>&1 || true
-        echo '=== recent infrastructure journal ==='
-        journalctl --utc -u containerd -u kubelet -u cni-dhcp -n 120 --no-pager 2>&1 || true
-        echo '=== container storage ==='
-        findmnt -T /var/lib/containerd -o TARGET,SOURCE,FSTYPE,OPTIONS 2>&1 || true
-        df -h /var/lib/containerd /var/lib/kubelet 2>&1 || true
-        echo '=== clock synchronization ==='
-        timedatectl show --property=Timezone --property=NTPSynchronized 2>&1 || true
+        {
+          echo '=== host and UTC time ==='
+          hostname
+          date -u --iso-8601=seconds
+          echo '=== operating system ==='
+          cat /etc/os-release
+          echo '=== installed infrastructure packages ==='
+          dpkg-query -W -f='${binary:Package}\t${Version}\t${db:Status-Abbrev}\n' kubelet kubeadm kubectl containerd runc 2>&1 || true
+          echo '=== package selections ==='
+          dpkg --get-selections kubelet kubeadm kubectl containerd 2>&1 || true
+          echo '=== APT candidates ==='
+          timeout 15s apt-cache policy kubelet kubeadm kubectl containerd 2>&1 || true
+          echo '=== Kubernetes repository ==='
+          cat /etc/apt/sources.list.d/kubernetes.list 2>&1 || true
+          echo '=== container runtime ==='
+          containerd --version 2>&1 || true
+          timeout 15s ctr plugins ls 2>&1 || true
+          echo '=== current service state ==='
+          timeout 15s systemctl show containerd kubelet cni-dhcp --property=Id,LoadState,ActiveState,SubState,Result,ExecMainStatus 2>&1 || true
+          echo '=== recent infrastructure journal ==='
+          journalctl --utc -u containerd -u kubelet -u cni-dhcp -n 120 --no-pager 2>&1 || true
+          echo '=== container storage ==='
+          findmnt -T /var/lib/containerd -o TARGET,SOURCE,FSTYPE,OPTIONS 2>&1 || true
+          df -h /var/lib/containerd /var/lib/kubelet 2>&1 || true
+          echo '=== clock synchronization ==='
+          timedatectl show --property=Timezone --property=NTPSynchronized 2>&1 || true
+        } 2>&1 | /usr/bin/python3 -c 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data.decode("utf-8", "replace").encode("utf-8"))'
       args:
         executable: /bin/bash
       timeout: 120
@@ -68,32 +70,34 @@
   tasks:
     - name: Read RAN and gNB failure evidence
       ansible.builtin.shell: |
-        echo '=== host ==='
-        hostname 2>&1 || true
-        if ! command -v kubectl >/dev/null 2>&1; then
-          echo 'Kubernetes tooling is not installed; see infrastructure diagnostics.'
-          exit 0
-        fi
-        echo '=== Kubernetes pods ==='
-        kubectl get pods -A -o wide 2>&1 | tail -n 160 || true
-        echo '=== gNB / srsRAN pod logs ==='
-        kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
-        while read -r ns pod; do
-          lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
-          case "$lower" in
-            *gnb*|*srsran*)
-              echo "--- ${ns}/${pod} logs ---"
-              kubectl -n "$ns" logs "$pod" --all-containers=true --tail=250 2>&1 || true
-              echo "--- ${ns}/${pod} /var/log/gnb.log tail ---"
-              kubectl -n "$ns" exec "$pod" -c gnb -- tail -n 250 /var/log/gnb.log 2>&1 || \
-                kubectl -n "$ns" exec "$pod" -c gnb-logs -- tail -n 250 /var/log/gnb.log 2>&1 || true
-              echo "--- ${ns}/${pod} describe tail ---"
-              kubectl -n "$ns" describe pod "$pod" 2>&1 | tail -n 180 || true
-              ;;
-          esac
-        done
-        echo '=== kubelet journal tail ==='
-        journalctl -u kubelet -n 120 --no-pager 2>&1 || true
+        {
+          echo '=== host ==='
+          hostname 2>&1 || true
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo 'Kubernetes tooling is not installed; see infrastructure diagnostics.'
+            exit 0
+          fi
+          echo '=== Kubernetes pods ==='
+          kubectl get pods -A -o wide 2>&1 | tail -n 160 || true
+          echo '=== gNB / srsRAN pod logs ==='
+          kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
+          while read -r ns pod; do
+            lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              *gnb*|*srsran*)
+                echo "--- ${ns}/${pod} logs ---"
+                kubectl -n "$ns" logs "$pod" --all-containers=true --tail=250 2>&1 || true
+                echo "--- ${ns}/${pod} /var/log/gnb.log tail ---"
+                kubectl -n "$ns" exec "$pod" -c gnb -- tail -n 250 /var/log/gnb.log 2>&1 || \
+                  kubectl -n "$ns" exec "$pod" -c gnb-logs -- tail -n 250 /var/log/gnb.log 2>&1 || true
+                echo "--- ${ns}/${pod} describe tail ---"
+                kubectl -n "$ns" describe pod "$pod" 2>&1 | tail -n 180 || true
+                ;;
+            esac
+          done
+          echo '=== kubelet journal tail ==='
+          journalctl -u kubelet -n 120 --no-pager 2>&1 || true
+        } 2>&1 | /usr/bin/python3 -c 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data.decode("utf-8", "replace").encode("utf-8"))'
       args:
         executable: /bin/bash
       register: synthran_ran_diagnostics
@@ -118,29 +122,31 @@
   tasks:
     - name: Read core control-plane failure evidence
       ansible.builtin.shell: |
-        echo '=== host ==='
-        hostname 2>&1 || true
-        if ! command -v kubectl >/dev/null 2>&1; then
-          echo 'Kubernetes tooling is not installed; see infrastructure diagnostics.'
-          exit 0
-        fi
-        echo '=== Kubernetes pods ==='
-        kubectl get pods -A -o wide 2>&1 | tail -n 180 || true
-        echo '=== AMF / SMF / UPF pod logs ==='
-        kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
-        while read -r ns pod; do
-          lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
-          case "$lower" in
-            *amf*|*smf*|*upf*|*spgwu*)
-              echo "--- ${ns}/${pod} ---"
-              kubectl -n "$ns" logs "$pod" --all-containers=true --tail=220 2>&1 || true
-              ;;
-          esac
-        done
-        echo '=== recent cluster events ==='
-        kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -n 120 || true
-        echo '=== kubelet journal tail ==='
-        journalctl -u kubelet -n 120 --no-pager 2>&1 || true
+        {
+          echo '=== host ==='
+          hostname 2>&1 || true
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo 'Kubernetes tooling is not installed; see infrastructure diagnostics.'
+            exit 0
+          fi
+          echo '=== Kubernetes pods ==='
+          kubectl get pods -A -o wide 2>&1 | tail -n 180 || true
+          echo '=== AMF / SMF / UPF pod logs ==='
+          kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name' 2>/dev/null |
+          while read -r ns pod; do
+            lower=$(printf '%s' "$pod" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              *amf*|*smf*|*upf*|*spgwu*)
+                echo "--- ${ns}/${pod} ---"
+                kubectl -n "$ns" logs "$pod" --all-containers=true --tail=220 2>&1 || true
+                ;;
+            esac
+          done
+          echo '=== recent cluster events ==='
+          kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -n 120 || true
+          echo '=== kubelet journal tail ==='
+          journalctl -u kubelet -n 120 --no-pager 2>&1 || true
+        } 2>&1 | /usr/bin/python3 -c 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data.decode("utf-8", "replace").encode("utf-8"))'
       args:
         executable: /bin/bash
       register: synthran_core_diagnostics
@@ -165,20 +171,41 @@
   tasks:
     - name: Read non-mutating modem and interface evidence
       ansible.builtin.shell: |
-        echo '=== host ==='
-        hostname 2>&1 || true
-        echo '=== configured transport ==='
-        printf 'mode=%s\n' {{ mode | default('unknown') | quote }}
-        echo '=== IPv4 interfaces ==='
-        ip -4 -o addr show 2>&1 | tail -n 120 || true
-        echo '=== routes ==='
-        ip route show 2>&1 | tail -n 120 || true
-        echo '=== wwan0 link ==='
-        ip -s link show wwan0 2>&1 | head -n 100 || true
-        echo '=== modem devices ==='
-        ls -l /dev/cdc-wdm* /dev/wwan* 2>&1 | tail -n 80 || true
-        echo '=== recent WWAN / MBIM / QMI kernel events ==='
-        dmesg --color=never 2>&1 | grep -Ei 'wwan|cdc-wdm|mbim|qmi|usb' | tail -n 120 || true
+        {
+          echo '=== host ==='
+          hostname 2>&1 || true
+          echo '=== configured transport ==='
+          printf 'mode=%s\n' {{ mode | default('unknown') | quote }}
+          echo '=== IPv4 interfaces ==='
+          ip -4 -o addr show 2>&1 | tail -n 120 || true
+          echo '=== routes ==='
+          ip route show 2>&1 | tail -n 120 || true
+          echo '=== wwan0 link ==='
+          ip -s link show wwan0 2>&1 | head -n 100 || true
+          echo '=== modem devices ==='
+          ls -l /dev/cdc-wdm* /dev/wwan* 2>&1 | tail -n 80 || true
+          echo '=== modem helper availability ==='
+          command -v qhat-check 2>&1 || true
+          command -v check-ue 2>&1 || true
+          command -v stop.sh 2>&1 || true
+          command -v start.sh 2>&1 || true
+          echo '=== read-only qhat state ==='
+          timeout 15s qhat-check 2>&1 || true
+          if command -v mbimcli >/dev/null 2>&1 && [ -e /dev/cdc-wdm0 ]; then
+            echo '=== MBIM subscriber status ==='
+            timeout 15s mbimcli -p -d /dev/cdc-wdm0 --query-subscriber-ready-status 2>&1 || true
+            echo '=== MBIM registration state ==='
+            timeout 15s mbimcli -p -d /dev/cdc-wdm0 --query-registration-state 2>&1 || true
+            echo '=== MBIM packet service state ==='
+            timeout 15s mbimcli -p -d /dev/cdc-wdm0 --query-packet-service-state 2>&1 || true
+            echo '=== MBIM session 0 connection state ==='
+            timeout 15s mbimcli -p -d /dev/cdc-wdm0 --query-connection-state=0 2>&1 || true
+            echo '=== MBIM session 0 IP configuration ==='
+            timeout 15s mbimcli -p -d /dev/cdc-wdm0 --query-ip-configuration=0 2>&1 || true
+          fi
+          echo '=== recent WWAN / MBIM / QMI kernel events ==='
+          dmesg --color=never 2>&1 | grep -Ei 'wwan|cdc-wdm|mbim|qmi|usb' | tail -n 120 || true
+        } 2>&1 | /usr/bin/python3 -c 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data.decode("utf-8", "replace").encode("utf-8"))'
       args:
         executable: /bin/bash
       register: synthran_ue_diagnostics
