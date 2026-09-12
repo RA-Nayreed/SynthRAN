@@ -2,239 +2,222 @@
 
 # SynthRAN
 
-**Reproducible virtual and physical 5G testbeds for research experimentation.**
+**Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
-`RFSIM` · `R2Lab` · `srsRAN` · `Open5GS` · `OAI` · `free5GC`
+`Ambient IoT` · `Energy Harvesting` · `Backscatter` · `RFSIM` · `R2Lab` · `srsRAN` · `Open5GS` · `OAI`
 
 </div>
 
-SynthRAN is a research-software platform for **configuring, provisioning, verifying, and recording programmable 5G testbeds**. It turns a testbed description into an auditable deployment: resources are selected, infrastructure is prepared, the mobile network is brought up, UEs are verified, and deployment evidence is persisted for later experiments.
+SynthRAN is a research-software platform for studying the path from an **energy-constrained Ambient-IoT device** to an **observable application-level outcome across a programmable 5G network**.
 
-The supported public entry point is deliberately simple:
+It brings together two equally important parts of the research problem:
+
+1. **Ambient-IoT modelling** — energy harvesting, capacitor state, sensing, backscatter communication, propagation, access protocols, collisions, receiver behaviour and SIC determine which device updates are successfully decoded.
+2. **5G testbed orchestration** — virtual or physical network resources are configured, reserved, deployed, verified and recorded so those workloads can be evaluated on a reproducible network path.
+
+The experiment layer that joins these two sides into the final public workflow is still under active construction. The project is converging on a **single supported user entry point**:
 
 ```bash
 ./deploy.sh
 ```
 
-Scientific experiment orchestration is being developed on top of accepted SynthRAN deployments. That layer lives under [`Experiment/`](Experiment/) and is **under active construction**; internal Python commands are therefore not presented here as a stable user interface.
+Internal Python modules and `synthran.cli` are implementation surfaces, not the intended experiment-facing interface.
 
 ---
 
-## Why SynthRAN?
+## The idea
 
-A 5G experiment is more than starting a core network and a gNB. A useful research run also needs to answer questions such as:
+Ambient-IoT traffic is not just ordinary periodic sensor traffic. A device may have data to send while lacking enough harvested energy to sense, process or communicate. Energy availability can therefore change **when updates exist, when they are transmitted, which transmissions collide and which packets are eventually decoded**.
 
-- Which exact testbed resources were used?
-- Which core, RAN, radio path, UE set, and network policy were selected?
-- Was the network actually usable before the experiment began?
-- Can the deployment be reconstructed later?
-- What evidence belongs to the run that produced a result?
-
-SynthRAN treats those questions as part of the system rather than as manual lab notes.
+SynthRAN models that source-side behaviour and connects it to a reproducible mobile-network environment.
 
 ```text
-scenario or interactive choices
-            │
-            ▼
-       ./deploy.sh
-            │
-            ├── resolve configuration
-            ├── reconcile reservations
-            ├── prepare hosts
-            ├── deploy core / RAN / radio path
-            ├── activate and verify UEs
-            ├── attest the live deployment
-            └── persist provenance and logs
-            │
-            ▼
-    accepted 5G testbed
-            │
-            ▼
-   scientific experiments
-      (under construction)
+              Ambient-IoT side
+              ----------------
+     harvested / recorded energy
+                  │
+                  ▼
+       capacitor + controller
+                  │
+                  ▼
+        sensing + backscatter
+                  │
+                  ▼
+     propagation / MAC / receiver
+          collisions + SIC
+                  │
+                  ▼
+           decoded updates
+                  │
+                  │   experiment integration
+                  │     under construction
+                  ▼
+              gateway UE
+                  │
+                  ▼
+              5G user plane
+        RFSIM or physical R2Lab
+                  │
+                  ▼
+         application / collector
+                  │
+                  ▼
+       measurements + provenance
 ```
 
-The deployment and scientific layers are intentionally separated in the repository. `deploy.sh`, `deployment/`, and `scenarios/` own testbed infrastructure. `Experiment/` owns evolving research studies and scientific artefacts.
+The model and the 5G deployment remain independently inspectable. That separation is intentional: source behaviour should not be hidden inside network setup, and network behaviour should not be confused with simulated Ambient-IoT radio behaviour.
 
 ---
 
-## Quick start
+## Ambient-IoT model
 
-### 1. Clone the repository
+The scientific model lives primarily in [`synthran/model/`](synthran/model/) and [`synthran/ambient_iot/`](synthran/ambient_iot/).
 
-```bash
-git clone https://github.com/RA-Nayreed/SynthRAN.git
-cd SynthRAN
+It includes the primitives needed to explore energy-aware Ambient-IoT behaviour, including:
+
+- harvested-energy inputs and deterministic energy traces;
+- capacitor charging, leakage and voltage thresholds;
+- device-controller state transitions;
+- sensing and transmission timing;
+- backscatter/link behaviour and propagation;
+- broadcast, SIC-assisted and contention-based access behaviour;
+- packet overlap, collision handling, SINR-based decoding and successive interference cancellation;
+- deterministic evidence from successfully decoded updates.
+
+The repository keeps one bundled scientific reference configuration:
+
+```text
+synthran/configs/reference.yml
 ```
 
-### 2. Inspect the deployment interface
+That file is a **reference model/workload configuration**, not a list of deployment presets. Additional scientific configurations should be created deliberately for a defined research question rather than accumulated as generic examples.
+
+---
+
+## 5G testbed layer
+
+`deploy.sh` and [`deployment/`](deployment/) own the infrastructure side of SynthRAN.
+
+Bare execution opens the interactive deployment workflow:
+
+```bash
+./deploy.sh
+```
+
+Inspect the available launcher options with:
 
 ```bash
 ./deploy.sh --help
 ```
 
-Bare deployment opens the interactive testbed wizard:
+The deployment workflow can select and prepare the mobile core, RAN, radio/platform, SOP-node placement, UE set, network profile, slice assignment and reservation settings. A caller may still provide an explicit deployment configuration with `--config <file>`, but SynthRAN no longer ships a second catalog of duplicated scenario presets.
 
-```bash
-./deploy.sh
-```
+| Capability | Current repository direction |
+| :---: | :---: |
+| Virtual radio path | RFSIM-based software deployment |
+| Physical radio path | R2Lab with networked N300/N320 USRPs |
+| Mobile-core integrations | Open5GS, OAI and free5GC deployment code |
+| RAN integrations | srsRAN and retained OAI deployment components |
+| UE paths | Software UEs and supported physical modem paths |
+| Deployment evidence | Resolved configuration, logs, source revision and live attestation |
 
-The wizard guides the user through the deployment choices available to the current platform, including network components, SOP-node placement, radio path, UE selection, network profile, slice assignment, and reservation settings.
-
-### 3. Preview a versioned scenario
-
-A scenario can be resolved without provisioning hardware:
-
-```bash
-./deploy.sh \
-  --config scenarios/r2lab-reference-oai-srsran.yml \
-  --dry-run
-```
-
-A real non-interactive deployment uses the same scenario:
-
-```bash
-./deploy.sh \
-  --config scenarios/r2lab-reference-oai-srsran.yml \
-  --no-input
-```
-
-Useful launcher options:
-
-| Option | Purpose |
-| --- | --- |
-| `--config <file>` | Load a versioned infrastructure scenario. |
-| `--interactive` | Use the supplied scenario as defaults, then open the wizard. |
-| `--no-input` | Deploy an explicit scenario without the configuration wizard. |
-| `--no-reservation` | Skip POS/R2Lab booking while retaining normal infrastructure setup. |
-| `--dry-run` | Resolve configuration and inventory without provisioning hardware. |
-| `--verbose` | Show additional deployment output. |
-
-`--no-input` requires `--config`. `--interactive` and `--no-input` are mutually exclusive.
+The presence of an integration in the codebase is not treated as proof that every possible combination has passed a current physical acceptance run. Physical capability claims remain tied to actual run evidence.
 
 ---
 
-## What SynthRAN deploys
+## One public workflow
 
-The repository currently ships the following **editable reference scenarios**:
+The intended end state is deliberately simple:
 
-| Scenario | Core | RAN | Radio / platform | UE selection |
-| --- | --- | --- | --- | --- |
-| [`rfsim-sidecars-3ue.yml`](scenarios/rfsim-sidecars-3ue.yml) | Open5GS | srsRAN | RFSIM | Three software UEs |
-| [`r2lab-reference-oai-srsran.yml`](scenarios/r2lab-reference-oai-srsran.yml) | OAI | srsRAN | R2Lab / N320 | Two QHATs |
-| [`r2lab-n300-qhats-sdr.yml`](scenarios/r2lab-n300-qhats-sdr.yml) | Open5GS | srsRAN | R2Lab / N300 | Three QHATs |
-| [`r2lab-n320-mixed-ues-dual-sdr.yml`](scenarios/r2lab-n320-mixed-ues-dual-sdr.yml) | free5GC | srsRAN | R2Lab / N320 | QHAT and QFIT modems |
-
-These files are **presets, not a certification matrix**. Their presence means the configuration is represented in the repository; it does not by itself claim that every combination has passed a current physical acceptance run.
-
-R2Lab physical deployment is intentionally constrained to the N300 and N320 networked-USRP paths. Software-radio scenarios use the virtual RFSIM path.
-
-See [`scenarios/README.md`](scenarios/README.md) for the scenario contract and current catalog.
-
----
-
-## Deployment configuration
-
-Infrastructure scenarios describe the testbed, not the scientific experiment. A typical physical scenario has this shape:
-
-```yaml
-deployment:
-  core: oai
-  ran: srsran
-  platform: r2lab
-  ru: n320
-  network_profile: default
-
-  nodes:
-    core: sopnode-f2
-    ran: sopnode-f3
-    broker: sopnode-f2
-
-  ues:
-    - qhat01
-    - qhat03
-
-  ue_slices:
-    qhat01: slice1
-    qhat03: slice2
-
-  reservation:
-    enabled: true
-    duration_minutes: 120
-    image: ubuntu-jammy
-
-  r2lab_reservation:
-    enabled: true
-    duration_minutes: 120
+```text
+                    ./deploy.sh
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+      Ambient-IoT research      5G infrastructure
+        configuration              selection
+             │                       │
+             ▼                       ▼
+      model / workload        reserve + provision
+             │                       │
+             └───────────┬───────────┘
+                         ▼
+                 run experiment
+                         │
+                         ▼
+               collect + reconcile
+                         │
+                         ▼
+                 research evidence
 ```
 
-The main configuration surfaces are:
+Today, `deploy.sh` is the supported public entry point for the deployment side. The experiment-selection and execution path is being integrated so users will not need to learn a separate `synthran.cli` workflow to run the science.
 
-| Surface | Responsibility |
-| --- | --- |
-| `deployment/group_vars/all/ue_catalog.yaml` | Canonical UE identities and transport settings. |
-| `deployment/group_vars/all/network_profile_*.yaml` | PLMN, DNN, slice, QoS, and subscriber-security policy. |
-| `deployment.ue_slices` | Explicit UE-to-slice assignment. |
-| `deployment.nodes` | Core, RAN, broker, and related placement. |
-| `deployment.host_vars` | Host-specific connection and tuning values. |
-| `deployment.reservation` | SOP-node reservation policy. |
-| `deployment.r2lab_reservation` | Physical R2Lab reservation policy. |
-| `deployment.r2lab_ssh` | R2Lab access configuration. |
-
-Local R2Lab credentials and SSH material do **not** belong in committed scenarios. `R2LAB_USERNAME`, `R2LAB_IDENTITY_FILE`, and the local `.r2lab_config` mechanism are available for machine-specific access settings.
+Until that boundary is stable, the README intentionally avoids documenting unfinished experiment commands as public API.
 
 ---
 
 ## Deployment lifecycle
 
-A normal SynthRAN deployment follows a controlled sequence rather than a collection of unrelated scripts.
+A normal testbed deployment follows a controlled lifecycle rather than a collection of unrelated scripts:
 
-1. **Resolve** — validate the selected scenario or interactive choices and render the effective deployment configuration.
+1. **Resolve** — validate the chosen infrastructure settings and render the effective deployment configuration.
 2. **Reserve** — reconcile the required SOP-node and, where applicable, R2Lab resources.
 3. **Prepare** — create the isolated local runtime and prepare the selected hosts.
-4. **Deploy** — configure the chosen mobile core, RAN, radio path, networking, and UE environment.
-5. **Verify** — verify live deployment state and UE/session behavior rather than treating process startup as success.
+4. **Deploy** — configure the chosen core, RAN, radio path, networking and UE environment.
+5. **Verify** — verify live network and UE/session behaviour rather than equating process startup with success.
 6. **Attest** — record the accepted deployment identity and current evidence.
-7. **Persist** — retain logs, source revision, resolved configuration, and run evidence beneath the run directory.
+7. **Persist** — retain logs, source revision, resolved configuration and run evidence.
 
-SynthRAN also prevents overlapping deployment controllers with a repository lock and keeps private execution state beneath `.synthran/`.
+SynthRAN prevents overlapping deployment controllers with a repository lock and keeps local authority/runtime state beneath `.synthran/`.
 
 ---
 
 ## Evidence and reproducibility
 
-Each deployment is associated with a run directory under:
+Deployment runs write evidence beneath:
 
 ```text
 results/<run-id>/
 ```
 
-The deployment controller records material needed to understand and investigate a run, including the source revision and deployment logs. Accepted deployment identity is also persisted under `.synthran/` for the layer that consumes the testbed later.
+The goal is for a research result to be traceable through a chain such as:
 
-The guiding rule is simple:
+```text
+research question
+      ↓
+source revision + scientific configuration
+      ↓
+resolved testbed configuration + resources
+      ↓
+model/workload evidence
+      ↓
+live network verification
+      ↓
+transport/application measurements
+      ↓
+result / figure / publication
+```
 
-> **A deployment is not research evidence merely because the processes started.**
+A process starting successfully is not, by itself, research evidence. SynthRAN distinguishes between **implemented capability**, **accepted behaviour in a particular run**, and **scientifically established results**.
 
-A result should be traceable to a specific source revision, resolved configuration, resource selection, live verification state, and resulting run artefacts.
-
-Generated result directories and local authority/credential state should not be committed to Git.
+Generated result directories and local credential/authority state should not be committed to Git.
 
 ---
 
-## Scientific experiment layer
+## Research layer
 
-The scientific side of SynthRAN is currently **under construction**.
+[`Experiment/`](Experiment/) contains the evolving studies and research material built around SynthRAN.
 
-[`Experiment/`](Experiment/) contains the evolving research layer, including Ambient-IoT modelling and study material. The long-term public workflow is intended to build experiments on top of an accepted SynthRAN deployment while preserving the same provenance and evidence discipline as the testbed layer.
+The scientific integration is currently **under construction**. This means:
 
-For now:
+- Ambient-IoT modelling is part of SynthRAN now, not an afterthought to the testbed;
+- the testbed can be deployed and attested independently;
+- model/workload and experiment-support modules exist internally;
+- the final deployment-to-experiment orchestration is not yet advertised as a stable public interface;
+- planned studies are not presented here as completed experimental findings.
 
-- `./deploy.sh` is the supported public repository entry point.
-- The root README does not advertise internal `synthran.cli` commands as the experiment interface.
-- Experimental modules may change while the deployment-to-experiment contract is being finalized.
-- Planned or partially implemented studies are not presented as completed experimental results.
-
-Background material currently lives in [`docs/ambient-iot.md`](docs/ambient-iot.md) and [`docs/experiment-readiness.md`](docs/experiment-readiness.md).
+Focused technical background is available in [`docs/ambient-iot.md`](docs/ambient-iot.md). Research-readiness notes remain in [`docs/experiment-readiness.md`](docs/experiment-readiness.md) while that layer is being consolidated.
 
 ---
 
@@ -242,82 +225,55 @@ Background material currently lives in [`docs/ambient-iot.md`](docs/ambient-iot.
 
 ```text
 SynthRAN/
-├── deploy.sh              # supported deployment entry point
-├── scenarios/             # versioned infrastructure presets
-├── deployment/            # Ansible roles, playbooks, inventory and testbed logic
-├── synthran/              # Python support modules used by the platform
-├── Experiment/            # scientific studies and experiment work in progress
-├── docs/                  # focused technical/research documentation
-├── third_party/           # pinned upstream provenance and retained notices
-├── THIRD_PARTY_NOTICES.md # third-party attribution and license status
-├── CITATION.cff           # software citation metadata
-├── CONTRIBUTING.md        # contribution and validation rules
-├── SECURITY.md            # vulnerability-reporting guidance
-└── LICENSE                # BSD-3-Clause text for SynthRAN-original code
-```
-
-A useful boundary for contributors is:
-
-```text
-scenarios/ + deploy.sh + deployment/  →  build and attest the testbed
-Experiment/                           →  define the science
-results/ + .synthran/                 →  local runtime evidence and authority state
+├── deploy.sh            # public entry point; deployment today, unified workflow target
+├── deployment/          # testbed provisioning, networking, RAN/core/UE integration
+├── synthran/
+│   ├── model/           # Ambient-IoT scientific primitives
+│   ├── ambient_iot/     # model integration, protocols and evidence
+│   └── configs/
+│       └── reference.yml# single bundled scientific reference configuration
+├── Experiment/          # evolving research studies
+├── docs/                # focused technical and research documentation
+├── third_party/         # upstream provenance records
+├── CITATION.cff         # machine-readable software citation
+├── CONTRIBUTING.md      # contribution and validation rules
+├── SECURITY.md          # vulnerability-reporting guidance
+└── LICENSE              # project license
 ```
 
 ---
 
 ## Project status
 
-SynthRAN is research software under active development. The repository is currently versioned as `0.1.0`.
+SynthRAN is pre-1.0 research software under active development. The package is currently versioned as `0.1.0`.
 
-| Area | Current status |
-| --- | --- |
-| Interactive and scenario-driven deployment | Active development; public interface is `./deploy.sh`. |
-| RFSIM deployment path | Implemented in the deployment framework. |
-| R2Lab N300/N320 path | Implemented with explicit physical-resource handling; acceptance remains evidence-specific. |
-| Deployment provenance and run evidence | Implemented and persisted per deployment run. |
-| Scientific experiment orchestration | Under construction; not yet documented as a stable public interface. |
-| Individual research studies | Evolving independently under `Experiment/`; no blanket completion claim is made here. |
-
-This status distinction is intentional: **implemented**, **validated in a particular run**, and **scientifically established** are not treated as synonyms.
+| Area | Status |
+| :---: | :---: |
+| Ambient-IoT scientific model | Integrated and actively evolving |
+| Deterministic model/workload evidence | Implemented in the scientific stack |
+| Interactive 5G deployment | Active public workflow through `./deploy.sh` |
+| RFSIM path | Implemented in the deployment framework |
+| R2Lab N300/N320 path | Implemented; acceptance remains run-specific |
+| Deployment provenance | Persisted per deployment run |
+| Unified model → testbed experiment execution | Under construction |
+| Publication-grade experiment campaigns | Study-specific; no blanket completion claim |
 
 ---
 
 ## Citation
 
-If SynthRAN contributes to published work, cite the software version or commit used for the experiment. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
+If SynthRAN contributes to published work, cite the exact software version or Git commit used for the experiment. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
 
-Until versioned archival releases and a DOI are established, a citation should include at minimum:
-
-- the repository name (`SynthRAN`),
-- the exact Git commit or tagged version,
-- the repository URL,
-- and the access/release date appropriate to the publication.
-
-A DOI will only be added when an actual archived release exists; the repository does not use placeholder citation identifiers.
+A DOI will be added only when an actual archival release exists; the repository does not use placeholder citation identifiers.
 
 ---
 
 ## Contributing
 
-Contributions are welcome when they preserve SynthRAN's separation of concerns, provenance, and testbed-safety rules. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-For bugs, include the smallest useful evidence bundle and redact credentials, private keys, tokens, subscriber secrets, and machine-specific access material.
+Contribution and validation expectations are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md). Bug reports and research proposals use structured GitHub issue forms so that implementation defects, testbed evidence and scientific claims are not mixed together.
 
 ---
 
-## License and third-party code
+## License
 
-SynthRAN-original code is distributed under the BSD 3-Clause License; see [`LICENSE`](LICENSE).
-
-This repository also contains or derives from third-party work with separate provenance and licensing conditions. In particular, the Amber-derived model retains its upstream BSD terms, while the retained `sopnode/5g_ansible`-derived deployment material comes from an upstream repository that did not declare a repository-level license at the pinned comparison revision.
-
-The root license does **not** override those third-party conditions or create permissions that the upstream authors did not grant. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) before redistributing derived material.
-
----
-
-## Acknowledgements
-
-SynthRAN builds on open research infrastructure and software from the wider mobile-networking community, including SLICES/Post5G resources, R2Lab, srsRAN, Open5GS, OAI, free5GC, UERANSIM, the SOPNode 5G Ansible work, and the Amber Ambient-IoT model.
-
-Exact third-party provenance belongs in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the pinned records under [`third_party/`](third_party/), rather than being inferred from this README.
+See [`LICENSE`](LICENSE) for the project license.
