@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Persist native Ambient-IoT evidence and bridge outputs."""
 
 from __future__ import annotations
