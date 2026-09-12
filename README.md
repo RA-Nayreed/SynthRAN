@@ -5,9 +5,9 @@
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
 <p>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&logo=python&logoColor=white" alt="Python requirement"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version" alt="Project version"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/RA-Nayreed/SynthRAN?branch=main&label=last%20commit" alt="Last commit"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&color=3776AB&style=flat-square&logo=python&logoColor=white" alt="Python requirement"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=7C3AED&style=flat-square" alt="Project version"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/RA-Nayreed/SynthRAN?branch=main&label=last%20commit&color=0F766E&style=flat-square" alt="Last commit"></a>
 </p>
 
 </div>
@@ -35,38 +35,86 @@ Ambient-IoT traffic is not just ordinary periodic sensor traffic. A device may h
 
 SynthRAN models that source-side behaviour and connects it to a reproducible mobile-network environment.
 
-```text
-              Ambient-IoT side
-              ----------------
-     harvested / recorded energy
-                  │
-                  ▼
-       capacitor + controller
-                  │
-                  ▼
-        sensing + backscatter
-                  │
-                  ▼
-     propagation / MAC / receiver
-          collisions + SIC
-                  │
-                  ▼
-           decoded updates
-                  │
-                  │   experiment integration
-                  │     under construction
-                  ▼
-              gateway UE
-                  │
-                  ▼
-              5G user plane
-        RFSIM or physical R2Lab
-                  │
-                  ▼
-         application / collector
-                  │
-                  ▼
-       measurements + provenance
+```mermaid
+flowchart LR
+    ENTRY["./deploy.sh<br/>public entry point"]
+    REF["synthran/configs/reference.yml<br/>scientific reference configuration"]
+
+    subgraph AIOT["Ambient-IoT model"]
+        ENERGY["Energy input<br/>deterministic trace / harvested power"]
+        CAP["Capacitor model<br/>charging · leakage · voltage thresholds"]
+        CTRL["Device controller<br/>energy-aware state transitions"]
+        SENSE["Sensing opportunities<br/>sample generation / suppression"]
+        MAC["Access protocol<br/>broadcast · unicast · framed/adaptive ALOHA"]
+        TX["Backscatter transmission<br/>airtime · payload · subcarrier shift"]
+        PROP["Propagation + coverage<br/>link budget · RSSI · sensitivity"]
+        RX["Reader / receiver<br/>overlap · SINR · collision · SIC"]
+        DECODE["Decoded updates<br/>event ID · sequence · generation/decode time"]
+        MODEVID["Native model evidence<br/>energy · transitions · TX/RX outcomes"]
+
+        ENERGY --> CAP --> CTRL --> SENSE
+        SENSE --> MAC --> TX
+        PROP --> TX
+        TX --> RX
+        PROP --> RX
+        RX --> DECODE
+        CTRL --> MODEVID
+        RX --> MODEVID
+    end
+
+    subgraph BRIDGE["Experiment bridge — integration under construction"]
+        TRACE["Canonical event trace<br/>decoded events / events.jsonl"]
+        REPLAY["Gateway workload replay<br/>energy-gated MQTT telemetry"]
+        RECON["Result reconciliation<br/>generated ↔ decoded ↔ delivered"]
+    end
+
+    subgraph TESTBED["5G testbed orchestration"]
+        RESOLVE["Resolve configuration<br/>core · RAN · radio · nodes · UEs"]
+        RESERVE["Reserve resources<br/>SOP nodes / R2Lab when required"]
+        PREPARE["Prepare runtime + hosts<br/>inventory · networking · dependencies"]
+        CORE["5G core<br/>Open5GS · OAI · free5GC"]
+        RAN["RAN<br/>srsRAN · retained OAI components"]
+        UE["Gateway UE(s)<br/>software or supported physical modem"]
+        RADIO{"Radio path"}
+        RFSIM["RFSIM<br/>virtual software path"]
+        R2LAB["R2Lab<br/>N300 / N320 physical path"]
+        VERIFY["Verify + attest<br/>live network / session acceptance"]
+
+        RESOLVE --> RESERVE --> PREPARE
+        PREPARE -. configures .-> CORE
+        PREPARE -. configures .-> RAN
+        PREPARE -. configures .-> UE
+        UE --> RADIO
+        RADIO --> RFSIM --> RAN
+        RADIO --> R2LAB --> RAN
+        RAN --> CORE
+        CORE --> VERIFY
+        RAN --> VERIFY
+        UE --> VERIFY
+    end
+
+    subgraph OUTPUT["Application + research evidence"]
+        COLLECT["N6-side application / collector<br/>MQTT receipts and transport observations"]
+        RESULT["Measurements<br/>delivery · timing · network evidence"]
+        PROV["Run provenance<br/>source revision · resolved config · logs"]
+        ARTEFACT["Reconciled experiment artefact<br/>inputs + model evidence + network evidence"]
+
+        COLLECT --> RECON
+        RECON --> RESULT
+        RESULT --> ARTEFACT
+        PROV --> ARTEFACT
+        MODEVID --> ARTEFACT
+    end
+
+    REF --> ENERGY
+    ENTRY --> RESOLVE
+    DECODE --> TRACE
+    TRACE -. planned unified execution .-> REPLAY
+    VERIFY -. accepted testbed .-> REPLAY
+    REPLAY --> UE
+    CORE --> COLLECT
+    TRACE --> RECON
+    VERIFY --> PROV
 ```
 
 The model and the 5G deployment remain independently inspectable. That separation is intentional: source behaviour should not be hidden inside network setup, and network behaviour should not be confused with simulated Ambient-IoT radio behaviour.
@@ -141,28 +189,28 @@ The presence of an integration in the codebase is not treated as proof that ever
 
 ## One public workflow
 
-The intended end state is deliberately simple:
+The intended end state is deliberately simple to enter while preserving the model/testbed boundary internally:
 
-```text
-                    ./deploy.sh
-                         │
-             ┌───────────┴───────────┐
-             │                       │
-      Ambient-IoT research      5G infrastructure
-        configuration              selection
-             │                       │
-             ▼                       ▼
-      model / workload        reserve + provision
-             │                       │
-             └───────────┬───────────┘
-                         ▼
-                 run experiment
-                         │
-                         ▼
-               collect + reconcile
-                         │
-                         ▼
-                 research evidence
+```mermaid
+flowchart TD
+    START["./deploy.sh"] --> RESOLVE["Resolve scientific + infrastructure configuration"]
+
+    RESOLVE --> MODEL["Ambient-IoT model"]
+    RESOLVE --> INFRA["5G infrastructure"]
+
+    MODEL --> EVENTS["Generate energy-aware decoded event trace"]
+    INFRA --> DEPLOY["Reserve → prepare → deploy → verify → attest"]
+
+    EVENTS -. integration under construction .-> RUN["Replay experiment workload"]
+    DEPLOY --> RUN
+
+    RUN --> TRANSPORT["Carry workload through accepted 5G user plane"]
+    TRANSPORT --> COLLECT["Collect application receipts + network evidence"]
+    EVENTS --> RECON["Reconcile decoded events with delivered events"]
+    COLLECT --> RECON
+    DEPLOY --> PROV["Persist deployment identity + provenance"]
+    RECON --> BUNDLE["Persist reproducible result bundle"]
+    PROV --> BUNDLE
 ```
 
 Today, `deploy.sh` is the supported public entry point for the deployment side. The experiment-selection and execution path is being integrated so users will not need to learn a separate `synthran.cli` workflow to run the science.
@@ -303,5 +351,3 @@ Contribution and validation expectations are documented in [`CONTRIBUTING.md`](C
 **Copyright © 2026 Rezwan Ahmad Nayreed.**
 
 SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text.
-
-Third-party and upstream-derived material keeps its own copyright, licensing, and provenance information under [`third_party/`](third_party/).
