@@ -55,13 +55,13 @@ jobs:
       - name: Import SynthRAN package
         run: python -c "import synthran; print('synthran import OK')"
 
-      - name: Parse versioned YAML configuration
+      - name: Parse versioned YAML and citation metadata
         run: |
           python - <<'PY'
           from pathlib import Path
           import yaml
 
-          paths = sorted(Path("scenarios").glob("*.yml"))
+          paths = [Path("synthran/configs/reference.yml")]
           paths += sorted(Path("deployment/group_vars/all").glob("network_profile_*.yaml"))
           paths.append(Path("deployment/group_vars/all/ue_catalog.yaml"))
           paths.append(Path("CITATION.cff"))
@@ -75,8 +75,12 @@ jobs:
           print(f"parsed {len(paths)} YAML/CFF files")
           PY
 
-      - name: Ensure README artwork is not required
+      - name: Enforce repository presentation boundaries
         run: |
+          if [[ -d scenarios ]]; then
+            echo "The duplicated scenarios/ catalog must not be reintroduced" >&2
+            exit 1
+          fi
           if grep -qE 'readme-(hero|architecture).*\.svg' README.md; then
             echo "README still references removed presentation artwork" >&2
             exit 1
