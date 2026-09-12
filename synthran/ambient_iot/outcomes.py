@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Read receiver decisions without reconstructing collision or cancellation stages."""
 from __future__ import annotations
 
