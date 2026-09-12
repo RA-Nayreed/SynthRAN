@@ -21,6 +21,11 @@ def invoke(phase: str, config: str | Path, **options) -> None:
         raise ValueError(
             "experiment.entrypoint must name an existing Python entrypoint"
         )
+    if phase == "configure" and not options.get("source_config"):
+        source_config = selection.get("config")
+        if not source_config:
+            raise ValueError("experiment.configure requires experiment.config")
+        options["source_config"] = source_config
     command = [
         sys.executable,
         entrypoint,
