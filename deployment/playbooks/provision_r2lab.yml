@@ -56,9 +56,9 @@
             SYNTHRAN_SSH_KNOWN_HOSTS: "{{ synthran_nested_ssh_dir }}/known_hosts"
       when: platform == 'r2lab'
 
-    - name: Load active 5G profile for R2Lab UE slice configuration
+    - name: Load the resolved network profile for R2Lab UE slice configuration
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../group_vars/all/5g_profile_{{ fiveg_profile | default('default') }}.yaml"
+        file: "{{ network_profile_file }}"
       when: platform == 'r2lab'
 
     - name: Apply the configured DNN and S-NSSAI to each reachable QHAT
@@ -93,7 +93,7 @@
           - item.rc == 0
         fail_msg: >-
           R2Lab QHAT {{ item.item }} could not be initialized with the DNN/S-NSSAI
-          selected by the active 5G profile.
+          selected by the active network profile.
       loop: "{{ synthran_qhat_profile_init.results | default([]) }}"
       loop_control:
         label: "{{ item.item | default('unknown') }}"

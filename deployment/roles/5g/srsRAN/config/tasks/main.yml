@@ -1,4 +1,5 @@
 ---
+
 - name: Check if ansible venv python exists
   ansible.builtin.stat:
     path: /opt/ansible-venv/bin/python
@@ -10,7 +11,7 @@
   when: venv_python.stat.exists
 
 - name: Load common variables
-  ansible.builtin.include_vars:
+  include_vars:
     file: "../../common/defaults/main.yml"
 
 - name: Remove existing srsRAN Helm directory to ensure clean state
@@ -23,8 +24,8 @@
     repo: "{{ repo_url }}"
     dest: "{{ repo_dest }}"
     version: "{{ version | default('main') }}"
-    update: false
-    force: true
+    update: no
+    force: yes
 
 - name: Ensure namespace exists
   kubernetes.core.k8s:
@@ -33,33 +34,31 @@
     name: "{{ ran_ns }}"
     state: present
 
-- name: Gather env facts
+- name: Gather env facts (remote)
   ansible.builtin.setup:
     filter: ansible_env
   when: ansible_env is not defined
 
 - name: Normalize repo_dest to remote HOME
   ansible.builtin.set_fact:
-    repo_dest_abs: "{{ (repo_dest | default('~/srsran-helm') | trim) | regex_replace('^~/?', ansible_env.HOME ~ '/') }}"
-    synthran_srsran_rru: "{{ rru | default('rfsim') | string | trim | lower }}"
+    repo_dest_abs: "{{ (repo_dest | default('~/srsran-helm') | trim)
+                       | regex_replace('^~/?', ansible_env.HOME ~ '/') }}"
 
-- name: Require a supported srsRAN radio path
+- name: Select values filename from rru
+  ansible.builtin.set_fact:
+    values_filename: "{{ rru_file_map[(rru | string | trim | lower)] }}"
+  vars:
+    rru_file_map:
+      n300: values-n300-n78-20MHz.yaml # values-n300.yaml is original FDD, band 3
+      n320: values-n320-n78-20MHz.yaml # values-n320.yaml is original FDD, band 3
+      rfsim: values-rfsim.yaml
+
+- name: Require a supported srsRAN radio mode
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_srsran_rru in ['rfsim', 'n300', 'n320']
-    fail_msg: >-
-      Unsupported srsRAN radio {{ synthran_srsran_rru }}; SynthRAN supports only
-      RFSIM, N300, and N320.
-
-- name: Select the exact values file for the supported radio
-  ansible.builtin.set_fact:
-    values_filename: "{{ rru_file_map[synthran_srsran_rru] }}"
-  vars:
-    rru_file_map:
-      n300: values-n300-n78-20MHz.yaml
-      n320: values-n320-n78-20MHz.yaml
-      rfsim: values-rfsim.yaml
+      - (rru | string | trim | lower) in ['rfsim', 'n300', 'n320']
+    fail_msg: "srsRAN supports only rfsim, n300, or n320 in SynthRAN"
 
 - name: Build absolute values_file path
   ansible.builtin.set_fact:
@@ -71,12 +70,12 @@
       - "repo_dest_abs='{{ repo_dest_abs }}'"
       - "values_file='{{ values_file }}'"
 
-- name: Ensure values file exists
+- name: Ensure values file exists (remote)
   ansible.builtin.stat:
     path: "{{ values_file }}"
   register: values_stat
 
-- name: Fail if values file is missing
+- name: Fail if values file missing
   ansible.builtin.fail:
     msg: "Values file not found: {{ values_file }}"
   when: not values_stat.stat.exists
@@ -101,11 +100,11 @@
     - core == 'free5gc'
     - core_node_name != ran_node_name
 
-- name: Apply 5G profile to gNB and UE configs
-  ansible.builtin.include_tasks: apply_5g_profile.yaml
+- name: Apply network profile to gNB and UE configs
+  ansible.builtin.include_tasks: apply_network_profile.yaml
 
 - name: Report the srsRAN AMF endpoint
-  ansible.builtin.debug:
+  debug:
     msg:
       - "amf_ip={{ srsran_network.n2.amf_ip | quote }}"
       - "amf_port={{ srsran_network.n2.amf_port | quote }}"
@@ -122,7 +121,7 @@
       .namespace = "{{ ran_ns }}"
     ' "{{ values_file }}"
 
-- name: Fix device_args for RFSIM GNU Radio single-channel multi-UE
+- name: Fix device_args for rfsim GNU Radio single-channel multi-UE
   ansible.builtin.shell: >
     {{ yq_bin_path }} eval -i '
       .gnbConfig.cell_cfg.channel_bandwidth_MHz = 20 |
@@ -143,15 +142,15 @@
   ansible.builtin.include_tasks: oai_core_network.yml
   when: core == 'oai'
 
-- name: Load 5G profile vars for RFSIM UEs
+# --- rfsim only: UE list + srsue values file ---
+
+- name: Load resolved network profile vars for RFSIM UE rendering
   ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    file: "{{ network_profile_file }}"
     name: fiveg
   when: rru == 'rfsim'
 
-- name: Validate every selected software UE against the effective 5G profile
+- name: Validate every selected software UE against the effective network profile
   ansible.builtin.assert:
     quiet: true
     that:
@@ -196,7 +195,7 @@
     label: "{{ item.device }}"
   when: rru == 'rfsim'
 
-- name: Write srsUE values-rfsim.yaml
+- name: Write srsue values-rfsim.yaml
   ansible.builtin.copy:
     dest: "{{ [repo_dest_abs, 'charts', 'srsue', 'values-rfsim.yaml'] | path_join }}"
     content: |

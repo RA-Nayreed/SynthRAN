@@ -105,17 +105,13 @@
   ansible.builtin.command: python3 /tmp/patch_upf_wrapper.py "{{ free5gc_repo_dest }}"
   changed_when: true
 
-# Then apply the 5G profile settings on the repo
-
-- name: Load active 5G profile
+- name: Load resolved network profile
   ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    file: "{{ network_profile_file }}"
     name: fiveg
 
 - name: Validate PLMN
-  assert:
+  ansible.builtin.assert:
     quiet: true
     that:
       - fiveg.plmn.mcc is defined
@@ -123,7 +119,7 @@
       - fiveg.plmn.tac is defined
 
 - name: Validate slices
-  assert:
+  ansible.builtin.assert:
     quiet: true
     that:
       - slice.name is defined
@@ -137,7 +133,7 @@
     label: "{{ slice.name }}"
 
 - name: Validate UE slice references
-  assert:
+  ansible.builtin.assert:
     quiet: true
     that:
       - ue.value.slice in fiveg.slices | map(attribute='name') | list
@@ -156,7 +152,7 @@
 - name: Generate free5gc Helm values override
   ansible.builtin.template:
     src: free5gc-values-override.yaml.j2
-    dest: "{{ free5gc_repo_dest }}/values-profile-override.yaml"
+    dest: "{{ free5gc_repo_dest }}/values-network-profile-override.yaml"
     mode: "0644"
   vars:
     profile: "{{ fiveg }}"
@@ -184,13 +180,11 @@
   vars:
     profile: "{{ fiveg }}"
 
-- name: Generate free5gc profile check file
+- name: Generate free5gc network-profile check file
   ansible.builtin.template:
     src: profile-check.j2
-    dest: /root/free5gc_profile_check.txt
+    dest: /root/free5gc_network_profile_check.txt
     owner: root
     mode: '0644'
   vars:
     profile: "{{ fiveg }}"
-
-

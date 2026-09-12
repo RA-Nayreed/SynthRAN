@@ -15,31 +15,25 @@
       - yq_version in synthran_srsran_yq_version.stdout
     fail_msg: "srsRAN requires the checksum-pinned {{ yq_version }} yq runtime"
 
-- name: Resolve 5G profile file
-  set_fact:
-    resolved_fiveg_profile_file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
-
-- name: Load 5G profile
-  include_vars:
-    file: "{{ resolved_fiveg_profile_file }}"
+- name: Load the resolved network profile
+  ansible.builtin.include_vars:
+    file: "{{ network_profile_file }}"
     name: fiveg
 
-- name: Report the active 5G profile
-  debug:
+- name: Report the active network profile
+  ansible.builtin.debug:
     msg:
-      - "Using 5G profile: {{ fiveg_profile | default('default') }}"
+      - "Using network profile: {{ network_profile }}"
       - "PLMN: {{ fiveg.plmn.mcc }}{{ fiveg.plmn.mnc }}"
       - "TAC: {{ fiveg.plmn.tac }}"
 
-- name: Initialize gnb_slices and amf_slices
-  set_fact:
+- name: Initialize gNB and AMF slice lists
+  ansible.builtin.set_fact:
     gnb_slices: []
     amf_slices: []
 
-- name: Map slices strictly for gNB and AMF
-  set_fact:
+- name: Map network slices strictly for gNB and AMF
+  ansible.builtin.set_fact:
     gnb_slices: "{{ (gnb_slices | default([])) + [ slice_entry ] }}"
     amf_slices: "{{ (amf_slices | default([])) + [ slice_entry ] }}"
   loop: "{{ fiveg.slices }}"
@@ -93,7 +87,7 @@
     fail_msg: Refusing to deploy srsRAN with an enabled or broadly bound remote-control listener.
 
 - name: Ensure values file has node constraints
-  blockinfile:
+  ansible.builtin.blockinfile:
     path: "{{ values_file }}"
     marker: "# {mark} ANSIBLE MANAGED NODE SELECTOR"
     insertafter: EOF

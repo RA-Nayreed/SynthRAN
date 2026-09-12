@@ -28,23 +28,20 @@
     state: file
   become: true
 
-
-- name: Load active 5G profile
+- name: Load resolved network profile
   ansible.builtin.include_vars:
-    file: >-
-      {{ fiveg_profile_file |
-         default(playbook_dir ~ '/../group_vars/all/5g_profile_' ~ (fiveg_profile | default('default')) ~ '.yaml') }}
+    file: "{{ network_profile_file }}"
     name: fiveg
 
 - name: Validate PLMN
-  assert:
+  ansible.builtin.assert:
     that:
       - fiveg.plmn.mcc is defined
       - fiveg.plmn.mnc is defined
       - fiveg.plmn.tac is defined
 
 - name: Validate slices
-  assert:
+  ansible.builtin.assert:
     that:
       - slice.name is defined
       - slice.sst is defined
@@ -54,16 +51,13 @@
     loop_var: slice
 
 - name: Validate UE slice references
-  assert:
+  ansible.builtin.assert:
     that:
       - ue.value.slice in fiveg.slices | map(attribute='name') | list
   loop: "{{ fiveg.ues | dict2items }}"
   loop_control:
     loop_var: ue
 
-# ============================================================
-# Dispatch to core-specific config
-# ============================================================
 - name: Configure ueransim for open5gs
   ansible.builtin.include_tasks: config_open5gs.yml
   when: core == 'open5gs'
@@ -74,7 +68,6 @@
   vars:
     ueransim_network: "{{ ueransim_free5gc_network }}"
 
-# Retrieve ueransim repo for oai
 - name: Remove existing free5gc directory to ensure clean state
   ansible.builtin.file:
     path: "{{ free5gc_repo_dest }}"
@@ -122,4 +115,3 @@
   when: core == 'oai'
   vars:
     ueransim_network: "{{ ueransim_oai_network }}"
-

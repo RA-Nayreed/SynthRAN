@@ -257,7 +257,7 @@ def main(argv=None):
         "ran": "srsRAN" if d["ran"].lower() == "srsran" else d["ran"],
         "rru": "rfsim" if d["platform"] == "rfsim" else d.get("ru", d["platform"]),
         "platform": d["platform"],
-        "network_profile": "resolved",
+        "network_profile": profile_name,
         "network_profile_file": str(effective_profile_path.resolve()),
         "core_node_name": nodes["core"],
         "ran_node_name": nodes["ran"],
