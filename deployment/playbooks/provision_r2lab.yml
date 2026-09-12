@@ -47,7 +47,7 @@
         modification_time: preserve
       when: platform == 'r2lab'
 
-    - name: Run the pinned upstream R2Lab UE setup with host verification enforced
+    - name: Power and verify the selected R2Lab UEs
       ansible.builtin.include_role:
         name: r2lab/ue/setup
         apply:
@@ -56,16 +56,26 @@
             SYNTHRAN_SSH_KNOWN_HOSTS: "{{ synthran_nested_ssh_dir }}/known_hosts"
       when: platform == 'r2lab'
 
-    - name: Load the resolved network profile for R2Lab UE slice configuration
+    - name: Require every selected R2Lab UE to be reachable before modem initialization
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - failed_ues | default([]) | length == 0
+        fail_msg: >-
+          Selected R2Lab UEs are not reachable after power-up: {{ failed_ues | default([]) }}.
+          Refusing to continue with a partial UE set.
+      when: platform == 'r2lab'
+
+    - name: Load the resolved network profile for R2Lab UE configuration
       ansible.builtin.include_vars:
         file: "{{ network_profile_file }}"
       when: platform == 'r2lab'
 
-    - name: Apply the configured DNN and S-NSSAI to each reachable QHAT
+    - name: Initialize each selected R2Lab UE with its configured DNN and S-NSSAI
       vars:
         ue_profile: "{{ ues[item] }}"
         ue_slice: "{{ slices | selectattr('name', 'equalto', ue_profile.slice) | first }}"
-        qhat_nssai: >-
+        ue_nssai: >-
           {{ ue_slice.sst if (ue_slice.sd | string | upper) == 'EMPTY'
              else ue_slice.sst ~ '.' ~ ue_slice.sd }}
       ansible.builtin.shell: >-
@@ -74,27 +84,61 @@
         -o UserKnownHostsFile={{ synthran_nested_ssh_dir }}/known_hosts
         root@{{ item }}
         'qhat-init --mode={{ hostvars[item].mode | default("default") }}
-        --dnn={{ ue_slice.dnn }} --nssai={{ qhat_nssai }}'
+        --dnn={{ ue_slice.dnn }} --nssai={{ ue_nssai }}'
       args:
         executable: /bin/bash
-      loop: "{{ reachable_ues | default([]) | select('match', '^qhat') | list }}"
+      loop: "{{ reachable_ues | default([]) }}"
       loop_control:
-        label: "{{ item }} -> {{ ue_profile.slice }} / {{ ue_slice.dnn }} / {{ qhat_nssai }}"
-      register: synthran_qhat_profile_init
+        label: "{{ item }} -> {{ ue_profile.slice }} / {{ ue_slice.dnn }} / {{ ue_nssai }}"
       changed_when: true
       when:
         - platform == 'r2lab'
         - item in ues
 
-    - name: Fail when a requested QHAT could not be initialized with its configured slice
-      ansible.builtin.assert:
-        quiet: true
-        that:
-          - item.rc == 0
-        fail_msg: >-
-          R2Lab QHAT {{ item.item }} could not be initialized with the DNN/S-NSSAI
-          selected by the active network profile.
-      loop: "{{ synthran_qhat_profile_init.results | default([]) }}"
+    - name: Return initialized R2Lab UEs to a detached state before connection
+      vars:
+        ue_stop_cmd: >-
+          {{ 'stop.sh'
+             if (hostvars[item].mode | default('mbim', true)) == 'mbim'
+             else 'python3 /usr/local/bin/ci_ctl_qtel.py '
+                  ~ (hostvars[item].at_port | default('/dev/ttyUSB3')) ~ ' detach' }}
+      ansible.builtin.shell: >-
+        ssh -o ConnectTimeout=5 -o BatchMode=yes
+        -o StrictHostKeyChecking=accept-new
+        -o UserKnownHostsFile={{ synthran_nested_ssh_dir }}/known_hosts
+        root@{{ item }} '{{ ue_stop_cmd }}'
+      args:
+        executable: /bin/bash
+      loop: "{{ reachable_ues | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      register: synthran_r2lab_detach
+      changed_when: true
+      failed_when: false
+      when: platform == 'r2lab'
+
+    - name: Check initialized R2Lab UE state without attaching it
+      ansible.builtin.shell: >-
+        ssh -o ConnectTimeout=5 -o BatchMode=yes
+        -o StrictHostKeyChecking=accept-new
+        -o UserKnownHostsFile={{ synthran_nested_ssh_dir }}/known_hosts
+        root@{{ item }} 'qhat-check'
+      args:
+        executable: /bin/bash
+      loop: "{{ reachable_ues | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      register: synthran_r2lab_init_checks
+      changed_when: false
+      failed_when: false
+      when: platform == 'r2lab'
+
+    - name: Report initialized R2Lab UE state
+      ansible.builtin.debug:
+        msg:
+          - "UE: {{ item.item }}"
+          - "{{ item.stdout_lines | default([]) }}"
+      loop: "{{ synthran_r2lab_init_checks.results | default([]) }}"
       loop_control:
         label: "{{ item.item | default('unknown') }}"
       when:
