@@ -9,9 +9,12 @@
 
 - name: Download Kubernetes GPG key
   ansible.builtin.shell: |
+    set -euo pipefail
     curl -fsSL "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor }}/deb/Release.key" | \
       gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    executable: /bin/bash
   become: true
   when: ansible_facts.os_family == 'Debian'
 
@@ -31,17 +34,8 @@
   become: true
   when: ansible_facts.os_family == 'Debian'
 
-- name: Release previous Kubernetes package holds before an exact upgrade
-  ansible.builtin.dpkg_selections:
-    name: "{{ item }}"
-    selection: install
-  loop:
-    - kubelet
-    - kubeadm
-    - kubectl
-  become: true
-  when: ansible_facts.os_family == 'Debian'
-
+# APT handles both fresh installation and held upgrades. dpkg_selections cannot
+# unhold a package that a freshly booted image has never installed.
 - name: Install exact supported kubelet, kubeadm, and kubectl versions
   ansible.builtin.apt:
     name:
@@ -51,6 +45,7 @@
     state: present
     update_cache: no
     allow_change_held_packages: true
+    force_apt_get: true
   become: true
   register: k8s_install
   retries: 5
