@@ -109,8 +109,6 @@ def render_inventory(
     faraday_known_hosts: Path,
 ) -> dict:
     nodes = d["nodes"]
-    # Upstream delegates to this inventory name; an alias such as faraday_host
-    # silently loses the configured connection variables on delegated tasks.
     children = {}
     for group, name in [
         ("core_node", nodes["core"]),
@@ -200,14 +198,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
     parser.add_argument("run_dir", type=Path)
-    parser.add_argument("reuse", choices=("true", "false"))
-    parser.add_argument("resume_contract", nargs="?", default="")
     args = parser.parse_args(argv)
     c = yaml.safe_load(args.config.read_text())
     d = c["deployment"]
     nodes, ues = d["nodes"], d["ues"]
-    workload_only = args.reuse == "true"
-    resume_source_contract = args.resume_contract
     if d["ran"].lower() == "srsran" and d["platform"] == "rfsim" and len(ues) > 635:
         raise ValueError("srsRAN RFSIM exceeds the available TCP port range")
     if d["platform"] == "r2lab" and d["ran"].lower() == "ueransim":
@@ -271,8 +265,6 @@ def main(argv=None):
         n2.pop("amf_ip_split")
     topology["contract_version"] = topologies["schema_version"]
     manifest = build_manifest(c, profile, ue_map, topology)
-    # Arbitrary Ansible/host override values can include credentials. Preserve
-    # their identity contribution without publishing the values themselves.
     selected = manifest["deployment"]
     for key in ("ansible_vars", "host_vars"):
         raw = selected.pop(key, {})
@@ -301,15 +293,8 @@ def main(argv=None):
         "synthran_topology": topology,
         "synthran_deployment_contract": manifest,
         "synthran_deployment_contract_file": str(manifest_path.resolve()),
-        "synthran_workload_only": workload_only,
         "synthran_private_dir": str(private_dir.resolve()),
     }
-    for option in ("fhi72", "f3_ran", "aw2s"):
-        variables.setdefault(option, False)
-    if resume_source_contract:
-        variables["synthran_resume_source_contract"] = json.loads(
-            Path(resume_source_contract).read_text()
-        )
     private_vars_path = private_dir / "deployment-vars.yml"
     private_vars_path.write_text(yaml.safe_dump(variables, sort_keys=False))
     private_vars_path.chmod(0o600)
@@ -317,15 +302,12 @@ def main(argv=None):
         yaml.safe_dump(redacted(variables), sort_keys=False)
     )
 
-    # Supply the raw resolved profile only inside the private execution tree.
-    # The shareable results contain a redacted profile instead.
     context = private_dir / "ansible"
     shutil.copytree("deployment/playbooks", context / "playbooks", dirs_exist_ok=True)
     shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
     shutil.copyfile(
         effective_profile_path, context / "group_vars/all/5g_profile_resolved.yaml"
     )
-
     if not (context / "roles").exists():
         (context / "roles").symlink_to(
             Path("deployment/roles").resolve(), target_is_directory=True
