@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "synthran"
 version = "0.1.0"
-description = "Energy-aware 6G modeling over real 5G user planes"
+description = "Reproducible 5G testbed deployment and research experimentation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "BSD-3-Clause"
