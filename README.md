@@ -9,9 +9,9 @@ For R2Lab, the hardware files listed in
 [`SOURCE.json`](third_party/sopnode-5g-ansible/SOURCE.json) remain pinned from the
 `sopnode/5g_ansible` implementation where exact upstream parity is useful.
 SynthRAN narrows the physical-radio deployment contract to the N300 and N320
-networked USRP paths and supplies the inventory, selected 5G profile,
-reservations, deployment orchestration, radio/gNB integration, and live
-deployment attestation.
+networked USRP paths and supplies inventory, the reusable UE catalog, network
+profiles, reservations, deployment orchestration, radio/gNB integration, and
+live deployment attestation.
 
 ## Deploy a testbed
 
@@ -33,17 +33,24 @@ An explicit testbed preset can be used directly or as interactive defaults:
 clean up, or finalize an experiment. If a legacy configuration still contains
 an `experiment:` block, the launcher strips it before deployment resolution.
 
-The interactive wizard asks for the core, RAN, platform/radio, SOP nodes,
-reservation settings, 5G profile, and UE set. 5G profiles are discovered at
-runtime from:
+The interactive wizard asks for the core, RAN, platform/radio, SOP nodes and UE
+set. UE identities are discovered from the platform-independent catalog:
 
 ```text
-deployment/group_vars/all/5g_profile_*.yaml
+deployment/group_vars/all/ue_catalog.yaml
 ```
 
-They are presented as numbered choices. For R2Lab, physical QHAT/QFIT UE choices
-are then read from the selected profile rather than from a duplicated hard-coded
-list in the launcher. The supported R2Lab radio choices are `n300` and `n320`.
+The selected platform filters that catalog to the usable RFSIM or R2Lab UEs.
+The wizard then discovers network profiles at runtime from:
+
+```text
+deployment/group_vars/all/network_profile_*.yaml
+```
+
+A network profile owns PLMN, DNN, slice, QoS, and subscriber-security policy.
+Each selected UE is explicitly assigned to one slice exposed by the selected
+network profile. UE identity/transport therefore remains independent from
+network policy. The supported R2Lab radio choices are `n300` and `n320`.
 
 `--no-reservation` skips POS/R2Lab booking while normal infrastructure setup
 still runs. `--dry-run` resolves the testbed configuration and rendered inventory
@@ -60,13 +67,17 @@ deployment:
   ran: srsran
   platform: r2lab
   ru: n320
-  profile: default
+  network_profile: default
   nodes:
     core: sopnode-f2
     ran: sopnode-f3
     broker: sopnode-f2
   ues:
     - qhat01
+    - qhat03
+  ue_slices:
+    qhat01: slice1
+    qhat03: slice2
   reservation:
     enabled: true
     duration_minutes: 120
@@ -78,9 +89,9 @@ deployment:
 
 Important deployment surfaces include:
 
-- `deployment.profile`: selects a bundled 5G profile.
-- `deployment.ues`: selected software or physical UEs.
-- `deployment.ue_profiles`: optional subscriber overrides.
+- `deployment.network_profile`: selects a bundled network policy.
+- `deployment.ues`: selects UE identities from `ue_catalog.yaml`.
+- `deployment.ue_slices`: explicitly assigns every selected UE to a slice in the selected network profile.
 - `deployment.host_vars.<host>`: connection/hardware settings such as
   `ansible_host`, `ip`, `cpu_low_latency`, and `netplan_config_file`.
 - `deployment.reservation`: SOP-node reservation policy.
