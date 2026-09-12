@@ -196,7 +196,7 @@ def classify_allocation(node, allocation):
     raise SystemExit(output.strip())
 
 
-def prepare_nodes(nodes, image, *, preserve_state=False):
+def prepare_nodes(nodes, image, *, ask_existing=False):
     allocation_states = {}
     for node in nodes:
         print(f"Allocating {node} for this deployment", flush=True)
@@ -205,15 +205,32 @@ def prepare_nodes(nodes, image, *, preserve_state=False):
         if allocation_states[node] == "already-active":
             print(f"Reusing the active allocation for {node}", flush=True)
 
+    existing_nodes = [
+        node for node in nodes if allocation_states[node] == "already-active"
+    ]
+    preserve_existing = False
+    if ask_existing and existing_nodes:
+        prepare_action = choice(
+            "Existing allocated nodes detected.\n\nHow should SynthRAN prepare them?",
+            [
+                "Reuse current node state",
+                "Reset/reimage nodes before deployment",
+            ],
+        )
+        preserve_existing = prepare_action == 1
+
+    preserved_nodes = []
+    reset_nodes = []
     for node in nodes:
-        if preserve_state and allocation_states[node] == "already-active":
+        if preserve_existing and allocation_states[node] == "already-active":
             print(
                 f"Preserving current image and node state on {node}; "
                 "skipping POS image selection and reset",
                 flush=True,
             )
+            preserved_nodes.append(node)
             continue
-        if preserve_state:
+        if ask_existing and allocation_states[node] != "already-active":
             print(
                 f"{node} has calendar coverage but no active allocation; "
                 "preparing it normally before deployment",
@@ -226,7 +243,8 @@ def prepare_nodes(nodes, image, *, preserve_state=False):
         )
         run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
         print(f"{node} finished its POS reset", flush=True)
-    return allocation_states
+        reset_nodes.append(node)
+    return allocation_states, preserved_nodes, reset_nodes
 
 
 def main():
@@ -311,17 +329,9 @@ def main():
             print(
                 f"Keeping the active SOP calendar reservation for {', '.join(selected)}"
             )
-            allocation_states = prepare_nodes(selected, image, preserve_state=True)
-            preserved_nodes = [
-                node
-                for node in selected
-                if allocation_states.get(node) == "already-active"
-            ]
-            reset_nodes = [
-                node
-                for node in selected
-                if allocation_states.get(node) != "already-active"
-            ]
+            allocation_states, preserved_nodes, reset_nodes = prepare_nodes(
+                selected, image, ask_existing=True
+            )
             deployment["nodes"] = nodes
             write_resolved_scenario(path, scenario)
             Path(args.run_dir, "pos-selection.json").write_text(
@@ -419,7 +429,7 @@ def main():
     print(
         f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}"
     )
-    allocation_states = prepare_nodes(selected, image)
+    allocation_states, _, reset_nodes = prepare_nodes(selected, image)
     deployment["nodes"] = nodes
     write_resolved_scenario(path, scenario)
     Path(args.run_dir, "pos-selection.json").write_text(
@@ -431,7 +441,7 @@ def main():
                 "coverage_start": coverage_start.isoformat(),
                 "coverage_end": coverage_end.isoformat(),
                 "allocation_states": allocation_states,
-                "reset_nodes": selected,
+                "reset_nodes": reset_nodes,
             },
             indent=2,
         )
