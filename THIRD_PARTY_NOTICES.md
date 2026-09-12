@@ -15,18 +15,19 @@ In particular, the root BSD 3-Clause license must not be read as creating a
 license grant for upstream-derived material whose original project did not
 publish one.
 
-## Amber-derived Ambient-IoT model (`Experiment/model/`)
+## Amber-derived Ambient-IoT model (`synthran/model/`)
 
-SynthRAN's native Ambient-IoT scientific primitives in `Experiment/model/`
-originated from the [Amber](https://github.com/RA-Nayreed/Amber) 6G Ambient-IoT
+SynthRAN's Ambient-IoT scientific primitives in `synthran/model/` originated
+from the [Amber](https://github.com/RA-Nayreed/Amber) 6G Ambient-IoT
 discrete-event simulator by Mirana Manafova. They were imported from the exact
 commit recorded in `third_party/amber/SOURCE.json` and are now maintained and
 modified as part of SynthRAN rather than as an upstream-compatible package.
 
 The derived files remain redistributed under the BSD 3-Clause License. The
 unmodified upstream license is preserved below and at
-`third_party/amber/LICENSE`. SynthRAN-original orchestration, configuration,
-protocol, evidence, and bridge code lives under `Experiment/ambient_iot/`.
+`third_party/amber/LICENSE`. SynthRAN-specific orchestration, scenario handling,
+evidence, and protocol integration live primarily under `synthran/ambient_iot/`
+and related experiment-support modules.
 
 Copyright and license conditions are preserved below.
 
