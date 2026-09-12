@@ -6,7 +6,8 @@ title: SynthRAN
 type: software
 version: 0.1.0
 authors:
-  - name: SynthRAN contributors
+  - family-names: Nayreed
+    given-names: Rezwan Ahmad
 abstract: >-
   SynthRAN is research software for Ambient-IoT modelling and reproducible 5G
   experimentation. It combines energy-aware Ambient-IoT source modelling with
