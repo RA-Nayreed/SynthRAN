@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: >-
+  If you use SynthRAN in research, please cite the exact software version or
+  Git commit used for the experiment.
+title: SynthRAN
+type: software
+version: 0.1.0
+authors:
+  - family-names: Nayreed
+    given-names: Rezwan Ahmad
+abstract: >-
+  SynthRAN is research software for Ambient-IoT modelling and reproducible 5G
+  experimentation. It combines energy-aware Ambient-IoT source modelling with
+  virtual and physical mobile-network deployment, verification, provenance and
+  an evolving end-to-end experiment workflow.
+repository-code: https://github.com/RA-Nayreed/SynthRAN
+url: https://github.com/RA-Nayreed/SynthRAN
+keywords:
+  - Ambient IoT
+  - energy harvesting
+  - backscatter
+  - 5G
+  - RAN
+  - R2Lab
+  - research software
+  - reproducibility

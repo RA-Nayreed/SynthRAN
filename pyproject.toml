@@ -5,11 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "synthran"
 version = "0.1.0"
-description = "Energy-aware 6G modeling over real 5G user planes"
+description = "Ambient-IoT modelling and reproducible 5G research experimentation"
 readme = "README.md"
+authors = [{ name = "Rezwan Ahmad Nayreed" }]
 requires-python = ">=3.11"
-license = "BSD-3-Clause"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "third_party/NOTICE.md", "third_party/amber/LICENSE"]
 dependencies = ["PyYAML==6.0.3"]
 
 [project.optional-dependencies]
@@ -23,4 +24,4 @@ synthran = ["data/*.csv", "configs/*.yml", "experiment_runtime/**/*.yml", "exper
 
 [tool.setuptools.packages.find]
 include = ["synthran", "synthran.*"]
-exclude = ["deployment*", "scenarios*", "results*", "third_party*", "Experiment*"]
+exclude = ["deployment*", "results*", "third_party*", "Experiment*"]

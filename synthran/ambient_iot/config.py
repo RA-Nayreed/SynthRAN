@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Validated, timestamp-aware harvesting inputs."""
 
 from __future__ import annotations

@@ -8,18 +8,18 @@
   "imported_on": "2026-09-03",
   "license": "BSD-3-Clause",
   "license_file": "third_party/amber/LICENSE",
-  "derived_path": "Experiment/model/",
+  "derived_path": "synthran/model/",
   "upstream_package_path": "amber/",
   "local_patches": [
     {
-      "file": "Experiment/model/propagation.py",
+      "file": "synthran/model/propagation.py",
       "summary": "Made the matplotlib import optional (try/except) so propagation and its transitive consumers can run in headless model environments without matplotlib.",
-      "reason": "SynthRAN's model-run path (Experiment.workload.trace.generate) must not require plotting dependencies at import time."
+      "reason": "SynthRAN's model-run path must not require plotting dependencies at import time."
     }
   ],
   "notes": [
-    "The imported source is now maintained as SynthRAN-native code under Experiment/model/.",
+    "The imported source is now maintained as SynthRAN-integrated code under synthran/model/.",
     "This record preserves origin and licensing; it does not define an upstream synchronization workflow.",
-    "SynthRAN orchestration code lives under Experiment/ambient_iot/ (see docs/ambient-iot.md)."
+    "SynthRAN-specific Ambient-IoT orchestration and integration live primarily under synthran/ambient_iot/."
   ]
 }
