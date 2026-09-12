@@ -7,7 +7,7 @@ from .profile_validation import validate_profile, validate_ue_profile_overrides
 
 SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
-SUPPORTED_PLATFORMS = {"rfsim", "r2lab", "physical"}
+SUPPORTED_PLATFORMS = {"rfsim", "r2lab"}
 SUPPORTED_R2LAB_RADIOS = {"n300", "n320"}
 _TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
 _INSECURE_SSH = re.compile(
@@ -78,7 +78,10 @@ def load_scenario(path: str | Path) -> dict:
     if str(dep.get("ran", "")).lower() not in SUPPORTED_RANS:
         raise ValueError("unsupported RAN")
     if dep.get("platform") not in SUPPORTED_PLATFORMS:
-        raise ValueError("unsupported platform")
+        raise ValueError(
+            "unsupported platform; supported platforms are: "
+            + ", ".join(sorted(SUPPORTED_PLATFORMS))
+        )
     if dep.get("platform") == "r2lab" and dep.get("ru") not in SUPPORTED_R2LAB_RADIOS:
         raise ValueError(
             "unsupported R2Lab radio; supported radios are: "
