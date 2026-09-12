@@ -37,22 +37,43 @@
       set_fact:
         current_ue_slice: "{{ fiveg.ues[ue_item].slice }}"
 
-    - name: Extract DNN for slice
+    - name: Resolve selected slice definition
       set_fact:
-        current_dnn: "{{ (fiveg.slices | selectattr('name', 'equalto', current_ue_slice) | map(attribute='dnn') | first) }}"
+        current_slice_config: "{{ fiveg.slices | selectattr('name', 'equalto', current_ue_slice) | first }}"
+
+    - name: Extract DNN and normalize the selected slice SD
+      set_fact:
+        current_dnn: "{{ current_slice_config.dnn }}"
+        current_slice_sd: "{{ current_slice_config.sd | string | upper }}"
+
+    - name: Require a supported slice-qualified MBIM context convention
+      assert:
+        quiet: true
+        that:
+          - ue_mode != 'mbim' or current_slice_sd in ['EMPTY', 'FFFFFF'] or (current_slice_config.sst | int) == 1
+        fail_msg: >-
+          R2Lab MBIM slice selection is only defined for the observed Quectel
+          SST=1 context convention. Refusing to drop non-empty SD {{ current_slice_sd }}
+          from SST {{ current_slice_config.sst }} for {{ ue_item }}.
+
+    - name: Resolve the modem access string for the selected slice
+      set_fact:
+        mbim_access_string: >-
+          {{ current_dnn ~ '_EMBB' ~ current_slice_sd
+             if ue_mode == 'mbim'
+                and current_slice_sd not in ['EMPTY', 'FFFFFF']
+                and (current_slice_config.sst | int) == 1
+             else current_dnn }}
 
     - name: "Get UPF IP for this UE"
       set_fact:
-        upf_ip: >-
-          {{
-            (fiveg.slices
-             | selectattr('name', 'equalto', current_ue_slice)
-             | first).ip_prefix
-          }}.1
+        upf_ip: "{{ current_slice_config.ip_prefix }}.1"
 
     - name: "Debug: Show mode and UPF IP for current UE"
       debug:
-        msg: "UE {{ ue_item }} -> phone={{ is_phone }} mode={{ ue_mode }} UPF IP={{ upf_ip }}"
+        msg: >-
+          UE {{ ue_item }} -> phone={{ is_phone }} mode={{ ue_mode }}
+          DNN={{ current_dnn }} MBIM-access={{ mbim_access_string }} UPF={{ upf_ip }}
 
     # =====================================================================
     # PHONE bring-up (adb over the tethering Mac, same SSH path as the other
@@ -171,11 +192,14 @@
         # -----------------------------------------------------------------
         # MBIM bring-up
         # -----------------------------------------------------------------
+        # qhat-init keeps the plain DNN context and, for SST=1 with a real SD,
+        # exposes the slice-qualified context as <dnn>_EMBB<sd>. Selecting the
+        # plain DNN loses the SD and the network sees FFFFFF instead.
         - name: "MBIM: stop.sh + start.sh on {{ ue_item }} if wwan0 not reachable"
           shell: >
             ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no
             root@{{ ue_item }}
-            'stop.sh; start.sh -F {{ current_dnn }}'
+            'stop.sh; start.sh -F {{ mbim_access_string }}'
           when:
             - ue_mode == 'mbim'
             - current_dnn is defined
