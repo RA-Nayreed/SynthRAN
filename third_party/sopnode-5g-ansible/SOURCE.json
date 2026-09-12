@@ -17,7 +17,7 @@
     "Removed upstream roles and supporting content outside SynthRAN's supported deployment matrix.",
     "Adapted Kubernetes, networking, OAI, Open5GS, free5GC, srsRAN, UERANSIM, reservation, radio-power, and experiment orchestration where SynthRAN requires its own integration.",
     "N3xx physical-radio deployment is intentionally narrowed to the N300 and N320 paths; unsupported O-RAN RU preparation branches and assets are not retained.",
-    "The upstream-derived R2Lab UE connection role retains its modem attachment behavior but consumes SynthRAN's resolved network_profile_file instead of the removed upstream-style fiveg_profile path.",
+    "The upstream-derived R2Lab UE connection role consumes SynthRAN's resolved network_profile_file. For Quectel MBIM UEs on SST 1 slices with a non-empty SD, SynthRAN selects the slice-qualified modem access string (<dnn>_EMBB<sd>) produced by qhat-init instead of the plain DNN so the requested S-NSSAI is preserved; final acceptance remains read-only live-state verification.",
     "For platform=r2lab, selected cleanup, OAI N3xx IP-swap, and srsRAN N3xx deployment helper files remain byte-identical to this pinned upstream revision.",
     "SynthRAN adds the Ambient-IoT workload, MQTT transport, collection, logging, reconciliation, and only the minimal adapter needed to run those experiments over the upstream-managed R2Lab UE interface."
   ],
