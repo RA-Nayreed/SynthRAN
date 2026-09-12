@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  If you use SynthRAN in research, please cite the exact software version or
+  Git commit used for the experiment.
+title: SynthRAN
+type: software
+version: 0.1.0
+authors:
+  - name: SynthRAN contributors
+abstract: >-
+  SynthRAN is research software for configuring, provisioning, verifying, and
+  recording reproducible virtual and physical 5G testbeds, with an evolving
+  scientific experiment layer built on accepted deployments.
+repository-code: https://github.com/RA-Nayreed/SynthRAN
+url: https://github.com/RA-Nayreed/SynthRAN
+keywords:
+  - 5G
+  - research software
+  - RAN
+  - R2Lab
+  - reproducibility
+license: BSD-3-Clause
