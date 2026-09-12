@@ -4,7 +4,22 @@
 
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
-`Ambient IoT` · `Energy Harvesting` · `Backscatter` · `RFSIM` · `R2Lab` · `srsRAN` · `Open5GS` · `OAI`
+<p>
+  <img src="https://img.shields.io/badge/Ambient%20IoT-Research-7B61FF" alt="Ambient IoT">
+  <img src="https://img.shields.io/badge/Energy%20Harvesting-Model-2EA44F" alt="Energy Harvesting">
+  <img src="https://img.shields.io/badge/Backscatter-Radio-0A84FF" alt="Backscatter">
+  <img src="https://img.shields.io/badge/5G-Open%20RAN-6F42C1" alt="5G Open RAN">
+  <img src="https://img.shields.io/badge/RFSIM-Virtual-555555" alt="RFSIM">
+  <img src="https://img.shields.io/badge/R2Lab-Physical-D73A49" alt="R2Lab">
+</p>
+
+<p>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml"><img src="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL"></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/version-0.1.0-informational" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/status-research%20software-orange" alt="Research software">
+</p>
 
 </div>
 
@@ -112,14 +127,24 @@ Inspect the available launcher options with:
 
 The deployment workflow can select and prepare the mobile core, RAN, radio/platform, SOP-node placement, UE set, network profile, slice assignment and reservation settings. A caller may still provide an explicit deployment configuration with `--config <file>`, but SynthRAN no longer ships a second catalog of duplicated scenario presets.
 
-| Capability | Current repository direction |
-| :---: | :---: |
-| Virtual radio path | RFSIM-based software deployment |
-| Physical radio path | R2Lab with networked N300/N320 USRPs |
-| Mobile-core integrations | Open5GS, OAI and free5GC deployment code |
-| RAN integrations | srsRAN and retained OAI deployment components |
-| UE paths | Software UEs and supported physical modem paths |
-| Deployment evidence | Resolved configuration, logs, source revision and live attestation |
+<div align="center">
+<table>
+  <thead>
+    <tr>
+      <th align="center">Capability</th>
+      <th align="center">Current repository direction</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="center">Virtual radio path</td><td align="center">RFSIM-based software deployment</td></tr>
+    <tr><td align="center">Physical radio path</td><td align="center">R2Lab with networked N300/N320 USRPs</td></tr>
+    <tr><td align="center">Mobile-core integrations</td><td align="center">Open5GS, OAI and free5GC deployment code</td></tr>
+    <tr><td align="center">RAN integrations</td><td align="center">srsRAN and retained OAI deployment components</td></tr>
+    <tr><td align="center">UE paths</td><td align="center">Software UEs and supported physical modem paths</td></tr>
+    <tr><td align="center">Deployment evidence</td><td align="center">Resolved configuration, logs, source revision and live attestation</td></tr>
+  </tbody>
+</table>
+</div>
 
 The presence of an integration in the codebase is not treated as proof that every possible combination has passed a current physical acceptance run. Physical capability claims remain tied to actual run evidence.
 
@@ -247,16 +272,26 @@ SynthRAN/
 
 SynthRAN is pre-1.0 research software under active development. The package is currently versioned as `0.1.0`.
 
-| Area | Status |
-| :---: | :---: |
-| Ambient-IoT scientific model | Integrated and actively evolving |
-| Deterministic model/workload evidence | Implemented in the scientific stack |
-| Interactive 5G deployment | Active public workflow through `./deploy.sh` |
-| RFSIM path | Implemented in the deployment framework |
-| R2Lab N300/N320 path | Implemented; acceptance remains run-specific |
-| Deployment provenance | Persisted per deployment run |
-| Unified model → testbed experiment execution | Under construction |
-| Publication-grade experiment campaigns | Study-specific; no blanket completion claim |
+<div align="center">
+<table>
+  <thead>
+    <tr>
+      <th align="center">Area</th>
+      <th align="center">Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="center">Ambient-IoT scientific model</td><td align="center">Integrated and actively evolving</td></tr>
+    <tr><td align="center">Deterministic model/workload evidence</td><td align="center">Implemented in the scientific stack</td></tr>
+    <tr><td align="center">Interactive 5G deployment</td><td align="center">Active public workflow through <code>./deploy.sh</code></td></tr>
+    <tr><td align="center">RFSIM path</td><td align="center">Implemented in the deployment framework</td></tr>
+    <tr><td align="center">R2Lab N300/N320 path</td><td align="center">Implemented; acceptance remains run-specific</td></tr>
+    <tr><td align="center">Deployment provenance</td><td align="center">Persisted per deployment run</td></tr>
+    <tr><td align="center">Unified model → testbed experiment execution</td><td align="center">Under construction</td></tr>
+    <tr><td align="center">Publication-grade experiment campaigns</td><td align="center">Study-specific; no blanket completion claim</td></tr>
+  </tbody>
+</table>
+</div>
 
 ---
 
