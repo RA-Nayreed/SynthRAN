@@ -8,14 +8,18 @@ version: 0.1.0
 authors:
   - name: SynthRAN contributors
 abstract: >-
-  SynthRAN is research software for configuring, provisioning, verifying, and
-  recording reproducible virtual and physical 5G testbeds, with an evolving
-  scientific experiment layer built on accepted deployments.
+  SynthRAN is research software for Ambient-IoT modelling and reproducible 5G
+  experimentation. It combines energy-aware Ambient-IoT source modelling with
+  virtual and physical mobile-network deployment, verification, provenance and
+  an evolving end-to-end experiment workflow.
 repository-code: https://github.com/RA-Nayreed/SynthRAN
 url: https://github.com/RA-Nayreed/SynthRAN
 keywords:
+  - Ambient IoT
+  - energy harvesting
+  - backscatter
   - 5G
-  - research software
   - RAN
   - R2Lab
+  - research software
   - reproducibility
