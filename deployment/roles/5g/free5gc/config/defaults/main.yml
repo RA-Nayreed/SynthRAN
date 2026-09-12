@@ -5,7 +5,6 @@ free5gc_repo_branch: "499ad3d6b0c0c8879f49edcc174f306ee72a4ff4"
 free5gc_root: "{{ repo_dest }}/charts/free5gc"
 core_ns: "free5gc"
 free5gc_prepare_node: true
-fiveg_profile: "default"
 
 # SynthRAN installs and verifies this centrally before the Free5GC role. Keep
 # the legacy fallback fail-closed if the role is invoked outside that workflow.
