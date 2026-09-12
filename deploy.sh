@@ -140,8 +140,6 @@ R2Lab resource matrix
 5G radio units selectable by SynthRAN
   1) n300      USRP N300, SophiaNode fiber, 2x2 antenna
   2) n320      USRP N320, SophiaNode fiber, 4x4 antenna
-  3) benetel1  RAN550 O-RU, band n78, 4T4R, 100 MHz
-  4) benetel2  RAN550 O-RU, band n78, 4T4R, 100 MHz
 
 Physical 5G UEs are loaded from the selected 5G profile.
 Availability and health are verified during reservation and provisioning.
@@ -353,21 +351,15 @@ BANNER
     case "$DEFAULT_RU" in
       n300) DEFAULT_RU_CHOICE=1 ;;
       n320) DEFAULT_RU_CHOICE=2 ;;
-      benetel1) DEFAULT_RU_CHOICE=3 ;;
-      benetel2) DEFAULT_RU_CHOICE=4 ;;
       *) DEFAULT_RU=n300; DEFAULT_RU_CHOICE=1 ;;
     esac
     echo "Which radio unit do you want to use? (default: $DEFAULT_RU)"
     echo "1) n300"
     echo "2) n320"
-    echo "3) benetel1"
-    echo "4) benetel2"
-    read -r -p "Enter choice [1-4]: " RU_CHOICE
+    read -r -p "Enter choice [1-2]: " RU_CHOICE
     case "${RU_CHOICE:-$DEFAULT_RU_CHOICE}" in
       1) SELECTED_RU=n300 ;;
       2) SELECTED_RU=n320 ;;
-      3) SELECTED_RU=benetel1 ;;
-      4) SELECTED_RU=benetel2 ;;
       *) echo "Invalid RU choice" >&2; exit 2 ;;
     esac
 
