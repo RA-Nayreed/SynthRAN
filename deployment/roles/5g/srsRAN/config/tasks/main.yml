@@ -1,5 +1,4 @@
 ---
-
 - name: Check if ansible venv python exists
   ansible.builtin.stat:
     path: /opt/ansible-venv/bin/python
@@ -11,7 +10,7 @@
   when: venv_python.stat.exists
 
 - name: Load common variables
-  include_vars:
+  ansible.builtin.include_vars:
     file: "../../common/defaults/main.yml"
 
 - name: Remove existing srsRAN Helm directory to ensure clean state
@@ -24,8 +23,8 @@
     repo: "{{ repo_url }}"
     dest: "{{ repo_dest }}"
     version: "{{ version | default('main') }}"
-    update: no
-    force: yes
+    update: false
+    force: true
 
 - name: Ensure namespace exists
   kubernetes.core.k8s:
@@ -34,24 +33,32 @@
     name: "{{ ran_ns }}"
     state: present
 
-- name: Gather env facts (remote)
+- name: Gather env facts
   ansible.builtin.setup:
     filter: ansible_env
   when: ansible_env is not defined
 
 - name: Normalize repo_dest to remote HOME
   ansible.builtin.set_fact:
-    repo_dest_abs: "{{ (repo_dest | default('~/srsran-helm') | trim)
-                       | regex_replace('^~/?', ansible_env.HOME ~ '/') }}"
+    repo_dest_abs: "{{ (repo_dest | default('~/srsran-helm') | trim) | regex_replace('^~/?', ansible_env.HOME ~ '/') }}"
+    synthran_srsran_rru: "{{ rru | default('rfsim') | string | trim | lower }}"
 
-- name: Select values filename from rru
+- name: Require a supported srsRAN radio path
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_rru in ['rfsim', 'n300', 'n320']
+    fail_msg: >-
+      Unsupported srsRAN radio {{ synthran_srsran_rru }}; SynthRAN supports only
+      RFSIM, N300, and N320.
+
+- name: Select the exact values file for the supported radio
   ansible.builtin.set_fact:
-    values_filename: "{{ rru_file_map[(rru | default('rfsim') | string | trim | lower)] | default('values.yaml') }}"
+    values_filename: "{{ rru_file_map[synthran_srsran_rru] }}"
   vars:
     rru_file_map:
-      liteon: values-liteon.yaml
-      n300: values-n300-n78-20MHz.yaml # values-n300.yaml is original FDD, band 3
-      n320: values-n320-n78-20MHz.yaml # values-n320.yaml is original FDD, band 3
+      n300: values-n300-n78-20MHz.yaml
+      n320: values-n320-n78-20MHz.yaml
       rfsim: values-rfsim.yaml
 
 - name: Build absolute values_file path
@@ -64,12 +71,12 @@
       - "repo_dest_abs='{{ repo_dest_abs }}'"
       - "values_file='{{ values_file }}'"
 
-- name: Ensure values file exists (remote)
+- name: Ensure values file exists
   ansible.builtin.stat:
     path: "{{ values_file }}"
   register: values_stat
 
-- name: Fail if values file missing
+- name: Fail if values file is missing
   ansible.builtin.fail:
     msg: "Values file not found: {{ values_file }}"
   when: not values_stat.stat.exists
@@ -95,10 +102,10 @@
     - core_node_name != ran_node_name
 
 - name: Apply 5G profile to gNB and UE configs
-  include_tasks: apply_5g_profile.yaml
+  ansible.builtin.include_tasks: apply_5g_profile.yaml
 
 - name: Report the srsRAN AMF endpoint
-  debug:
+  ansible.builtin.debug:
     msg:
       - "amf_ip={{ srsran_network.n2.amf_ip | quote }}"
       - "amf_port={{ srsran_network.n2.amf_port | quote }}"
@@ -115,7 +122,7 @@
       .namespace = "{{ ran_ns }}"
     ' "{{ values_file }}"
 
-- name: Fix device_args for rfsim GNU Radio single-channel multi-UE
+- name: Fix device_args for RFSIM GNU Radio single-channel multi-UE
   ansible.builtin.shell: >
     {{ yq_bin_path }} eval -i '
       .gnbConfig.cell_cfg.channel_bandwidth_MHz = 20 |
@@ -135,10 +142,8 @@
 - name: Configure srsRAN interoperability with an OAI core
   ansible.builtin.include_tasks: oai_core_network.yml
   when: core == 'oai'
-  
-# --- rfsim only: UE list + srsue values file ---
 
-- name: Load 5G profile vars
+- name: Load 5G profile vars for RFSIM UEs
   ansible.builtin.include_vars:
     file: >-
       {{ fiveg_profile_file |
@@ -191,7 +196,7 @@
     label: "{{ item.device }}"
   when: rru == 'rfsim'
 
-- name: Write srsue values-rfsim.yaml
+- name: Write srsUE values-rfsim.yaml
   ansible.builtin.copy:
     dest: "{{ [repo_dest_abs, 'charts', 'srsue', 'values-rfsim.yaml'] | path_join }}"
     content: |
