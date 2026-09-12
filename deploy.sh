@@ -256,7 +256,13 @@ BANNER
   if [[ "$SELECTED_PLATFORM" == r2lab ]]; then
     show_r2lab_matrix
     echo
-    case "$DEFAULT_RU" in n300) DEFAULT_RU_CHOICE=1;; n320) DEFAULT_RU_CHOICE=2;; benetel1) DEFAULT_RU_CHOICE=3;; benetel2) DEFAULT_RU_CHOICE=4;; *) DEFAULT_RU_CHOICE=1;; esac
+    case "$DEFAULT_RU" in
+      n300) DEFAULT_RU_CHOICE=1 ;;
+      n320) DEFAULT_RU_CHOICE=2 ;;
+      benetel1) DEFAULT_RU_CHOICE=3 ;;
+      benetel2) DEFAULT_RU_CHOICE=4 ;;
+      *) DEFAULT_RU=n300; DEFAULT_RU_CHOICE=1 ;;
+    esac
     echo "Which radio unit do you want to use? (default: $DEFAULT_RU)"
     echo "1) n300"
     echo "2) n320"
