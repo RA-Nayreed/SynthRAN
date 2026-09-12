@@ -1,3 +1,6 @@
+# Copyright 2026 Rezwan Ahmad Nayreed
+# SPDX-License-Identifier: Apache-2.0
+
 """Forward unique generated samples only after authoritative reader decode."""
 
 from __future__ import annotations
@@ -58,7 +61,6 @@ def decoded_events(result, scenario):
                 raise ValueError(
                     f"payload_bytes={requested_bytes} cannot hold event metadata"
                 )
-            # JSON permits trailing whitespace; it also handles padding shorter than a new field.
             encoded += " " * missing
         events.append(
             {
