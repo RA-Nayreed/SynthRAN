@@ -110,16 +110,6 @@
     msg: "UE {{ item }} command: {{ qhat_command }}"
   loop: "{{ reachable_ues }}"
 
-- name: Configure rmem buffers
-  shell: |
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ item }} '
-      sysctl -w net.core.rmem_max=62500000;
-      sysctl -w net.core.rmem_default=62500000;
-    '
-  delegate_to: faraday.inria.fr
-  loop: "{{ reachable_ues }}"
-  when: rru in ['benetel1', 'benetel2']
-
 - name: Init UEs (qhat-init only, parallel)
   shell: >
     ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ item }}
