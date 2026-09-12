@@ -19,6 +19,3 @@ deployment:
     enabled: true
     duration_minutes: 120
     image: ubuntu-jammy
-experiment:
-  entrypoint: ../synthran/experiment_runner.py
-  config: ../synthran/configs/rfsim-sidecars-3ue.yml
