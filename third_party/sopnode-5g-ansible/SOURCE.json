@@ -17,13 +17,13 @@
     "Removed upstream roles and supporting content outside SynthRAN's supported deployment matrix.",
     "Adapted Kubernetes, networking, OAI, Open5GS, free5GC, srsRAN, UERANSIM, reservation, radio-power, and experiment orchestration where SynthRAN requires its own integration.",
     "N3xx physical-radio deployment is intentionally narrowed to the N300 and N320 paths; unsupported O-RAN RU preparation branches and assets are not retained.",
-    "For platform=r2lab, selected cleanup, UE connection, OAI N3xx IP-swap, and srsRAN N3xx deployment helper files remain byte-identical to this pinned upstream revision.",
+    "The upstream-derived R2Lab UE connection role retains its modem attachment behavior but consumes SynthRAN's resolved network_profile_file instead of the removed upstream-style fiveg_profile path.",
+    "For platform=r2lab, selected cleanup, OAI N3xx IP-swap, and srsRAN N3xx deployment helper files remain byte-identical to this pinned upstream revision.",
     "SynthRAN adds the Ambient-IoT workload, MQTT transport, collection, logging, reconciliation, and only the minimal adapter needed to run those experiments over the upstream-managed R2Lab UE interface."
   ],
   "comparison_note": "The pinned source_commit is authoritative for files listed in upstream_parity. Other retained deployment files are upstream-derived and may be modified by SynthRAN; no test files are retained.",
   "upstream_parity": [
     "roles/r2lab/cleanup/tasks/main.yml",
-    "roles/r2lab/ue/connect/tasks/main.yml",
     "roles/5g/oai/ran/n3xx_ip_swap/tasks/main.yml",
     "roles/5g/oai/ran/n3xx_ip_swap/meta/main.yml",
     "roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml"
