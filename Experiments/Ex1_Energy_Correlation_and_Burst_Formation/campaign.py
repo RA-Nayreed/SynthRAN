@@ -2,7 +2,7 @@
 """Experiment 1 v2 campaign phases.
 
 This module is an internal study implementation used by ``experiment.sh`` via
-``synthran.experiments``.  Public tuning switches intentionally live in neither
+``synthran.experiments``. Public tuning switches intentionally live in neither
 place: the versioned experiment manifest is the scientific design contract.
 """
 
@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from synthran.archive import archive_run
 from synthran.experiments import parallel_map
 from synthran.workload.bundle import validate_bundle
 from synthran.workload.trace import generate
@@ -252,6 +253,26 @@ def _spec_matches(path: Path, expected: dict[str, Any]) -> bool:
         return False
 
 
+def _archive_result(
+    root: Path,
+    destination: Path,
+    manifest: dict[str, Any],
+    phase: str,
+    name: str,
+) -> dict[str, Any]:
+    settings = manifest.get("archive", {})
+    if not bool(settings.get("enabled", False)):
+        return {"archive_status": "disabled"}
+    campaign_state = _read_json(root / "campaign.json")
+    return archive_run(
+        destination,
+        settings=settings,
+        campaign=campaign_state,
+        phase=phase,
+        run_id=name,
+    )
+
+
 def _run_task(task: dict[str, Any]) -> dict[str, Any]:
     manifest = _manifest()
     measurement = manifest["study"]["measurement"]
@@ -263,6 +284,7 @@ def _run_task(task: dict[str, Any]) -> dict[str, Any]:
         "schema_version": 1,
         "phase": phase,
         "name": name,
+        "condition": task.get("condition"),
         "sensor_count": int(task["sensor_count"]),
         "seed": int(task["seed"]),
         "energy": task["energy"],
@@ -278,7 +300,14 @@ def _run_task(task: dict[str, Any]) -> dict[str, Any]:
         )
         if not metrics_path.is_file():
             _write_json(metrics_path, result)
-        return {"name": name, "resumed": True, "spec": spec, "metrics": result}
+        archive = _archive_result(root, destination, manifest, phase, name)
+        return {
+            "name": name,
+            "resumed": True,
+            "spec": spec,
+            "metrics": result,
+            "archive": archive,
+        }
 
     staging_root = root / ".staging" / phase
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -311,7 +340,14 @@ def _run_task(task: dict[str, Any]) -> dict[str, Any]:
         _write_json(staging / "metrics.json", result)
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging.replace(destination)
-        return {"name": name, "resumed": False, "spec": spec, "metrics": result}
+        archive = _archive_result(root, destination, manifest, phase, name)
+        return {
+            "name": name,
+            "resumed": False,
+            "spec": spec,
+            "metrics": result,
+            "archive": archive,
+        }
     except BaseException:
         if tracemalloc.is_tracing():
             tracemalloc.stop()

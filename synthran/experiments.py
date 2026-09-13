@@ -23,6 +23,7 @@ from typing import Callable, Iterable, TypeVar
 
 import yaml
 
+from synthran.archive import archive_campaign_snapshot
 from synthran.scenario import load_scenario as load_testbed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,24 @@ _EX1_PHASE_HANDLERS = {
     "analysis": (
         "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analysis_v2",
         "run",
+    ),
+}
+_EX1_CAMPAIGN_ARCHIVE_FILES = {
+    "freeze": (
+        "campaign.json",
+        "qualification/qualification.json",
+        "calibration/power/summary.json",
+        "calibration/power/selection.json",
+        "calibration/population/summary.json",
+        "calibration/population/selection.json",
+        "frozen-design.json",
+    ),
+    "analysis": (
+        "campaign.json",
+        "frozen-design.json",
+        "runs/index.json",
+        "analysis/run-metrics.json",
+        "analysis/summary.json",
     ),
 }
 
@@ -356,6 +375,20 @@ def _phase_handler(experiment: str, phase: str):
     return handler
 
 
+def _archive_campaign_phase(root: Path, manifest: dict, phase: str) -> None:
+    files = _EX1_CAMPAIGN_ARCHIVE_FILES.get(phase)
+    settings = manifest.get("archive", {})
+    if files is None or not bool(settings.get("enabled", False)):
+        return
+    archive_campaign_snapshot(
+        root,
+        settings=settings,
+        phase=phase,
+        selected_files=files,
+    )
+    print(f"Archive           VERIFIED · campaign {phase} snapshot")
+
+
 def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
     manifest = _load_manifest(experiment)
     selected = _selected_phases(manifest, phase)
@@ -429,6 +462,7 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
             continue
         handler = _phase_handler(experiment, phase_id)
         result = handler(root)
+        _archive_campaign_phase(root, manifest, phase_id)
         _mark_phase(root, phase_id)
         if isinstance(result, dict) and result.get("status"):
             print(f"Phase status      {str(result['status']).upper()}")

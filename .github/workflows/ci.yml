@@ -166,7 +166,7 @@ jobs:
           import math
           from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import analysis_v2
 
-          assert analysis_v2._fano([0, 2, 0, 2]) == 1.0
+          assert math.isclose(analysis_v2._fano([0, 2, 0, 2]), 1.0)
           assert math.isclose(analysis_v2._gap_cv([0.0, 1.0, 3.0]), 1 / 3)
           bursts = analysis_v2._burst_stats([0.0, 0.5, 2.0, 2.4], 1.0)
           assert bursts["burst_count"] == 2, bursts
@@ -175,6 +175,87 @@ jobs:
           assert ci["n_pairs"] == 3
           assert ci["ci95"][0] is not None and ci["ci95"][1] is not None
           print("analysis metric contracts OK")
+          PY
+
+      - name: Validate immutable archive lifecycle
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from synthran import archive
+
+          settings = {
+              "enabled": True,
+              "backend": "s3",
+              "alias": "slices",
+              "bucket": "research-bucket",
+              "prefix": "SynthRAN/experiments/ex1",
+              "remote_verify": True,
+          }
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp) / "run"
+              root.mkdir()
+              science = root / "result.txt"
+              science.write_text("scientific evidence\n")
+              calls = {}
+              archive._mc_binary = lambda: "fake-mc"
+
+              def put(mc, local, remote, expected):
+                  assert mc == "fake-mc"
+                  assert archive._sha256(local) == expected
+                  calls[remote] = expected
+
+              archive._put_immutable = put
+              result = archive.archive_directory(
+                  root,
+                  settings=settings,
+                  experiment="ex1",
+                  campaign_id="campaign-ci",
+                  archive_kind="run",
+                  archive_id="run-ci",
+                  phase="confirmation",
+                  source_revision="deadbeef",
+                  remote_suffix="runs/run-ci",
+              )
+              assert result["archive_status"] == "VERIFIED", result
+              assert (root / "_ARCHIVED.json").is_file()
+              manifest = json.loads((root / "archive-manifest.json").read_text())
+              assert manifest["files"]["result.txt"]["sha256"] == archive._sha256(science)
+              assert not any("credential" in key.lower() for key in manifest)
+              assert any(path.endswith("/_ARCHIVED.json") for path in calls)
+
+              failed = Path(tmp) / "failed"
+              failed.mkdir()
+              retained = failed / "result.txt"
+              retained.write_text("retain me\n")
+              original = archive._sha256(retained)
+
+              def fail_put(*args, **kwargs):
+                  raise archive.ArchiveError("object store offline")
+
+              archive._put_immutable = fail_put
+              try:
+                  archive.archive_directory(
+                      failed,
+                      settings=settings,
+                      experiment="ex1",
+                      campaign_id="campaign-ci",
+                      archive_kind="run",
+                      archive_id="run-failed",
+                      phase="confirmation",
+                      source_revision="deadbeef",
+                      remote_suffix="runs/run-failed",
+                  )
+              except archive.ArchiveError:
+                  pass
+              else:
+                  raise AssertionError("archive failure did not propagate")
+              status = json.loads((failed / "archive-status.json").read_text())
+              assert status["archive_status"] == "FAILED", status
+              assert archive._sha256(retained) == original
+              assert not (failed / "_ARCHIVED.json").exists()
+              print("archive lifecycle contracts OK")
           PY
 
       - name: Parse versioned YAML and citation metadata
