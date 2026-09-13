@@ -12,6 +12,7 @@ from synthran.workload.trace import implementation_fingerprint
 from . import campaign
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
 
 
 def _canonical(value: Any) -> bytes:
