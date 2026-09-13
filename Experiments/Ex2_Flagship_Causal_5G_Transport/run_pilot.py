@@ -19,8 +19,7 @@ sys.path.insert(0, str(ROOT))
 from synthran.experiments import load_scenario
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
-PLAN = EXPERIMENT_DIR / "pilot-plan-v1.json"
-PILOT_DEFAULT = ROOT / "results/exp2-matched-trace/pilot-seed1001"
+PLAN = EXPERIMENT_DIR / "pilot-plan.json"
 SCENARIO_NAME = "transport.yml"
 
 
@@ -78,7 +77,7 @@ def deploy(args):
     return rd
 
 
-def ensure_inputs(pilot, exp1, plan, plan_path):
+def ensure_inputs(pilot, exp1_campaign, plan, plan_path):
     required = [
         pilot / "pilot-source-selection.json",
         pilot / "native/model/events.jsonl",
@@ -92,8 +91,8 @@ def ensure_inputs(pilot, exp1, plan, plan_path):
             [
                 sys.executable,
                 EXPERIMENT_DIR / "prepare_pilot.py",
-                "--experiment1-root",
-                exp1,
+                "--experiment1-campaign",
+                exp1_campaign,
                 "--plan",
                 plan_path,
                 "--output",
@@ -408,21 +407,34 @@ def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--experiment1-root",
-        type=Path,
-        default=ROOT / "results/exp1-energy-correlation",
-    )
+    ap.add_argument("--experiment1-campaign", type=Path)
     ap.add_argument("--plan", type=Path, default=PLAN)
-    ap.add_argument("--pilot-root", type=Path, default=PILOT_DEFAULT)
+    ap.add_argument("--pilot-root", type=Path)
     ap.add_argument("--prepare-only", action="store_true")
     args = ap.parse_args()
 
     plan = json.loads(args.plan.read_text())
-    pilot = args.pilot_root.expanduser().resolve()
-    scenario = ensure_inputs(
-        pilot, args.experiment1_root.expanduser().resolve(), plan, args.plan.resolve()
+    selection = plan["source_selection"]
+    campaign = (
+        args.experiment1_campaign.expanduser().resolve()
+        if args.experiment1_campaign
+        else (
+            ROOT
+            / "results/experiments/ex1"
+            / selection["experiment_1_campaign_id"]
+        ).resolve()
     )
+    pilot = (
+        args.pilot_root.expanduser().resolve()
+        if args.pilot_root
+        else (
+            ROOT
+            / "results/exp2-matched-trace"
+            / selection["experiment_1_campaign_id"]
+            / "pilot"
+        ).resolve()
+    )
+    scenario = ensure_inputs(pilot, campaign, plan, args.plan.resolve())
 
     print("\nChecking the fixed prepared-workload contract.")
     deploy(

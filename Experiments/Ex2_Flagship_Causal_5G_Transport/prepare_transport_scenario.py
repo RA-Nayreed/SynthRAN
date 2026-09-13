@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from synthran.experiments import scientific_settings
 
-DEFAULT_PLAN = Path(__file__).with_name("pilot-plan-v1.json")
+DEFAULT_PLAN = Path(__file__).with_name("pilot-plan.json")
 
 
 def prepare(pilot_root: Path, output: Path, plan_path: Path = DEFAULT_PLAN) -> Path:

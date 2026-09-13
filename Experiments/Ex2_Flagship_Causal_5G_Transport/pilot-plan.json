@@ -3,14 +3,16 @@
   "phase": "transport-operating-point-pilot",
   "status": "frozen-before-transport-outcomes",
   "source_selection": {
+    "experiment_1_campaign_id": "20260913T124545847955Z",
+    "experiment_1_design_version": 2,
+    "experiment_1_source_revision": "2a2043781c2d11cf063914a64c24e8244d89191a",
     "experiment_1_condition": "knee-common",
-    "model_seed": 1001,
-    "energy_source": "lognormal",
-    "energy_correlation": "common",
-    "mean_power_w": 0.001,
-    "sensor_count": 32,
-    "duration_seconds": 60,
-    "selection_rationale": "first preregistered Experiment-1 confirmation seed; selected by ID rather than an observed burstiness, collision, freshness, or transport outcome"
+    "seed_policy": "first_frozen_confirmation_seed",
+    "require_completed_phases": [
+      "confirmation",
+      "analysis"
+    ],
+    "selection_rationale": "Use the first seed in the frozen Experiment-1 v2 confirmation cohort, selected by frozen identity before any Experiment-2 transport outcome is observed. Sensor population, energy operating point, source seed and bundle identity are read from the frozen v2 campaign rather than duplicated here."
   },
   "timing_interventions": {
     "variants": [
@@ -21,6 +23,8 @@
     "warmup_seconds": 10.0,
     "gap_permutation_seed": 101,
     "invariants": [
+      "Experiment-1 campaign identity",
+      "frozen-design SHA-256",
       "source bundle lineage",
       "event IDs",
       "event count",
@@ -88,8 +92,9 @@
     "purpose": "mechanism/measurement pilot only; not the final confirmation campaign",
     "base_port": 39101
   },
-  "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point before the matched timing confirmation campaign. Do not use this pilot to select a source trace based on transport outcomes.",
+  "pilot_objective": "Find and freeze a reproducible 5G competing-traffic operating point using a source bundle from the current frozen Experiment-1 v2 campaign before the matched timing confirmation campaign. Do not use transport outcomes to select the source trace.",
   "transport_sequence": [
+    "resolve and verify the frozen Experiment-1 v2 source bundle",
     "prepare immutable timing variants",
     "prepare fixed OAI+srsRAN RFSIM scenario with separate competing UE",
     "full native no-load qualification",
