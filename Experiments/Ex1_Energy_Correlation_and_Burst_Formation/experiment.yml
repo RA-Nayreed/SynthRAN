@@ -143,19 +143,6 @@ phases:
     produces:
       - analysis/
 
-archive:
-  enabled: true
-  backend: s3
-  alias: slices
-  bucket: ilabt.imec.be-project-post5g-beta
-  prefix: SynthRAN/experiments/ex1
-  upload_after_success: true
-  remote_verify: true
-  replay: if_available
-  credentials: external-mc-alias
-  overwrite: false
-  completion_marker: _ARCHIVED.json
-
 historical_campaign:
   status: preserved_reference_only
   path: results/exp1-energy-correlation
