@@ -2,6 +2,7 @@ name: Research / experiment proposal
 description: Propose a scientific study or experiment-layer extension
 labels:
   - research
+  - experiment
 body:
   - type: markdown
     attributes:
