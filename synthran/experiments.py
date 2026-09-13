@@ -2,14 +2,16 @@
 
 ``experiment.sh`` is the only user-facing experiment launcher. This module owns
 experiment manifests, scientific scenario loading, resource-aware parallelism,
-and the handoff to runtime implementations. Individual studies live under
-``Experiments/``.
+campaign identity, and the handoff to runtime implementations. Individual
+studies live under ``Experiments/``.
 """
 
 from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
+import json
 import math
 import os
 from pathlib import Path
@@ -26,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = {
     "ex1": ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml",
 }
+RESULTS_ROOT = ROOT / "results/experiments"
+ACTIVE_EXPERIMENT = ROOT / ".synthran/active-experiment.json"
 REQUIRED_SECTIONS = ("model", "mqtt", "devices")
 OPTIONAL_SECTIONS = ("measurement",)
 SCIENTIFIC_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
@@ -238,6 +242,83 @@ def _section(title: str) -> None:
     print("-" * len(title))
 
 
+def _source_revision() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _new_campaign(experiment: str, manifest: dict) -> Path:
+    campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    root = RESULTS_ROOT / experiment / campaign_id
+    root.mkdir(parents=True, exist_ok=False)
+    campaign = {
+        "schema_version": 1,
+        "campaign_id": campaign_id,
+        "experiment": experiment,
+        "design_version": manifest["design_version"],
+        "status": "active",
+        "source_revision": _source_revision(),
+        "completed_phases": [],
+    }
+    _write_json(root / "campaign.json", campaign)
+    ACTIVE_EXPERIMENT.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        ACTIVE_EXPERIMENT,
+        {
+            "schema_version": 1,
+            "status": "active",
+            "experiment": experiment,
+            "campaign_id": campaign_id,
+            "campaign_root": str(root),
+            "campaign_file": str(root / "campaign.json"),
+        },
+    )
+    return root
+
+
+def _active_campaign(experiment: str) -> Path:
+    if not ACTIVE_EXPERIMENT.is_file():
+        raise ValueError("no active experiment campaign; run qualification first")
+    endpoint = json.loads(ACTIVE_EXPERIMENT.read_text(encoding="utf-8"))
+    if endpoint.get("status") != "active" or endpoint.get("experiment") != experiment:
+        raise ValueError("active experiment state does not match the requested experiment")
+    root = Path(endpoint.get("campaign_root", "")).resolve()
+    campaign_file = root / "campaign.json"
+    if not campaign_file.is_file():
+        raise ValueError("active experiment campaign metadata is missing")
+    campaign = json.loads(campaign_file.read_text(encoding="utf-8"))
+    if (
+        campaign.get("status") != "active"
+        or campaign.get("campaign_id") != endpoint.get("campaign_id")
+        or campaign.get("experiment") != experiment
+    ):
+        raise ValueError("active experiment endpoint does not match campaign metadata")
+    return root
+
+
+def _mark_phase(root: Path, phase: str) -> None:
+    path = root / "campaign.json"
+    campaign = json.loads(path.read_text(encoding="utf-8"))
+    completed = list(campaign.get("completed_phases", []))
+    if phase not in completed:
+        completed.append(phase)
+    campaign["completed_phases"] = completed
+    _write_json(path, campaign)
+
+
 def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
     manifest = _load_manifest(experiment)
     selected = _selected_phases(manifest, phase)
@@ -283,17 +364,59 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
         print("dry-run")
 
 
+def execute(experiment: str, phase: str, *, verbose: bool) -> None:
+    manifest = _load_manifest(experiment)
+    selected = _selected_phases(manifest, phase)
+    if manifest["resource"].get("active_deployment_access") == "forbidden" and experiment == "ex1":
+        pass
+
+    root = (
+        _new_campaign(experiment, manifest)
+        if selected[0]["id"] == "qualification"
+        else _active_campaign(experiment)
+    )
+    _section("Campaign")
+    print(f"ID                {root.name}")
+    print(f"Results           {root.relative_to(ROOT)}")
+    print(f"Parallel workers  {automatic_worker_count()} available automatically")
+
+    for item in selected:
+        phase_id = item["id"]
+        _section(item["name"])
+        if experiment == "ex1" and phase_id == "qualification":
+            script = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py"
+            subprocess.run(
+                [sys.executable, str(script), "--output", str(root / "qualification")],
+                cwd=ROOT,
+                check=True,
+            )
+            _mark_phase(root, phase_id)
+            print("Qualification     PASSED")
+            continue
+        raise ValueError(
+            f"{manifest['display_name']} phase {phase_id!r} is not implemented yet; "
+            f"completed campaign evidence remains at {root.relative_to(ROOT)}"
+        )
+
+    if verbose:
+        _section("Campaign metadata")
+        print((root / "campaign.json").read_text(encoding="utf-8").rstrip())
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("command", choices=("plan",))
+    parser.add_argument("command", choices=("plan", "run"))
     parser.add_argument("--experiment", required=True)
     parser.add_argument("--phase", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
     try:
-        plan(args.experiment, args.phase, dry_run=args.dry_run, verbose=args.verbose)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+        if args.command == "plan" or args.dry_run:
+            plan(args.experiment, args.phase, dry_run=True, verbose=args.verbose)
+        else:
+            execute(args.experiment, args.phase, verbose=args.verbose)
+    except (OSError, ValueError, yaml.YAMLError, subprocess.CalledProcessError) as exc:
         print(f"Experiment error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

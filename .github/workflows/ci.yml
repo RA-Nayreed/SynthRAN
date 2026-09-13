@@ -33,7 +33,7 @@ jobs:
           bash -n experiment.sh
 
       - name: Compile Python sources
-        run: python -m compileall -q synthran
+        run: python -m compileall -q synthran Experiments
 
       - name: Validate project metadata
         run: |
@@ -49,16 +49,33 @@ jobs:
           print(f"validated pyproject.toml for {project['name']} {project['version']}")
           PY
 
-      - name: Install package and configuration parser
+      - name: Install package and qualification runtime
         run: |
           python -m pip install --disable-pip-version-check --no-deps -e .
-          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3 numpy==2.4.6 simpy==4.1.2
 
       - name: Import SynthRAN package
         run: python -c "import synthran; print('synthran import OK')"
 
       - name: Validate experiment planner
         run: python -m synthran.experiments plan --experiment ex1 --phase all --dry-run
+
+      - name: Run Experiment 1 qualification gate
+        run: |
+          python Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py \
+            --output "$RUNNER_TEMP/ex1-qualification"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "ex1-qualification/qualification.json").read_text()
+          )
+          assert result["status"] == "passed", result
+          assert result["checks_failed"] == [], result
+          print(f"qualification passed: {result['checks_passed']}/{result['checks_total']}")
+          PY
 
       - name: Parse versioned YAML and citation metadata
         run: |

@@ -182,7 +182,9 @@ EOF
   fi
 fi
 
-args=(plan --experiment "$EXPERIMENT" --phase "$PHASE")
+COMMAND=run
+$DRY_RUN && COMMAND=plan
+args=("$COMMAND" --experiment "$EXPERIMENT" --phase "$PHASE")
 $DRY_RUN && args+=(--dry-run)
 $VERBOSE && args+=(--verbose)
 
