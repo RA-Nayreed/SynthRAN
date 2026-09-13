@@ -49,7 +49,7 @@ jobs:
           print(f"validated pyproject.toml for {project['name']} {project['version']}")
           PY
 
-      - name: Install package and qualification runtime
+      - name: Install package and experiment runtime
         run: python -m pip install --disable-pip-version-check -e '.[experiment]'
 
       - name: Import SynthRAN package
@@ -73,6 +73,32 @@ jobs:
           assert result["status"] == "passed", result
           assert result["checks_failed"] == [], result
           print(f"qualification passed: {result['checks_passed']}/{result['checks_total']}")
+          PY
+
+      - name: Validate power-calibration selection contract
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import yaml
+
+          path = Path("Experiments/Ex1_Energy_Correlation_and_Burst_Formation/campaign.py")
+          spec = importlib.util.spec_from_file_location("ex1_campaign_ci", path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          manifest = yaml.safe_load(path.with_name("experiment.yml").read_text())
+          design = manifest["study"]["power_calibration"]
+          active = [0.08, 0.21, 0.49, 0.79, 0.94]
+          aggregates = [
+              {"mean_power_w": power, "active_fraction_mean": fraction}
+              for power, fraction in zip(design["candidate_mean_power_w"], active)
+          ]
+          result = module._select_power_points(aggregates, design)
+          selected = result["selected"]
+          assert selected["low"]["mean_power_w"] == 0.0005, result
+          assert selected["knee"]["mean_power_w"] == 0.001, result
+          assert selected["high"]["mean_power_w"] == 0.002, result
+          print("power calibration selection contract OK")
           PY
 
       - name: Parse versioned YAML and citation metadata

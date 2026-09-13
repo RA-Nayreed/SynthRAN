@@ -2,7 +2,7 @@
 
 ``experiment.sh`` is the only user-facing experiment launcher. This module owns
 experiment manifests, scientific scenario loading, resource-aware parallelism,
-campaign identity, and the handoff to runtime implementations. Individual
+campaign identity, and the handoff to study/runtime implementations. Individual
 studies live under ``Experiments/``.
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
+import importlib.util
 import json
 import math
 import os
@@ -309,6 +310,19 @@ def _active_campaign(experiment: str) -> Path:
     return root
 
 
+def _campaign(root: Path) -> dict:
+    return json.loads((root / "campaign.json").read_text(encoding="utf-8"))
+
+
+def _require_phase_dependencies(root: Path, item: dict) -> None:
+    completed = set(_campaign(root).get("completed_phases", []))
+    missing = [name for name in item.get("requires", []) if name not in completed]
+    if missing:
+        raise ValueError(
+            f"phase {item['id']} requires completed phase(s): {', '.join(missing)}"
+        )
+
+
 def _mark_phase(root: Path, phase: str) -> None:
     path = root / "campaign.json"
     campaign = json.loads(path.read_text(encoding="utf-8"))
@@ -317,6 +331,18 @@ def _mark_phase(root: Path, phase: str) -> None:
         completed.append(phase)
     campaign["completed_phases"] = completed
     _write_json(path, campaign)
+
+
+def _study_module(experiment: str):
+    if experiment != "ex1":
+        raise ValueError(f"no local study implementation for {experiment}")
+    path = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/campaign.py"
+    spec = importlib.util.spec_from_file_location("synthran_ex1_campaign", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"cannot load experiment implementation: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
@@ -367,9 +393,6 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
 def execute(experiment: str, phase: str, *, verbose: bool) -> None:
     manifest = _load_manifest(experiment)
     selected = _selected_phases(manifest, phase)
-    if manifest["resource"].get("active_deployment_access") == "forbidden" and experiment == "ex1":
-        pass
-
     root = (
         _new_campaign(experiment, manifest)
         if selected[0]["id"] == "qualification"
@@ -380,8 +403,10 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
     print(f"Results           {root.relative_to(ROOT)}")
     print(f"Parallel workers  {automatic_worker_count()} available automatically")
 
+    study = None
     for item in selected:
         phase_id = item["id"]
+        _require_phase_dependencies(root, item)
         _section(item["name"])
         if experiment == "ex1" and phase_id == "qualification":
             script = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py"
@@ -390,17 +415,35 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
                 cwd=ROOT,
                 check=True,
             )
+            result = json.loads(
+                (root / "qualification/qualification.json").read_text(encoding="utf-8")
+            )
+            if result.get("status") != "passed":
+                raise ValueError("Experiment 1 qualification did not pass")
             _mark_phase(root, phase_id)
             print("Qualification     PASSED")
             continue
+
+        study = study or _study_module(experiment)
+        if experiment == "ex1" and phase_id == "power-calibration":
+            selection = study.power_calibration(root)
+            _mark_phase(root, phase_id)
+            print(
+                "Calibration       PASSED · "
+                + ", ".join(
+                    f"{name}={row['mean_power_w'] * 1e6:g} µW"
+                    for name, row in selection["selected"].items()
+                )
+            )
+            continue
+
         raise ValueError(
-            f"{manifest['display_name']} phase {phase_id!r} is not implemented yet; "
-            f"completed campaign evidence remains at {root.relative_to(ROOT)}"
+            f"{manifest['display_name']} phase {phase_id!r} is not implemented yet"
         )
 
     if verbose:
-        _section("Campaign metadata")
-        print((root / "campaign.json").read_text(encoding="utf-8").rstrip())
+        _section("Campaign state")
+        print(json.dumps(_campaign(root), indent=2, sort_keys=True))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -412,8 +455,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan" or args.dry_run:
-            plan(args.experiment, args.phase, dry_run=True, verbose=args.verbose)
+        if args.command == "plan":
+            plan(args.experiment, args.phase, dry_run=args.dry_run, verbose=args.verbose)
         else:
             execute(args.experiment, args.phase, verbose=args.verbose)
     except (OSError, ValueError, yaml.YAMLError, subprocess.CalledProcessError) as exc:

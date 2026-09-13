@@ -25,6 +25,70 @@ execution:
     to the process. Scientific dependency barriers are never crossed to create
     additional concurrency, and no public worker-count argument is exposed.
 
+study:
+  scenario_template: scenario-template.yml
+  measurement:
+    duration_seconds: 60
+    warmup_seconds: 10
+    sensing_interval_ms: 1000
+  energy:
+    mode: environmental
+    source: lognormal
+    coefficient_of_variation: 1.0
+    sample_interval_s: 0.1
+    correlation_time_s: 5.0
+    interpolation: hold
+  sensor:
+    subcarrier_shift: 0
+  power_calibration:
+    sensor_count: 8
+    correlation: independent
+    candidate_mean_power_w:
+      - 0.00025
+      - 0.0005
+      - 0.001
+      - 0.002
+      - 0.004
+    seeds: [101, 102, 103, 104, 105]
+    target_active_fraction:
+      low: 0.20
+      knee: 0.50
+      high: 0.80
+    acceptance:
+      low_max_active_fraction: 0.35
+      knee_min_active_fraction: 0.30
+      knee_max_active_fraction: 0.70
+      high_min_active_fraction: 0.65
+      monotonic_tolerance: 0.05
+  population_calibration:
+    correlation: independent
+    candidate_sensor_counts: [8, 16, 32, 64, 128]
+    seeds: [201, 202, 203, 204, 205]
+    target_collision_exposure: 0.10
+    accepted_collision_exposure: [0.03, 0.25]
+    minimum_relative_decode_rate: 0.50
+  confirmation:
+    seeds:
+      first: 2001
+      last: 2030
+      count: 30
+    conditions:
+      - always-powered
+      - low-independent
+      - low-common
+      - knee-independent
+      - knee-common
+      - high-independent
+      - high-common
+  statistics:
+    experimental_unit: source_seed
+    fano_window_seconds: 1.0
+    peak_window_seconds: 1.0
+    count_autocorrelation_lag_windows: 1
+    burst_gap_seconds: 1.0
+    paired_bootstrap_resamples: 10000
+    paired_bootstrap_seed: 61901
+
 phases:
   - id: qualification
     name: Qualify model semantics and evidence lineage
