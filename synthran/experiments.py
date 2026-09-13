@@ -29,6 +29,13 @@ EXPERIMENTS = {
 REQUIRED_SECTIONS = ("model", "mqtt", "devices")
 OPTIONAL_SECTIONS = ("measurement",)
 SCIENTIFIC_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
+_THREAD_ENV_NAMES = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -56,19 +63,11 @@ def automatic_worker_count() -> int:
     return max(1, available)
 
 
-def worker_environment() -> dict[str, str]:
-    """Prevent nested BLAS/OpenMP pools from oversubscribing worker processes."""
+def _configure_worker_threads() -> None:
+    """Prevent nested numerical pools from oversubscribing a process worker."""
 
-    environment = dict(os.environ)
-    for name in (
-        "OMP_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-        "VECLIB_MAXIMUM_THREADS",
-    ):
-        environment[name] = "1"
-    return environment
+    for name in _THREAD_ENV_NAMES:
+        os.environ[name] = "1"
 
 
 def parallel_map(function: Callable[[T], R], items: Iterable[T]) -> list[R]:
@@ -83,9 +82,13 @@ def parallel_map(function: Callable[[T], R], items: Iterable[T]) -> list[R]:
     if not units:
         return []
     workers = min(automatic_worker_count(), len(units))
+    _configure_worker_threads()
     if workers == 1:
         return [function(item) for item in units]
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_configure_worker_threads,
+    ) as executor:
         return list(executor.map(function, units))
 
 
