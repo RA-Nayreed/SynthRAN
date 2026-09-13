@@ -164,14 +164,14 @@ jobs:
         run: |
           python - <<'PY'
           import math
-          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import analysis_v2
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import analyze
 
-          assert math.isclose(analysis_v2._fano([0, 2, 0, 2]), 1.0)
-          assert math.isclose(analysis_v2._gap_cv([0.0, 1.0, 3.0]), 1 / 3)
-          bursts = analysis_v2._burst_stats([0.0, 0.5, 2.0, 2.4], 1.0)
+          assert math.isclose(analyze._fano([0, 2, 0, 2]), 1.0)
+          assert math.isclose(analyze._gap_cv([0.0, 1.0, 3.0]), 1 / 3)
+          bursts = analyze._burst_stats([0.0, 0.5, 2.0, 2.4], 1.0)
           assert bursts["burst_count"] == 2, bursts
           assert bursts["burst_size_max"] == 2, bursts
-          ci = analysis_v2._bootstrap_ci([1.0, 2.0, 3.0], resamples=100, seed=7)
+          ci = analyze._bootstrap_ci([1.0, 2.0, 3.0], resamples=100, seed=7)
           assert ci["n_pairs"] == 3
           assert ci["ci95"][0] is not None and ci["ci95"][1] is not None
           print("analysis metric contracts OK")

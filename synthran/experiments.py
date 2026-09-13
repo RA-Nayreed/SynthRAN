@@ -60,7 +60,7 @@ _EX1_PHASE_HANDLERS = {
         "run",
     ),
     "analysis": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analysis_v2",
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analyze",
         "run",
     ),
 }

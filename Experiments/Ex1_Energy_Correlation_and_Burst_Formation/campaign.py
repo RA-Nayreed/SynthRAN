@@ -160,27 +160,29 @@ def _capacitor_statistics(bundle: Path, warmup_s: float) -> dict[str, float]:
     }
 
 
-def _measurement_counts(bundle: Path, warmup_s: float) -> dict[str, Any]:
+def _measurement_counts(
+    bundle: Path, warmup_s: float, end_s: float = math.inf
+) -> dict[str, Any]:
     warmup_ms = warmup_s * 1000.0
     opportunities = [
         row
         for row in _read_jsonl(bundle / "ambient_iot/sensing-opportunities.jsonl")
-        if float(row["time_ms"]) >= warmup_ms
+        if warmup_ms <= float(row["time_ms"]) < end_s * 1000.0
     ]
     node_tx = [
         row
         for row in _read_jsonl(bundle / "ambient_iot/node-tx.jsonl")
-        if float(row["start_ms"]) >= warmup_ms
+        if warmup_ms <= float(row["start_ms"]) < end_s * 1000.0
     ]
     receptions = [
         row
         for row in _read_jsonl(bundle / "ambient_iot/bs-rx.jsonl")
-        if float(row["start_ms"]) >= warmup_ms
+        if warmup_ms <= float(row["start_ms"]) < end_s * 1000.0
     ]
     events = [
         row
         for row in _read_jsonl(bundle / "events.jsonl")
-        if float(row["decode_time_s"]) >= warmup_s
+        if warmup_s <= float(row["decode_time_s"]) < end_s
     ]
     generated = sum(row.get("outcome") == "generated" for row in opportunities)
     suppressed = len(opportunities) - generated
@@ -224,7 +226,7 @@ def _metrics(bundle: Path, measurement: dict[str, Any]) -> dict[str, Any]:
     window_s = duration_s - warmup_s
     if not 0 <= warmup_s < duration_s:
         raise ValueError("measurement warm-up must lie inside the run horizon")
-    counts = _measurement_counts(bundle, warmup_s)
+    counts = _measurement_counts(bundle, warmup_s, duration_s)
     capacitors = _capacitor_statistics(bundle, warmup_s)
     transmitted = counts["transmitted"]
     return {

@@ -168,6 +168,81 @@ independently:
 10. **Accepted-testbed attachment** — generic read-only compatibility checks for
     later physical experiments.
 
+## Analysis interpretation
+
+The source seed is the experimental unit. Sensors, packets, and adjacent time
+windows are dependent observations within a run, not additional replicates.
+New schema-2 analysis outputs include metric-specific valid/undefined sample
+sizes, excluded seed pairs, silent-run indicators, empty-window fractions and
+the longest observed interval without a decode. Undefined collision exposure
+(no transmissions), Jain fairness (no decodes), Fano (zero mean count), and
+activation synchrony (no onsets) remain `null`. Calibration's historical zero
+conventions are unchanged. Do not replace undefined values with zero or silently
+drop silent runs when describing reliability. Bootstrap intervals are pointwise
+percentile intervals over complete seed pairs, not multiplicity-adjusted claims;
+a single valid pair has no estimable bootstrap interval.
+
+Measurement uses `[warmup, duration)` at each stage's own timestamp. Count bins
+must tile that interval exactly; unequal partial bins are rejected. Analysis
+recomputes stage counts and active time from raw evidence instead of trusting
+unhashed wrapper metrics. Power correlation excludes the end boundary and
+requires aligned sensor sample times.
+
+The frozen burst rule describes **gap-connected components** of decoded events.
+Dense continuous traffic can form one component spanning almost the entire
+observation. Larger component size is therefore not necessarily greater
+burstiness. Use Fano, peaks, empty windows, and temporal traces together; the
+single-component indicator exposes this case. Longest observed silence includes
+the leading and trailing boundary intervals, which are censored observations,
+not complete outage durations.
+
+Existing schema-1 analysis is preserved on resume. Updated code cannot resume
+confirmation under an old implementation fingerprint. The analysis phase and retained-campaign inspection share one `analyze.py`
+entry point. To write updated diagnostics separately, run:
+
+```bash
+python -m Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analyze \
+  --campaign /path/to/immutable/ex1/campaign \
+  --output /path/to/new/separate/reanalysis
+```
+
+The output directory must not exist and must be outside the campaign. This
+command checks the frozen design, complete unique condition/seed cohort, run
+specifications, and every source bundle checksum. It records both the original
+source revision and the analysis revision/source hashes. It never changes the
+original analysis, campaign state, source bundles, or Ex2 handoff. Its results
+are explicitly **exploratory reanalysis**, not newly prespecified findings.
+
+Outputs are `summary.json`, `run-metrics.json`, and `run-diagnostics.json`.
+Diagnostics include per-sensor realized input energy integrated using the
+declared hold interpolation, mean input power, decoded counts including zero
+service, and generation-cohort outcomes matched by event ID. Energy input is
+not capacitor-stored energy, and the always-powered control bypasses gating.
+Generation-cohort latency is conditional on decoding before the horizon; pending
+and incomplete outcomes are retained rather than automatically classified as
+permanent loss. Stage-rate ratios are not generation-cohort delivery probabilities.
+Exploratory count-window sensitivity uses 0.1, 0.5, 1, 2 and 5 seconds where they
+tile the horizon, and burst-gap sensitivity uses 0.1, 0.25, 0.5, 1 and 2 seconds.
+These settings are reported in the output and must not be selected afterward
+solely to obtain a favorable result.
+
+For a larger study, version and freeze a new design **before** confirmation:
+
+1. Assess warmup and longer observation horizons using calibration seeds;
+   report duration in units of the input correlation time, without treating that
+   ratio as an effective independent sample count.
+2. Cross population with intermediate energy correlation and correlation time,
+   keeping paired seed blocks and documenting which random inputs are shared.
+3. Specify primary outcomes and contrasts, uncertainty precision goals and any
+   multiplicity policy before choosing the confirmation seed count.
+4. Keep per-run, per-sensor and time-window data separate; compare realized
+   energy and activity before attributing throughput differences to collisions.
+5. Validate transport and physical behavior in a separate experiment. Ex1
+   measures model decoding, not end-to-end MQTT/5G delivery.
+
+Do not change the current frozen 60-second duration to retrospectively address
+short observation or add new treatments to an already completed cohort.
+
 ## Non-goals of Experiment 1
 
 Experiment 1 does not provision R2Lab, reserve SOP nodes, power-cycle N3xx

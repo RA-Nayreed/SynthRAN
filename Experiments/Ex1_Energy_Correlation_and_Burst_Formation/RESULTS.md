@@ -6,7 +6,7 @@ The reproducibility code for this completed experiment now lives in this same di
 
 - `experiment-plan.json` — frozen campaign definition and historical integrity record.
 - `run_experiment.py` — reproduces the power calibration, population calibration, and 7-arm × 30-seed confirmation campaign while refusing to overwrite immutable bundles.
-- `analyze.py` — analyzes the retained confirmation bundles without modifying them.
+- `analyze.py` — the current frozen-campaign analysis entry point. The historical analyzer used for the results below remains available in Git history before the analysis consolidation; these results are retained historical evidence.
 
 The original one-off orchestration script used during the completed campaign was not preserved. `run_experiment.py` reconstructs the campaign from the frozen experiment record and current SynthRAN model contract, while preserving the existing run-directory names used downstream by Experiment 2 (including `knee-common-seed1001`).
 
