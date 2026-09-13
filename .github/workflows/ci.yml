@@ -50,9 +50,7 @@ jobs:
           PY
 
       - name: Install package and qualification runtime
-        run: |
-          python -m pip install --disable-pip-version-check --no-deps -e .
-          python -m pip install --disable-pip-version-check PyYAML==6.0.3 numpy==2.4.6 simpy==4.1.2
+        run: python -m pip install --disable-pip-version-check -e '.[experiment]'
 
       - name: Import SynthRAN package
         run: python -c "import synthran; print('synthran import OK')"
