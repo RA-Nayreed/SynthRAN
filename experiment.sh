@@ -105,13 +105,8 @@ BANNER
   fi
 }
 
-if [[ -x .venv/bin/python ]]; then
-  SYNTHRAN_PYTHON=.venv/bin/python
-else
-  command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
-  python3 -m venv .venv
-  SYNTHRAN_PYTHON=.venv/bin/python
-fi
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+SYNTHRAN_PYTHON="$(python3 -m synthran.runtime python)"
 
 show_banner
 
