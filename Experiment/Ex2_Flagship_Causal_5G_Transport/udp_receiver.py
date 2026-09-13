@@ -15,6 +15,7 @@ of a fixed wall-clock timeout before the sender began.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import socket
 import struct
@@ -23,9 +24,49 @@ import time
 HEADER = struct.Struct("!QQ")  # sequence number, sender monotonic timestamp (ns)
 
 
+def _default_bind_address() -> str:
+    """Resolve the IPv4 address selected by the host's default route.
+
+    Experiment 2 already resolves the broker endpoint from the broker host's
+    default-route source address.  Using the same routing decision here keeps
+    the receiver reachable without exposing the calibration socket on every
+    host interface.
+    """
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # UDP connect performs local route selection without sending a packet.
+        probe.connect(("1.1.1.1", 9))
+        address = probe.getsockname()[0]
+    except OSError as error:
+        raise SystemExit(
+            f"could not resolve a routed IPv4 address for the UDP receiver: {error}"
+        ) from error
+    finally:
+        probe.close()
+    return address
+
+
+def _validated_bind_address(value: str | None) -> str:
+    candidate = value or _default_bind_address()
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError as error:
+        raise SystemExit(f"UDP receiver bind address must be an IPv4 address: {candidate}") from error
+    if address.version != 4:
+        raise SystemExit("UDP receiver requires an IPv4 bind address")
+    if address.is_unspecified:
+        raise SystemExit("refusing to bind the UDP calibration receiver to all interfaces")
+    return str(address)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument(
+        "--bind",
+        default=None,
+        help="local IPv4 address to bind; defaults to the default-route source address",
+    )
     parser.add_argument("--port", type=int, default=39001)
     parser.add_argument("--startup-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--idle-timeout-seconds", type=float, default=2.0)
@@ -45,9 +86,10 @@ def main() -> None:
     if args.idle_timeout_seconds <= 0:
         raise SystemExit("idle timeout must be > 0")
 
+    bind_address = _validated_bind_address(args.bind)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, args.rcvbuf_bytes)
-    sock.bind((args.bind, args.port))
+    sock.bind((bind_address, args.port))
     sock.settimeout(0.25)
 
     receiver_start_ns = time.monotonic_ns()
@@ -110,7 +152,7 @@ def main() -> None:
     lost_within_observed_span = max(expected - packets, 0)
 
     result = {
-        "bind": args.bind,
+        "bind": bind_address,
         "port": args.port,
         "startup_timeout_seconds": startup_timeout_s,
         "idle_timeout_seconds": args.idle_timeout_seconds,
