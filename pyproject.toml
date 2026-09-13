@@ -24,4 +24,4 @@ synthran = ["data/*.csv", "configs/*.yml", "experiment_runtime/**/*.yml", "exper
 
 [tool.setuptools.packages.find]
 include = ["synthran", "synthran.*"]
-exclude = ["deployment*", "results*", "third_party*", "Experiment*"]
+exclude = ["deployment*", "results*", "third_party*", "Experiments*"]

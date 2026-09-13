@@ -14,6 +14,17 @@ resource:
   testbed_required: false
   active_deployment_access: forbidden
 
+execution:
+  parallelism: automatic_max
+  scope: independent_run_units
+  phase_barriers: strict
+  numeric_threads_per_worker: 1
+  capacity_source: process_affinity_and_cgroup
+  note: >-
+    Independent run units are scheduled across the maximum CPU capacity visible
+    to the process. Scientific dependency barriers are never crossed to create
+    additional concurrency, and no public worker-count argument is exposed.
+
 phases:
   - id: qualification
     name: Qualify model semantics and evidence lineage

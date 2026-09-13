@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reusable Ambient-IoT experiment lifecycle for an accepted SynthRAN testbed."""
+"""Accepted-testbed runtime for SynthRAN physical experiments."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ import subprocess
 import shutil
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import yaml
 
-from synthran.experiment_scenario import load_scenario, remap_gateways, scientific_settings
+from synthran.experiments import load_scenario, remap_gateways, scientific_settings
 from synthran.scenario import load_scenario as load_testbed
 
 ACTIVE_DEPLOYMENT_ENDPOINT = ROOT / ".synthran/active-deployment.json"
@@ -141,7 +141,7 @@ def prepare(
     ):
         destination = run / "runtime/synthran" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(Path(__file__).parent / relative, destination)
+        shutil.copyfile(ROOT / "synthran" / relative, destination)
     mqtt = scenario["mqtt"]
     manifest = json.loads((run / "model/source-manifest.json").read_text())
     variables = {

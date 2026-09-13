@@ -33,10 +33,12 @@ Experiment 1 phases:
   analysis
   all
 
+Parallelism is automatic. Independent scientific runs use the maximum safe CPU
+capacity available to this process; dependency barriers remain sequential.
+
 The experiment runner never provisions, repairs, reserves, or reconfigures a
-5G testbed. Future physical experiment phases may attach to an already accepted
-deployment produced by deploy.sh. Experiment 1 is local-only and does not read
-or modify active deployment state.
+5G testbed. Future physical experiment phases may attach read-only to an already
+accepted deployment produced by deploy.sh. Experiment 1 is local-only.
 EOF
 }
 
@@ -82,6 +84,31 @@ experiment_section() {
   printf '%*s\n' "${#1}" '' | tr ' ' '-'
 }
 
+show_banner() {
+  echo
+  if [[ -t 1 ]]; then
+    printf '\033[1;35m'
+  fi
+  cat <<'BANNER'
+  _____             _   _     _____            _   _
+ / ____|           | | | |   |  __ \     /\   | \ | |
+| (___  _   _ _ __ | |_| |__ | |__) |   /  \  |  \| |
+ \___ \| | | | '_ \| __| '_ \|  _  /   / /\ \ | . ` |
+ ____) | |_| | | | | |_| | | | | \ \  / ____ \| |\  |
+|_____/ \__, |_| |_|\__|_| |_|_|  \_\/_/    \_\_| \_|
+         __/ |
+        |___/       scientific experiment suite
+BANNER
+  if [[ -t 1 ]]; then
+    printf '\033[0m'
+  fi
+  cat <<'EOF'
+
+  MODEL  →  QUALIFY  →  CALIBRATE  →  FREEZE  →  CONFIRM  →  ANALYZE
+     independent runs saturate available compute whenever scientifically safe
+EOF
+}
+
 if [[ -x .venv/bin/python ]]; then
   SYNTHRAN_PYTHON=.venv/bin/python
 else
@@ -89,6 +116,8 @@ else
   python3 -m venv .venv
   SYNTHRAN_PYTHON=.venv/bin/python
 fi
+
+show_banner
 
 experiment_section "Preparing the local SynthRAN experiment runtime"
 "$SYNTHRAN_PYTHON" -m synthran.runtime experiment --log /tmp/synthran-experiment-bootstrap.log
@@ -98,7 +127,7 @@ command -v flock >/dev/null || { echo "flock is required to protect experiment c
 exec 9>.synthran/experiment.lock
 if ! flock -n 9; then
   echo "Another SynthRAN experiment controller is already running." >&2
-  echo "Inspect it with: pgrep -af 'experiment.sh|synthran.experiment_suite'" >&2
+  echo "Inspect it with: pgrep -af 'experiment.sh|synthran.experiments'" >&2
   exit 1
 fi
 printf '%s\n' "$$" 1>&9
@@ -108,9 +137,9 @@ if [[ -z "$EXPERIMENT" ]]; then
     echo "--no-input requires --experiment" >&2
     exit 2
   fi
-  experiment_section "SynthRAN Experiment Suite"
+  experiment_section "Available experiments"
   echo "  1) Ex1  Energy correlation and burst formation"
-  echo "          LOCAL — no testbed required"
+  echo "          LOCAL · no deployed testbed required"
   echo
   read -r -p "Select experiment [1]: " choice
   case "${choice:-1}" in
@@ -128,14 +157,16 @@ if [[ -z "$PHASE" ]]; then
   if $NO_INPUT; then
     PHASE=all
   else
-    experiment_section "Experiment 1 — Energy correlation and burst formation"
-    echo "  1) Qualification"
-    echo "  2) Power calibration"
-    echo "  3) Population calibration"
-    echo "  4) Freeze confirmation design"
-    echo "  5) Confirmation"
-    echo "  6) Analysis"
-    echo "  7) Full experiment"
+    experiment_section "Experiment 1 · Energy correlation and burst formation"
+    cat <<'EOF'
+  1) Qualification              prove the model contract
+  2) Power calibration          locate low / knee / high energy regimes
+  3) Population calibration     locate the contention transition
+  4) Freeze confirmation design lock the prespecified campaign
+  5) Confirmation               execute the frozen treatment matrix
+  6) Analysis                   summarize mechanism and uncertainty
+  7) Full experiment            run the complete dependency chain
+EOF
     echo
     read -r -p "Select phase [7]: " choice
     case "${choice:-7}" in
@@ -155,4 +186,4 @@ args=(plan --experiment "$EXPERIMENT" --phase "$PHASE")
 $DRY_RUN && args+=(--dry-run)
 $VERBOSE && args+=(--verbose)
 
-"$SYNTHRAN_PYTHON" -m synthran.experiment_suite "${args[@]}"
+"$SYNTHRAN_PYTHON" -m synthran.experiments "${args[@]}"

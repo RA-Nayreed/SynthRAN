@@ -20,7 +20,7 @@ def stop_publishers(marker: str) -> int:
             continue
         if (
             token not in cmdline
-            or b"Experiment.cli" not in cmdline
+            or b"synthran.cli" not in cmdline
             or b"workload" not in cmdline
             or b"replay" not in cmdline
         ):
