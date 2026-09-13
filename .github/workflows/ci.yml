@@ -86,7 +86,6 @@ jobs:
               "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml",
               encoding="utf-8",
           ))
-
           power_design = manifest["study"]["power_calibration"]
           active = [0.08, 0.21, 0.49, 0.79, 0.94]
           power_rows = [
@@ -117,6 +116,44 @@ jobs:
           )
           assert population["selected"]["sensor_count"] == 32, population
           print("calibration selection contracts OK")
+          PY
+
+      - name: Validate confirmation freeze contract
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import freeze
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              (root / "calibration/power").mkdir(parents=True)
+              (root / "calibration/population").mkdir(parents=True)
+              (root / "campaign.json").write_text(json.dumps({
+                  "schema_version": 1,
+                  "campaign_id": "ci-freeze",
+                  "experiment": "ex1",
+                  "source_revision": "ci",
+              }))
+              (root / "calibration/power/selection.json").write_text(json.dumps({
+                  "status": "selected",
+                  "selected": {
+                      "low": {"mean_power_w": 0.0005},
+                      "knee": {"mean_power_w": 0.001},
+                      "high": {"mean_power_w": 0.002},
+                  },
+              }))
+              (root / "calibration/population/selection.json").write_text(json.dumps({
+                  "status": "selected",
+                  "selected": {"sensor_count": 32},
+              }))
+              design = freeze.run(root)
+              freeze.validate(design)
+              assert len(design["confirmation"]["conditions"]) == 7
+              assert len(design["confirmation"]["seeds"]) == 30
+              assert design["confirmation"]["sensor_count"] == 32
+              print("confirmation freeze contract OK")
           PY
 
       - name: Parse versioned YAML and citation metadata
