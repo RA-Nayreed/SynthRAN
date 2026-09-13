@@ -1,0 +1,145 @@
+id: ex2
+display_name: Experiment 2 — Causal 5G transport
+design_version: 1
+status: development
+
+purpose: >-
+  Test whether the temporal structure of an event-identical Ambient-IoT workload
+  changes application delivery over the currently accepted 5G testbed under
+  controlled competing traffic. The deployment is selected by the operator with
+  deploy.sh, discovered from active-deployment.json, shown before execution, and
+  frozen as provenance for one Experiment-2 campaign.
+
+resource:
+  type: active_testbed
+  testbed_required: true
+  active_deployment_access: read_only
+  discovery: .synthran/active-deployment.json
+  selection: operator_approved_current_deployment
+  minimum_verified_ues: 2
+  role_policy: >-
+    The first verified UE binding is the workload gateway and the second is the
+    competing-traffic UE. Core, RAN, radio unit, nodes, slices and UE identities
+    are not prescribed by Experiment 2; they are recorded from the accepted
+    deployment. A deployment change starts a new campaign rather than mixing
+    testbeds inside one confirmation series.
+
+study:
+  source:
+    upstream_experiment: ex1
+    condition: knee-common
+    source_seed_count: 30
+    selection: newest complete local Experiment-1 campaign when preparing
+    transferable_path: results/experiments/ex2-source
+  timing:
+    warmup_seconds: 10.0
+    arms:
+      - native
+      - gap_permutation_r1
+      - gap_permutation_r2
+      - periodic
+    invariants:
+      - event identity and order
+      - event count
+      - sensor identity
+      - serialized payload bytes
+      - MQTT topic
+      - source horizon
+      - first and last measurement release
+      - native gap multiset for both gap permutations
+  transport_calibration:
+    generator: paced UDP application payload
+    packet_bytes: 1200
+    probe_duration_seconds: 10
+    repeats_per_rate: 3
+    offered_payload_mbps_grid: [5, 10, 15, 20, 25, 30, 40, 50]
+    delivery_threshold: 0.98
+    selection_rule: >-
+      Using median end-to-end delivery ratio over repeats at each ascending grid
+      rate, ABOVE is the first rate below 0.98, NEAR is the immediately preceding
+      rate, and BELOW is the rate immediately preceding NEAR. Stop before
+      confirmation if all three levels cannot be selected.
+    base_port: 39001
+  confirmation:
+    source_seed_count: 30
+    timing_arms: [native, gap_permutation_r1, gap_permutation_r2, periodic]
+    load_levels: [below, near, above]
+    expected_replays: 360
+    sessions: 3
+    seeds_per_session: 10
+    within_block_order_seed: 20260913
+    sentinel_every_replays: 12
+    sentinel_min_fraction_of_calibrated_near_delivery: 0.98
+    base_port: 39101
+    sentinel_base_port: 39901
+    reservation_safety_seconds: 180
+    execution_policy: >-
+      Run complete four-arm matched blocks while the current reservation has
+      enough remaining coverage. Pause before a block that does not fit. Rerun
+      experiment.sh after extending the same deployment reservation; completed
+      run records are reused. A different deployment hash starts a new campaign.
+  measurement:
+    deadline_seconds: 0.5
+    age_limit_seconds: 2.0
+    clock_evidence: >-
+      Before qualification and each confirmation session, bound workload-publisher
+      versus broker UTC offset with controller-bracketed remote clock probes. The
+      bound is retained with results and supplied to the measurement contract.
+  statistics:
+    experimental_unit: source_seed
+    principal_outcomes:
+      - conditional_scheduled_delay_p95_s
+      - deadline_failure_fraction
+    principal_contrasts:
+      - native minus periodic
+      - native minus mean of the two gap-permutation controls
+    report_by_load: true
+    permutation_arms_do_not_increase_n: true
+    bootstrap_resamples: 10000
+    bootstrap_seed: 62002
+
+phases:
+  - id: prepare
+    name: Prepare the transferable matched source cohort
+    resource: local
+    campaign: false
+    produces:
+      - results/experiments/ex2-source/<upstream-campaign>/
+
+  - id: qualification
+    name: Qualify the accepted testbed and no-load delivery path
+    resource: active_testbed
+    produces:
+      - qualification/
+      - control/deployment.json
+      - clock/qualification.json
+
+  - id: calibration
+    name: Calibrate below, near, and above competing-load levels
+    resource: active_testbed
+    requires: [qualification]
+    produces:
+      - calibration/load-selection.json
+
+  - id: freeze
+    name: Freeze deployment, source cohort, loads, sessions, and analysis design
+    resource: active_testbed
+    requires: [qualification, calibration]
+    produces:
+      - frozen-design.json
+
+  - id: confirmation
+    name: Run the 360 matched physical transport replays
+    resource: active_testbed
+    requires: [freeze]
+    produces:
+      - runs/
+      - sessions/
+      - sentinels/
+
+  - id: analysis
+    name: Analyze paired timing effects across calibrated load levels
+    resource: local
+    requires: [confirmation]
+    produces:
+      - analysis/summary.json
