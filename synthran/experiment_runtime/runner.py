@@ -18,37 +18,36 @@ import yaml
 
 from synthran.experiments import load_scenario, remap_gateways, scientific_settings
 from synthran.scenario import load_scenario as load_testbed
+from synthran.testbed_attachment import (
+    attach_active_deployment,
+    requirements_from_deployment,
+)
 
-ACTIVE_DEPLOYMENT_ENDPOINT = ROOT / ".synthran/active-deployment.json"
 EXPERIMENT_ANSIBLE = ROOT / "synthran/experiment_runtime/ansible"
 
 
-def _active_private_dir() -> Path:
-    configured = os.environ.get("SYNTHRAN_PRIVATE_DIR")
-    if configured:
-        private = Path(configured).resolve()
-    else:
-        if not ACTIVE_DEPLOYMENT_ENDPOINT.is_file():
-            raise FileNotFoundError(
-                "no accepted deployment endpoint exists; run ./deploy.sh successfully first"
-            )
-        endpoint = json.loads(ACTIVE_DEPLOYMENT_ENDPOINT.read_text(encoding="utf-8"))
-        if endpoint.get("status") != "active":
-            raise ValueError("the saved deployment endpoint is not active")
-        identity_path = Path(endpoint.get("identity_file", ""))
-        if not identity_path.is_file():
-            raise FileNotFoundError("the active deployment identity referenced by the endpoint is missing")
-        identity = json.loads(identity_path.read_text(encoding="utf-8"))
-        if identity.get("status") != "active" or identity.get("deployment_hash") != endpoint.get("deployment_hash"):
-            raise ValueError("the active deployment endpoint does not match the active deployment identity")
-        private = Path(endpoint.get("private_execution_dir", "")).resolve()
-        os.environ["SYNTHRAN_PRIVATE_DIR"] = str(private)
-    required = (private / "inventory.yml", private / "deployment-vars.yml")
-    missing = [str(path) for path in required if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "the accepted deployment execution context is incomplete: " + ", ".join(missing)
+def _attachment(requirements: dict | None = None) -> dict:
+    """Resolve the accepted deployment without mutating its authority state."""
+
+    return attach_active_deployment(requirements)
+
+
+def _active_private_dir(
+    requirements: dict | None = None,
+    *,
+    expected_deployment_hash: str | None = None,
+) -> Path:
+    attachment = _attachment(requirements)
+    if (
+        expected_deployment_hash is not None
+        and attachment["deployment_hash"] != expected_deployment_hash
+    ):
+        raise ValueError(
+            "the active deployment changed after experiment preparation; "
+            "refusing to attach the experiment to different infrastructure"
         )
+    private = Path(attachment["private_execution_dir"]).resolve()
+    os.environ["SYNTHRAN_PRIVATE_DIR"] = str(private)
     return private
 
 
@@ -99,6 +98,31 @@ def configure(config: Path, source: Path) -> None:
     config.write_text(yaml.safe_dump(selected, sort_keys=False))
 
 
+def _write_attachment_snapshot(run: Path, attachment: dict) -> None:
+    snapshot = {
+        key: value
+        for key, value in attachment.items()
+        if key != "private_execution_dir"
+    }
+    (run / "accepted-testbed.json").write_text(
+        json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _expected_attachment_hash(run: Path) -> str:
+    path = run / "accepted-testbed.json"
+    if not path.is_file():
+        raise FileNotFoundError(
+            "experiment run has no accepted-testbed snapshot; prepare the experiment first"
+        )
+    value = json.loads(path.read_text(encoding="utf-8"))
+    deployment_hash = value.get("deployment_hash")
+    if not isinstance(deployment_hash, str) or not deployment_hash:
+        raise ValueError("accepted-testbed snapshot has no deployment hash")
+    return deployment_hash
+
+
 def prepare(
     config: Path, run: Path, prepared: Path | None, resume: Path | None
 ) -> None:
@@ -111,13 +135,18 @@ def prepare(
 
     scenario = load_scenario(config)
     run.mkdir(parents=True, exist_ok=True)
-    private = _active_private_dir()
+    testbed = load_testbed(config)
+    requirements = requirements_from_deployment(testbed["deployment"])
+    attachment = _attachment(requirements)
+    private = Path(attachment["private_execution_dir"]).resolve()
+    os.environ["SYNTHRAN_PRIVATE_DIR"] = str(private)
+    _write_attachment_snapshot(run, attachment)
     write_credentials(private)
+
     settings = run / "experiment-input.yml"
     settings.write_text(
         yaml.safe_dump(scientific_settings(scenario), sort_keys=False)
     )
-    testbed = load_testbed(config)
     testbed["experiment"]["config"] = str(settings.resolve())
     testbed.pop("_source_directory", None)
     config.write_text(yaml.safe_dump(testbed, sort_keys=False))
@@ -162,7 +191,9 @@ def _run_playbook(run: Path, playbook: Path) -> None:
     environment = dict(os.environ)
     environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
     environment["ANSIBLE_ROLES_PATH"] = str(EXPERIMENT_ANSIBLE / "roles")
-    private = _active_private_dir()
+    private = _active_private_dir(
+        expected_deployment_hash=_expected_attachment_hash(run)
+    )
     environment["SYNTHRAN_PRIVATE_DIR"] = str(private)
     secrets_file = private / "experiment-secrets.yml"
     if not secrets_file.is_file():
