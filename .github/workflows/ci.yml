@@ -27,8 +27,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Check deploy.sh syntax
-        run: bash -n deploy.sh
+      - name: Check shell entrypoint syntax
+        run: |
+          bash -n deploy.sh
+          bash -n experiment.sh
 
       - name: Compile Python sources
         run: python -m compileall -q synthran
@@ -55,6 +57,9 @@ jobs:
       - name: Import SynthRAN package
         run: python -c "import synthran; print('synthran import OK')"
 
+      - name: Validate experiment planner
+        run: python -m synthran.experiments plan --experiment ex1 --phase all --dry-run
+
       - name: Parse versioned YAML and citation metadata
         run: |
           python - <<'PY'
@@ -64,6 +69,7 @@ jobs:
           paths = [Path("synthran/configs/reference.yml")]
           paths += sorted(Path("deployment/group_vars/all").glob("network_profile_*.yaml"))
           paths.append(Path("deployment/group_vars/all/ue_catalog.yaml"))
+          paths.append(Path("Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml"))
           paths.append(Path("CITATION.cff"))
 
           for path in paths:

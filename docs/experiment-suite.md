@@ -2,26 +2,33 @@
 
 ## Purpose
 
-`experiment.sh` is the user-facing scientific experiment runner. It is separate
-from `deploy.sh` and deliberately consumes, rather than owns, deployed testbeds.
+`experiment.sh` is the single user-facing scientific experiment runner. It is
+separate from `deploy.sh` and deliberately consumes, rather than owns, deployed
+testbeds.
 
 The boundary is strict:
 
-- `deploy.sh` provisions, repairs, reserves, verifies, and activates testbeds.
-- `experiment.sh` plans and executes scientific campaigns.
-- a future physical experiment may attach to an already accepted deployment,
-  but it must not mutate infrastructure in order to make an experiment pass.
+- `deploy.sh` provisions, repairs, reserves, verifies, and activates testbeds;
+- `experiment.sh` plans and executes scientific campaigns;
+- a physical experiment may attach to an already accepted deployment, but it
+  must not mutate infrastructure in order to make an experiment pass;
 - Experiment 1 is local-only and must not inspect or modify active deployment
   state at all.
 
+Scientific studies live under `Experiments/`. Shared experiment control logic
+lives in `synthran/experiments.py`. Accepted-testbed runtime mechanics are kept
+under `synthran/experiment_runtime/` instead of being exposed as another public
+runner.
+
 ## User-interface contract
 
-The experiment frontend mirrors the presentation style of `deploy.sh`: strict
-shell execution, explicit argument validation, hierarchical section headings,
-one controller lock, and a predictable local runtime. The shell remains thin;
-structured experiment logic lives in Python and experiment manifests.
+The experiment frontend follows the presentation quality of `deploy.sh`: strict
+shell execution, explicit argument validation, hierarchical sections, one
+controller lock, a predictable local runtime, and a SynthRAN terminal banner.
+The shell stays thin; structured experiment logic belongs in Python and study
+manifests.
 
-The initial public interface is:
+The public interface remains intentionally small:
 
 ```sh
 ./experiment.sh
@@ -29,20 +36,43 @@ The initial public interface is:
 ./experiment.sh --experiment ex1 --phase all --dry-run
 ```
 
-The first development increment implements planning only. Scientific execution
-is added phase-by-phase in later commits so every behavior change remains
-reviewable and independently testable.
+Parallel worker tuning is deliberately **not** a public option.
+
+## Automatic parallel execution
+
+Local scientific work should use available compute aggressively without changing
+the experiment itself.
+
+For independent run units, `synthran.experiments.parallel_map` automatically:
+
+1. determines CPU capacity visible through process affinity;
+2. respects a cgroup v2 CPU quota when present;
+3. uses up to that many process workers, bounded by the number of run units;
+4. constrains common numerical-library thread pools to one thread per worker so
+   process-level parallelism is not multiplied by nested BLAS/OpenMP pools;
+5. returns results in deterministic input order even if workers finish in a
+   different order.
+
+Scientific dependencies remain barriers. Qualification must finish before power
+calibration; power calibration must finish before population calibration; the
+confirmation design must be frozen before confirmation. The runner does not
+cross those boundaries merely to increase utilization.
+
+Physical experiments are different: runs sharing a UE/RAN/radio path are not
+implicitly concurrent because that traffic would alter the network treatment.
+Physical concurrency is allowed only when the experiment design explicitly
+requires and isolates it.
 
 ## Experiment 1 v2 lifecycle
 
 Experiment 1 is rebuilt as a qualified, calibrated, frozen, then confirmed
 campaign:
 
-1. **qualification** — prove current sensing, energy, controller, transmission,
+1. **qualification** — prove sensing, energy, controller, transmission,
    receiver, SIC, event-lineage, and bundle semantics before scientific use;
 2. **power calibration** — derive low, knee, and high harvested-power operating
-   points from the current implementation rather than inheriting the historical
-   500/1000/2000 µW choices;
+   points from the current implementation rather than inheriting historical
+   values;
 3. **population calibration** — derive the contention-transition population
    rather than assuming the historical `N*=32` remains authoritative;
 4. **freeze** — write an immutable confirmation design containing selected
@@ -102,7 +132,7 @@ run -> validate -> finalize -> checksum manifest -> upload -> remote verify
     -> write _ARCHIVED.json -> continue
 ```
 
-A scientific success and an archival success are separate states. If S3 is
+Scientific success and archival success are separate states. If S3 is
 unavailable after a valid stochastic run completes, the local immutable result
 is retained and only the upload is retried. The experiment must never be rerun
 merely because storage failed.
@@ -116,32 +146,30 @@ round trip. Versioned deletion behavior was observed. New experiment code still
 uses unique paths and refuses overwrite; bucket versioning is recovery defense,
 not the normal immutability mechanism.
 
-## Planned incremental implementation
+## Incremental implementation
 
-The development PR is intentionally staged. Each stage receives its own commit
-and the PR description is updated after the stage is completed.
+Development is staged so scientific and engineering behavior can be reviewed
+independently:
 
-1. **Frontend and contract** — add `experiment.sh`, the internal manifest
-   planner, the Ex1 v2 manifest, and this architecture document.
-2. **Qualification engine** — implement retained machine-readable semantic
-   qualification artifacts and block calibration until they pass.
-3. **Power calibration** — run a pilot sweep and select low/knee/high using
-   explicit criteria.
-4. **Population calibration** — run the population pilot at the selected knee
-   and select the contention-transition population.
-5. **Freeze** — generate and validate the immutable confirmation design.
-6. **Confirmation execution** — execute the frozen primary treatments with safe
-   resume semantics.
-7. **Analysis** — produce the prespecified mechanism/traffic metrics and
-   uncertainty summaries.
-8. **S3 archival** — archive every successful run and campaign-level result,
-   verify the remote copy, and support upload-only retry.
-9. **Accepted-testbed attachment** — only after Experiment 1 is complete, add
-   the generic read-only deployment attachment needed by later physical
-   experiments.
+1. **Frontend and contract** — `experiment.sh`, Ex1 v2 manifest, result/archive
+   contract and terminal UX.
+2. **Control-plane cleanup** — plural `Experiments/` tree, consolidated
+   `synthran.experiments`, internal physical runtime, automatic parallel policy.
+3. **Qualification engine** — retained machine-readable semantic qualification
+   artifacts and a hard gate before calibration.
+4. **Power calibration** — parallel pilot sweep and explicit low/knee/high
+   selection evidence.
+5. **Population calibration** — parallel population pilot and explicit
+   contention-transition selection.
+6. **Freeze** — immutable confirmation design and implementation fingerprint.
+7. **Confirmation** — frozen treatment matrix with immutable resume semantics.
+8. **Analysis** — prespecified mechanism/traffic metrics and uncertainty.
+9. **S3 archival** — per-run verified archival plus campaign-level results.
+10. **Accepted-testbed attachment** — generic read-only compatibility checks for
+    later physical experiments.
 
-## Non-goals of the Experiment 1 implementation
+## Non-goals of Experiment 1
 
-This work does not provision R2Lab, reserve SOP nodes, power-cycle N3xx radios,
-repair Kubernetes, switch core/RAN implementations, or change physical UE
-configuration. Those remain deployment responsibilities.
+Experiment 1 does not provision R2Lab, reserve SOP nodes, power-cycle N3xx
+radios, repair Kubernetes, switch core/RAN implementations, or change physical
+UE configuration. Those remain deployment responsibilities.
