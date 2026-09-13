@@ -83,6 +83,7 @@ study:
       - high-common
   statistics:
     experimental_unit: source_seed
+    activation_sync_window_seconds: 0.1
     fano_window_seconds: 1.0
     peak_window_seconds: 1.0
     count_autocorrelation_lag_windows: 1

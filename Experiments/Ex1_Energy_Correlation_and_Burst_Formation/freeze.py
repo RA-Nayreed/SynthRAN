@@ -142,6 +142,7 @@ def run(campaign_root: str | Path) -> dict[str, Any]:
         HERE / "population_calibration.py",
         HERE / "freeze.py",
         HERE / "confirmation.py",
+        HERE / "analysis_v2.py",
     ]
     campaign_state = campaign._read_json(root / "campaign.json")
     value: dict[str, Any] = {
