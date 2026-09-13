@@ -1,0 +1,88 @@
+id: ex1
+display_name: Experiment 1 — Energy correlation and burst formation
+design_version: 2
+status: development
+
+purpose: >-
+  Re-run Experiment 1 from a qualified current SynthRAN model, recalibrate the
+  operating points instead of inheriting historical values, freeze the
+  confirmation design before confirmation, and produce immutable source data
+  for later transport experiments.
+
+resource:
+  type: local
+  testbed_required: false
+  active_deployment_access: forbidden
+
+phases:
+  - id: qualification
+    name: Qualify model semantics and evidence lineage
+    resource: local
+    produces:
+      - qualification/qualification.json
+
+  - id: power-calibration
+    name: Calibrate low, knee, and high harvested-power regimes
+    resource: local
+    requires:
+      - qualification
+    produces:
+      - calibration/power/summary.json
+      - calibration/power/selection.json
+
+  - id: population-calibration
+    name: Calibrate the contention-transition sensor population
+    resource: local
+    requires:
+      - qualification
+      - power-calibration
+    produces:
+      - calibration/population/summary.json
+      - calibration/population/selection.json
+
+  - id: freeze
+    name: Freeze confirmation design and implementation fingerprint
+    resource: local
+    requires:
+      - qualification
+      - power-calibration
+      - population-calibration
+    produces:
+      - frozen-design.json
+
+  - id: confirmation
+    name: Run the prespecified confirmation campaign
+    resource: local
+    requires:
+      - freeze
+    produces:
+      - runs/
+
+  - id: analysis
+    name: Analyze the completed confirmation campaign
+    resource: local
+    requires:
+      - confirmation
+    produces:
+      - analysis/
+
+archive:
+  enabled: true
+  backend: s3
+  alias: slices
+  bucket: ilabt.imec.be-project-post5g-beta
+  prefix: SynthRAN/experiments/ex1
+  upload_after_success: true
+  remote_verify: true
+  replay: if_available
+  credentials: external-mc-alias
+  overwrite: false
+  completion_marker: _ARCHIVED.json
+
+historical_campaign:
+  status: preserved_reference_only
+  path: results/exp1-energy-correlation
+  authoritative_for_v2: false
+  note: >-
+    The previous campaign remains historical evidence. Its calibrated values and
+    run bundles must not be silently reused as the authoritative v2 design.
