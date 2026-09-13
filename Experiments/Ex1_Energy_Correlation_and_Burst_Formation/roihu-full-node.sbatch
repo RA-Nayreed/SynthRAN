@@ -31,7 +31,7 @@ echo "Archive directory $ARCHIVE_DIR"
 echo "CPUs allocated    ${SLURM_CPUS_PER_TASK:-unknown}"
 echo "Python            $(python3 --version 2>&1)"
 
-# Run the file-heavy campaign on Roihu's node-local NVMe.  Clone the exact
+# Run the file-heavy campaign on Roihu's node-local NVMe. Clone the exact
 # submitted revision so the campaign source fingerprint remains meaningful.
 git clone --quiet --local --no-hardlinks "$SUBMIT_ROOT" "$WORK_ROOT"
 git -C "$WORK_ROOT" checkout --quiet --detach "$SOURCE_REVISION"
@@ -49,7 +49,7 @@ RUN_RC=$?
 set -e
 
 # Package whatever campaign state exists, even if the scientific run stopped
-# early.  The tarball is copied back to persistent project scratch before the
+# early. The tarball is copied back to persistent project scratch before the
 # node-local $TMPDIR is destroyed.
 ACTIVE="$WORK_ROOT/.synthran/active-experiment.json"
 if [[ -f "$ACTIVE" ]]; then
@@ -74,11 +74,14 @@ PY
         ARCHIVE_NAME="ex1-${CAMPAIGN_ID}-job${SLURM_JOB_ID}-${STATE}.tar.gz"
         LOCAL_ARCHIVE="$TMPDIR/$ARCHIVE_NAME"
         tar -C "$(dirname "$CAMPAIGN_ROOT")" -czf "$LOCAL_ARCHIVE" "$CAMPAIGN_ID"
-        sha256sum "$LOCAL_ARCHIVE" > "$LOCAL_ARCHIVE.sha256"
+        (
+          cd "$TMPDIR"
+          sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+        )
         cp "$LOCAL_ARCHIVE" "$ARCHIVE_DIR/$ARCHIVE_NAME"
-        cp "$LOCAL_ARCHIVE.sha256" "$ARCHIVE_DIR/$ARCHIVE_NAME.sha256"
+        cp "$TMPDIR/$ARCHIVE_NAME.sha256" "$ARCHIVE_DIR/$ARCHIVE_NAME.sha256"
         echo "Archive           $ARCHIVE_DIR/$ARCHIVE_NAME"
-        echo "Archive SHA-256   $(cut -d' ' -f1 "$LOCAL_ARCHIVE.sha256")"
+        echo "Archive SHA-256   $(cut -d' ' -f1 "$TMPDIR/$ARCHIVE_NAME.sha256")"
       fi
       ;;
     *)
