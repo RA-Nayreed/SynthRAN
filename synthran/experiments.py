@@ -9,7 +9,7 @@ studies live under ``Experiments/``.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 import importlib
 import json
@@ -113,21 +113,106 @@ def _configure_worker_threads() -> None:
         os.environ[name] = "1"
 
 
+def _progress_detail(result: object) -> str:
+    if not isinstance(result, dict):
+        return "complete"
+    parts: list[str] = []
+    if result.get("status"):
+        parts.append(str(result["status"]).lower())
+    if result.get("resumed"):
+        parts.append("reused")
+    runtime = result.get("metrics", {}).get("runtime", {}) if isinstance(result.get("metrics"), dict) else {}
+    wall = runtime.get("wall_seconds") if isinstance(runtime, dict) else None
+    if wall is not None and not result.get("resumed"):
+        parts.append(f"{float(wall):.1f}s")
+    archive = result.get("archive")
+    if isinstance(archive, dict):
+        state = str(archive.get("archive_status", "")).upper()
+        if state == "VERIFIED":
+            parts.append("archived")
+        elif state == "DISABLED":
+            parts.append("archive disabled")
+        elif state:
+            parts.append(f"archive {state.lower()}")
+    return " · ".join(parts) if parts else "complete"
+
+
+def _progress_name(result: object, fallback: str) -> str:
+    if isinstance(result, dict):
+        value = result.get("name") or result.get("check")
+        if value:
+            return str(value)
+    return fallback
+
+
+def _print_parallel_header(total: int, workers: int) -> None:
+    print(f"Run units         {total}", flush=True)
+    print(f"Workers           {workers}", flush=True)
+    print("Progress          live; completion lines include validation/archive state", flush=True)
+
+
+def _print_parallel_completion(completed: int, total: int, result: object) -> None:
+    width = len(str(total))
+    name = _progress_name(result, f"unit-{completed}")
+    detail = _progress_detail(result)
+    print(f"  [{completed:>{width}}/{total}] {name}  ✓  {detail}", flush=True)
+
+
 def parallel_map(function: Callable[[T], R], items: Iterable[T]) -> list[R]:
-    """Use maximum safe parallelism for independent CPU-bound run units."""
+    """Run independent CPU-bound units at maximum safe parallelism with live progress.
+
+    Results are returned in input order even though completion is reported as soon
+    as each worker finishes. A heartbeat is printed while long-running units are
+    still active so the terminal never looks stalled.
+    """
 
     units = list(items)
     if not units:
         return []
     workers = min(automatic_worker_count(), len(units))
     _configure_worker_threads()
+    _print_parallel_header(len(units), workers)
+
     if workers == 1:
-        return [function(item) for item in units]
+        results: list[R] = []
+        for index, item in enumerate(units, start=1):
+            result = function(item)
+            results.append(result)
+            _print_parallel_completion(index, len(units), result)
+        return results
+
+    ordered: dict[int, R] = {}
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_configure_worker_threads,
     ) as executor:
-        return list(executor.map(function, units))
+        futures = {
+            executor.submit(function, item): index
+            for index, item in enumerate(units)
+        }
+        pending = set(futures)
+        completed = 0
+        while pending:
+            done, pending = wait(
+                pending,
+                timeout=15.0,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                active = min(workers, len(pending))
+                print(
+                    f"  [{completed}/{len(units)}] working · "
+                    f"{len(pending)} remaining · {active} workers active",
+                    flush=True,
+                )
+                continue
+            for future in sorted(done, key=lambda item: futures[item]):
+                index = futures[future]
+                result = future.result()
+                ordered[index] = result
+                completed += 1
+                _print_parallel_completion(completed, len(units), result)
+    return [ordered[index] for index in range(len(units))]
 
 
 def scientific_settings(scenario: dict) -> dict:

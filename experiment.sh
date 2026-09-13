@@ -103,11 +103,6 @@ BANNER
   if [[ -t 1 ]]; then
     printf '\033[0m'
   fi
-  cat <<'EOF'
-
-  MODEL  →  QUALIFY  →  CALIBRATE  →  FREEZE  →  CONFIRM  →  ANALYZE
-     independent runs saturate available compute whenever scientifically safe
-EOF
 }
 
 if [[ -x .venv/bin/python ]]; then
