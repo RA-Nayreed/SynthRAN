@@ -39,7 +39,8 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("frozen design failed its integrity check")
     if value.get("schema_version") != 1 or value.get("experiment") != "ex1":
         raise ValueError("unsupported frozen Experiment 1 design")
-    conditions = value.get("confirmation", {}).get("conditions", {})
+    confirmation = value.get("confirmation", {})
+    conditions = confirmation.get("conditions", {})
     required = {
         "always-powered",
         "low-independent",
@@ -51,7 +52,10 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
     }
     if set(conditions) != required:
         raise ValueError("frozen confirmation treatment matrix is incomplete")
-    seeds = value.get("confirmation", {}).get("seeds", [])
+    order = confirmation.get("condition_order", [])
+    if len(order) != len(required) or set(order) != required:
+        raise ValueError("frozen confirmation condition order is incomplete")
+    seeds = confirmation.get("seeds", [])
     if not seeds or len(seeds) != len(set(seeds)):
         raise ValueError("frozen confirmation seeds must be unique and non-empty")
     return value
@@ -137,6 +141,7 @@ def run(campaign_root: str | Path) -> dict[str, Any]:
         HERE / "campaign.py",
         HERE / "population_calibration.py",
         HERE / "freeze.py",
+        HERE / "confirmation.py",
     ]
     campaign_state = campaign._read_json(root / "campaign.json")
     value: dict[str, Any] = {
@@ -160,6 +165,7 @@ def run(campaign_root: str | Path) -> dict[str, Any]:
             "experimental_unit": study["statistics"]["experimental_unit"],
             "sensor_count": n_star,
             "seeds": seeds,
+            "condition_order": declared,
             "conditions": {name: condition_map[name] for name in declared},
         },
         "statistics": study["statistics"],

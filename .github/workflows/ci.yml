@@ -118,12 +118,13 @@ jobs:
           print("calibration selection contracts OK")
           PY
 
-      - name: Validate confirmation freeze contract
+      - name: Validate freeze and confirmation matrix contracts
         run: |
           python - <<'PY'
           import json
           import tempfile
           from pathlib import Path
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import confirmation
           from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import freeze
 
           with tempfile.TemporaryDirectory() as tmp:
@@ -150,10 +151,13 @@ jobs:
               }))
               design = freeze.run(root)
               freeze.validate(design)
+              tasks = confirmation.build_tasks(root, design)
               assert len(design["confirmation"]["conditions"]) == 7
               assert len(design["confirmation"]["seeds"]) == 30
               assert design["confirmation"]["sensor_count"] == 32
-              print("confirmation freeze contract OK")
+              assert len(tasks) == 210
+              assert len({task["name"] for task in tasks}) == 210
+              print("freeze and confirmation matrix contracts OK")
           PY
 
       - name: Parse versioned YAML and citation metadata
