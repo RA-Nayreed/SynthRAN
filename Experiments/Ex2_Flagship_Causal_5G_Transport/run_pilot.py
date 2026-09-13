@@ -15,6 +15,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+
+from synthran.experiments import load_scenario
+
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 PLAN = EXPERIMENT_DIR / "pilot-plan-v1.json"
 PILOT_DEFAULT = ROOT / "results/exp2-matched-trace/pilot-seed1001"
@@ -230,8 +233,6 @@ def udp_probe(ran, broker, b, dst, rate, seconds, packet_bytes, port):
 
 
 def calibrate(plan, scenario, baseline, outdir):
-    from synthran.experiment_scenario import load_scenario
-
     cfg = load_scenario(scenario)
     nodes = cfg["deployment"]["nodes"]
     ran, broker = nodes["ran"], nodes["broker"]
@@ -340,8 +341,6 @@ def finish_bg(tx, rx, timeout):
 
 
 def matched_block(plan, scenario, pilot, baseline, outdir, lstar, ran, broker, b, dst):
-    from synthran.experiment_scenario import load_scenario
-
     cfg = load_scenario(scenario)
     mqtt = cfg.get("mqtt", {})
     model = cfg.get("model", {})

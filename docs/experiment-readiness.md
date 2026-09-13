@@ -5,7 +5,7 @@
 There are **seven experiment families**, not seven runs or seven promised papers.
 Readiness tests are a prerequisite, not an eighth scientific experiment. Each
 family contains controlled treatments, independent source seeds and repeated
-transport runs; the final run count is set after an operating-point pilot.
+transport runs; the final run count is set by each frozen study design.
 
 | Family | Role | Primary question |
 | --- | --- | --- |
@@ -22,16 +22,36 @@ study. The other families should resolve a specific uncertainty, not become a
 large undirected configuration sweep. No code change establishes novelty or
 guarantees publication.
 
-## What this change qualifies
+## Control-plane boundary
 
-The experiment implements the model-to-MQTT evidence path. The testbed invokes
+SynthRAN deliberately separates infrastructure authority from scientific
+campaign execution:
+
+```text
+./deploy.sh       reserve / provision / deploy / verify / attest infrastructure
+./experiment.sh   qualify / calibrate / freeze / confirm / analyze science
+```
+
+Experiment 1 is local-only and never consults active deployment state. Later
+physical experiments may attach **read-only** to an already accepted deployment.
+Experiment code must not reserve, repair, rebuild, power-cycle or reconfigure
+infrastructure merely to make a scientific run pass.
+
+The accepted-testbed attachment proves that the saved deployment identity and
+acceptance evidence are internally consistent and compatible with the requested
+experiment. It does **not** prove current RF, UE, PDU-session or user-plane
+liveness. Those claims require fresh experiment-time measurements.
+
+## Implemented model-to-MQTT contract
+
+The repository implements the model-to-MQTT evidence path. The testbed invokes
 pinned upstream N320 bring-up; local validation does not demonstrate radio
 synchronization, attachment or slice enforcement. Proposed gateway mitigation
 policies remain campaign work.
 
 | Layer | Implemented contract |
 | --- | --- |
-| Sensors and gateways | `devices` defines the modeled population; each sensor maps to one entry in `deployment.ues` through `gateway`. Extra UEs need not have sensors. |
+| Sensors and gateways | `devices` defines the modeled population; each sensor maps to one selected gateway. Extra UEs need not have sensors. |
 | Sensing | Opportunities occur at `sensing_phase_ms + k * sensing_interval_ms`. Omitted phases are independently randomized from the seed. Unavailable or busy opportunities do not accumulate catch-up samples. |
 | Harvesting | Explicit CSV timestamps and units, held/linear interpolation, per-sensor traces, and seeded common/independent lognormal inputs. `wpt_power_w` changes harvesting only. |
 | Energy | One series-source circuit with blocking diode, leakage, constant-current state loads and explicit source/load/loss accounting. Listening and transmission consume energy. |
@@ -50,6 +70,41 @@ waveform decoder. Adaptive slot occupancy is an ideal modeled observation, not
 a calibrated energy detector. SIC uses minimum instantaneous SINR over the
 packet, not a measured BLER or mutual-information link abstraction.
 
+## Experiment 1 v2 lifecycle
+
+The versioned Experiment 1 design lives in:
+
+```text
+Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml
+```
+
+Its dependency chain is strict:
+
+```text
+qualification
+    ↓
+power calibration
+    ↓
+population calibration
+    ↓
+freeze confirmation design
+    ↓
+confirmation
+    ↓
+analysis
+```
+
+Qualification must pass before calibration. Calibration re-discovers operating
+points from the current qualified implementation rather than inheriting the
+historical 500/1000/2000 µW values or historical N*=32 as answers. Confirmation
+uses a disjoint held-out seed block and refuses implementation drift after the
+freeze. Scientific run state and S3 archive state are independent: an archive
+failure must not cause a valid stochastic run to be regenerated.
+
+The historical campaign under `results/exp1-energy-correlation/` remains
+reference evidence only. The current model semantics differ enough that old
+traces must not be compared to v2 as if only one treatment changed.
+
 ## Configuration and migration
 
 Do not compare corrected results to old-main traces as if only a treatment
@@ -57,20 +112,20 @@ changed. Older sensing intervals, WPT overrides and SIC residual controls were
 ineffective, and the energy and decode-time semantics differed. Regenerate a
 complete campaign with one pinned implementation.
 
-The default transmit duration is now 5 ms. A transmit duration longer than an RX
-slot is rejected. The old sample `wpt_power_w` fields have been removed: leaving
-the field absent derives harvesting from RF coverage, while providing it now
-applies the requested control. Zero watts remains exactly zero. The UMa
-below-10-m branch is clamped to its 10-m boundary; that is not validation of
-near-field coverage.
+The default transmit duration is 5 ms. A transmit duration longer than an RX
+slot is rejected. Leaving `wpt_power_w` absent derives harvesting from RF
+coverage, while providing it applies the requested control. Zero watts remains
+exactly zero. The UMa below-10-m branch is clamped to its 10-m boundary; that is
+not validation of near-field coverage.
 
 `collision_window_ms` and `durations_ms.listening` are obsolete and trigger a
 warning when supplied. Actual packet overlap controls decoding; periodic
 opportunities and command slots determine listening time. Remove those fields
 from treatment sweeps.
 
-Example sensor mapping in `Experiment/configs/<name>.yml`, with both gateways
-selected under `deployment.ues` in the testbed scenario:
+Study-specific scientific configuration belongs beside the study under
+`Experiments/` or in an explicitly supplied experiment configuration. A sensor
+gateway mapping follows this structure:
 
 ```yaml
 devices:
@@ -78,13 +133,11 @@ devices:
   sensor-b: {gateway: uesim01, sensing_interval_ms: 1000, sensing_phase_ms: 625}
 ```
 
-Here `uesim02` is available for a separately controlled competing workload. Its
-publisher emits no sensor events. Changing the UE list does not create or drop
-modeled sensors. Interactive UE renaming preserves the sensor population and
-remaps gateways positionally; removing a still-needed gateway requires an
-explicit scenario edit.
+A separately selected UE may be reserved for controlled competing traffic and
+need not publish sensor events. Changing the testbed UE list does not create or
+drop modeled sensors; the scientific mapping remains explicit.
 
-For a matched-marginal energy-dependence study, replace `model.energy` with:
+For a matched-marginal energy-dependence study, use:
 
 ```yaml
 energy:
@@ -126,55 +179,57 @@ separately; it is not a measured battery model.
 
 ## Local validation
 
-No test files are retained. Local checks can render the selected testbed and
-prepare an immutable workload without booking resources:
+No standalone test-file tree is retained. Repository checks cover syntax,
+planner contracts, qualification semantics, calibration/freeze/confirmation
+contracts, analysis metrics, S3 archival, and accepted-testbed attachment.
+Useful local checks are:
 
 ```sh
 python -m pip install -e '.[experiment,deployment]'
-python -m compileall -q synthran Experiment
+python -m compileall -q synthran Experiments
 bash -n deploy.sh
-./deploy.sh --config scenarios/reference.yml --testbed-only --dry-run
-./deploy.sh --config scenarios/reference.yml --dry-run
+bash -n experiment.sh
+python -m synthran.experiments plan --experiment ex1 --phase all --dry-run
 ```
 
-Ansible syntax checks and deterministic model/bundle checks establish local
-consistency. They do not prove live MQTT delivery or physical 5G acceptance.
-The PR records the temporary validation performed for this refactor.
+For deployment work, use a caller-supplied deployment configuration with
+`./deploy.sh --config <deployment.yml> --dry-run`. SynthRAN intentionally no
+longer ships a duplicated `scenarios/` preset catalog.
+
+These checks establish local consistency. They do not prove live MQTT delivery,
+physical 5G acceptance, or a completed scientific campaign.
 
 ## Freeze and intervene on one source workload
 
-Use fresh output directories; existing bundles are not overwritten.
+Low-level bundle tools remain available for development and for constructing a
+prespecified timing intervention. Use fresh output directories; existing bundles
+are not overwritten.
 
 ```sh
-python -m Experiment.cli model run --config scenarios/reference.yml --output results/source/model
-python -m Experiment.cli workload validate --source results/source/model
-python -m Experiment.cli workload transform --source results/source/model --output results/permuted/model --variant gap_permutation --seed 101 --warmup-seconds 1
-python -m Experiment.cli workload transform --source results/source/model --output results/periodic/model --variant periodic --warmup-seconds 1
+python -m synthran.cli model run --config synthran/configs/reference.yml --output results/source/model
+python -m synthran.cli workload validate --source results/source/model
+python -m synthran.cli workload transform --source results/source/model --output results/permuted/model --variant gap_permutation --seed 101 --warmup-seconds 1
+python -m synthran.cli workload transform --source results/source/model --output results/periodic/model --variant periodic --warmup-seconds 1
 ```
 
-These are command examples, not the final study duration or warm-up. The
-intervention preserves pre-warm-up events, payload bytes, sensor/gateway/event
-order, event count, measurement endpoints and full horizon. Gap permutation
-also preserves the global inter-release-gap multiset. It is a finite gap-order
-surrogate, not an independent renewal process. Periodic spacing is global;
-neither intervention claims to preserve every sensor's gap distribution.
+These are implementation-level examples, not the public publication-campaign
+interface and not a final study duration or warm-up. The intervention preserves
+pre-warm-up events, payload bytes, sensor/gateway/event order, event count,
+measurement endpoints and full horizon. Gap permutation also preserves the
+global inter-release-gap multiset. It is a finite gap-order surrogate, not an
+independent renewal process. Periodic spacing is global; neither intervention
+claims to preserve every sensor's gap distribution.
 
 Keep native model time at 1×. A transformed trace retains its original
 generation fields as provenance but is marked ineligible for physical AoI.
 Use transport delay and deadline measures for that contrast. Evaluate physical
 freshness and causal online mitigation on native arrivals.
 
-Validate the prepared-workload deployment path without changing infrastructure:
-
-```sh
-./deploy.sh --config scenarios/reference.yml --prepared-workload results/permuted/model --dry-run
-```
-
-On an already qualified matching deployment, a separately authorized physical
-or software replay uses `--workload-only --prepared-workload <bundle>` with the
-same explicit scenario. This path imports the prepared bundle rather than
-regenerating it. Sensor/gateway mapping and MQTT QoS, topic prefix and payload
-size must match. Import validation precedes reservation or deployment changes.
+For physical experiments, prepared workloads are consumed by the internal
+accepted-testbed runtime only after compatibility with the active deployment has
+been proved. The experiment layer reuses the accepted deployment and does not
+book or repair infrastructure. Sensor/gateway mapping and MQTT QoS, topic prefix
+and payload size must match before a prepared bundle is imported.
 
 `source-manifest.json` records hashes of the Python implementation and installed
 model dependencies. It is an integrity record, not a signature, and does not
@@ -230,9 +285,9 @@ source seeds rather than treating packets as independent replications.
 
 Before booking confirmation runs, demonstrate clean N320 attach and routing on
 the chosen fixed core/RAN pair, including the selected MBIM/QMI data interface,
-subscriber/session identity and broker source address. The R2Lab modem connection follows the pinned upstream implementation; the
-experiment routes its broker through that established interface. Existing
-cluster identity checks are not proof of live physical IMSI or DNN.
+subscriber/session identity and broker source address. That acceptance belongs
+to `deploy.sh`; the experiment layer consumes the resulting accepted identity
+read-only.
 
 Capture effective images/configuration and detect drift before and after each
 run. Establish host clock bounds, pilot release jitter and queue occupancy,
@@ -243,8 +298,10 @@ claiming a larger physical UE population.
 
 Slice names, DNNs and configured ratios alone are not uplink isolation evidence.
 RF robustness needs measured physical SINR/BLER/RSRP and controlled attenuation
-or placement, not a modeled Ambient-IoT distance sweep. Experiment 2 includes a configurable RFSIM competing-traffic pilot. Gateway
-pacing and latest-update policies, physical competing-traffic qualification,
-calibrated harvesting and live image/configuration attestation remain subsequent
-work. Stop a campaign if these required gates
-are absent; report a failed qualification, not a positive scientific result.
+or placement, not a modeled Ambient-IoT distance sweep. Experiment 2 retains a
+legacy RFSIM transport pilot while its physical campaign is migrated to the
+standalone `experiment.sh` control plane. Gateway pacing and latest-update
+policies, physical competing-traffic qualification, calibrated harvesting and
+live image/configuration attestation remain subsequent work. Stop a campaign if
+required gates are absent; report a failed qualification, not a positive
+scientific result.

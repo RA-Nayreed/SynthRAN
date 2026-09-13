@@ -7,10 +7,10 @@
 <!-- Check every area this PR changes. -->
 
 - [ ] `deploy.sh` / deployment controller
-- [ ] `scenarios/` / infrastructure configuration
 - [ ] `deployment/` / Ansible or testbed integration
-- [ ] `synthran/` / Python support code
-- [ ] `Experiment/` / scientific experiment work
+- [ ] `experiment.sh` / scientific experiment controller
+- [ ] `Experiments/` / study-specific scientific experiment work
+- [ ] `synthran/` / reusable Python support code
 - [ ] Documentation / metadata only
 - [ ] Third-party provenance or licensing
 
@@ -22,11 +22,14 @@
 
 <!-- List commands/runs actually performed. Do not claim checks that were not run. -->
 
-- [ ] `bash -n deploy.sh` when shell control flow changed
-- [ ] `python3 -m compileall -q synthran` when Python changed
-- [ ] Relevant scenario `--dry-run` when deployment configuration changed
+- [ ] `bash -n deploy.sh` when deployment shell control flow changed
+- [ ] `bash -n experiment.sh` when experiment shell control flow changed
+- [ ] `python3 -m compileall -q synthran Experiments` when Python changed
+- [ ] Relevant deployment `--dry-run` when infrastructure configuration changed
+- [ ] Experiment planner/contract validation when scientific control flow changed
 - [ ] Virtual deployment acceptance when required
 - [ ] Authorized physical R2Lab acceptance when required
+- [ ] Real stochastic campaign execution when a scientific result is claimed
 - [ ] Not applicable; explain why below
 
 Validation evidence / explanation:
@@ -41,11 +44,13 @@ Validation evidence / explanation:
 - [ ] This PR does not describe implemented behavior as physically validated unless a live acceptance run was performed.
 - [ ] This PR does not turn one successful run into a general scientific claim.
 - [ ] Experiment changes preserve enough configuration/provenance to reproduce the study.
+- [ ] Frozen experiment designs are not silently modified after confirmation begins.
 
-## Deployment safety
+## Deployment and experiment safety
 
 - [ ] No wildcard/broad cleanup was introduced for shared resources.
-- [ ] Resource mutations remain bound to selected/owned authority.
+- [ ] Resource mutations remain bound to selected/owned deployment authority.
+- [ ] Scientific experiment code does not reserve, repair, rebuild, power-cycle, or reconfigure accepted testbed infrastructure merely to make a run pass.
 - [ ] No credentials, tokens, private keys, subscriber secrets, or machine-specific access files were committed.
 - [ ] Not applicable to this PR.
 
