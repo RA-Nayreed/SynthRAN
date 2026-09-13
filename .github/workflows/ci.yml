@@ -75,30 +75,48 @@ jobs:
           print(f"qualification passed: {result['checks_passed']}/{result['checks_total']}")
           PY
 
-      - name: Validate power-calibration selection contract
+      - name: Validate calibration selection contracts
         run: |
           python - <<'PY'
-          import importlib.util
-          from pathlib import Path
           import yaml
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import campaign
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import population_calibration
 
-          path = Path("Experiments/Ex1_Energy_Correlation_and_Burst_Formation/campaign.py")
-          spec = importlib.util.spec_from_file_location("ex1_campaign_ci", path)
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          manifest = yaml.safe_load(path.with_name("experiment.yml").read_text())
-          design = manifest["study"]["power_calibration"]
+          manifest = yaml.safe_load(open(
+              "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml",
+              encoding="utf-8",
+          ))
+
+          power_design = manifest["study"]["power_calibration"]
           active = [0.08, 0.21, 0.49, 0.79, 0.94]
-          aggregates = [
+          power_rows = [
               {"mean_power_w": power, "active_fraction_mean": fraction}
-              for power, fraction in zip(design["candidate_mean_power_w"], active)
+              for power, fraction in zip(power_design["candidate_mean_power_w"], active)
           ]
-          result = module._select_power_points(aggregates, design)
-          selected = result["selected"]
-          assert selected["low"]["mean_power_w"] == 0.0005, result
-          assert selected["knee"]["mean_power_w"] == 0.001, result
-          assert selected["high"]["mean_power_w"] == 0.002, result
-          print("power calibration selection contract OK")
+          power = campaign._select_power_points(power_rows, power_design)
+          assert power["selected"]["low"]["mean_power_w"] == 0.0005, power
+          assert power["selected"]["knee"]["mean_power_w"] == 0.001, power
+          assert power["selected"]["high"]["mean_power_w"] == 0.002, power
+
+          population_design = manifest["study"]["population_calibration"]
+          collisions = [0.01, 0.04, 0.11, 0.22, 0.40]
+          decode = [10.0, 20.0, 30.0, 27.0, 15.0]
+          population_rows = [
+              {
+                  "sensor_count": count,
+                  "collision_exposure_mean": collision,
+                  "decode_rate_per_s_mean": rate,
+                  "jain_decode_fairness_mean": 0.9,
+              }
+              for count, collision, rate in zip(
+                  population_design["candidate_sensor_counts"], collisions, decode
+              )
+          ]
+          population = population_calibration._select_population(
+              population_rows, population_design
+          )
+          assert population["selected"]["sensor_count"] == 32, population
+          print("calibration selection contracts OK")
           PY
 
       - name: Parse versioned YAML and citation metadata

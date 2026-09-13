@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
-import importlib.util
+import importlib
 import json
 import math
 import os
@@ -41,6 +41,28 @@ _THREAD_ENV_NAMES = (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 )
+_EX1_PHASE_HANDLERS = {
+    "power-calibration": (
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.campaign",
+        "power_calibration",
+    ),
+    "population-calibration": (
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.population_calibration",
+        "run",
+    ),
+    "freeze": (
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.freeze",
+        "run",
+    ),
+    "confirmation": (
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.confirmation",
+        "run",
+    ),
+    "analysis": (
+        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analysis_v2",
+        "run",
+    ),
+}
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -53,7 +75,6 @@ def automatic_worker_count() -> int:
         available = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         available = os.cpu_count() or 1
-
     try:
         quota_text, period_text = Path("/sys/fs/cgroup/cpu.max").read_text(
             encoding="utf-8"
@@ -69,19 +90,12 @@ def automatic_worker_count() -> int:
 
 
 def _configure_worker_threads() -> None:
-    """Prevent nested numerical pools from oversubscribing a process worker."""
-
     for name in _THREAD_ENV_NAMES:
         os.environ[name] = "1"
 
 
 def parallel_map(function: Callable[[T], R], items: Iterable[T]) -> list[R]:
-    """Use maximum safe parallelism for independent CPU-bound run units.
-
-    The result order remains deterministic even if workers finish out of order.
-    Phase implementations decide which units are scientifically independent;
-    dependency barriers are never crossed merely to increase utilization.
-    """
+    """Use maximum safe parallelism for independent CPU-bound run units."""
 
     units = list(items)
     if not units:
@@ -98,8 +112,6 @@ def parallel_map(function: Callable[[T], R], items: Iterable[T]) -> list[R]:
 
 
 def scientific_settings(scenario: dict) -> dict:
-    """Return the complete configured scientific contract without defaults."""
-
     return {key: scenario[key] for key in SCIENTIFIC_SECTIONS if key in scenario}
 
 
@@ -124,19 +136,16 @@ def load_scenario(path: str | Path) -> dict:
     data = load_testbed(source) if isinstance(raw, dict) and "deployment" in raw else raw
     if not isinstance(data, dict):
         raise ValueError("experiment scenario must be a mapping")
-
     experiment_config = data.get("experiment", {}).get("config")
     if experiment_config:
         source = Path(experiment_config)
         settings = yaml.safe_load(source.read_text(encoding="utf-8"))
         _apply_experiment_settings(data, settings)
-
     for section in REQUIRED_SECTIONS:
         if not isinstance(data.get(section), dict):
             raise ValueError(f"experiment requires mapping: {section}")
     if "measurement" in data and not isinstance(data["measurement"], dict):
         raise ValueError("experiment measurement must be a mapping")
-
     ues = data.get("deployment", {}).get("ues", data.get("gateways", []))
     if not data["devices"]:
         raise ValueError("devices must define at least one sensor")
@@ -151,7 +160,6 @@ def load_scenario(path: str | Path) -> dict:
         if gateway not in ues:
             raise ValueError(f"sensor {name!r} requires a gateway from deployment.ues")
         device["gateway"] = gateway
-
     data["_source_directory"] = str(source.parent)
     trace = data["model"].get("energy", {}).get("trace")
     if trace and not str(trace).startswith("builtin:"):
@@ -196,7 +204,6 @@ def invoke(phase: str, config: str | Path, **options) -> None:
         if not source_config:
             raise ValueError("experiment.configure requires experiment.config")
         options["source_config"] = source_config
-
     command = [sys.executable, entrypoint, phase, "--config", str(Path(config).resolve())]
     for name, value in options.items():
         if value:
@@ -333,16 +340,20 @@ def _mark_phase(root: Path, phase: str) -> None:
     _write_json(path, campaign)
 
 
-def _study_module(experiment: str):
-    if experiment != "ex1":
-        raise ValueError(f"no local study implementation for {experiment}")
-    path = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/campaign.py"
-    spec = importlib.util.spec_from_file_location("synthran_ex1_campaign", path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"cannot load experiment implementation: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _phase_handler(experiment: str, phase: str):
+    if experiment != "ex1" or phase not in _EX1_PHASE_HANDLERS:
+        raise ValueError(f"{experiment} phase {phase!r} is not implemented yet")
+    module_name, function_name = _EX1_PHASE_HANDLERS[phase]
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            raise ValueError(f"{experiment} phase {phase!r} is not implemented yet") from exc
+        raise
+    handler = getattr(module, function_name, None)
+    if not callable(handler):
+        raise ValueError(f"{experiment} phase {phase!r} has no callable implementation")
+    return handler
 
 
 def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
@@ -350,7 +361,6 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
     selected = _selected_phases(manifest, phase)
     resource = manifest["resource"]
     archive = manifest.get("archive", {})
-
     _section(f"Planning {manifest['display_name']}")
     print(f"Experiment        {manifest['id']}")
     print(f"Design version    {manifest['design_version']}")
@@ -361,17 +371,14 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
     )
     print(f"Requested phase   {phase}")
     print(f"Parallel workers  {automatic_worker_count()} available automatically")
-
     _section("Execution order")
     for index, item in enumerate(selected, start=1):
         print(f"  {index}. {item['id']:<24} {item['name']}")
-
     _section("Execution policy")
     print("Independent runs  maximum safe parallelism")
     print("Phase barriers    preserved")
     print("Numeric threads   1 per worker")
     print("Result identity   deterministic regardless of completion order")
-
     if archive:
         _section("Result archival")
         print(f"Backend           {archive.get('backend', 'disabled')}")
@@ -381,7 +388,6 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
             print(f"Bucket            {archive.get('bucket')}")
             print(f"Prefix            {archive.get('prefix')}")
             print(f"Replay evidence   {archive.get('replay', 'if_available')}")
-
     if verbose:
         _section("Manifest")
         print(yaml.safe_dump(manifest, sort_keys=False).rstrip())
@@ -402,8 +408,6 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
     print(f"ID                {root.name}")
     print(f"Results           {root.relative_to(ROOT)}")
     print(f"Parallel workers  {automatic_worker_count()} available automatically")
-
-    study = None
     for item in selected:
         phase_id = item["id"]
         _require_phase_dependencies(root, item)
@@ -423,24 +427,13 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
             _mark_phase(root, phase_id)
             print("Qualification     PASSED")
             continue
-
-        study = study or _study_module(experiment)
-        if experiment == "ex1" and phase_id == "power-calibration":
-            selection = study.power_calibration(root)
-            _mark_phase(root, phase_id)
-            print(
-                "Calibration       PASSED · "
-                + ", ".join(
-                    f"{name}={row['mean_power_w'] * 1e6:g} µW"
-                    for name, row in selection["selected"].items()
-                )
-            )
-            continue
-
-        raise ValueError(
-            f"{manifest['display_name']} phase {phase_id!r} is not implemented yet"
-        )
-
+        handler = _phase_handler(experiment, phase_id)
+        result = handler(root)
+        _mark_phase(root, phase_id)
+        if isinstance(result, dict) and result.get("status"):
+            print(f"Phase status      {str(result['status']).upper()}")
+        else:
+            print("Phase status      COMPLETE")
     if verbose:
         _section("Campaign state")
         print(json.dumps(_campaign(root), indent=2, sort_keys=True))

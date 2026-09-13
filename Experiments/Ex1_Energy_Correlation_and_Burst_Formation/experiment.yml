@@ -67,6 +67,7 @@ study:
     target_collision_exposure: 0.10
     accepted_collision_exposure: [0.03, 0.25]
     minimum_relative_decode_rate: 0.50
+    require_interior: true
   confirmation:
     seeds:
       first: 2001
