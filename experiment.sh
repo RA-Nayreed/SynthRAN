@@ -125,7 +125,7 @@ command -v flock >/dev/null || { echo "flock is required to protect experiment c
 exec 9>.synthran/experiment.lock
 if ! flock -n 9; then
   echo "Another SynthRAN experiment controller is already running." >&2
-  echo "Inspect it with: pgrep -af 'experiment.sh|synthran.experiments|synthran.ex2_control'" >&2
+  echo "Inspect it with: pgrep -af 'experiment.sh|synthran.experiments'" >&2
   exit 1
 fi
 printf '%s\n' "$$" 1>&9
@@ -209,14 +209,8 @@ fi
 COMMAND=run
 $DRY_RUN && COMMAND=plan
 
-if [[ "$EXPERIMENT" == ex2 ]]; then
-  args=("$COMMAND" --phase "$PHASE")
-  $VERBOSE && args+=(--verbose)
-  $NO_INPUT && args+=(--no-input)
-  "$SYNTHRAN_PYTHON" -m synthran.ex2_control "${args[@]}"
-else
-  args=("$COMMAND" --experiment "$EXPERIMENT" --phase "$PHASE")
-  $DRY_RUN && args+=(--dry-run)
-  $VERBOSE && args+=(--verbose)
-  "$SYNTHRAN_PYTHON" -m synthran.experiments "${args[@]}"
-fi
+args=("$COMMAND" --experiment "$EXPERIMENT" --phase "$PHASE")
+$DRY_RUN && args+=(--dry-run)
+$VERBOSE && args+=(--verbose)
+$NO_INPUT && args+=(--no-input)
+"$SYNTHRAN_PYTHON" -m synthran.experiments "${args[@]}"
