@@ -48,13 +48,13 @@
 
     - name: Inspect the partial broker receipt artifact
       ansible.builtin.stat:
-        path: "/var/log/synthran/receipts-{{ run_dir | basename }}.jsonl"
+        path: "/var/log/synthran/receipts-{{ run_dir | hash('sha256') }}.jsonl"
       register: synthran_receipt_file
       failed_when: false
 
     - name: Read partial broker receipts
       ansible.builtin.slurp:
-        src: "/var/log/synthran/receipts-{{ run_dir | basename }}.jsonl"
+        src: "/var/log/synthran/receipts-{{ run_dir | hash('sha256') }}.jsonl"
       register: synthran_receipts
       when: synthran_receipt_file.stat.exists | default(false)
       failed_when: false
@@ -69,6 +69,13 @@
       when:
         - synthran_receipts is defined
         - synthran_receipts.content is defined
+      failed_when: false
+
+    - name: Remove retained remote broker receipts
+      ansible.builtin.file:
+        path: "/var/log/synthran/receipts-{{ run_dir | hash('sha256') }}.jsonl"
+        state: absent
+      when: synthran_receipt_file.stat.exists | default(false)
       failed_when: false
 
     - name: Read bounded broker and collector service logs
@@ -108,7 +115,7 @@
           - -m
           - synthran.workload.cleanup
           - --marker
-          - "synthran-publisher-{{ run_dir | basename }}.jsonl"
+          - "synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl"
       environment:
         PYTHONPATH: /opt/synthran-source
       changed_when: false
@@ -116,13 +123,13 @@
 
     - name: Inspect the current physical publisher artifact
       ansible.builtin.stat:
-        path: "/var/log/synthran-publisher-{{ run_dir | basename }}.jsonl"
+        path: "/var/log/synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl"
       register: synthran_physical_publisher_file
       failed_when: false
 
     - name: Read partial physical publisher records
       ansible.builtin.slurp:
-        src: "/var/log/synthran-publisher-{{ run_dir | basename }}.jsonl"
+        src: "/var/log/synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl"
       register: synthran_physical_publisher
       when: synthran_physical_publisher_file.stat.exists | default(false)
       failed_when: false
@@ -137,6 +144,13 @@
       when:
         - synthran_physical_publisher is defined
         - synthran_physical_publisher.content is defined
+      failed_when: false
+
+    - name: Remove retained remote physical publisher artifact
+      ansible.builtin.file:
+        path: "/var/log/synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl"
+        state: absent
+      when: synthran_physical_publisher_file.stat.exists | default(false)
       failed_when: false
 
     - name: Remove the physical publisher plaintext MQTT credential
