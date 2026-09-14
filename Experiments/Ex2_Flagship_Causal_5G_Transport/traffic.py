@@ -1,6 +1,6 @@
 """Accepted-testbed SSH and competing-traffic helpers for Experiment 2."""
 from __future__ import annotations
-import json, shlex, subprocess, time
+import hashlib, json, shlex, subprocess, time
 from pathlib import Path
 from typing import Any
 import yaml
@@ -31,7 +31,18 @@ def _inventory_host_vars(environment: dict[str, Any], hostname: str) -> dict[str
     return found
 
 
+def _ssh_control_path(environment: dict[str, Any], hostname: str) -> Path:
+    """Return a short control socket owned by the accepted deployment context."""
+    private = Path(environment["attachment"]["private_execution_dir"])
+    directory = private / "ssh"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    token = hashlib.sha256(hostname.encode("utf-8")).hexdigest()[:12]
+    return directory / token
+
+
 def _ssh_base(environment: dict[str, Any], hostname: str, *, scp: bool = False) -> tuple[list[str], str]:
+    """Use the exact SSH contract emitted by deploy.sh, with connection reuse."""
     variables = _inventory_host_vars(environment, hostname)
     binary = "scp" if scp else "ssh"
     command = [binary]
@@ -41,6 +52,16 @@ def _ssh_base(environment: dict[str, Any], hostname: str, *, scp: bool = False) 
     key = variables.get("ansible_ssh_private_key_file")
     if key:
         command.extend(["-i", str(key)])
+    command.extend(
+        [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPersist=120",
+            "-o",
+            f"ControlPath={_ssh_control_path(environment, hostname)}",
+        ]
+    )
     target_host = str(variables.get("ansible_host") or hostname)
     user = variables.get("ansible_user")
     target = f"{user}@{target_host}" if user else target_host
@@ -49,12 +70,17 @@ def _ssh_base(environment: dict[str, Any], hostname: str, *, scp: bool = False) 
 
 def _ssh(environment: dict[str, Any], hostname: str, remote: str, *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
     base, target = _ssh_base(environment, hostname)
-    return _run([*base, "-n", target, remote], capture=capture, check=check)
+    return _run(
+        [*base, "-n", target, remote],
+        capture=capture,
+        check=check,
+        display=False,
+    )
 
 
 def _scp(environment: dict[str, Any], hostname: str, source: Path, destination: str) -> None:
     base, target = _ssh_base(environment, hostname, scp=True)
-    _run([*base, source, f"{target}:{destination}"])
+    _run([*base, source, f"{target}:{destination}"], display=False)
 
 
 def _transport_value(binding: dict[str, Any], key: str) -> Any:
