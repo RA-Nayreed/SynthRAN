@@ -174,6 +174,7 @@ def prepare(
     mqtt = scenario["mqtt"]
     manifest = json.loads((run / "model/source-manifest.json").read_text())
     variables = {
+        "run_dir": str(run),
         "mqtt_start_delay_seconds": mqtt.get("start_delay_seconds", 30),
         "mqtt_broker_address": mqtt.get("broker_address"),
         "mqtt_port": mqtt.get("port", 1883),
