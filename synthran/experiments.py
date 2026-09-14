@@ -1,9 +1,9 @@
 """Scientific experiment control plane for SynthRAN.
 
 ``experiment.sh`` is the only user-facing experiment launcher. This module owns
-experiment manifests, scientific scenario loading, resource-aware parallelism,
-campaign identity, and the handoff to study/runtime implementations. Individual
-studies live under ``Experiments/``.
+experiment discovery, campaign lifecycle, resource attachment, and dispatch to
+study-specific phase implementations. Individual studies live under
+``Experiments/``; accepted-testbed mechanics remain read-only from here.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 import importlib
+import inspect
 import json
 import math
 import os
@@ -19,19 +20,26 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 
 import yaml
 
 from synthran.archive import archive_campaign_snapshot
+from synthran.experiment_environment import inspect_active_deployment
 from synthran.scenario import load_scenario as load_testbed
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = {
     "ex1": ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml",
+    "ex2": ROOT / "Experiments/Ex2_Flagship_Causal_5G_Transport/experiment.yml",
 }
 RESULTS_ROOT = ROOT / "results/experiments"
-ACTIVE_EXPERIMENT = ROOT / ".synthran/active-experiment.json"
+_ACTIVE_ENDPOINTS = {
+    # Preserve the established Ex1 endpoint so in-progress local campaigns remain usable.
+    "ex1": ROOT / ".synthran/active-experiment.json",
+    # Preserve the established Ex2 endpoint so physical acceptance can resume safely.
+    "ex2": ROOT / ".synthran/active-ex2.json",
+}
 REQUIRED_SECTIONS = ("model", "mqtt", "devices")
 OPTIONAL_SECTIONS = ("measurement",)
 SCIENTIFIC_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
@@ -42,45 +50,75 @@ _THREAD_ENV_NAMES = (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 )
-_EX1_PHASE_HANDLERS = {
-    "power-calibration": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.campaign",
-        "power_calibration",
-    ),
-    "population-calibration": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.population_calibration",
-        "run",
-    ),
-    "freeze": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.freeze",
-        "run",
-    ),
-    "confirmation": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.confirmation",
-        "run",
-    ),
-    "analysis": (
-        "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analyze",
-        "run",
-    ),
+_PHASE_HANDLERS = {
+    "ex1": {
+        "power-calibration": (
+            "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.campaign",
+            "power_calibration",
+        ),
+        "population-calibration": (
+            "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.population_calibration",
+            "run",
+        ),
+        "freeze": (
+            "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.freeze",
+            "run",
+        ),
+        "confirmation": (
+            "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.confirmation",
+            "run",
+        ),
+        "analysis": (
+            "Experiments.Ex1_Energy_Correlation_and_Burst_Formation.analyze",
+            "run",
+        ),
+    },
+    "ex2": {
+        "prepare": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.campaign",
+            "prepare",
+        ),
+        "qualification": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.campaign",
+            "qualification",
+        ),
+        "calibration": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.campaign",
+            "calibration",
+        ),
+        "freeze": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.campaign",
+            "freeze",
+        ),
+        "confirmation": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.campaign",
+            "confirmation",
+        ),
+        "analysis": (
+            "Experiments.Ex2_Flagship_Causal_5G_Transport.analysis",
+            "analysis",
+        ),
+    },
 }
-_EX1_CAMPAIGN_ARCHIVE_FILES = {
-    "freeze": (
-        "campaign.json",
-        "qualification/qualification.json",
-        "calibration/power/summary.json",
-        "calibration/power/selection.json",
-        "calibration/population/summary.json",
-        "calibration/population/selection.json",
-        "frozen-design.json",
-    ),
-    "analysis": (
-        "campaign.json",
-        "frozen-design.json",
-        "runs/index.json",
-        "analysis/run-metrics.json",
-        "analysis/summary.json",
-    ),
+_CAMPAIGN_ARCHIVE_FILES = {
+    "ex1": {
+        "freeze": (
+            "campaign.json",
+            "qualification/qualification.json",
+            "calibration/power/summary.json",
+            "calibration/power/selection.json",
+            "calibration/population/summary.json",
+            "calibration/population/selection.json",
+            "frozen-design.json",
+        ),
+        "analysis": (
+            "campaign.json",
+            "frozen-design.json",
+            "runs/index.json",
+            "analysis/run-metrics.json",
+            "analysis/summary.json",
+        ),
+    },
 }
 
 T = TypeVar("T")
@@ -121,7 +159,11 @@ def _progress_detail(result: object) -> str:
         parts.append(str(result["status"]).lower())
     if result.get("resumed"):
         parts.append("reused")
-    runtime = result.get("metrics", {}).get("runtime", {}) if isinstance(result.get("metrics"), dict) else {}
+    runtime = (
+        result.get("metrics", {}).get("runtime", {})
+        if isinstance(result.get("metrics"), dict)
+        else {}
+    )
     wall = runtime.get("wall_seconds") if isinstance(runtime, dict) else None
     if wall is not None and not result.get("resumed"):
         parts.append(f"{float(wall):.1f}s")
@@ -148,7 +190,10 @@ def _progress_name(result: object, fallback: str) -> str:
 def _print_parallel_header(total: int, workers: int) -> None:
     print(f"Run units         {total}", flush=True)
     print(f"Workers           {workers}", flush=True)
-    print("Progress          live; completion lines include validation/archive state", flush=True)
+    print(
+        "Progress          live; completion lines include validation/archive state",
+        flush=True,
+    )
 
 
 def _print_parallel_completion(completed: int, total: int, result: object) -> None:
@@ -315,7 +360,7 @@ def invoke(phase: str, config: str | Path, **options) -> None:
     subprocess.run(command, check=True)
 
 
-def _load_manifest(experiment: str) -> dict:
+def _load_manifest(experiment: str) -> dict[str, Any]:
     try:
         path = EXPERIMENTS[experiment]
     except KeyError as exc:
@@ -338,7 +383,7 @@ def _load_manifest(experiment: str) -> dict:
     return data
 
 
-def _selected_phases(manifest: dict, requested: str) -> list[dict]:
+def _selected_phases(manifest: dict[str, Any], requested: str) -> list[dict[str, Any]]:
     if requested == "all":
         return manifest["phases"]
     for phase in manifest["phases"]:
@@ -365,18 +410,39 @@ def _source_revision() -> str:
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
-def _write_json(path: Path, value: dict) -> None:
+def _read_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return value
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     temporary.replace(path)
 
 
-def _new_campaign(experiment: str, manifest: dict) -> Path:
+def _active_endpoint(experiment: str) -> Path:
+    try:
+        return _ACTIVE_ENDPOINTS[experiment]
+    except KeyError as exc:
+        raise ValueError(f"no campaign endpoint configured for {experiment}") from exc
+
+
+def _new_campaign(
+    experiment: str,
+    manifest: dict[str, Any],
+    environment: dict[str, Any] | None = None,
+) -> Path:
     campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     root = RESULTS_ROOT / experiment / campaign_id
     root.mkdir(parents=True, exist_ok=False)
-    campaign = {
+    campaign: dict[str, Any] = {
         "schema_version": 1,
         "campaign_id": campaign_id,
         "experiment": experiment,
@@ -385,10 +451,13 @@ def _new_campaign(experiment: str, manifest: dict) -> Path:
         "source_revision": _source_revision(),
         "completed_phases": [],
     }
+    if environment is not None:
+        campaign["deployment_hash"] = environment["deployment_hash"]
+        campaign["deployment_run_id"] = environment["attachment"].get("deployment_run_id")
     _write_json(root / "campaign.json", campaign)
-    ACTIVE_EXPERIMENT.parent.mkdir(parents=True, exist_ok=True)
+    endpoint = _active_endpoint(experiment)
     _write_json(
-        ACTIVE_EXPERIMENT,
+        endpoint,
         {
             "schema_version": 1,
             "status": "active",
@@ -401,31 +470,43 @@ def _new_campaign(experiment: str, manifest: dict) -> Path:
     return root
 
 
-def _active_campaign(experiment: str) -> Path:
-    if not ACTIVE_EXPERIMENT.is_file():
-        raise ValueError("no active experiment campaign; run qualification first")
-    endpoint = json.loads(ACTIVE_EXPERIMENT.read_text(encoding="utf-8"))
+def _active_campaign(
+    experiment: str,
+    environment: dict[str, Any] | None = None,
+) -> Path:
+    endpoint_path = _active_endpoint(experiment)
+    if not endpoint_path.is_file():
+        raise ValueError(f"no active {experiment} campaign; run qualification first")
+    endpoint = _read_json(endpoint_path)
     if endpoint.get("status") != "active" or endpoint.get("experiment") != experiment:
-        raise ValueError("active experiment state does not match the requested experiment")
-    root = Path(endpoint.get("campaign_root", "")).resolve()
+        raise ValueError(f"active campaign state does not match {experiment}")
+    root = Path(str(endpoint.get("campaign_root", ""))).resolve()
     campaign_file = root / "campaign.json"
     if not campaign_file.is_file():
         raise ValueError("active experiment campaign metadata is missing")
-    campaign = json.loads(campaign_file.read_text(encoding="utf-8"))
+    campaign = _read_json(campaign_file)
     if (
         campaign.get("status") != "active"
         or campaign.get("campaign_id") != endpoint.get("campaign_id")
         or campaign.get("experiment") != experiment
     ):
         raise ValueError("active experiment endpoint does not match campaign metadata")
+    if (
+        environment is not None
+        and campaign.get("deployment_hash") != environment.get("deployment_hash")
+    ):
+        raise ValueError(
+            "the active experiment campaign belongs to a different testbed; "
+            "run qualification or the full experiment to start a new campaign"
+        )
     return root
 
 
-def _campaign(root: Path) -> dict:
-    return json.loads((root / "campaign.json").read_text(encoding="utf-8"))
+def _campaign(root: Path) -> dict[str, Any]:
+    return _read_json(root / "campaign.json")
 
 
-def _require_phase_dependencies(root: Path, item: dict) -> None:
+def _require_phase_dependencies(root: Path, item: dict[str, Any]) -> None:
     completed = set(_campaign(root).get("completed_phases", []))
     missing = [name for name in item.get("requires", []) if name not in completed]
     if missing:
@@ -434,25 +515,37 @@ def _require_phase_dependencies(root: Path, item: dict) -> None:
         )
 
 
-def _mark_phase(root: Path, phase: str) -> None:
+def _mark_phase(root: Path, phase: str, *, complete: bool = False) -> None:
     path = root / "campaign.json"
-    campaign = json.loads(path.read_text(encoding="utf-8"))
+    campaign = _read_json(path)
     completed = list(campaign.get("completed_phases", []))
     if phase not in completed:
         completed.append(phase)
     campaign["completed_phases"] = completed
+    if complete:
+        campaign["status"] = "complete"
+        campaign["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
     _write_json(path, campaign)
+
+    if complete:
+        endpoint_path = _active_endpoint(str(campaign["experiment"]))
+        if endpoint_path.is_file():
+            endpoint = _read_json(endpoint_path)
+            if endpoint.get("campaign_id") == campaign["campaign_id"]:
+                endpoint["status"] = "complete"
+                _write_json(endpoint_path, endpoint)
 
 
 def _phase_handler(experiment: str, phase: str):
-    if experiment != "ex1" or phase not in _EX1_PHASE_HANDLERS:
-        raise ValueError(f"{experiment} phase {phase!r} is not implemented yet")
-    module_name, function_name = _EX1_PHASE_HANDLERS[phase]
+    try:
+        module_name, function_name = _PHASE_HANDLERS[experiment][phase]
+    except KeyError as exc:
+        raise ValueError(f"{experiment} phase {phase!r} is not implemented") from exc
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
         if exc.name == module_name:
-            raise ValueError(f"{experiment} phase {phase!r} is not implemented yet") from exc
+            raise ValueError(f"{experiment} phase {phase!r} is not implemented") from exc
         raise
     handler = getattr(module, function_name, None)
     if not callable(handler):
@@ -460,8 +553,49 @@ def _phase_handler(experiment: str, phase: str):
     return handler
 
 
-def _archive_campaign_phase(root: Path, manifest: dict, phase: str) -> None:
-    files = _EX1_CAMPAIGN_ARCHIVE_FILES.get(phase)
+def _run_ex1_qualification(root: Path) -> dict[str, Any]:
+    script = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py"
+    subprocess.run(
+        [sys.executable, str(script), "--output", str(root / "qualification")],
+        cwd=ROOT,
+        check=True,
+    )
+    result = _read_json(root / "qualification/qualification.json")
+    if result.get("status") != "passed":
+        raise ValueError("Experiment 1 qualification did not pass")
+    return result
+
+
+def _invoke_phase(
+    experiment: str,
+    phase: str,
+    root: Path | None,
+    *,
+    manifest: dict[str, Any],
+    environment: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if experiment == "ex1" and phase == "qualification":
+        if root is None:
+            raise ValueError("Experiment 1 qualification requires a campaign")
+        return _run_ex1_qualification(root)
+
+    handler = _phase_handler(experiment, phase)
+    parameters = inspect.signature(handler).parameters
+    kwargs: dict[str, Any] = {}
+    if "manifest" in parameters:
+        kwargs["manifest"] = manifest
+    if "environment" in parameters:
+        kwargs["environment"] = environment
+    return handler(root, **kwargs)
+
+
+def _archive_campaign_phase(
+    experiment: str,
+    root: Path,
+    manifest: dict[str, Any],
+    phase: str,
+) -> None:
+    files = _CAMPAIGN_ARCHIVE_FILES.get(experiment, {}).get(phase)
     settings = manifest.get("archive", {})
     if files is None or not bool(settings.get("enabled", False)):
         return
@@ -474,11 +608,115 @@ def _archive_campaign_phase(root: Path, manifest: dict, phase: str) -> None:
     print(f"Archive           VERIFIED · campaign {phase} snapshot")
 
 
-def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
+def _needs_active_testbed(items: list[dict[str, Any]]) -> bool:
+    return any(item.get("resource") == "active_testbed" for item in items)
+
+
+def _display_environment(environment: dict[str, Any]) -> None:
+    deployment = environment["deployment"]
+    reservation = environment["reservation"]
+    _section("Active testbed")
+    print(f"Deployment hash   {environment['deployment_hash']}")
+    print(f"Platform          {deployment.get('platform')}")
+    print(f"Core              {deployment.get('core')}")
+    print(f"RAN               {deployment.get('ran')}")
+    print(f"Radio             {deployment.get('radio_unit')}")
+    print(
+        "Nodes             "
+        + ", ".join(
+            f"{key}={value}" for key, value in deployment.get("nodes", {}).items()
+        )
+    )
+    for index, binding in enumerate(environment.get("bindings", []), 1):
+        print(
+            f"UE {index:<2}             {binding.get('device')} · "
+            f"slice={binding.get('slice')} · dnn={binding.get('dnn')} · "
+            f"address={binding.get('address', 'unreported')}"
+        )
+    print(f"SOP reservation   {reservation['sop'].get('status')}")
+    if deployment.get("platform") == "r2lab":
+        print(f"R2Lab reservation {reservation['r2lab'].get('status')}")
+    if reservation.get("coverage_end"):
+        remaining = reservation.get("remaining_seconds")
+        suffix = (
+            f" · {float(remaining) / 60:.1f} min remaining"
+            if remaining is not None
+            else ""
+        )
+        print(f"Coverage until    {reservation['coverage_end']}{suffix}")
+    for warning in environment.get("warnings", []):
+        print(f"Warning           {warning}")
+
+
+def _approve_environment(
+    manifest: dict[str, Any],
+    environment: dict[str, Any],
+    *,
+    no_input: bool,
+) -> None:
+    resource = manifest["resource"]
+    minimum_ues = int(resource.get("minimum_verified_ues", 0))
+    if len(environment.get("bindings", [])) < minimum_ues:
+        raise ValueError(
+            f"{manifest['display_name']} needs at least {minimum_ues} verified UE bindings"
+        )
+
+    reservation = environment.get("reservation", {})
+    if reservation.get("sop", {}).get("status") != "active":
+        raise ValueError(
+            "the accepted testbed has no active SOP reservation coverage; "
+            "extend or reacquire it with deploy.sh"
+        )
+    if (
+        environment["deployment"].get("platform") == "r2lab"
+        and reservation.get("r2lab", {}).get("status") != "active"
+    ):
+        raise ValueError(
+            "the accepted physical testbed has no active R2Lab reservation coverage; "
+            "extend or reacquire it with deploy.sh"
+        )
+    if no_input:
+        return
+    answer = input(
+        f"\nRun {manifest['display_name']} on this active testbed? [y/N]: "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise ValueError(f"{manifest['display_name']} cancelled")
+
+
+def _campaign_for_qualification(
+    experiment: str,
+    manifest: dict[str, Any],
+    environment: dict[str, Any] | None,
+) -> Path:
+    if not manifest["resource"].get("testbed_required"):
+        return _new_campaign(experiment, manifest)
+
+    if environment is None:
+        raise ValueError("qualification requires an active testbed")
+
+    try:
+        candidate = _active_campaign(experiment)
+        campaign = _campaign(candidate)
+        if campaign.get("deployment_hash") == environment["deployment_hash"]:
+            return candidate
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return _new_campaign(experiment, manifest, environment)
+
+
+def plan(
+    experiment: str,
+    phase: str,
+    *,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
     manifest = _load_manifest(experiment)
     selected = _selected_phases(manifest, phase)
     resource = manifest["resource"]
     archive = manifest.get("archive", {})
+
     _section(f"Planning {manifest['display_name']}")
     print(f"Experiment        {manifest['id']}")
     print(f"Design version    {manifest['design_version']}")
@@ -489,14 +727,24 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
     )
     print(f"Requested phase   {phase}")
     print(f"Parallel workers  {automatic_worker_count()} available automatically")
+
     _section("Execution order")
     for index, item in enumerate(selected, start=1):
         print(f"  {index}. {item['id']:<24} {item['name']}")
+
     _section("Execution policy")
     print("Independent runs  maximum safe parallelism")
     print("Phase barriers    preserved")
     print("Numeric threads   1 per worker")
     print("Result identity   deterministic regardless of completion order")
+
+    if _needs_active_testbed(selected):
+        try:
+            _display_environment(inspect_active_deployment())
+        except Exception as exc:
+            _section("Active testbed")
+            print(f"Not available     {exc}")
+
     if archive:
         _section("Result archival")
         print(f"Backend           {archive.get('backend', 'disabled')}")
@@ -506,53 +754,96 @@ def plan(experiment: str, phase: str, *, dry_run: bool, verbose: bool) -> None:
             print(f"Bucket            {archive.get('bucket')}")
             print(f"Prefix            {archive.get('prefix')}")
             print(f"Replay evidence   {archive.get('replay', 'if_available')}")
+
     if verbose:
         _section("Manifest")
         print(yaml.safe_dump(manifest, sort_keys=False).rstrip())
+
     if dry_run:
         _section("Mode")
         print("dry-run")
 
 
-def execute(experiment: str, phase: str, *, verbose: bool) -> None:
+def execute(
+    experiment: str,
+    phase: str,
+    *,
+    verbose: bool,
+    no_input: bool,
+) -> None:
     manifest = _load_manifest(experiment)
     selected = _selected_phases(manifest, phase)
-    root = (
-        _new_campaign(experiment, manifest)
-        if selected[0]["id"] == "qualification"
-        else _active_campaign(experiment)
-    )
+
+    campaign_items: list[dict[str, Any]] = []
+    for item in selected:
+        if item.get("campaign", True) is False:
+            _section(item["name"])
+            result = _invoke_phase(
+                experiment,
+                item["id"],
+                None,
+                manifest=manifest,
+                environment=None,
+            )
+            status = str((result or {}).get("status", "complete")).upper()
+            print(f"Phase status      {status}")
+        else:
+            campaign_items.append(item)
+
+    if not campaign_items:
+        return
+
+    environment: dict[str, Any] | None = None
+    if _needs_active_testbed(campaign_items):
+        environment = inspect_active_deployment()
+        _display_environment(environment)
+        _approve_environment(manifest, environment, no_input=no_input)
+
+    if campaign_items[0]["id"] == "qualification":
+        root = _campaign_for_qualification(experiment, manifest, environment)
+    else:
+        root = _active_campaign(experiment, environment)
+
     _section("Campaign")
     print(f"ID                {root.name}")
     print(f"Results           {root.relative_to(ROOT)}")
     print(f"Parallel workers  {automatic_worker_count()} available automatically")
-    for item in selected:
+
+    for item in campaign_items:
         phase_id = item["id"]
         _require_phase_dependencies(root, item)
         _section(item["name"])
+        result = _invoke_phase(
+            experiment,
+            phase_id,
+            root,
+            manifest=manifest,
+            environment=environment,
+        )
+        status = str((result or {}).get("status", "complete")).lower()
+
+        if status in {"paused", "partial"}:
+            print(f"Phase status      {status.upper()}")
+            if (result or {}).get("runs_complete") is not None:
+                print(
+                    "Progress          "
+                    f"{result['runs_complete']}/{result.get('runs_expected', '?')} replays"
+                )
+            print(
+                "Resume            rerun experiment.sh after extending "
+                "the same deployment reservation"
+            )
+            break
+
+        _archive_campaign_phase(experiment, root, manifest, phase_id)
+        _mark_phase(root, phase_id, complete=phase_id == "analysis")
         if experiment == "ex1" and phase_id == "qualification":
-            script = ROOT / "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py"
-            subprocess.run(
-                [sys.executable, str(script), "--output", str(root / "qualification")],
-                cwd=ROOT,
-                check=True,
-            )
-            result = json.loads(
-                (root / "qualification/qualification.json").read_text(encoding="utf-8")
-            )
-            if result.get("status") != "passed":
-                raise ValueError("Experiment 1 qualification did not pass")
-            _mark_phase(root, phase_id)
             print("Qualification     PASSED")
-            continue
-        handler = _phase_handler(experiment, phase_id)
-        result = handler(root)
-        _archive_campaign_phase(root, manifest, phase_id)
-        _mark_phase(root, phase_id)
-        if isinstance(result, dict) and result.get("status"):
-            print(f"Phase status      {str(result['status']).upper()}")
+        elif status:
+            print(f"Phase status      {status.upper()}")
         else:
             print("Phase status      COMPLETE")
+
     if verbose:
         _section("Campaign state")
         print(json.dumps(_campaign(root), indent=2, sort_keys=True))
@@ -561,17 +852,34 @@ def execute(experiment: str, phase: str, *, verbose: bool) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("command", choices=("plan", "run"))
-    parser.add_argument("--experiment", required=True)
+    parser.add_argument("--experiment", required=True, choices=tuple(EXPERIMENTS))
     parser.add_argument("--phase", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--no-input", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            plan(args.experiment, args.phase, dry_run=args.dry_run, verbose=args.verbose)
+            plan(
+                args.experiment,
+                args.phase,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
         else:
-            execute(args.experiment, args.phase, verbose=args.verbose)
-    except (OSError, ValueError, yaml.YAMLError, subprocess.CalledProcessError) as exc:
+            execute(
+                args.experiment,
+                args.phase,
+                verbose=args.verbose,
+                no_input=args.no_input,
+            )
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        subprocess.SubprocessError,
+        yaml.YAMLError,
+    ) as exc:
         print(f"Experiment error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
