@@ -33,9 +33,16 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _run(command: list[str | Path], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: list[str | Path],
+    *,
+    capture: bool = False,
+    check: bool = True,
+    display: bool = True,
+) -> subprocess.CompletedProcess[str]:
     rendered = [str(value) for value in command]
-    print("$ " + " ".join(shlex.quote(value) for value in rendered), flush=True)
+    if display:
+        print("$ " + " ".join(shlex.quote(value) for value in rendered), flush=True)
     process = subprocess.run(
         rendered,
         cwd=ROOT,
@@ -43,7 +50,7 @@ def _run(command: list[str | Path], *, capture: bool = False, check: bool = True
         capture_output=capture,
         check=False,
     )
-    if capture and process.stdout:
+    if display and capture and process.stdout:
         print(process.stdout, end="" if process.stdout.endswith("\n") else "\n")
     if process.returncode and check:
         detail = (process.stderr or process.stdout or "").strip()
