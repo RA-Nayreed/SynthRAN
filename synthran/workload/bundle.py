@@ -157,6 +157,46 @@ def import_bundle(source, destination, scenario):
     return Path(destination) / "events.jsonl"
 
 
+def _permuted_offsets(offsets, seed):
+    """Permute native gaps without creating a floating-point time reversal.
+
+    Reordering IEEE-754 gaps changes the order in which additions are rounded.
+    With a trailing zero/tiny gap, naively snapping only the final timestamp back
+    to the native endpoint can therefore make the penultimate timestamp a few
+    ulps larger than the final timestamp.  Use compensated summation and, when
+    required, collapse only a numerically indistinguishable trailing overshoot
+    onto the exact native endpoint.
+    """
+    gaps = [right - left for left, right in zip(offsets, offsets[1:])]
+    random.Random(seed).shuffle(gaps)
+    first, last = offsets[0], offsets[-1]
+    rebuilt = [first]
+    running = 0.0
+    correction = 0.0
+    for gap in gaps:
+        adjusted = gap - correction
+        total = running + adjusted
+        correction = (total - running) - adjusted
+        running = total
+        rebuilt.append(first + running)
+
+    tolerance = max(
+        1e-12,
+        32.0 * math.ulp(max(abs(first), abs(last), 1.0)),
+    )
+    rebuilt[-1] = last
+    for index in range(len(rebuilt) - 2, -1, -1):
+        if rebuilt[index] <= rebuilt[index + 1]:
+            break
+        overshoot = rebuilt[index] - rebuilt[index + 1]
+        if overshoot > tolerance:
+            raise ValueError(
+                "permuted trace accumulated a non-numerical endpoint reversal"
+            )
+        rebuilt[index] = rebuilt[index + 1]
+    return rebuilt
+
+
 def transform_bundle(source, destination, variant, seed=1, warmup_seconds=0.0):
     manifest = validate_bundle(source)
     if manifest.get("transformation", {}).get("variant", "native") != "native":
@@ -175,12 +215,7 @@ def transform_bundle(source, destination, variant, seed=1, warmup_seconds=0.0):
     offsets = [event["time_offset_s"] for event in measurement]
     if len(offsets) > 1:
         if variant == "gap_permutation":
-            gaps = [right - left for left, right in zip(offsets, offsets[1:])]
-            random.Random(seed).shuffle(gaps)
-            offsets = [offsets[0]]
-            for gap in gaps:
-                offsets.append(offsets[-1] + gap)
-            offsets[-1] = measurement[-1]["time_offset_s"]
+            offsets = _permuted_offsets(offsets, seed)
         elif variant == "periodic":
             first, last = offsets[0], offsets[-1]
             offsets = [
