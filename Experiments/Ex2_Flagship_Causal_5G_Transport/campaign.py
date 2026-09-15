@@ -63,7 +63,15 @@ def _transport_context(environment: dict[str, Any]) -> tuple[dict[str, Any], str
 def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
     destination = root / "calibration/load-selection.json"
     if destination.is_file():
-        return _read_json(destination)
+        retained = _read_json(destination)
+        if retained.get("status") == "selected":
+            return retained
+        raise RuntimeError(
+            "Experiment-2 calibration already retained a non-selected result "
+            f"({retained.get('status', 'unknown')}); preserve that evidence and start "
+            "qualification/full execution under a revised scientific design"
+        )
+
     competitor, broker, route = _transport_context(environment)
     config = manifest["study"]["transport_calibration"]
     rates = [float(value) for value in config["offered_payload_mbps_grid"]]
@@ -72,9 +80,55 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
     seconds = float(config["probe_duration_seconds"])
     packet_bytes = int(config["packet_bytes"])
     base_port = int(config["base_port"])
-    probes, medians = [], []
+    achieved_min = float(config["achieved_rate_fraction_min"])
+    achieved_max = float(config["achieved_rate_fraction_max"])
+    allowed_sender_errors = int(config.get("sender_errors_allowed", 0))
+
+    if not (0 < achieved_min <= 1 <= achieved_max):
+        raise ValueError("invalid calibration achieved-rate validity bounds")
+    if repeats < 1 or not rates:
+        raise ValueError("calibration requires at least one rate and one repeat")
+
+    probes: list[dict[str, Any]] = []
+    rate_summaries: list[dict[str, Any]] = []
+    crossing: int | None = None
+
+    def retained_result(status: str, *, selected: dict[str, float] | None = None, failure: str | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "schema_version": 2,
+            "status": status,
+            "deployment_hash": environment["deployment_hash"],
+            "selection_rule": config["selection_rule"],
+            "delivery_threshold": threshold,
+            "generator_validity": {
+                "achieved_rate_fraction_min": achieved_min,
+                "achieved_rate_fraction_max": achieved_max,
+                "sender_errors_allowed": allowed_sender_errors,
+                "all_repeats_at_rate_must_be_valid": True,
+            },
+            "route_evidence": route,
+            "broker_address": broker,
+            "tested_rate_grid_mbps": rates,
+            "selected_mbps": selected,
+            "rate_summaries": rate_summaries,
+            "rate_medians": [
+                {
+                    "rate_mbps": row["rate_mbps"],
+                    "median_delivery_ratio": row["median_delivery_ratio"],
+                }
+                for row in rate_summaries
+            ],
+            "probes": probes,
+        }
+        if failure:
+            result["failure"] = failure
+        _write_json(destination, result)
+        return result
+
     for rate_index, rate in enumerate(rates):
-        ratios = []
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError("calibration rates must be finite and positive")
+        current: list[dict[str, Any]] = []
         for repeat in range(repeats):
             port = base_port + rate_index * repeats + repeat
             probe = _udp_probe(
@@ -86,42 +140,140 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
                 packet_bytes=packet_bytes,
                 port=port,
             )
-            probe.update({"rate_mbps": rate, "repeat": repeat + 1, "port": port})
+            sender = probe.get("sender") or {}
+            reasons: list[str] = []
+            try:
+                reported_requested = float(sender["requested_payload_mbps"])
+            except (KeyError, TypeError, ValueError):
+                reported_requested = math.nan
+                reasons.append("sender requested rate unavailable")
+            try:
+                actual = float(sender["actual_payload_mbps"])
+            except (KeyError, TypeError, ValueError):
+                actual = math.nan
+                reasons.append("sender achieved rate unavailable")
+            try:
+                sender_errors = int(sender["send_errors"])
+            except (KeyError, TypeError, ValueError):
+                sender_errors = -1
+                reasons.append("sender error count unavailable")
+
+            if math.isfinite(reported_requested) and not math.isclose(
+                reported_requested, rate, rel_tol=1e-9, abs_tol=1e-9
+            ):
+                reasons.append("sender requested rate differs from calibration rate")
+            achieved_fraction = actual / rate if math.isfinite(actual) else math.nan
+            if math.isfinite(achieved_fraction):
+                if achieved_fraction < achieved_min or achieved_fraction > achieved_max:
+                    reasons.append(
+                        "achieved payload rate outside prespecified validity interval"
+                    )
+            elif "sender achieved rate unavailable" not in reasons:
+                reasons.append("sender achieved rate is not finite")
+            if sender_errors >= 0 and sender_errors > allowed_sender_errors:
+                reasons.append("sender reported transmission errors")
+
+            valid = not reasons
+            probe.update(
+                {
+                    "rate_mbps": rate,
+                    "requested_rate_mbps": rate,
+                    "reported_requested_rate_mbps": reported_requested,
+                    "actual_payload_mbps": actual,
+                    "achieved_rate_fraction": achieved_fraction,
+                    "sender_errors": sender_errors,
+                    "generator_valid": valid,
+                    "generator_invalid_reasons": reasons,
+                    "repeat": repeat + 1,
+                    "port": port,
+                }
+            )
             probes.append(probe)
-            ratios.append(float(probe["delivery_ratio"]))
+            current.append(probe)
+            validity = "valid" if valid else "INVALID"
+            actual_text = f"{actual:.3f}" if math.isfinite(actual) else "unavailable"
             print(
-                f"Calibration {rate:g} Mbps repeat {repeat + 1}/{repeats}: delivery={probe['delivery_ratio']:.6f}",
+                f"Calibration {rate:g} Mbps repeat {repeat + 1}/{repeats}: "
+                f"actual={actual_text} Mbps delivery={probe['delivery_ratio']:.6f} {validity}",
                 flush=True,
             )
-        medians.append(statistics.median(ratios))
-    crossing = next((index for index, value in enumerate(medians) if value < threshold), None)
-    if crossing is None or crossing < 2:
-        raise RuntimeError(
-            "formal load calibration could not select below/near/above by the frozen rule; "
-            "preserve the calibration result and revise the design before confirmation"
+
+        valid_probes = [probe for probe in current if probe["generator_valid"]]
+        delivery_median = (
+            statistics.median(float(probe["delivery_ratio"]) for probe in valid_probes)
+            if valid_probes
+            else None
         )
+        actual_median = (
+            statistics.median(float(probe["actual_payload_mbps"]) for probe in valid_probes)
+            if valid_probes
+            else None
+        )
+        achieved_median = (
+            statistics.median(float(probe["achieved_rate_fraction"]) for probe in valid_probes)
+            if valid_probes
+            else None
+        )
+        rate_summaries.append(
+            {
+                "rate_mbps": rate,
+                "repeats_expected": repeats,
+                "repeats_valid": len(valid_probes),
+                "median_actual_payload_mbps": actual_median,
+                "median_achieved_rate_fraction": achieved_median,
+                "median_delivery_ratio": delivery_median,
+            }
+        )
+
+        if len(valid_probes) != repeats:
+            retained_result(
+                "invalid_generator",
+                failure=(
+                    f"offered-load generator validity failed at {rate:g} Mbps; "
+                    "confirmation is blocked and all completed calibration probes were retained"
+                ),
+            )
+            raise RuntimeError(
+                f"formal load calibration stopped at {rate:g} Mbps because one or more "
+                "repeats did not achieve the prespecified sender-rate contract; evidence retained"
+            )
+
+        if delivery_median is not None and delivery_median < threshold:
+            crossing = len(rate_summaries) - 1
+            break
+
+    if crossing is None:
+        retained_result(
+            "unbracketed",
+            failure=(
+                f"no tested rate crossed the median UDP delivery threshold {threshold:.6f}; "
+                "the result characterizes only the tested end-to-end loss range"
+            ),
+        )
+        raise RuntimeError(
+            "formal load calibration remained unbracketed; preserve load-selection.json "
+            "and revise the scientific design before confirmation"
+        )
+
+    if crossing < 2:
+        retained_result(
+            "insufficient_predecessors",
+            failure=(
+                "the first delivery-threshold crossing did not have two lower valid "
+                "grid points required for BELOW and NEAR"
+            ),
+        )
+        raise RuntimeError(
+            "formal load calibration crossed too early to select below/near/above; "
+            "evidence retained"
+        )
+
     selected = {
-        "below": rates[crossing - 2],
-        "near": rates[crossing - 1],
-        "above": rates[crossing],
+        "below": float(rate_summaries[crossing - 2]["rate_mbps"]),
+        "near": float(rate_summaries[crossing - 1]["rate_mbps"]),
+        "above": float(rate_summaries[crossing]["rate_mbps"]),
     }
-    result = {
-        "schema_version": 1,
-        "status": "selected",
-        "deployment_hash": environment["deployment_hash"],
-        "selection_rule": config["selection_rule"],
-        "delivery_threshold": threshold,
-        "route_evidence": route,
-        "broker_address": broker,
-        "selected_mbps": selected,
-        "rate_medians": [
-            {"rate_mbps": rate, "median_delivery_ratio": median}
-            for rate, median in zip(rates, medians)
-        ],
-        "probes": probes,
-    }
-    _write_json(destination, result)
-    return result
+    return retained_result("selected", selected=selected)
 
 
 def freeze(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
