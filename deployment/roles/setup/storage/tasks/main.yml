@@ -1,0 +1,4 @@
+---
+- name: Delegate cluster storage lifecycle to pinned 5g-Ansible
+  ansible.builtin.include_tasks:
+    file: "{{ synthran_reference_root }}/roles/setup/storage/tasks/main.yml"
