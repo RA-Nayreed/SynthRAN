@@ -4,6 +4,56 @@
   args:
     chdir: "{{ repo_dest }}"
 
+- name: Select the R2Lab N320 OAI release and RU NAD name
+  ansible.builtin.set_fact:
+    oai_n320_release_name: "{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
+    oai_n320_ru_nad_name: "{{ ('oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb') ~ '-ru' }}"
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Install the validated R2Lab N320 ipvlan RU attachment
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    metadata:
+      name: {{ oai_n320_ru_nad_name }}
+      namespace: {{ core }}
+    spec:
+      config: '{"cniVersion":"0.3.1","name":"{{ oai_n320_ru_nad_name }}","plugins":[{"type":"{{ oai_r2lab_n320_ru_cni_type }}","master":"r2lab_usrp","mode":"{{ oai_r2lab_n320_ru_cni_mode }}","ipam":{"type":"static","addresses":[{"address":"{{ oai_r2lab_n320_ru_ip }}/24"}]}}]}'
+    EOF
+  args:
+    executable: /bin/bash
+  register: oai_n320_ru_nad_apply
+  changed_when: "'created' in oai_n320_ru_nad_apply.stdout or 'configured' in oai_n320_ru_nad_apply.stdout"
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Verify the R2Lab N320 RU attachment before Helm launch
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CONFIG="$(kubectl get network-attachment-definition {{ oai_n320_ru_nad_name }} -n {{ core }} -o jsonpath='{.spec.config}')"
+    python3 - "$CONFIG" <<'PY'
+    import json
+    import sys
+
+    cfg = json.loads(sys.argv[1])
+    plugin = cfg['plugins'][0]
+    assert plugin['type'] == '{{ oai_r2lab_n320_ru_cni_type }}', plugin
+    assert plugin['master'] == 'r2lab_usrp', plugin
+    assert plugin['mode'] == '{{ oai_r2lab_n320_ru_cni_mode }}', plugin
+    assert plugin['ipam']['addresses'][0]['address'] == '{{ oai_r2lab_n320_ru_ip }}/24', plugin
+    PY
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
 - name: Launch OAI gNB pod
   ansible.builtin.command: "{{ demo_oai_script }} start-gnb"
   args:
@@ -47,8 +97,8 @@
           - gnb_rf_ready.rc == 0
         fail_msg: >-
           The OAI RAN did not report successful N3xx RF-device initialization.
-          The R2Lab radio endpoint is configured before the first launch; no runtime
-          IP-swap fallback is attempted. Inspect the newest RAN pod logs.
+          Inspect the newest RAN pod logs; SynthRAN has already installed and verified
+          the R2Lab N320 RU NetworkAttachmentDefinition before the Helm launch.
   when: rru in ['n300', 'n320']
 
 - name: Launch OAI NR-UE pods for RFSIM
