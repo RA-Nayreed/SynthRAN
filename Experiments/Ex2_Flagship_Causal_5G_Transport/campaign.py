@@ -9,6 +9,7 @@ from synthran.workload.bundle import canonical, validate_bundle
 from . import source as source_cohort
 from .common import _read_json, _write_json, _sha256, _prepared, _deployment_roles
 from .runtime import _base_testbed_config, _bundle, _clock_evidence, _victim_run, _prepared_seeds
+from .telemetry import capture_transport_snapshot
 from .traffic import _broker_address, _stage_udp_tools, _prove_competitor_route, _udp_probe, _start_background, _finish_background
 
 def prepare(_root: Path | None = None, *, manifest: dict[str, Any] | None = None, environment: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -52,12 +53,15 @@ def qualification(root: Path, *, manifest: dict[str, Any], environment: dict[str
     return result
 
 
-def _transport_context(environment: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
-    _, competitor = _deployment_roles(environment)
+def _transport_context(environment: dict[str, Any]) -> tuple[dict[str, Any], str, dict[str, str]]:
+    workload, competitor = _deployment_roles(environment)
     broker = _broker_address(environment)
     _stage_udp_tools(environment, competitor)
-    route = _prove_competitor_route(environment, competitor, broker)
-    return competitor, broker, route
+    routes = {
+        "workload_ue": _prove_competitor_route(environment, workload, broker),
+        "competing_ue": _prove_competitor_route(environment, competitor, broker),
+    }
+    return competitor, broker, routes
 
 
 def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +77,21 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
         )
 
     competitor, broker, route = _transport_context(environment)
+    telemetry_before = root / "calibration/telemetry-before.json"
+    if not telemetry_before.is_file():
+        _write_json(
+            telemetry_before,
+            capture_transport_snapshot(environment, broker_address=broker),
+        )
+
+    def finish_telemetry() -> None:
+        path = root / "calibration/telemetry-after.json"
+        if not path.is_file():
+            _write_json(
+                path,
+                capture_transport_snapshot(environment, broker_address=broker),
+            )
+
     config = manifest["study"]["transport_calibration"]
     rates = [float(value) for value in config["offered_payload_mbps_grid"]]
     repeats = int(config["repeats_per_rate"])
@@ -233,6 +252,7 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
                     "confirmation is blocked and all completed calibration probes were retained"
                 ),
             )
+            finish_telemetry()
             raise RuntimeError(
                 f"formal load calibration stopped at {rate:g} Mbps because one or more "
                 "repeats did not achieve the prespecified sender-rate contract; evidence retained"
@@ -250,6 +270,7 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
                 "the result characterizes only the tested end-to-end loss range"
             ),
         )
+        finish_telemetry()
         raise RuntimeError(
             "formal load calibration remained unbracketed; preserve load-selection.json "
             "and revise the scientific design before confirmation"
@@ -263,6 +284,7 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
                 "grid points required for BELOW and NEAR"
             ),
         )
+        finish_telemetry()
         raise RuntimeError(
             "formal load calibration crossed too early to select below/near/above; "
             "evidence retained"
@@ -273,7 +295,9 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
         "near": float(rate_summaries[crossing - 1]["rate_mbps"]),
         "above": float(rate_summaries[crossing]["rate_mbps"]),
     }
-    return retained_result("selected", selected=selected)
+    result = retained_result("selected", selected=selected)
+    finish_telemetry()
+    return result
 
 
 def freeze(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
@@ -441,10 +465,26 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
                 "deployment_hash": environment["deployment_hash"],
                 "route_evidence": route,
                 "broker_address": broker,
+                "bindings": environment.get("bindings", []),
                 "competing_ue": competitor,
                 "clock": clock,
             },
         )
+        telemetry_before = session_root / "telemetry-before.json"
+        session_records = list(root.glob(f"runs/s{session}-r*-*/run-record.json"))
+        if not telemetry_before.is_file():
+            _write_json(
+                telemetry_before,
+                capture_transport_snapshot(environment, broker_address=broker),
+            )
+        elif session_records:
+            resume_path = session_root / f"telemetry-resume-after-{len(session_records):03d}.json"
+            if not resume_path.is_file():
+                _write_json(
+                    resume_path,
+                    capture_transport_snapshot(environment, broker_address=broker),
+                )
+
         replay_base_port = int(confirmation_plan["base_port"]) + (session - 1) * 1000
         ordinal = 0
         for seed, load, arms in blocks:
@@ -462,6 +502,11 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
             remaining = reservation_remaining_seconds(environment)
             if remaining is not None and remaining < estimated:
                 total = len(list((root / "runs").glob("*/run-record.json"))) if (root / "runs").is_dir() else 0
+                pause_path = session_root / f"telemetry-pause-after-{len(session_records):03d}.json"
+                _write_json(
+                    pause_path,
+                    capture_transport_snapshot(environment, broker_address=broker),
+                )
                 print(
                     f"Reservation has {remaining/60:.1f} min remaining; next matched block needs about {estimated/60:.1f} min. "
                     "Pausing before the block.",
@@ -544,6 +589,10 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
         records = list(root.glob(f"runs/s{session}-r*-*/run-record.json"))
         if len(records) != 120:
             raise RuntimeError(f"session {session} has {len(records)}/120 completed replays")
+        _write_json(
+            session_root / "telemetry-after.json",
+            capture_transport_snapshot(environment, broker_address=broker),
+        )
         _write_json(
             session_root / "summary.json",
             {"schema_version": 1, "status": "complete", "session": session, "replays": 120},
