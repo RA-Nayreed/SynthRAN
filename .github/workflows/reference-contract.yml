@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install contract parser dependency
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+
       - name: Check out pinned 5g-Ansible reference
         uses: actions/checkout@v7
         with:
