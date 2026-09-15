@@ -1,0 +1,10 @@
+{
+  "check": "capacitor-known-trajectory",
+  "criterion": "With no leakage/load/clamping, capacitor voltage follows the closed-form series-RC charging solution.",
+  "observed": {
+    "absolute_error_v": 0.0,
+    "expected_voltage_v": 0.28346868942621073,
+    "observed_voltage_v": 0.28346868942621073
+  },
+  "status": "passed"
+}

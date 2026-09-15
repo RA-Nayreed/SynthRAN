@@ -1,0 +1,19 @@
+{
+  "accepted_collision_exposure": [
+    0.03,
+    0.25
+  ],
+  "definition": "Among candidates inside the prespecified collision-exposure band and retaining the required fraction of the best observed decode rate, choose the population closest to the target collision exposure.",
+  "minimum_relative_decode_rate": 0.5,
+  "schema_version": 1,
+  "selected": {
+    "collision_exposure_mean": 0.149730043227099,
+    "decode_rate_per_s_mean": 24.32,
+    "jain_decode_fairness_mean": 0.8417211316219863,
+    "relative_decode_rate": 0.6052160063706947,
+    "sensor_count": 64
+  },
+  "selected_candidate_index": 3,
+  "status": "selected",
+  "target_collision_exposure": 0.1
+}

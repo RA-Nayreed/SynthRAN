@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import socket
 import struct
 import time
@@ -74,6 +75,7 @@ def main() -> None:
     # only "time allowed for the first packet to arrive", not total run time.
     parser.add_argument("--timeout-seconds", type=float, default=None)
     parser.add_argument("--rcvbuf-bytes", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--report-ready", action="store_true")
     args = parser.parse_args()
 
     startup_timeout_s = (
@@ -81,16 +83,20 @@ def main() -> None:
         if args.timeout_seconds is not None
         else args.startup_timeout_seconds
     )
-    if startup_timeout_s <= 0:
+    if not math.isfinite(startup_timeout_s) or startup_timeout_s <= 0:
         raise SystemExit("startup timeout must be > 0")
-    if args.idle_timeout_seconds <= 0:
+    if not math.isfinite(args.idle_timeout_seconds) or args.idle_timeout_seconds <= 0:
         raise SystemExit("idle timeout must be > 0")
+    if args.rcvbuf_bytes <= 0:
+        raise SystemExit("--rcvbuf-bytes must be > 0")
 
     bind_address = _validated_bind_address(args.bind)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, args.rcvbuf_bytes)
     sock.bind((bind_address, args.port))
     sock.settimeout(0.25)
+    if args.report_ready:
+        print(json.dumps({"event": "receiver_ready", "bind": bind_address, "port": args.port}), flush=True)
 
     receiver_start_ns = time.monotonic_ns()
     first_rx_ns: int | None = None
@@ -169,10 +175,12 @@ def main() -> None:
         "duplicates": duplicates,
         "out_of_order": out_of_order,
         "receive_span_seconds": duration_s,
+        "socket_receive_buffer_bytes": sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
         "received_payload_mbps": (
             payload_bytes * 8 / duration_s / 1e6 if duration_s else 0.0
         ),
     }
+    sock.close()
     print(json.dumps(result, sort_keys=True))
 
 

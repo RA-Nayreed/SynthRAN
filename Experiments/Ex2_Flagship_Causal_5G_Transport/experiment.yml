@@ -113,9 +113,11 @@ study:
     deadline_seconds: 0.5
     age_limit_seconds: 2.0
     clock_evidence: >-
-      Before qualification and each confirmation session, bound workload-publisher
+      Before qualification and each confirmation replay, bound workload-publisher
       versus broker UTC offset with controller-bracketed remote clock probes. The
-      bound is retained with results and supplied to the measurement contract.
+      bound is retained with immutable probe history and supplied to the measurement
+      contract. Competitor-publisher clock brackets qualify background coverage.
+      These bounds assume stable clocks during a replay and are not session-long drift bounds.
     clock_contract:
       require_publisher_ntp_synchronized: true
       require_broker_ntp_synchronized: true
@@ -146,7 +148,9 @@ study:
       it does not discard an otherwise valid native-versus-periodic contrast.
     confirmation_load_treatment_validity: >-
       Every replay is eligible only if its recorded competing-flow sender achieved
-      95-105% of the frozen requested load and reported zero sender errors. An
+      95-105% of the frozen requested load and reported zero sender errors. The
+      successful background-send interval must also cover the publisher horizon
+      and drain under the retained competitor-publisher clock bounds. An
       invalid load treatment excludes that arm only from contrasts that require it;
       it is not reclassified as successful evidence at another load level.
     load_interactions:

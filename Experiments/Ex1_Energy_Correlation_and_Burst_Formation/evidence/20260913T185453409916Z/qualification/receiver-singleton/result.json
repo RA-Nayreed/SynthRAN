@@ -1,0 +1,12 @@
+{
+  "check": "receiver-singleton",
+  "criterion": "A sufficiently strong isolated packet is decoded and reports SINR above threshold.",
+  "observed": {
+    "decode_stage": 0,
+    "interference_w": 0.0,
+    "outcome": "decoded",
+    "residual_w": 9.999999999999998e-11,
+    "sinr_db": 30.0
+  },
+  "status": "passed"
+}

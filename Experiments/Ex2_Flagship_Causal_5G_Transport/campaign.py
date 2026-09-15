@@ -1,16 +1,16 @@
 """Internal Experiment-2 phase implementation; invoked only by experiment.sh control."""
 from __future__ import annotations
-import hashlib, math, random, statistics, time
+import hashlib, json, math, random, statistics, uuid
 from pathlib import Path
 from typing import Any
 import yaml
 from synthran.experiment_environment import reservation_remaining_seconds
 from synthran.workload.bundle import canonical, validate_bundle
 from . import source as source_cohort
-from .common import _read_json, _write_json, _sha256, _prepared, _deployment_roles
-from .runtime import _base_testbed_config, _bundle, _clock_evidence, _victim_run, _prepared_seeds
 from .telemetry import capture_transport_snapshot
-from .traffic import _broker_address, _stage_udp_tools, _prove_competitor_route, _udp_probe, _start_background, _finish_background
+from .common import ROOT, _read_json, _write_json, _sha256, _prepared, _deployment_roles
+from .runtime import _base_testbed_config, _bundle, _clock_evidence, _prepare_victim_run, _victim_run, _prepared_seeds
+from .traffic import ProbeError, _broker_address, _stage_udp_tools, _prove_competitor_route, _udp_probe, _start_background, _finish_background, _probe_quality, _stop_background
 
 def prepare(_root: Path | None = None, *, manifest: dict[str, Any] | None = None, environment: dict[str, Any] | None = None) -> dict[str, Any]:
     del manifest, environment
@@ -64,34 +64,52 @@ def _transport_context(environment: dict[str, Any]) -> tuple[dict[str, Any], str
     return competitor, broker, routes
 
 
-def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
+def _selected_calibration(root: Path, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
+    destination = root / "calibration/load-selection.json"
+    result = _read_json(destination)
+    if result.get("status") != "selected":
+        raise RuntimeError(
+            f"calibration is {result.get('status', 'invalid')}; evidence retained at {destination}. "
+            "Review the retained pilot, revise the design, and requalify into a new campaign; "
+            "this campaign cannot freeze or confirm."
+        )
+    if result.get("deployment_hash") != environment["deployment_hash"]:
+        raise RuntimeError("calibration belongs to another accepted deployment")
+    if result.get("calibration_config_sha256") != hashlib.sha256(
+        canonical(manifest["study"]["transport_calibration"])
+    ).hexdigest():
+        raise RuntimeError("calibration design changed; start a new campaign")
+    # A cached status label alone is not sufficient evidence of a valid pilot.
+    config = manifest["study"]["transport_calibration"]
+    rates = [float(value) for value in config["offered_payload_mbps_grid"]]
+    repeats = int(config["repeats_per_rate"])
+    rows, probes = result.get("rate_medians", []), result.get("probes", [])
+    if result.get("schema_version") != 2 or not 3 <= len(rows) <= len(rates) or len(probes) != len(rows) * repeats:
+        raise RuntimeError("calibration selection has incomplete probe evidence; start a new campaign")
+    for index, row in enumerate(rows):
+        rate = rates[index]
+        batch = probes[index * repeats : (index + 1) * repeats]
+        if any(
+            probe.get("rate_mbps") != rate or probe.get("repeat") != repeat + 1
+            or not _probe_quality(probe, config, rate=rate)["valid"]
+            for repeat, probe in enumerate(batch)
+        ):
+            raise RuntimeError("calibration selection contains invalid probe evidence; start a new campaign")
+        median = statistics.median(float(probe["delivery_ratio"]) for probe in batch)
+        if row.get("rate_mbps") != rate or row.get("median_delivery_ratio") != median or (
+            (median < float(config["delivery_threshold"])) != (index == len(rows) - 1)
+        ):
+            raise RuntimeError("calibration selection does not follow the frozen first-crossing rule")
+    selected = dict(zip(("below", "near", "above"), rates[len(rows) - 3 : len(rows)]))
+    if result.get("selected_mbps") != selected:
+        raise RuntimeError("calibration selected levels do not match the observed first crossing")
+    return result
+
+
+def _calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
     destination = root / "calibration/load-selection.json"
     if destination.is_file():
-        retained = _read_json(destination)
-        if retained.get("status") == "selected":
-            return retained
-        raise RuntimeError(
-            "Experiment-2 calibration already retained a non-selected result "
-            f"({retained.get('status', 'unknown')}); preserve that evidence and start "
-            "qualification/full execution under a revised scientific design"
-        )
-
-    competitor, broker, route = _transport_context(environment)
-    telemetry_before = root / "calibration/telemetry-before.json"
-    if not telemetry_before.is_file():
-        _write_json(
-            telemetry_before,
-            capture_transport_snapshot(environment, broker_address=broker),
-        )
-
-    def finish_telemetry() -> None:
-        path = root / "calibration/telemetry-after.json"
-        if not path.is_file():
-            _write_json(
-                path,
-                capture_transport_snapshot(environment, broker_address=broker),
-            )
-
+        return _selected_calibration(root, manifest, environment)
     config = manifest["study"]["transport_calibration"]
     rates = [float(value) for value in config["offered_payload_mbps_grid"]]
     repeats = int(config["repeats_per_rate"])
@@ -99,223 +117,117 @@ def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, 
     seconds = float(config["probe_duration_seconds"])
     packet_bytes = int(config["packet_bytes"])
     base_port = int(config["base_port"])
-    achieved_min = float(config["achieved_rate_fraction_min"])
-    achieved_max = float(config["achieved_rate_fraction_max"])
-    allowed_sender_errors = int(config.get("sender_errors_allowed", 0))
-
-    if not (0 < achieved_min <= 1 <= achieved_max):
-        raise ValueError("invalid calibration achieved-rate validity bounds")
-    if repeats < 1 or not rates:
-        raise ValueError("calibration requires at least one rate and one repeat")
-
-    probes: list[dict[str, Any]] = []
-    rate_summaries: list[dict[str, Any]] = []
-    crossing: int | None = None
-
-    def retained_result(status: str, *, selected: dict[str, float] | None = None, failure: str | None = None) -> dict[str, Any]:
-        result: dict[str, Any] = {
-            "schema_version": 2,
-            "status": status,
-            "deployment_hash": environment["deployment_hash"],
-            "selection_rule": config["selection_rule"],
-            "delivery_threshold": threshold,
-            "generator_validity": {
-                "achieved_rate_fraction_min": achieved_min,
-                "achieved_rate_fraction_max": achieved_max,
-                "sender_errors_allowed": allowed_sender_errors,
-                "all_repeats_at_rate_must_be_valid": True,
-            },
-            "route_evidence": route,
-            "broker_address": broker,
-            "tested_rate_grid_mbps": rates,
-            "selected_mbps": selected,
-            "rate_summaries": rate_summaries,
-            "rate_medians": [
-                {
-                    "rate_mbps": row["rate_mbps"],
-                    "median_delivery_ratio": row["median_delivery_ratio"],
-                }
-                for row in rate_summaries
-            ],
-            "probes": probes,
-        }
-        if failure:
-            result["failure"] = failure
+    lower = float(config["achieved_rate_fraction_min"])
+    upper = float(config["achieved_rate_fraction_max"])
+    if len(rates) < 3 or any(not math.isfinite(rate) or rate <= 0 for rate in rates) or any(
+        right <= left for left, right in zip(rates, rates[1:])
+    ):
+        raise ValueError("calibration requires at least three strictly increasing positive finite rates")
+    if repeats < 1 or not 0 < threshold < 1 or not 0 < lower <= 1 <= upper or not math.isfinite(upper):
+        raise ValueError("invalid prespecified calibration repeats, threshold, or rate-fidelity bounds")
+    if not math.isfinite(seconds) or seconds <= 0 or not 16 <= packet_bytes <= 65507:
+        raise ValueError("invalid calibration duration or UDP payload size")
+    if not 1 <= base_port <= 65535 or base_port + len(rates) * repeats - 1 > 65535:
+        raise ValueError("calibration ports must fit the UDP port range")
+    result = {
+        "schema_version": 2,
+        "status": "running",
+        "deployment_hash": environment["deployment_hash"],
+        "calibration_config": config,
+        "calibration_config_sha256": hashlib.sha256(canonical(config)).hexdigest(),
+        "selection_rule": config["selection_rule"],
+        "delivery_threshold": threshold,
+        "selected_mbps": None,
+        "rate_medians": [],
+        "probes": [],
+    }
+    _write_json(destination, result)
+    try:
+        competitor, broker, route = _transport_context(environment)
+    except Exception as error:
+        result.update(status="failed", failure_reason="transport_setup_failed", error=str(error))
         _write_json(destination, result)
-        return result
-
+        raise
+    result.update(route_evidence=route, broker_address=broker)
+    _write_json(destination, result)
     for rate_index, rate in enumerate(rates):
-        if not math.isfinite(rate) or rate <= 0:
-            raise ValueError("calibration rates must be finite and positive")
-        current: list[dict[str, Any]] = []
+        ratios = []
         for repeat in range(repeats):
             port = base_port + rate_index * repeats + repeat
-            probe = _udp_probe(
-                environment,
-                competitor,
-                broker,
-                rate=rate,
-                seconds=seconds,
-                packet_bytes=packet_bytes,
-                port=port,
-            )
-            sender = probe.get("sender") or {}
-            reasons: list[str] = []
+            probe = {"rate_mbps": rate, "repeat": repeat + 1, "port": port}
             try:
-                reported_requested = float(sender["requested_payload_mbps"])
-            except (KeyError, TypeError, ValueError):
-                reported_requested = math.nan
-                reasons.append("sender requested rate unavailable")
-            try:
-                actual = float(sender["actual_payload_mbps"])
-            except (KeyError, TypeError, ValueError):
-                actual = math.nan
-                reasons.append("sender achieved rate unavailable")
-            try:
-                sender_errors = int(sender["send_errors"])
-            except (KeyError, TypeError, ValueError):
-                sender_errors = -1
-                reasons.append("sender error count unavailable")
-
-            if math.isfinite(reported_requested) and not math.isclose(
-                reported_requested, rate, rel_tol=1e-9, abs_tol=1e-9
-            ):
-                reasons.append("sender requested rate differs from calibration rate")
-            achieved_fraction = actual / rate if math.isfinite(actual) else math.nan
-            if math.isfinite(achieved_fraction):
-                if achieved_fraction < achieved_min or achieved_fraction > achieved_max:
-                    reasons.append(
-                        "achieved payload rate outside prespecified validity interval"
-                    )
-            elif "sender achieved rate unavailable" not in reasons:
-                reasons.append("sender achieved rate is not finite")
-            if sender_errors >= 0 and sender_errors > allowed_sender_errors:
-                reasons.append("sender reported transmission errors")
-
-            valid = not reasons
-            probe.update(
-                {
-                    "rate_mbps": rate,
-                    "requested_rate_mbps": rate,
-                    "reported_requested_rate_mbps": reported_requested,
-                    "actual_payload_mbps": actual,
-                    "achieved_rate_fraction": achieved_fraction,
-                    "sender_errors": sender_errors,
-                    "generator_valid": valid,
-                    "generator_invalid_reasons": reasons,
-                    "repeat": repeat + 1,
-                    "port": port,
-                }
-            )
-            probes.append(probe)
-            current.append(probe)
-            validity = "valid" if valid else "INVALID"
-            actual_text = f"{actual:.3f}" if math.isfinite(actual) else "unavailable"
+                probe.update(_udp_probe(
+                    environment, competitor, broker, rate=rate, seconds=seconds,
+                    packet_bytes=packet_bytes, port=port,
+                ))
+                probe["quality"] = _probe_quality(probe, config, rate=rate)
+            except Exception as error:
+                probe.update(status="failed", error=str(error))
+                if isinstance(error, ProbeError):
+                    probe["failure_evidence"] = error.evidence
+                result["probes"].append(probe)
+                result.update(status="failed", failure_reason="probe_execution_failed")
+                _write_json(destination, result)
+                raise RuntimeError(f"calibration probe failed; evidence retained at {destination}") from error
+            result["probes"].append(probe)
+            if not probe["quality"]["valid"]:
+                result.update(status="failed", failure_reason="invalid_generator_or_accounting")
+                _write_json(destination, result)
+                raise RuntimeError(
+                    f"calibration probe invalid: {', '.join(probe['quality']['reasons'])}; "
+                    f"evidence retained at {destination}. Start a new campaign after diagnosis."
+                )
+            ratios.append(float(probe["delivery_ratio"]))
+            _write_json(destination, result)
             print(
                 f"Calibration {rate:g} Mbps repeat {repeat + 1}/{repeats}: "
-                f"actual={actual_text} Mbps delivery={probe['delivery_ratio']:.6f} {validity}",
+                f"actual={probe['sender']['actual_payload_mbps']:.3f} Mbps delivery={probe['delivery_ratio']:.6f}",
                 flush=True,
             )
+        median = statistics.median(ratios)
+        result["rate_medians"].append({"rate_mbps": rate, "median_delivery_ratio": median})
+        _write_json(destination, result)
+        if median < threshold:
+            if rate_index < 2:
+                result.update(status="failed", failure_reason="crossing_before_two_lower_rates")
+            else:
+                result.update(status="selected", selected_mbps={
+                    "below": rates[rate_index - 2], "near": rates[rate_index - 1], "above": rate,
+                })
+            _write_json(destination, result)
+            return _selected_calibration(root, manifest, environment)
+    result.update(status="failed", failure_reason="no_delivery_threshold_crossing")
+    _write_json(destination, result)
+    return _selected_calibration(root, manifest, environment)
 
-        valid_probes = [probe for probe in current if probe["generator_valid"]]
-        delivery_median = (
-            statistics.median(float(probe["delivery_ratio"]) for probe in valid_probes)
-            if valid_probes
-            else None
-        )
-        actual_median = (
-            statistics.median(float(probe["actual_payload_mbps"]) for probe in valid_probes)
-            if valid_probes
-            else None
-        )
-        achieved_median = (
-            statistics.median(float(probe["achieved_rate_fraction"]) for probe in valid_probes)
-            if valid_probes
-            else None
-        )
-        rate_summaries.append(
-            {
-                "rate_mbps": rate,
-                "repeats_expected": repeats,
-                "repeats_valid": len(valid_probes),
-                "median_actual_payload_mbps": actual_median,
-                "median_achieved_rate_fraction": achieved_median,
-                "median_delivery_ratio": delivery_median,
-            }
-        )
 
-        if len(valid_probes) != repeats:
-            retained_result(
-                "invalid_generator",
-                failure=(
-                    f"offered-load generator validity failed at {rate:g} Mbps; "
-                    "confirmation is blocked and all completed calibration probes were retained"
-                ),
-            )
-            finish_telemetry()
-            raise RuntimeError(
-                f"formal load calibration stopped at {rate:g} Mbps because one or more "
-                "repeats did not achieve the prespecified sender-rate contract; evidence retained"
-            )
 
-        if delivery_median is not None and delivery_median < threshold:
-            crossing = len(rate_summaries) - 1
-            break
-
-    if crossing is None:
-        retained_result(
-            "unbracketed",
-            failure=(
-                f"no tested rate crossed the median UDP delivery threshold {threshold:.6f}; "
-                "the result characterizes only the tested end-to-end loss range"
-            ),
-        )
-        finish_telemetry()
-        raise RuntimeError(
-            "formal load calibration remained unbracketed; preserve load-selection.json "
-            "and revise the scientific design before confirmation"
-        )
-
-    if crossing < 2:
-        retained_result(
-            "insufficient_predecessors",
-            failure=(
-                "the first delivery-threshold crossing did not have two lower valid "
-                "grid points required for BELOW and NEAR"
-            ),
-        )
-        finish_telemetry()
-        raise RuntimeError(
-            "formal load calibration crossed too early to select below/near/above; "
-            "evidence retained"
-        )
-
-    selected = {
-        "below": float(rate_summaries[crossing - 2]["rate_mbps"]),
-        "near": float(rate_summaries[crossing - 1]["rate_mbps"]),
-        "above": float(rate_summaries[crossing]["rate_mbps"]),
-    }
-    result = retained_result("selected", selected=selected)
-    finish_telemetry()
-    return result
-
+def calibration(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
+    if (root / "calibration/load-selection.json").is_file():
+        return _selected_calibration(root, manifest, environment)
+    before = root / "calibration/telemetry-before.json"
+    if not before.is_file():
+        _write_json(before, capture_transport_snapshot(environment))
+    try:
+        return _calibration(root, manifest=manifest, environment=environment)
+    finally:
+        after = root / "calibration/telemetry-after.json"
+        if not after.is_file():
+            _write_json(after, capture_transport_snapshot(environment))
 
 def freeze(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
     destination = root / "frozen-design.json"
     if destination.is_file():
-        value = _read_json(destination)
-        digest = value.pop("design_sha256", None)
-        if digest != hashlib.sha256(canonical(value)).hexdigest():
-            raise RuntimeError("Experiment-2 frozen design failed its integrity check")
-        value["design_sha256"] = digest
-        return value
+        return _frozen(root, environment, manifest)
     prepared_root, prepared = _prepared()
-    calibration_result = _read_json(root / "calibration/load-selection.json")
+    calibration_result = _selected_calibration(root, manifest, environment)
     seeds = _prepared_seeds()
     confirmation = manifest["study"]["confirmation"]
     design = {
         "schema_version": 1,
         "experiment": "ex2",
+        "design_version": manifest["design_version"],
+        "study": manifest["study"],
         "campaign_id": root.name,
         "deployment_hash": environment["deployment_hash"],
         "prepared_source": str(prepared_root.relative_to(ROOT)),
@@ -326,6 +238,7 @@ def freeze(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any])
         "source_seeds": seeds,
         "timing_arms": list(source_cohort.ARMS),
         "load_levels_mbps": calibration_result["selected_mbps"],
+        "calibration_sha256": _sha256(root / "calibration/load-selection.json"),
         "sessions": int(confirmation["sessions"]),
         "seeds_per_session": int(confirmation["seeds_per_session"]),
         "within_block_order_seed": int(confirmation["within_block_order_seed"]),
@@ -338,13 +251,22 @@ def freeze(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any])
     return {"status": "complete", **design}
 
 
-def _frozen(root: Path, environment: dict[str, Any]) -> dict[str, Any]:
+def _frozen(root: Path, environment: dict[str, Any], manifest: dict[str, Any] | None = None) -> dict[str, Any]:
     value = _read_json(root / "frozen-design.json")
     digest = value.pop("design_sha256", None)
     observed = hashlib.sha256(canonical(value)).hexdigest()
     value["design_sha256"] = digest
     if digest != observed:
         raise RuntimeError("Experiment-2 frozen design failed its integrity check")
+    if value.get("experiment") != "ex2" or value.get("campaign_id") != root.name:
+        raise RuntimeError("Experiment-2 frozen design belongs to another campaign")
+    if manifest is not None and (
+        value.get("design_version") != manifest.get("design_version")
+        or value.get("study") != manifest.get("study")
+    ):
+        raise RuntimeError("Experiment-2 study changed after freeze; start a new campaign")
+    if _sha256(root / "calibration/load-selection.json") != value.get("calibration_sha256"):
+        raise RuntimeError("Experiment-2 calibration changed after freeze")
     if value.get("deployment_hash") != environment.get("deployment_hash"):
         raise RuntimeError(
             "current accepted deployment differs from this frozen Experiment-2 campaign; "
@@ -377,16 +299,120 @@ def _blocks(seeds: list[int], loads: list[str], *, campaign_id: str, session: in
     return result
 
 
-def _background_seconds(bundle: Path) -> float:
+def _background_seconds(bundle: Path, study: dict[str, Any] | None = None) -> float:
     manifest = validate_bundle(bundle)
     scenario = yaml.safe_load((bundle / "resolved-scenario.yml").read_text(encoding="utf-8")) or {}
     mqtt = scenario.get("mqtt", {})
     return (
         float(manifest["duration_seconds"])
         + float(mqtt.get("start_delay_seconds", 30))
-        + float(mqtt.get("drain_seconds", 60))
+        + max(float(mqtt.get("drain_seconds", 60)), float((study or {}).get("measurement", {}).get("deadline_seconds", 0)))
         + 30.0
     )
+
+
+def _background_coverage(run_dir: Path, background: dict[str, Any], clock: dict[str, Any]) -> dict[str, Any]:
+    """Bound successful background sends against the actual publisher schedule.
+
+    Epoch values are compared only after mapping competitor time to publisher
+    time. The clock evidence bounds probe times; this check remains conditional
+    on those host clocks staying stable through the replay.
+    """
+    try:
+        sessions = [
+            row for line in (run_dir / "publisher.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip() and (row := json.loads(line)).get("record_type") == "session"
+        ]
+        if not sessions:
+            raise ValueError("publisher session evidence is missing")
+        starts = [float(row["start_epoch_ns"]) / 1e9 for row in sessions]
+        ends = [
+            start + float(row["horizon_seconds"]) + float(row["drain_seconds"])
+            for start, row in zip(starts, sessions)
+        ]
+        if any(not math.isfinite(value) for value in starts + ends) or any(
+            end <= start for start, end in zip(starts, ends)
+        ):
+            raise ValueError("invalid publisher observation interval")
+        lower, upper = [float(value) for value in clock["competitor_minus_publisher_interval_seconds"]]
+        first = float(background["sender"]["first_send_epoch_ns"]) / 1e9
+        last = float(background["sender"]["last_send_epoch_ns"]) / 1e9
+        if any(not math.isfinite(value) for value in (lower, upper, first, last)) or lower > upper or last < first:
+            raise ValueError("invalid sender timestamps or cross-host clock bounds")
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        return {"valid": False, "reason": f"coverage_evidence_invalid: {error}"}
+    latest_start, earliest_end = first - lower, last - upper
+    valid = latest_start <= min(starts) and earliest_end >= max(ends)
+    return {
+        "valid": valid,
+        "reason": "covered" if valid else "background_does_not_cover_publisher_horizon_and_drain",
+        "publisher_start_epoch_seconds": min(starts),
+        "publisher_end_including_drain_epoch_seconds": max(ends),
+        "latest_background_start_on_publisher_clock_epoch_seconds": latest_start,
+        "earliest_background_end_on_publisher_clock_epoch_seconds": earliest_end,
+        "competitor_minus_publisher_interval_seconds": [lower, upper],
+        "clock_evidence_path": clock.get("evidence_path"),
+        "assumption": "host clock offsets remain within the measured bounds throughout the replay",
+        "continuity_evidence": {
+            "maximum_send_gap_seconds": background["sender"].get("maximum_send_gap_seconds"),
+            "maximum_pacing_lag_seconds": background["sender"].get("maximum_pacing_lag_seconds"),
+        },
+    }
+
+
+def _archive_incomplete_attempt(root: Path, run_dir: Path) -> None:
+    if not run_dir.exists():
+        return
+    if (run_dir / "run-record.json").is_file():
+        raise RuntimeError("refusing to rerun an already completed treatment cell")
+    archive = root / "failed-attempts" / run_dir.name / uuid.uuid4().hex
+    if not run_dir.resolve().is_relative_to((root / "runs").resolve()) or not archive.resolve().is_relative_to(
+        (root / "failed-attempts").resolve()
+    ):
+        raise RuntimeError("invalid Experiment-2 attempt archive path")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    run_dir.rename(archive)
+
+
+def _confirmation_replay(root: Path, manifest: dict[str, Any], environment: dict[str, Any],
+                         competitor: dict[str, Any], broker: str, *, bundle: Path, run_dir: Path,
+                         rate: float, seconds: float, packet_bytes: int, port: int) -> dict[str, Any]:
+    # A victim summary and background trace form one indivisible physical attempt.
+    # Preserve any incomplete attempt before creating fresh execution artifacts.
+    _archive_incomplete_attempt(root, run_dir)
+    run_dir.mkdir(parents=True, exist_ok=False)
+    sender = receiver = None
+    clock = {}
+    background = {}
+    try:
+        clock = _clock_evidence(root, environment, run_dir.name, refresh=True)
+        config = _prepare_victim_run(
+            root, environment, manifest, bundle, run_dir,
+            clock_uncertainty=float(clock["clock_uncertainty_seconds"]),
+        )
+        sender, receiver = _start_background(
+            environment, competitor, broker, rate=rate, seconds=seconds,
+            packet_bytes=packet_bytes, port=port,
+        )
+        summary = _victim_run(
+            root, environment, manifest, bundle, run_dir,
+            clock_uncertainty=float(clock["clock_uncertainty_seconds"]), prepared_config=config,
+        )
+        background = _finish_background(sender, receiver, seconds + 30)
+        background["quality"] = _probe_quality(background, manifest["study"]["transport_calibration"], rate=rate)
+        background["coverage"] = _background_coverage(run_dir, background, clock)
+        if not background["quality"]["valid"] or not background["coverage"]["valid"]:
+            raise RuntimeError("confirmation background failed achieved-rate, accounting, or exposure-coverage checks")
+        return {"summary": summary, "background": background, "clock": clock}
+    except BaseException as error:
+        evidence = error.evidence if isinstance(error, ProbeError) else {}
+        if sender is not None and receiver is not None:
+            evidence["cleanup"] = _stop_background(sender, receiver)
+        _write_json(run_dir / "failed-attempt.json", {
+            "status": "failed", "error": str(error), "clock": clock,
+            "background": background, "failure_evidence": evidence,
+        })
+        raise
 
 
 def _sentinel(root: Path, manifest: dict[str, Any], environment: dict[str, Any], calibration_result: dict[str, Any], competitor: dict[str, Any], broker: str, *, session: int, ordinal: int) -> None:
@@ -400,30 +426,59 @@ def _sentinel(root: Path, manifest: dict[str, Any], environment: dict[str, Any],
     )
     minimum = near_median * float(confirmation["sentinel_min_fraction_of_calibrated_near_delivery"])
     port = int(confirmation["sentinel_base_port"]) + session * 100 + ordinal
-    probe = _udp_probe(
-        environment,
-        competitor,
-        broker,
-        rate=near,
-        seconds=float(config["probe_duration_seconds"]),
-        packet_bytes=int(config["packet_bytes"]),
-        port=port,
-    )
+    path = root / "sentinels" / f"session{session}-after{ordinal:03d}.json"
     record = {
+        "status": "running",
         "session": session,
         "after_replay": ordinal,
         "rate_mbps": near,
         "calibrated_near_median_delivery_ratio": near_median,
         "minimum_delivery_ratio": minimum,
-        **probe,
     }
-    _write_json(root / "sentinels" / f"session{session}-after{ordinal:03d}.json", record)
-    if float(probe["delivery_ratio"]) < minimum:
-        raise RuntimeError("drift sentinel failed; preserve the affected block and diagnose before continuing")
+    _write_json(path, record)
+    try:
+        record.update(_udp_probe(
+            environment, competitor, broker, rate=near,
+            seconds=float(config["probe_duration_seconds"]), packet_bytes=int(config["packet_bytes"]), port=port,
+        ))
+        record["quality"] = _probe_quality(record, config, rate=near)
+        if not record["quality"]["valid"] or float(record["delivery_ratio"]) < minimum:
+            raise RuntimeError("drift sentinel failed; preserve the affected block and diagnose before continuing")
+        record["status"] = "passed"
+    except BaseException as error:
+        record.update(status="failed", error=str(error))
+        if isinstance(error, ProbeError):
+            record["failure_evidence"] = error.evidence
+        raise
+    finally:
+        _write_json(path, record)
+
+
+def _validate_sentinel_history(root: Path, frozen: dict[str, Any]) -> None:
+    """A completed replay cannot stand in for its interrupted drift checkpoint."""
+    for path in (root / "sentinels").glob("*.json"):
+        if _read_json(path).get("status") != "passed":
+            raise RuntimeError(f"unresolved drift sentinel failure retained at {path}; campaign cannot silently resume")
+    interval = int(frozen["sentinel_every_replays"])
+    session_replays = int(frozen["seeds_per_session"]) * len(frozen["timing_arms"]) * len(frozen["load_levels_mbps"])
+    if interval <= 0:
+        raise RuntimeError("invalid frozen sentinel interval")
+    for path in (root / "runs").glob("*/run-record.json"):
+        record = _read_json(path)
+        ordinal = int(record["ordinal"])
+        if ordinal % interval == 0 and ordinal < session_replays:
+            checkpoint = root / "sentinels" / f"session{int(record['session'])}-after{ordinal:03d}.json"
+            if not checkpoint.is_file():
+                raise RuntimeError(
+                    f"missing drift sentinel after completed replay {ordinal}: {checkpoint}; "
+                    "preserve this interrupted campaign and diagnose before a revised campaign; "
+                    "a later probe cannot recover the missing historical drift evidence"
+                )
 
 
 def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any]) -> dict[str, Any]:
-    frozen = _frozen(root, environment)
+    frozen = _frozen(root, environment, manifest)
+    _validate_sentinel_history(root, frozen)
     calibration_result = _read_json(root / "calibration/load-selection.json")
     confirmation_plan = manifest["study"]["confirmation"]
     sessions = int(frozen["sessions"])
@@ -433,7 +488,6 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
     packet_bytes = int(manifest["study"]["transport_calibration"]["packet_bytes"])
     safety = float(confirmation_plan["reservation_safety_seconds"])
     completed_before = len(list((root / "runs").glob("*/run-record.json"))) if (root / "runs").is_dir() else 0
-
     for session in range(1, sessions + 1):
         seeds = _session_seeds(frozen["source_seeds"], sessions, per_session, session)
         blocks = _blocks(
@@ -458,16 +512,14 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
         if (session_root / "summary.json").is_file():
             continue
 
-        clock = _clock_evidence(root, environment, f"session{session}")
         _write_json(
             session_root / "transport-context.json",
             {
                 "deployment_hash": environment["deployment_hash"],
                 "route_evidence": route,
                 "broker_address": broker,
-                "bindings": environment.get("bindings", []),
                 "competing_ue": competitor,
-                "clock": clock,
+                "bindings": environment.get("bindings", []),
             },
         )
         telemetry_before = session_root / "telemetry-before.json"
@@ -498,15 +550,12 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
                 continue
 
             representative = _bundle(root, environment, seed, missing[0][2])
-            estimated = len(missing) * _background_seconds(representative) + safety
+            estimated = len(missing) * _background_seconds(representative, manifest["study"]) + safety
             remaining = reservation_remaining_seconds(environment)
             if remaining is not None and remaining < estimated:
                 total = len(list((root / "runs").glob("*/run-record.json"))) if (root / "runs").is_dir() else 0
-                pause_path = session_root / f"telemetry-pause-after-{len(session_records):03d}.json"
-                _write_json(
-                    pause_path,
-                    capture_transport_snapshot(environment, broker_address=broker),
-                )
+                _write_json(session_root / f"telemetry-pause-after-{total:03d}.json",
+                            capture_transport_snapshot(environment, broker_address=broker))
                 print(
                     f"Reservation has {remaining/60:.1f} min remaining; next matched block needs about {estimated/60:.1f} min. "
                     "Pausing before the block.",
@@ -518,38 +567,13 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
             for replay_ordinal, name, arm in missing:
                 run_dir = root / "runs" / name
                 bundle = _bundle(root, environment, seed, arm)
-                seconds = _background_seconds(bundle)
+                seconds = _background_seconds(bundle, manifest["study"])
                 port = replay_base_port + replay_ordinal
-                sender, receiver = _start_background(
-                    environment,
-                    competitor,
-                    broker,
-                    rate=rate,
-                    seconds=seconds,
-                    packet_bytes=packet_bytes,
-                    port=port,
+                attempt = _confirmation_replay(
+                    root, manifest, environment, competitor, broker, bundle=bundle, run_dir=run_dir,
+                    rate=rate, seconds=seconds, packet_bytes=packet_bytes, port=port,
                 )
-                time.sleep(1.0)
-                try:
-                    summary = _victim_run(
-                        root,
-                        environment,
-                        manifest,
-                        bundle,
-                        run_dir,
-                        clock_uncertainty=float(clock["clock_uncertainty_seconds"]),
-                    )
-                    background = _finish_background(sender, receiver, seconds + 30)
-                except BaseException:
-                    for process in (sender, receiver):
-                        if process.poll() is None:
-                            process.terminate()
-                    for process in (sender, receiver):
-                        try:
-                            process.communicate(timeout=5)
-                        except Exception:
-                            process.kill()
-                    raise
+                summary, background = attempt["summary"], attempt["background"]
                 record = {
                     "schema_version": 1,
                     "status": "complete",
@@ -561,6 +585,7 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
                     "timing_arm": arm,
                     "bundle_sha256": validate_bundle(bundle)["bundle_sha256"],
                     "background": background,
+                    "clock": attempt["clock"],
                     "deployment_identity": summary.get("deployment_identity"),
                     "measurement": summary.get("measurement"),
                     "five_g": summary.get("five_g"),
@@ -589,10 +614,8 @@ def confirmation(root: Path, *, manifest: dict[str, Any], environment: dict[str,
         records = list(root.glob(f"runs/s{session}-r*-*/run-record.json"))
         if len(records) != 120:
             raise RuntimeError(f"session {session} has {len(records)}/120 completed replays")
-        _write_json(
-            session_root / "telemetry-after.json",
-            capture_transport_snapshot(environment, broker_address=broker),
-        )
+        _write_json(session_root / "telemetry-after.json",
+                    capture_transport_snapshot(environment, broker_address=broker))
         _write_json(
             session_root / "summary.json",
             {"schema_version": 1, "status": "complete", "session": session, "replays": 120},

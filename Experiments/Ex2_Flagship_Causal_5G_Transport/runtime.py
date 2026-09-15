@@ -1,6 +1,7 @@
 """Prepared-workload and accepted-testbed runtime helpers for Experiment 2."""
 from __future__ import annotations
-import hashlib, json, math, shutil, sys, time
+import hashlib, json, math, shutil, sys, time, uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import yaml
@@ -154,10 +155,16 @@ def _clock_interval(environment: dict[str, Any], host: str, samples: int = 12) -
             remote = float(lines[-1])
         except ValueError:
             continue
+        if not all(math.isfinite(value) for value in (start, end, remote)) or end < start:
+            # A malformed remote clock or a backwards controller clock cannot
+            # provide an ordered offset bracket.
+            continue
         candidate = {
             "rtt_seconds": end - start,
             "offset_lower_seconds": remote - end,
             "offset_upper_seconds": remote - start,
+            "controller_probe_start_epoch_seconds": start,
+            "controller_probe_end_epoch_seconds": end,
         }
         if best is None or candidate["rtt_seconds"] < best["rtt_seconds"]:
             best = candidate
@@ -202,31 +209,57 @@ def _require_clock_contract(record: dict[str, Any], label: str) -> dict[str, Any
     )
 
 
-def _clock_evidence(root: Path, environment: dict[str, Any], label: str) -> dict[str, Any]:
+def _clock_evidence(root: Path, environment: dict[str, Any], label: str, *, refresh: bool = False) -> dict[str, Any]:
     path = root / "clock" / f"{label}.json"
+    if path.is_file() and not refresh:
+        return _require_clock_contract(_read_json(path), label)
     if path.is_file():
-        record = _read_json(path)
-        if "contract_satisfied" not in record:
-            record["contract_satisfied"] = _clock_contract_satisfied(record)
-            _write_json(path, record)
-        return _require_clock_contract(record, label)
-    workload, _ = _deployment_roles(environment)
+        previous = _read_json(path)
+        if not previous.get("evidence_path"):
+            # Preserve evidence written by older versions before replacing the
+            # compatibility pointer with a newly collected probe record.
+            _write_json(root / "clock" / "history" / f"{label}-legacy-{uuid.uuid4().hex}.json", previous)
+    workload, competitor = _deployment_roles(environment)
     broker_host = str(environment["deployment"]["nodes"]["broker"])
     publisher_host = _clock_target(environment, workload)
-    publisher = _clock_interval(environment, publisher_host)
-    broker = _clock_interval(environment, broker_host)
-    lower = float(publisher["offset_lower_seconds"]) - float(broker["offset_upper_seconds"])
-    upper = float(publisher["offset_upper_seconds"]) - float(broker["offset_lower_seconds"])
+    competitor_host = _clock_target(environment, competitor)
+    intervals = {
+        host: _clock_interval(environment, host)
+        for host in dict.fromkeys((publisher_host, broker_host, competitor_host))
+    }
+    publisher, broker, competitor_clock = (
+        intervals[publisher_host], intervals[broker_host], intervals[competitor_host]
+    )
+
+    def difference(first_host, second_host):
+        if first_host == second_host:
+            return [0.0, 0.0]
+        first, second = intervals[first_host], intervals[second_host]
+        return [
+            float(first["offset_lower_seconds"]) - float(second["offset_upper_seconds"]),
+            float(first["offset_upper_seconds"]) - float(second["offset_lower_seconds"]),
+        ]
+
+    lower, upper = difference(publisher_host, broker_host)
+    competitor_interval = difference(competitor_host, publisher_host)
     bound = max(abs(lower), abs(upper))
+    evidence_path = Path("clock") / "history" / f"{label}-{uuid.uuid4().hex}.json"
     record = {
         "schema_version": 2,
         "method": "controller-bracketed remote UTC probes; interval bound does not assume symmetric network delay",
+        "collected_at_utc": datetime.now(timezone.utc).isoformat(),
+        "validity_scope": "probe times only; continued bounds during a replay require stable host clocks; no full-session drift bound is asserted",
+        "evidence_path": evidence_path.as_posix(),
         "publisher": publisher,
         "broker": broker,
+        "competitor": competitor_clock,
         "publisher_minus_broker_interval_seconds": [lower, upper],
         "clock_uncertainty_seconds": bound,
+        "competitor_minus_publisher_interval_seconds": competitor_interval,
+        "competitor_publisher_clock_uncertainty_seconds": max(abs(value) for value in competitor_interval),
     }
     record["contract_satisfied"] = _clock_contract_satisfied(record)
+    _write_json(root / evidence_path, record)
     _write_json(path, record)
     return _require_clock_contract(record, label)
 
@@ -282,15 +315,23 @@ def _runtime_phase(phase: str, config: Path, run_dir: Path, bundle: Path | None 
     _run(command)
 
 
-def _victim_run(root: Path, environment: dict[str, Any], manifest: dict[str, Any], bundle: Path, run_dir: Path, *, clock_uncertainty: float) -> dict[str, Any]:
-    summary = run_dir / "summary.json"
-    if summary.is_file():
-        return _read_json(summary)
+def _prepare_victim_run(root: Path, environment: dict[str, Any], manifest: dict[str, Any], bundle: Path, run_dir: Path, *, clock_uncertainty: float) -> Path:
+    """Stage a replay before its finite-duration competing load is started."""
     base_config = _base_testbed_config(root, environment)
     config = _run_config(base_config, run_dir, bundle, manifest, clock_uncertainty)
     _runtime_phase("prepare", config, run_dir, bundle)
     shutil.copyfile(environment["attachment"]["identity_file"], run_dir / "deployment-fingerprint.json")
     shutil.copyfile(environment["attachment"]["evidence_file"], run_dir / "live-deployment-evidence.json")
+    return config
+
+
+def _victim_run(root: Path, environment: dict[str, Any], manifest: dict[str, Any], bundle: Path, run_dir: Path, *, clock_uncertainty: float, prepared_config: Path | None = None) -> dict[str, Any]:
+    summary = run_dir / "summary.json"
+    if summary.is_file():
+        return _read_json(summary)
+    config = prepared_config if prepared_config is not None else _prepare_victim_run(
+        root, environment, manifest, bundle, run_dir, clock_uncertainty=clock_uncertainty
+    )
     succeeded = False
     try:
         _runtime_phase("run", config, run_dir)

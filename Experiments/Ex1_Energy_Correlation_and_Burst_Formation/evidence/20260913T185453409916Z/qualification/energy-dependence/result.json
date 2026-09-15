@@ -1,0 +1,12 @@
+{
+  "check": "energy-dependence",
+  "criterion": "Common harvesting produces one shared sample path; independent harvesting produces distinct per-device sample paths for the same seed.",
+  "observed": {
+    "common_identical": true,
+    "independent_distinct": true,
+    "realized_common_pearson": 1.0,
+    "realized_independent_pearson": 0.3009837975233256,
+    "samples_per_sensor": 101
+  },
+  "status": "passed"
+}

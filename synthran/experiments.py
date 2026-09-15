@@ -727,6 +727,20 @@ def _campaign_for_qualification(
         candidate = _active_campaign(experiment, manifest=manifest)
         campaign = _campaign(candidate)
         if campaign.get("deployment_hash") == environment["deployment_hash"]:
+            # Restart an interrupted/failed acquisition only through explicit
+            # qualification. A valid unbracketed sweep must never be retried
+            # until its noise happens to produce the desired crossing.
+            calibration_path = candidate / "calibration/load-selection.json"
+            if (experiment == "ex2" and calibration_path.is_file()
+                    and not (candidate / "frozen-design.json").exists()):
+                calibration = _read_json(calibration_path)
+                acquisition_failed = (
+                    calibration.get("status") == "running"
+                    or (calibration.get("status") == "failed" and calibration.get("failure_reason")
+                        in {"transport_setup_failed", "probe_execution_failed"})
+                )
+                if acquisition_failed:
+                    return _new_campaign(experiment, manifest, environment)
             return candidate
     except (OSError, ValueError, json.JSONDecodeError):
         pass

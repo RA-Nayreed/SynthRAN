@@ -1,0 +1,14 @@
+{
+  "check": "zero-power",
+  "criterion": "Zero harvested power cannot create capacitor energy from a zero-energy initial state.",
+  "observed": {
+    "samples_w": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "stored_j": 0.0,
+    "voltage_v": 0
+  },
+  "status": "passed"
+}

@@ -1,0 +1,22 @@
+{
+  "checks": {
+    "capacitor-accounting": "passed",
+    "capacitor-known-trajectory": "passed",
+    "constant-power": "passed",
+    "energy-dependence": "passed",
+    "event-lineage-bundle": "passed",
+    "irregular-trace": "passed",
+    "receiver-collision": "passed",
+    "receiver-sic": "passed",
+    "receiver-singleton": "passed",
+    "sensing-periodicity": "passed",
+    "zero-power": "passed"
+  },
+  "checks_failed": [],
+  "checks_passed": 11,
+  "checks_total": 11,
+  "parallel_checks": true,
+  "schema_version": 1,
+  "source_revision": "4f8cc5d3f71a14537367c24d6030ffb3bf355ea4",
+  "status": "passed"
+}

@@ -1,0 +1,286 @@
+{
+  "calibration": {
+    "population_selection_sha256": "80b75fa1033e2381c84ef117ff167479dcbd74b3ade0612494ab5382fbe852a8",
+    "power_selection_sha256": "2e9d38a38f1ca68df4e5baeb1313f13e114a0c4595125a8a9e0c946645009ebe",
+    "selected_power_w": {
+      "high": 0.002,
+      "knee": 0.001,
+      "low": 0.0005
+    },
+    "sensor_count": 64
+  },
+  "campaign_id": "20260913T185453409916Z",
+  "confirmation": {
+    "condition_order": [
+      "always-powered",
+      "low-independent",
+      "low-common",
+      "knee-independent",
+      "knee-common",
+      "high-independent",
+      "high-common"
+    ],
+    "conditions": {
+      "always-powered": {
+        "correlation": "independent",
+        "mean_power_w": 0.001,
+        "mode": "always_powered",
+        "source": "lognormal"
+      },
+      "high-common": {
+        "correlation": "common",
+        "mean_power_w": 0.002,
+        "mode": "environmental",
+        "source": "lognormal"
+      },
+      "high-independent": {
+        "correlation": "independent",
+        "mean_power_w": 0.002,
+        "mode": "environmental",
+        "source": "lognormal"
+      },
+      "knee-common": {
+        "correlation": "common",
+        "mean_power_w": 0.001,
+        "mode": "environmental",
+        "source": "lognormal"
+      },
+      "knee-independent": {
+        "correlation": "independent",
+        "mean_power_w": 0.001,
+        "mode": "environmental",
+        "source": "lognormal"
+      },
+      "low-common": {
+        "correlation": "common",
+        "mean_power_w": 0.0005,
+        "mode": "environmental",
+        "source": "lognormal"
+      },
+      "low-independent": {
+        "correlation": "independent",
+        "mean_power_w": 0.0005,
+        "mode": "environmental",
+        "source": "lognormal"
+      }
+    },
+    "experimental_unit": "source_seed",
+    "seeds": [
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026,
+      2027,
+      2028,
+      2029,
+      2030
+    ],
+    "sensor_count": 64
+  },
+  "design_sha256": "35224c5c07afd10dd6064783bc16145c0916739b75bfddb3cf1fc853746248fb",
+  "design_version": 2,
+  "experiment": "ex1",
+  "experiment_source_sha256": {
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/analysis_v2.py": "1e297572450ab44bb7057730cce8c66d78c43afd77ae1df514ad0281dc14cea5",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/campaign.py": "e43c0d5038eff8e7bfd404a0a6e8341673b3d32b0b305332f4bedde16e52f2c3",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/confirmation.py": "f7718df65da5fb9652ff331a5816d4bcaa41a7b0d949897d27ffb0d5e184c707",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml": "cd156cfcc7ce26471b938a26d94d3af1b08e48af9f4bf8647cdfee1ed0f5c212",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/freeze.py": "605a8f1ea3eca6f7a4844afec5548eec3867ee7d8a2c2b217b03c7df67c98ea6",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/population_calibration.py": "e99be7d7fdb9a7c72bbf6d943e9b72919c457c290ba4361f45a576b7ed3cb0c1",
+    "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/scenario-template.yml": "e64434cf2ad529bd181af7314585b3c25f8ca1ecdc71fc122ad0b7f07fd0fdb9"
+  },
+  "implementation": {
+    "packages": {
+      "PyYAML": "6.0.3",
+      "numpy": "2.4.6",
+      "paho-mqtt": "2.1.0",
+      "pandas": "3.0.5",
+      "simpy": "4.1.2"
+    },
+    "python": "3.12.13",
+    "source_sha256": {
+      "__init__.py": "153510edb0e05d97ebba8104dbdcfcf0e5805286ac06994df6ce9ef863ba67ac",
+      "ambient_iot/__init__.py": "429aa598c6a2281b3f6644a12268fbb7514be4adea50d2e7d7f2522dc223d054",
+      "ambient_iot/bridge.py": "a60d6de1537e079b18658a5a82e460bea3510a7ad3922b0f7fd79e43490d26b4",
+      "ambient_iot/config.py": "1b07de17f1ac1c313afae068ab412a25a54b9627d7dbc9c3ba9acdf683a93187",
+      "ambient_iot/evidence.py": "fd168b8af30417ac0c6ec184bfb4166cc85b058bc613534a25857cc31fc4f938",
+      "ambient_iot/outcomes.py": "5f82e54be0bd8253c45313e8f4015946f2a087b5c265b97e54179ca4211212be",
+      "ambient_iot/protocols.py": "5e08b97f079657e5d866bfd717fe12c77c21a7d3cabc2dca84ffc0871579aee1",
+      "ambient_iot/runner.py": "25264f886a3d0b9c53729cd8a20a96e4fa264822d9543cce04ca499f269cb8be",
+      "archive.py": "5da6be848756b9a45bff781b281233b7845fc58c5335d190b9c1d75f288b8c78",
+      "cli.py": "67315a290fdf29eacfa1cc85aaf0ba3f39f6607bb0ce2112043ac96165b9bd1c",
+      "data/__init__.py": "16d8fb99255be5ac1225aac448ef13c5391fead4a4c0b57cb529e03b9f81a1a1",
+      "deployment_evidence.py": "fb8089c0e4e0ab4b4d0125d81a93342b19190574581be83344a09fe203c5ca9a",
+      "deployment_state.py": "f2f2fe43b357a9ba2060a359f5fb186f400b9a5d3beba852104afc89d73b6681",
+      "experiment_runtime/ansible/roles/software_ue_publish/files/discover_ue_tunnels.py": "4ac4dcaa1ed5badc8e595d424d68f8ec5c24f851fd08ab275fdbad9efd2f9f43",
+      "experiment_runtime/runner.py": "99a40c6b20708fb6cfdb0375c8c25013d5b54a393f4226a4256f54ad924a6ba9",
+      "experiments.py": "3868f5438e54e13aff4cccb081fcf149f562279062cee4b28bcaaca28eebabad",
+      "image_digest.py": "f2e7cf00cf1c801fed96f8b16381a1cdd43cd1e03fcf5767f9a101545e6d19e5",
+      "inventory.py": "4b3747f863452b2a6a181c1a55e5896ba36d9d5fb4510c584d870806f6f056a3",
+      "model/__init__.py": "a432289297f84d8ffcabe86b1b6291b097363c935e7a7af1881bcce2293b4f78",
+      "model/backscatter.py": "ecfd3fa65af1e62dd667776f73ec3534e73caeb43e4d2b5a0e67315190decea5",
+      "model/bsengine.py": "8284b3d5d54c843b6c840a165c6972f121ca3a595cb651ea5559f2ffbe3bd3c7",
+      "model/capacitor.py": "019c6ab3fb6f18012de66cd3a6c9733662816a02994e0c0ed00eaa5afd0a9433",
+      "model/controller.py": "68feedc0923276b544eefbf0b094ccf1128953d20bb2c912c185de4c1451d77d",
+      "model/energy.py": "fcce5f00646cbc92ce43a8ea9ff145a3afe44ec90f2bffed225a9e5c85680a70",
+      "model/packet_analysis.py": "1ca438cfcda962d05b2464fecef1ca0991068d6104b20628d5d50014abb1e42e",
+      "model/propagation.py": "db84fba4e06fcae4681c2b11f679c832cbb9ffe693b1e390f723d36063bdea17",
+      "model/radiodevices.py": "d53acb57c7bf2f18af0b42e7b0cbe49ffd88c3cbd9c08c5bc90a4633eec6aeb2",
+      "model/receiver.py": "0f1633660ee52916b494f4af0deab5db387e42b7eac8eb745cff90e08aec0006",
+      "mqtt_auth.py": "31fec23d3dbbd42c5b6004404deeef247fd37a53d9f2d8ef1fd17297257fa2df",
+      "profile_validation.py": "b0450992beca9125799c9a56d37b947c90b98b68532d9d3d7943baa611385f64",
+      "provenance.py": "9ccb9eaa9df10becd8515a453ec7f8702a69e7ff2215289a6d62188f3f198744",
+      "r2lab.py": "67380da46e208371c37d20b4f473174df36e76b794d41d546405fa852a098081",
+      "result_safety.py": "7deb50a68dc51513369786d54d0b91f9054165c166de2ee5fec3290bc341459b",
+      "results/__init__.py": "f2c054a83a9babcdb55c050592e4568fa0c123b6a15c7666b4204562794fa2a1",
+      "results/metrics.py": "a489f150e8ef4dab1e99c2e43e9e444d4ff1e361cc35c2383339a3f85484fd1e",
+      "results/reconcile.py": "ef6477fde6e8bb6247647311c79c00523ae28bb2f394996077ee7be3f54e3b77",
+      "runtime.py": "24d622b3cf3bd4ffb2c7b991e6e223015014713d77e3b75a9823111a2827f96e",
+      "scenario.py": "4a18079cc75a6c2ca3cba7a3a688f533eb663c4be3f14951f525289d3e23b4e9",
+      "testbed_attachment.py": "a67ec933d5eb463e12894f7fa0b1e08ca7078a35ce6a3da66e3f9190393cd179",
+      "workload/__init__.py": "9ada24a453525c613ef8a53352bd85ff4966880230a47c3a0b4e2aa5a299955d",
+      "workload/bundle.py": "33755c98b6a2cb2cab11f536c3c830a28fb111d02662cc7bf24b265d1bc6d314",
+      "workload/cleanup.py": "58428cee1eedca14327481998630fe8480696b126515e04441c920159af84178",
+      "workload/replay.py": "daf56b54aa17295723505cc905582611e5ae523eeed74b646b6a39f2fc00136b",
+      "workload/trace.py": "e18f117b57d7d7c65e1e55c2a85ac2be02e913d73ba755d4e411fcad1824a166"
+    }
+  },
+  "model_contract": {
+    "capacitor": {
+      "capacitance_f": 0.0003,
+      "initial_voltage_v": 0,
+      "leakage_resistance_ohm": 100000,
+      "log_interval_seconds": 0.01,
+      "maximum_voltage_v": 2,
+      "series_resistance_ohm": 5000,
+      "timestep_seconds": 0.001
+    },
+    "controller": {
+      "currents_a": {
+        "listening": 0.00014,
+        "processing": 0.00128,
+        "sensing": 0.000512,
+        "transmitting": 0.005
+      },
+      "durations_ms": {
+        "processing": 5,
+        "sensing": 2,
+        "transmitting": 5
+      },
+      "high_voltage_v": 1.7,
+      "low_voltage_v": 1.3,
+      "max_startup_time_ms": 2000
+    },
+    "energy": {
+      "coefficient_of_variation": 1.0,
+      "correlation_time_s": 5.0,
+      "interpolation": "hold",
+      "mode": "environmental",
+      "sample_interval_s": 0.1,
+      "source": "lognormal"
+    },
+    "gateways": [
+      "uesim01"
+    ],
+    "measurement": {
+      "duration_seconds": 60,
+      "sensing_interval_ms": 1000,
+      "warmup_seconds": 10
+    },
+    "mqtt": {
+      "payload_bytes": 256,
+      "port": 1883,
+      "qos": 1,
+      "start_delay_seconds": 30,
+      "topic_prefix": "synthran"
+    },
+    "propagation": {
+      "los": true,
+      "model": "macro"
+    },
+    "protocol": {
+      "pre_registered": true,
+      "rx_duration_ms": 10,
+      "slots": 4,
+      "tx_duration_ms": 5,
+      "type": "broadcast_sic"
+    },
+    "receiver": {
+      "bandwidth_hz": 100000000,
+      "cancellation_factor": 0.9,
+      "noise_figure_db": 6,
+      "required_sinr_db": 3,
+      "sic": true
+    },
+    "sensor": {
+      "subcarrier_shift": 0
+    },
+    "topology": {
+      "base_station": {
+        "height_m": 25,
+        "sectors": [
+          {
+            "azimuth_deg": 0,
+            "beamwidth_deg": 65,
+            "power_dbm": 46
+          },
+          {
+            "azimuth_deg": 120,
+            "beamwidth_deg": 65,
+            "power_dbm": 46
+          },
+          {
+            "azimuth_deg": 240,
+            "beamwidth_deg": 65,
+            "power_dbm": 46
+          }
+        ],
+        "x": 0,
+        "y": 0
+      },
+      "frequency_hz": 924000000,
+      "nodes": {
+        "placement": {
+          "max_radius_m": 40,
+          "min_radius_m": 10,
+          "type": "random_annulus"
+        }
+      },
+      "pathloss": "macro"
+    }
+  },
+  "schema_version": 1,
+  "source_revision": "4f8cc5d3f71a14537367c24d6030ffb3bf355ea4",
+  "statistics": {
+    "activation_sync_window_seconds": 0.1,
+    "burst_gap_seconds": 1.0,
+    "count_autocorrelation_lag_windows": 1,
+    "experimental_unit": "source_seed",
+    "fano_window_seconds": 1.0,
+    "paired_bootstrap_resamples": 10000,
+    "paired_bootstrap_seed": 61901,
+    "peak_window_seconds": 1.0
+  }
+}
