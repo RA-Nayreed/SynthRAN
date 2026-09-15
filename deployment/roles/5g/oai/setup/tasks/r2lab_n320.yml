@@ -1,4 +1,10 @@
 ---
+- name: Configure the R2Lab N320 RU parent interface
+  ansible.builtin.lineinfile:
+    path: "{{ repo_dest }}/rru/n320.env"
+    regexp: '^IF_NAME_GNB_RU='
+    line: 'IF_NAME_GNB_RU="{{ oai_r2lab_n320_ru_parent }}"'
+
 - name: Configure the R2Lab N320 RU with a static pod-side address
   ansible.builtin.lineinfile:
     path: "{{ repo_dest }}/rru/n320.env"
@@ -57,6 +63,7 @@
     set -euo pipefail
     python3 - \
       "{{ repo_dest }}/rru/n320.env" \
+      "{{ oai_r2lab_n320_ru_parent }}" \
       "{{ oai_r2lab_n320_ru_ip }}" \
       "{{ oai_r2lab_n320_ru_mtu }}" \
       "{{ oai_r2lab_n320_sdr_ip }}" \
@@ -70,11 +77,12 @@
     import sys
 
     env_path = Path(sys.argv[1])
-    ru_ip, ru_mtu, sdr_ip, cni_type, cni_mode = sys.argv[2:7]
-    value_paths = [Path(p) for p in sys.argv[7:]]
+    ru_parent, ru_ip, ru_mtu, sdr_ip, cni_type, cni_mode = sys.argv[2:8]
+    value_paths = [Path(p) for p in sys.argv[8:]]
 
     env = env_path.read_text()
     for expected in (
+        f'IF_NAME_GNB_RU="{ru_parent}"',
         f'IP_GNB_RU="{ru_ip}"',
         f'MTU_GNB_RU="{ru_mtu}"',
         f'mgmt_addr={sdr_ip},addr={sdr_ip}',
