@@ -72,6 +72,25 @@ study:
       UDP loss boundary. They do not identify the first onset of queueing, prove
       radio-link saturation, or locate the bottleneck without additional telemetry.
     base_port: 39001
+  telemetry:
+    access: read_only
+    calibration_snapshots: [before, after]
+    confirmation_snapshots: [session_before, resume, reservation_pause, session_after]
+    host_roles: [ran, core, broker, workload_ue, competing_ue]
+    evidence:
+      - accepted deployment and UE binding provenance
+      - workload and competing-UE routes to the N6 endpoint
+      - interface packet/error/drop counters
+      - selected kernel IP/TCP/UDP counters
+      - queue-disciplines where exposed
+      - relevant gNB/core process presence
+      - relevant Kubernetes pod identity, readiness and restart counts where exposed
+      - host uptime, load and clock-synchronization state
+    interpretation: >-
+      Telemetry is diagnostic evidence for infrastructure stability and possible
+      bottleneck localization. It must not be treated as proof of radio-scheduler
+      causality unless the required scheduler/resource counters are actually exposed
+      and aligned with the replay interval.
   confirmation:
     source_seed_count: 30
     timing_arms: [native, gap_permutation_r1, gap_permutation_r2, periodic]
@@ -132,6 +151,8 @@ phases:
     requires: [qualification]
     produces:
       - calibration/load-selection.json
+      - calibration/telemetry-before.json
+      - calibration/telemetry-after.json
 
   - id: freeze
     name: Freeze deployment, source cohort, loads, sessions, and analysis design
@@ -148,6 +169,7 @@ phases:
       - runs/
       - sessions/
       - sentinels/
+      - sessions/session*/telemetry-*.json
 
   - id: analysis
     name: Analyze paired timing effects across calibrated load levels
