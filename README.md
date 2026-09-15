@@ -209,6 +209,14 @@ Study-specific designs belong under `Experiments/` rather than becoming a growin
 
 The existence of code for a combination is not treated as proof that the combination has passed a current physical acceptance run. Physical capability claims remain tied to actual run evidence.
 
+### Upstream deployment foundation
+
+Substantial portions of SynthRAN's `deployment/` layer derive from [`sopnode/5g_ansible`](https://github.com/sopnode/5g_ansible), developed at **Inria Sophia Antipolis (SophiaNode / R2Lab, SLICES-RI)**. SynthRAN preserves the upstream provenance and records its modifications under [`third_party/sopnode-5g-ansible/`](third_party/sopnode-5g-ansible/). The upstream project is licensed under Apache-2.0.
+
+If the derived deployment layer contributes to research, please also cite:
+
+> Y. Amami, Z. Mabrouk, C. Barakat, T. Turletti, “Toward Real-Time RAN Observability in Open-Source 5G Systems,” 29th Conference on Innovation in Clouds, Internet and Networks (ICIN 2026), Athens, Greece, Mar. 2026. DOI: [10.1109/ICIN69025.2026.11481836](https://doi.org/10.1109/ICIN69025.2026.11481836).
+
 ---
 
 ## Read-only accepted-testbed attachment
