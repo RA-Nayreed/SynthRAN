@@ -30,11 +30,6 @@
         'timed out waiting for the condition' in
         ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
       }}
-    oai_start_helm_failure: >-
-      {{
-        'INSTALLATION FAILED' in
-        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
-      }}
 
 - name: Inspect the RAN Helm release after an upstream readiness timeout
   ansible.builtin.command:
@@ -44,6 +39,8 @@
       - "{{ oai_ran_release_name }}"
       - --namespace
       - "{{ core }}"
+      - --output
+      - json
   register: oai_start_helm_status
   changed_when: false
   failed_when: false
@@ -69,6 +66,18 @@
     - rru in ['n300', 'n320']
     - oai_start_wait_timeout | bool
 
+- name: Classify the timed-out Helm release state
+  ansible.builtin.set_fact:
+    oai_start_helm_deployed: >-
+      {{
+        (oai_start_helm_status.rc | default(1)) == 0 and
+        ((oai_start_helm_status.stdout | from_json).info.status | default('')) == 'deployed'
+      }}
+  when:
+    - rru in ['n300', 'n320']
+    - oai_start_wait_timeout | bool
+    - (oai_start_helm_status.rc | default(1)) == 0
+
 - name: Require a valid OAI launch result
   ansible.builtin.assert:
     quiet: true
@@ -78,15 +87,14 @@
         (
           rru in ['n300', 'n320'] and
           (oai_start_wait_timeout | bool) and
-          not (oai_start_helm_failure | bool) and
-          (oai_start_helm_status.rc | default(1)) == 0 and
+          (oai_start_helm_deployed | default(false) | bool) and
           (oai_start_workload.rc | default(1)) == 0
         )
     fail_msg: >-
       OAI start-gnb failed before SynthRAN could perform its RF readiness gate.
       rc={{ gnb_script.rc }}; expected release={{ oai_ran_release_name }}.
-      A kubectl readiness timeout is tolerated only for N3xx when the Helm release
-      and its Deployment both exist and Helm did not report INSTALLATION FAILED.
+      A kubectl readiness timeout is tolerated only for N3xx when Helm reports
+      the expected release as deployed and its Deployment exists.
 
 - name: Verify N3xx gNB RF-device readiness
   block:
