@@ -37,9 +37,9 @@
     python3 - \
       "$config" \
       "{{ oai_r2lab_n320_ru_cni_type }}" \
-      "r2lab_usrp" \
+      "{{ oai_r2lab_n320_ru_parent }}" \
       "{{ oai_r2lab_n320_ru_cni_mode }}" \
-      "{{ oai_r2lab_n320_ru_ip }}/24" <<'PY'
+      "{{ oai_r2lab_n320_ru_ip }}/{{ oai_r2lab_n320_ru_prefix }}" <<'PY'
     import json
     import sys
 
