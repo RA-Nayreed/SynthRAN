@@ -138,6 +138,7 @@ jobs:
           trap cleanup EXIT
           sudo mkfs.ext4 -q -F "$loop_dev"
           storage="$(basename "$loop_dev")"
+          python_bin="$(command -v python)"
           cat >"$RUNNER_TEMP/storage-inventory.yml" <<YAML
           all:
             children:
@@ -145,7 +146,7 @@ jobs:
                 hosts:
                   storage-ci:
                     ansible_connection: local
-                    ansible_python_interpreter: ${{ env.pythonLocation }}/bin/python
+                    ansible_python_interpreter: $python_bin
                     storage: $storage
           YAML
 
