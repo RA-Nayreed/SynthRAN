@@ -4,15 +4,17 @@
 
 Experiment 2 tests whether the temporal structure of an **event-identical** decoded Ambient-IoT workload changes application delivery over the 5G testbed that is currently active in SynthRAN.
 
-The experiment does **not** prescribe a particular core, RAN, radio unit, SOP-node pair, UE identity, or slice. Infrastructure is selected and accepted through `deploy.sh`. `experiment.sh` discovers `.synthran/active-deployment.json`, validates the saved deployment identity plus current reservation coverage, displays the actual testbed to the operator, and asks whether to use it. The chosen deployment hash is then frozen for that Experiment-2 campaign so different testbeds are never mixed silently inside one confirmation series.
+The experiment does **not** prescribe a particular core, RAN, radio unit, SOP-node pair, UE identity, or slice. Infrastructure is selected and accepted through `deploy.sh`. `experiment.sh` discovers `.synthran/active-deployment.json`, validates the saved deployment identity plus current reservation coverage, displays the actual testbed to the operator, and asks whether to use it. The chosen deployment hash and scientific design contract are then frozen for that Experiment-2 campaign so different testbeds or analysis rules are never mixed silently inside one confirmation series.
 
 ## Research questions
 
-- **T1:** For the same decoded event set, does native timing produce a practically meaningful delivery-delay or deadline-failure penalty compared with periodic timing?
-- **T2:** Does permuting the order of the exact native inter-event gaps change that penalty, indicating sensitivity to gap ordering beyond the gap histogram?
-- **T3:** Does the timing penalty interact with controlled competing 5G load?
+- **T1:** For the same decoded event set, does native timing produce a delivery-delay or deadline-failure penalty compared with periodic timing?
+- **T2:** Does native timing differ from the mean of two exact-gap permutations, indicating sensitivity to gap ordering beyond the gap histogram?
+- **T3:** Does either timing penalty change with controlled competing 5G load?
 
 The causal comparison is within source seed. Event identity, event order, sensor identity, payload bytes, MQTT topic, event count, source horizon and gateway role are held fixed. Only release timing changes.
+
+A statistically nonzero effect is not automatically a practically meaningful effect. Experiment 2 does not declare equivalence or practical importance without an independently justified margin specified before interpreting confirmation data.
 
 ## Source cohort
 
@@ -47,7 +49,7 @@ Run Experiment 2 on this active testbed? [y/N]
 
 If the reservation is absent or expired, the experiment does not reserve or repair anything; it stops and tells the operator to extend or reacquire coverage through `deploy.sh`.
 
-Extending reservation coverage does not change the scientific deployment identity. If the same deployment hash becomes active again, an incomplete Experiment-2 campaign can resume. If a different deployment hash becomes active, Experiment 2 starts a new campaign instead of combining different testbeds.
+Extending reservation coverage does not change the scientific deployment identity. If the same deployment hash and scientific design become active again, an incomplete Experiment-2 campaign can resume. If either the deployment or scientific design changes, qualification/full execution starts a separate campaign instead of combining incompatible evidence.
 
 At least two verified UE bindings are needed for the full study: the first is assigned the workload role and the second the competing-traffic role for that campaign. These assignments, plus all accepted deployment provenance, are retained in the campaign results.
 
@@ -55,19 +57,31 @@ At least two verified UE bindings are needed for the full study: the first is as
 
 The source workload keeps its native 1× time scale. Competing traffic is a separately paced UDP flow through the second UE to an N6-side sink.
 
-Before confirmation, Experiment 2 probes the configured ascending offered-payload grid:
+Design version 2 probes the configured ascending offered-payload grid:
 
 ```text
-5, 10, 15, 20, 25, 30, 40, 50 Mbps
+5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250 Mbps
 ```
 
-with three repeats per point. Using median end-to-end delivery ratio, the formal rule is:
+with three repeats per point. Every repeat must achieve 95–105% of its requested application-payload rate and report zero sender errors. A rate whose repeat set does not satisfy that generator-validity contract cannot be used to characterize the network.
 
-- **ABOVE** = first rate whose median delivery ratio is below 0.98
-- **NEAR** = immediately preceding rate
+Using median end-to-end UDP delivery ratio over a complete valid repeat set, the formal rule is:
+
+- **ABOVE** = first ascending rate whose median delivery ratio is below 0.98
+- **NEAR** = immediately preceding valid rate
 - **BELOW** = immediately preceding NEAR
 
-If this rule cannot select all three levels, confirmation does not start. The calibration result is preserved rather than inventing an artificial knee.
+The sweep stops once the first valid crossing is established. If the generator is invalid, the grid remains unbracketed, or the crossing occurs without two valid predecessors, confirmation does not start. Every completed probe is retained in `calibration/load-selection.json` before the phase stops.
+
+These labels are operational positions around an end-to-end UDP loss boundary. They do **not** by themselves identify the onset of queueing, prove radio saturation, establish path capacity, or locate the bottleneck.
+
+## Read-only transport evidence
+
+Calibration and confirmation retain bounded snapshots from the accepted deployment without changing its configuration. The evidence includes the proved routes of both experiment UEs to the N6 endpoint, interface packet/error/drop counters, selected kernel IP/TCP/UDP counters, queue-discipline state when exposed, relevant gNB/core process presence, relevant Kubernetes pod identity/readiness/restart counts when exposed, and host uptime/load/clock state.
+
+Calibration records before/after snapshots. Confirmation records session-start/session-end snapshots and evidence at reservation pause/resume boundaries. The same accepted deployment inventory and SSH contract produced by `deploy.sh` is reused.
+
+This evidence supports infrastructure-stability checks and possible bottleneck diagnosis. It is not automatically evidence that a measured effect was caused specifically by the radio scheduler. A radio-specific attribution requires the corresponding scheduler/resource evidence to be exposed and aligned with the replay interval.
 
 ## Confirmation design
 
@@ -95,10 +109,10 @@ Each run retains stable event identity and the planned/publisher/application tim
 - publisher release error;
 - application receipt delay;
 - delivery/loss evidence;
-- background-flow delivery ratio;
+- background-flow requested and achieved rate plus delivery ratio;
 - deployment and UE-binding provenance.
 
-Cross-host timing claims require an explicit clock-uncertainty bound. Experiment 2 collects controller-bracketed UTC probes from the workload-publisher host and broker host and records the resulting uncertainty bound with the campaign. Seeds whose matched arms do not satisfy the clock contract are excluded only from the affected timing contrast, with the exclusion recorded.
+Cross-host timing claims require an explicit clock-uncertainty bound. Experiment 2 collects controller-bracketed UTC probes from the workload-publisher host and broker host and records the resulting uncertainty bound with the campaign.
 
 ## Analysis
 
@@ -109,7 +123,22 @@ For each load level and source seed, the principal paired contrasts are:
 ΔNR = native − mean(gap_permutation_r1, gap_permutation_r2)
 ```
 
-for the prespecified principal outcomes. Positive values mean native timing is worse for outcomes where lower is better. Paired bootstrap confidence intervals are computed across source seeds. The two gap-permutation arms do not double the statistical sample size.
+for the prespecified principal outcomes. Positive values mean native timing is worse for outcomes where lower is better.
+
+Eligibility is **contrast-specific**. `ΔNP` requires only valid native and periodic measurements. `ΔNR` requires native plus both gap permutations. Consequently, a missing, clock-invalid, or undefined gap-permutation arm does not discard an otherwise valid native-versus-periodic estimate. Every exclusion is retained with its seed, affected arm and reason.
+
+Experiment 2 also estimates the prespecified paired load interactions:
+
+```text
+ΔNP(near)  − ΔNP(below)
+ΔNP(above) − ΔNP(below)
+ΔNR(near)  − ΔNR(below)
+ΔNR(above) − ΔNR(below)
+```
+
+The same source seed must be eligible for the relevant contrast at both compared loads. Positive interaction values mean the native-timing penalty is larger at the stronger load than at BELOW.
+
+Paired percentile-bootstrap confidence intervals are computed across source seeds with 10,000 deterministic resamples. The two gap-permutation arms do not increase the statistical sample size. The reported 95% intervals are pointwise and have no multiplicity adjustment; they must not be interpreted as familywise-confirmed evidence across all outcomes, loads and contrasts.
 
 ## User interface
 
