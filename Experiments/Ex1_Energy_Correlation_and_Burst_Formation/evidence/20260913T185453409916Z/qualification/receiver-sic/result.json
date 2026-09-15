@@ -1,0 +1,39 @@
+{
+  "check": "receiver-sic",
+  "criterion": "Perfect cancellation recovers the weaker overlapping packet after the stronger capture; disabling SIC does not.",
+  "observed": {
+    "sic_disabled": [
+      {
+        "decode_stage": 0,
+        "interference_w": 1e-09,
+        "outcome": "capture",
+        "residual_w": 1e-08,
+        "sinr_db": 9.995659225206813
+      },
+      {
+        "decode_stage": null,
+        "interference_w": 1e-08,
+        "outcome": "collision",
+        "residual_w": 1e-09,
+        "sinr_db": -10.000434272768626
+      }
+    ],
+    "sic_enabled": [
+      {
+        "decode_stage": 0,
+        "interference_w": 1e-09,
+        "outcome": "capture",
+        "residual_w": 0.0,
+        "sinr_db": 9.995659225206813
+      },
+      {
+        "decode_stage": 1,
+        "interference_w": 0.0,
+        "outcome": "sic_recovered",
+        "residual_w": 0.0,
+        "sinr_db": 30.0
+      }
+    ]
+  },
+  "status": "passed"
+}
