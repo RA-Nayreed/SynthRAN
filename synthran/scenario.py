@@ -13,11 +13,17 @@ SUPPORTED_CORES = {"oai", "open5gs", "free5gc"}
 SUPPORTED_RANS = {"oai", "srsran", "ueransim"}
 SUPPORTED_PLATFORMS = {"rfsim", "r2lab"}
 SUPPORTED_R2LAB_RADIOS = {"n300", "n320"}
+_RESERVATION_MODES = {"create", "require-existing", "disabled"}
+_PREPARATION_MODES = {"fresh", "preserve"}
+_PROVIDER_MODES = {"create", "require-existing", "disabled"}
+_R2LAB_RESERVATION_MODES = {"book", "require-existing", "disabled"}
 _TRANSPORT_KEYS = {"mode", "interface", "mbim_session"}
 _INSECURE_SSH = re.compile(
     r"(?:StrictHostKeyChecking\s*=\s*no|UserKnownHostsFile\s*=\s*/dev/null)", re.I
 )
 _SAFE_PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+_SAFE_PROVIDER_CONTEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_DURATION = re.compile(r"[1-9][0-9]*(?:m|h)\Z")
 
 
 def _network_profile_source(deployment: dict) -> Path:
@@ -29,6 +35,135 @@ def _network_profile_source(deployment: dict) -> Path:
 
 def _ue_catalog_source(deployment: dict) -> Path:
     return Path(deployment.get("ue_catalog_file") or "deployment/group_vars/all/ue_catalog.yaml")
+
+
+def _mapping(value, label: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a mapping")
+    return dict(value)
+
+
+def _legacy_enabled(value, label: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be boolean when provided")
+    return value
+
+
+def _normalize_reservation_policy(deployment: dict) -> None:
+    """Materialize all resource-acquisition choices before any remote mutation."""
+
+    reservation = _mapping(deployment.get("reservation"), "deployment.reservation")
+    reservation_enabled = _legacy_enabled(
+        reservation.get("enabled"), "deployment.reservation.enabled", True
+    )
+    mode = reservation.get("mode")
+    if mode is None:
+        mode = "create" if reservation_enabled else "disabled"
+    if mode not in _RESERVATION_MODES:
+        raise ValueError(
+            "deployment.reservation.mode must be create, require-existing, or disabled"
+        )
+    if "enabled" in reservation and reservation_enabled != (mode != "disabled"):
+        raise ValueError(
+            "deployment.reservation.enabled conflicts with deployment.reservation.mode"
+        )
+
+    host_preparation = reservation.get("host_preparation")
+    if host_preparation is None:
+        host_preparation = "fresh" if mode != "disabled" else "preserve"
+    if host_preparation not in _PREPARATION_MODES:
+        raise ValueError(
+            "deployment.reservation.host_preparation must be fresh or preserve"
+        )
+    if mode == "disabled" and host_preparation == "fresh":
+        raise ValueError(
+            "fresh host preparation requires deployment.reservation.mode create or require-existing"
+        )
+
+    duration = reservation.get("duration_minutes", 120)
+    if not isinstance(duration, int) or isinstance(duration, bool) or duration < 1:
+        raise ValueError("deployment.reservation.duration_minutes must be a positive integer")
+    image = reservation.get("image", "ubuntu-jammy")
+    if not isinstance(image, str) or not image.strip():
+        raise ValueError("deployment.reservation.image must be a non-empty string")
+
+    # node_pool belonged to the retired substitution policy. Resource identities
+    # now come exclusively from deployment.nodes and are immutable during acquisition.
+    reservation.pop("node_pool", None)
+    reservation.update(
+        {
+            "mode": mode,
+            "host_preparation": host_preparation,
+            "enabled": mode != "disabled",
+            "duration_minutes": duration,
+            "image": image,
+        }
+    )
+    deployment["reservation"] = reservation
+
+    provider = _mapping(deployment.get("provider"), "deployment.provider")
+    provider_mode = provider.get("mode", "disabled")
+    if provider_mode not in _PROVIDER_MODES:
+        raise ValueError(
+            "deployment.provider.mode must be create, require-existing, or disabled"
+        )
+    if provider_mode != "disabled":
+        for key in ("project", "experiment"):
+            value = provider.get(key)
+            if not isinstance(value, str) or _SAFE_PROVIDER_CONTEXT.fullmatch(value) is None:
+                raise ValueError(
+                    f"deployment.provider.{key} is required and must contain safe context characters"
+                )
+        experiment_duration = provider.get("experiment_duration", "4h")
+        if not isinstance(experiment_duration, str) or _DURATION.fullmatch(experiment_duration) is None:
+            raise ValueError(
+                "deployment.provider.experiment_duration must look like 30m or 4h"
+            )
+        provider["experiment_duration"] = experiment_duration
+    provider["mode"] = provider_mode
+    deployment["provider"] = provider
+
+    r2lab = _mapping(
+        deployment.get("r2lab_reservation"), "deployment.r2lab_reservation"
+    )
+    legacy_default = deployment.get("platform") == "r2lab"
+    r2lab_enabled = _legacy_enabled(
+        r2lab.get("enabled"), "deployment.r2lab_reservation.enabled", legacy_default
+    )
+    r2lab_mode = r2lab.get("mode")
+    if r2lab_mode is None:
+        r2lab_mode = "book" if r2lab_enabled else "disabled"
+    if r2lab_mode not in _R2LAB_RESERVATION_MODES:
+        raise ValueError(
+            "deployment.r2lab_reservation.mode must be book, require-existing, or disabled"
+        )
+    if deployment.get("platform") != "r2lab" and r2lab_mode != "disabled":
+        raise ValueError("R2Lab reservation must be disabled unless deployment.platform is r2lab")
+    if "enabled" in r2lab and r2lab_enabled != (r2lab_mode != "disabled"):
+        raise ValueError(
+            "deployment.r2lab_reservation.enabled conflicts with deployment.r2lab_reservation.mode"
+        )
+    r2lab_duration = r2lab.get("duration_minutes", 120)
+    if (
+        not isinstance(r2lab_duration, int)
+        or isinstance(r2lab_duration, bool)
+        or r2lab_duration < 1
+    ):
+        raise ValueError(
+            "deployment.r2lab_reservation.duration_minutes must be a positive integer"
+        )
+    r2lab.update(
+        {
+            "mode": r2lab_mode,
+            "enabled": r2lab_mode != "disabled",
+            "duration_minutes": r2lab_duration,
+        }
+    )
+    deployment["r2lab_reservation"] = r2lab
 
 
 def _validate_ssh_policy(deployment: dict, host_vars: dict) -> None:
@@ -133,6 +268,8 @@ def load_scenario(path: str | Path, *, deployment_only: bool = False) -> dict:
         raise ValueError("deployment.ues must be a non-empty list of names")
     if len(ues) != len(set(ues)):
         raise ValueError("deployment.ues must contain unique names")
+
+    _normalize_reservation_policy(dep)
 
     host_vars = dep.get("host_vars", {})
     if host_vars is not None and not isinstance(host_vars, dict):
