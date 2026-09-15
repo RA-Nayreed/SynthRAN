@@ -15,7 +15,7 @@ helm_sha256:
   arm64: "0236e2ebea9577799375a236c5e0e98d0eded4b9a3260678e51bfbc9dcca97a1"
 yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
-# Legacy role download tasks are intentionally fail-closed. The network play
+# Legacy role download tasks are intentionally fail-closed. The bootstrap play
 # installs this binary from the checksum-pinned release before any 5G backend.
 yq_url: ""
 yq_sha256:
@@ -33,3 +33,19 @@ flannel_chart_version: "v0.28.9"
 # The srsRAN chart hardcodes a BusyBox log sidecar. SynthRAN rewrites that
 # reference to this immutable Docker Official Image index before Helm renders.
 synthran_log_sidecar_image: "busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
+
+# #52 normalizes this field to fresh|preserve in the resolved scenario. This
+# policy remains controller-owned and is never inferred from live host state.
+synthran_host_preparation: >-
+  {{
+    (
+      (lookup('file', scenario_file) | from_yaml).deployment.reservation
+      | default({})
+    ).host_preparation
+    | default('fresh')
+  }}
+
+# #51 pins the reference commit. synthran.runtime verifies/materializes this
+# checkout before Ansible starts; delegated wrappers include tasks only here.
+synthran_reference_root: >-
+  {{ synthran_root }}/.synthran/reference/sopnode-5g-ansible/6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
