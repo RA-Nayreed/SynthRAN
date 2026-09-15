@@ -41,6 +41,33 @@
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml"
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"
 
+- name: Teach the staged OAI NAD templates to render ipvlan interfaces
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - "{{ item }}" <<'PY'
+    from pathlib import Path
+    import sys
+
+    path = Path(sys.argv[1])
+    text = path.read_text()
+    braces_open = chr(123) * 2
+    braces_close = chr(125) * 2
+    old_guard = braces_open + '- if eq .type "macvlan" ' + braces_close
+    new_guard = braces_open + '- if or (eq .type "macvlan") (eq .type "ipvlan") ' + braces_close
+    old_type = '"type": "macvlan",'
+    new_type = '"type": "' + braces_open + ' .type ' + braces_close + '",'
+    if old_guard not in text:
+        raise SystemExit(f"macvlan guard not found in {path}")
+    if old_type not in text:
+        raise SystemExit(f"macvlan plugin type not found in {path}")
+    path.write_text(text.replace(old_guard, new_guard, 1).replace(old_type, new_type, 1))
+    PY
+  args:
+    executable: /bin/bash
+  loop:
+    - "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml"
+    - "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml"
+
 - name: Verify the staged R2Lab N320 transport contract
   ansible.builtin.shell: |
     set -euo pipefail
@@ -55,6 +82,8 @@
       awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  type: {{ oai_r2lab_n320_ru_cni_type }}'
       awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  mode: "{{ oai_r2lab_n320_ru_cni_mode }}"'
     done
+    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml"
+    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml"
   args:
     executable: /bin/bash
   changed_when: false
