@@ -59,7 +59,12 @@ class CalibrationContractTests(unittest.TestCase):
             patch.object(
                 campaign,
                 "_transport_context",
-                return_value=({"device": "qhat03"}, "172.28.2.77", "proved-route"),
+                return_value=({"device": "qhat03"}, "172.28.2.77", {"workload_ue": "route-a", "competing_ue": "route-b"}),
+            ),
+            patch.object(
+                campaign,
+                "capture_transport_snapshot",
+                return_value={"schema_version": 1, "read_only": True},
             ),
             patch.object(campaign, "_udp_probe", side_effect=fake_probe) as probe_mock,
         ):
@@ -84,6 +89,8 @@ class CalibrationContractTests(unittest.TestCase):
         self.assertEqual(len(result["rate_summaries"]), 3)
         self.assertTrue(all(row["generator_valid"] for row in result["probes"]))
         self.assertEqual(result["schema_version"], 2)
+        self.assertTrue((self.root / "calibration/telemetry-before.json").is_file())
+        self.assertTrue((self.root / "calibration/telemetry-after.json").is_file())
 
     def test_invalid_generator_is_retained_and_blocks_confirmation(self) -> None:
         def fake_probe(_environment, _competitor, _broker, *, rate, **_kwargs):
@@ -94,7 +101,12 @@ class CalibrationContractTests(unittest.TestCase):
             patch.object(
                 campaign,
                 "_transport_context",
-                return_value=({"device": "qhat03"}, "172.28.2.77", "proved-route"),
+                return_value=({"device": "qhat03"}, "172.28.2.77", {"workload_ue": "route-a", "competing_ue": "route-b"}),
+            ),
+            patch.object(
+                campaign,
+                "capture_transport_snapshot",
+                return_value={"schema_version": 1, "read_only": True},
             ),
             patch.object(campaign, "_udp_probe", side_effect=fake_probe) as probe_mock,
             self.assertRaisesRegex(RuntimeError, "sender-rate contract"),
@@ -117,6 +129,7 @@ class CalibrationContractTests(unittest.TestCase):
                 for row in invalid
             )
         )
+        self.assertTrue((self.root / "calibration/telemetry-after.json").is_file())
 
     def test_unbracketed_sweep_retains_every_completed_probe(self) -> None:
         def fake_probe(_environment, _competitor, _broker, *, rate, **_kwargs):
@@ -126,7 +139,12 @@ class CalibrationContractTests(unittest.TestCase):
             patch.object(
                 campaign,
                 "_transport_context",
-                return_value=({"device": "qhat03"}, "172.28.2.77", "proved-route"),
+                return_value=({"device": "qhat03"}, "172.28.2.77", {"workload_ue": "route-a", "competing_ue": "route-b"}),
+            ),
+            patch.object(
+                campaign,
+                "capture_transport_snapshot",
+                return_value={"schema_version": 1, "read_only": True},
             ),
             patch.object(campaign, "_udp_probe", side_effect=fake_probe) as probe_mock,
             self.assertRaisesRegex(RuntimeError, "unbracketed"),
@@ -142,6 +160,7 @@ class CalibrationContractTests(unittest.TestCase):
         self.assertIsNone(retained["selected_mbps"])
         self.assertEqual(len(retained["probes"]), 9)
         self.assertEqual(probe_mock.call_count, 9)
+        self.assertTrue((self.root / "calibration/telemetry-after.json").is_file())
 
     def test_retained_failed_calibration_is_not_silently_reexecuted(self) -> None:
         destination = self.root / "calibration/load-selection.json"
@@ -150,6 +169,7 @@ class CalibrationContractTests(unittest.TestCase):
 
         with (
             patch.object(campaign, "_transport_context") as transport_mock,
+            patch.object(campaign, "capture_transport_snapshot") as telemetry_mock,
             self.assertRaisesRegex(RuntimeError, "already retained"),
         ):
             campaign.calibration(
@@ -158,6 +178,7 @@ class CalibrationContractTests(unittest.TestCase):
                 environment=self.environment,
             )
         transport_mock.assert_not_called()
+        telemetry_mock.assert_not_called()
 
 
 if __name__ == "__main__":
