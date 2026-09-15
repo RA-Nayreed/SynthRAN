@@ -24,9 +24,12 @@ CLIENT_KEY_DATA = re.compile(r"(?m)^(\s*client-key-data\s*:\s*).+$")
 SENSITIVE_YAML_LINE = re.compile(
     r"(?im)^(\s*(?:password|secret|token|credential|private_key|full_key|opc)\s*:\s*).+$"
 )
+# Keep the quoted JSON branches prefix-disjoint. Ordinary string characters must
+# exclude backslashes so an escape can only be consumed by the ``\\.`` branch;
+# otherwise Python's backtracking regex engine can exhibit exponential behavior.
 SENSITIVE_JSON_VALUE = re.compile(
     r'(?i)("(?:password|secret|token|credential|private_key|full_key|opc)"\s*:\s*)'
-    r'("(?:\\.|[^"])*"|[^,}\n]+)'
+    r'("(?:\\.|[^"\\])*"|[^,}\n]+)'
 )
 DANGEROUS_NAMES = {
     "admin.conf",
