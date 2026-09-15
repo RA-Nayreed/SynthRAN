@@ -1,0 +1,25 @@
+---
+- name: Select the rendered OAI RAN values file for N320 validation
+  ansible.builtin.set_fact:
+    oai_n320_rendered_values: >-
+      {{ charts_base }}/oai-5g-ran/{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}/values.yaml
+
+- name: Verify the rendered R2Lab N320 Helm values before launch
+  ansible.builtin.shell: |
+    set -euo pipefail
+    VALUES={{ oai_n320_rendered_values | quote }}
+    {{ yq_bin_path }} eval -e \
+      '.config.sdr_addrs | contains("mgmt_addr={{ oai_r2lab_n320_sdr_ip }},addr={{ oai_r2lab_n320_sdr_ip }}")' \
+      "$VALUES" >/dev/null
+    {{ yq_bin_path }} eval -e \
+      '(.multus.interfaces[] | select(.name == "ru") | .ipAdd) == "{{ oai_r2lab_n320_ru_ip }}"' \
+      "$VALUES" >/dev/null
+    {{ yq_bin_path }} eval -e \
+      '(.multus.interfaces[] | select(.name == "ru") | .type) == "{{ oai_r2lab_n320_ru_cni_type }}"' \
+      "$VALUES" >/dev/null
+    {{ yq_bin_path }} eval -e \
+      '(.multus.interfaces[] | select(.name == "ru") | .mode) == "{{ oai_r2lab_n320_ru_cni_mode }}"' \
+      "$VALUES" >/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
