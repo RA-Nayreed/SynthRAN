@@ -1,0 +1,13 @@
+{
+  "check": "constant-power",
+  "criterion": "A constant-power source returns the configured wattage at every sampled timestamp.",
+  "observed": {
+    "samples_w": {
+      "0": 0.00125,
+      "0.1": 0.00125,
+      "1.0": 0.00125,
+      "99.0": 0.00125
+    }
+  },
+  "status": "passed"
+}
