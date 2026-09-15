@@ -224,3 +224,70 @@
   roles:
     - role: setup/k8s/k8s_cpu_tuning
       when: synthran_host_preparation == 'fresh'
+
+- name: Collect host bootstrap evidence
+  hosts: sopnodes
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Read the effective containerd mount
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - -n
+          - -o
+          - SOURCE,FSTYPE,TARGET
+          - /var/lib/containerd
+      register: synthran_bootstrap_mount
+      changed_when: false
+
+    - name: Read CNI DHCP daemon state
+      ansible.builtin.command: systemctl is-active cni-dhcp.service
+      register: synthran_bootstrap_cni_dhcp
+      changed_when: false
+
+- name: Record bootstrap evidence with the deployment run
+  hosts: core_node
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Read registered Kubernetes nodes
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig=/etc/kubernetes/admin.conf
+          - get
+          - nodes
+          - -o
+          - json
+      register: synthran_bootstrap_cluster_nodes
+      changed_when: false
+
+    - name: Initialize bootstrap node evidence
+      ansible.builtin.set_fact:
+        synthran_bootstrap_nodes: []
+
+    - name: Collect per-host bootstrap evidence
+      ansible.builtin.set_fact:
+        synthran_bootstrap_nodes: >-
+          {{ synthran_bootstrap_nodes + [
+               {'host': item,
+                'storage': hostvars[item].storage | default(''),
+                'containerd_mount': hostvars[item].synthran_bootstrap_mount.stdout | trim,
+                'cni_dhcp': hostvars[item].synthran_bootstrap_cni_dhcp.stdout | trim}
+             ] }}
+      loop: "{{ groups['sopnodes'] | unique | list }}"
+
+    - name: Write shareable bootstrap evidence
+      ansible.builtin.copy:
+        content: >-
+          {{ {'host_preparation': synthran_host_preparation,
+               'nodes': synthran_bootstrap_nodes,
+               'cluster_nodes': (synthran_bootstrap_cluster_nodes.stdout | from_json)}
+             | to_nice_json }}
+        dest: "{{ run_dir }}/bootstrap-evidence.json"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
