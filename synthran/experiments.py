@@ -13,6 +13,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 import importlib
 import inspect
+import hashlib
 import json
 import math
 import os
@@ -434,6 +435,22 @@ def _active_endpoint(experiment: str) -> Path:
         raise ValueError(f"no campaign endpoint configured for {experiment}") from exc
 
 
+def _design_contract(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Settings that cannot change inside a physical confirmation campaign."""
+    return {
+        "design_version": manifest["design_version"],
+        "resource": manifest["resource"],
+        "study": manifest["study"],
+    }
+
+
+def _design_contract_sha256(manifest: dict[str, Any]) -> str:
+    serialized = json.dumps(
+        _design_contract(manifest), sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def _new_campaign(
     experiment: str,
     manifest: dict[str, Any],
@@ -454,6 +471,8 @@ def _new_campaign(
     if environment is not None:
         campaign["deployment_hash"] = environment["deployment_hash"]
         campaign["deployment_run_id"] = environment["attachment"].get("deployment_run_id")
+        campaign["design_contract_sha256"] = _design_contract_sha256(manifest)
+        _write_json(root / "design-contract.json", _design_contract(manifest))
     _write_json(root / "campaign.json", campaign)
     endpoint = _active_endpoint(experiment)
     _write_json(
@@ -473,6 +492,8 @@ def _new_campaign(
 def _active_campaign(
     experiment: str,
     environment: dict[str, Any] | None = None,
+    *,
+    manifest: dict[str, Any] | None = None,
 ) -> Path:
     endpoint_path = _active_endpoint(experiment)
     if not endpoint_path.is_file():
@@ -499,6 +520,13 @@ def _active_campaign(
             "the active experiment campaign belongs to a different testbed; "
             "run qualification or the full experiment to start a new campaign"
         )
+    if manifest is not None and manifest["resource"].get("testbed_required"):
+        if campaign.get("design_contract_sha256") != _design_contract_sha256(manifest):
+            raise ValueError(
+                "the active experiment campaign uses a different or legacy scientific design; "
+                "run qualification or the full experiment to start a new campaign; "
+                "the previous campaign remains preserved"
+            )
     return root
 
 
@@ -696,7 +724,7 @@ def _campaign_for_qualification(
         raise ValueError("qualification requires an active testbed")
 
     try:
-        candidate = _active_campaign(experiment)
+        candidate = _active_campaign(experiment, manifest=manifest)
         campaign = _campaign(candidate)
         if campaign.get("deployment_hash") == environment["deployment_hash"]:
             return candidate
@@ -802,7 +830,7 @@ def execute(
     if campaign_items[0]["id"] == "qualification":
         root = _campaign_for_qualification(experiment, manifest, environment)
     else:
-        root = _active_campaign(experiment, environment)
+        root = _active_campaign(experiment, environment, manifest=manifest)
 
     _section("Campaign")
     print(f"ID                {root.name}")
