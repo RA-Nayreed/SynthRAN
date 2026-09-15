@@ -35,13 +35,12 @@
     state: stopped
   become: true
 
-- name: Remove stale /var/lib/containerd fstab entries on live systems
+- name: Remove stale /var/lib/containerd fstab entries
   ansible.builtin.lineinfile:
     path: /etc/fstab
     regexp: '.*/var/lib/containerd.*'
     state: absent
   become: true
-  when: live_image_check.stdout == "live"
 
 - name: Clear stale containerd mounts
   ansible.builtin.shell: |
@@ -123,21 +122,6 @@
       /dev/{{ storage }} ({{ storage_fstype.stdout | trim }}) ->
       {{ storage_existing_mount.stdout | trim if storage_existing_mount.stdout | trim | length > 0 else '/var/lib/containerd' }} ->
       /var/lib/containerd ({{ containerd_storage_fstype.stdout | trim }})
-
-- name: Create overlayfs snapshotter directory
-  ansible.builtin.file:
-    path: /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
-    state: directory
-    mode: '0755'
-  become: true
-
-- name: Expose overlayfs capacity statistics to CRI
-  ansible.builtin.shell: |
-    findmnt /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs &>/dev/null || \
-      mount --bind /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs \
-                   /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
-  changed_when: false
-  become: true
 
 - name: Ensure kubelet base directory exists
   ansible.builtin.file:
