@@ -1,0 +1,4 @@
+---
+- name: Delegate worker untaint lifecycle to pinned 5g-Ansible
+  ansible.builtin.include_tasks:
+    file: "{{ synthran_reference_root }}/roles/setup/k8s/remove_taint/tasks/main.yml"
