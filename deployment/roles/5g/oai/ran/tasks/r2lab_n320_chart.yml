@@ -1,17 +1,14 @@
 ---
-- name: Install the Helm-owned R2Lab N320 ipvlan NAD renderer
-  ansible.builtin.copy:
-    src: r2lab_n320_ipvlan_nad.yaml
-    dest: "{{ charts_base }}/oai-5g-ran/{{ item }}/templates/synthran-r2lab-n320-ipvlan-nad.yaml"
-    mode: '0644'
-  loop:
-    - oai-gnb
-    - oai-du
-
 - name: Select the R2Lab N320 chart used by this OAI mode
   ansible.builtin.set_fact:
     oai_n320_release_name: "{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
     oai_n320_chart_path: "{{ charts_base }}/oai-5g-ran/{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
+
+- name: Install the Helm-owned R2Lab N320 ipvlan NAD renderer
+  ansible.builtin.copy:
+    src: r2lab_n320_ipvlan_nad.yaml
+    dest: "{{ oai_n320_chart_path }}/templates/synthran-r2lab-n320-ipvlan-nad.yaml"
+    mode: '0644'
 
 - name: Verify Helm renders exactly one validated N320 ipvlan RU attachment
   ansible.builtin.shell: |
