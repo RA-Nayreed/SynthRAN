@@ -1,0 +1,13 @@
+{
+  "check": "event-lineage-bundle",
+  "criterion": "Every canonical event is a unique generated sample forwarded only after decode, with matching serialized identity, checksum, chronology and immutable bundle manifest.",
+  "observed": {
+    "bundle_sha256": "0ef267b55fb6210f80f53d4a3a5c9006ecacef8e244dcea0e6ec7f80e31f1dd1",
+    "chronology_valid": true,
+    "decoded_events": 8,
+    "generated_samples": 8,
+    "payload_identity_and_sha256": true,
+    "unique_event_ids": 8
+  },
+  "status": "passed"
+}
