@@ -8,7 +8,7 @@ The machine entrypoint is `bin/fiveg`. Before any migration step relies on it, r
 python3 tools/check_5g_ansible_contract.py --reference /path/to/5g-Ansible
 ```
 
-The checker is intentionally local and non-hardware. It verifies the exact commit, capabilities, generated inventory assumptions, the `plan` playbook sequence, physical-UE attachment remaining outside `up`, unsupported `host_vars` behavior, qhat23 capability mismatch, named-profile enforcement, and the pinned resume-spec-integrity behavior. A failed check means the reference changed or an assumption is no longer true; re-audit instead of adding a fallback.
+The checker is intentionally local and non-hardware. It verifies the exact commit, capabilities, generated inventory assumptions, the `plan` playbook sequence, physical-UE attachment remaining outside `up`, unsupported `host_vars` behavior, qhat23 capability mismatch, named-profile enforcement, and the pinned resume-spec-integrity behavior. It also executes a normalized-spec/inventory/plan matrix covering co-located and split nodes, OAI, srsRAN, UERANSIM, qhat, qfit, and both pinned named profiles (`default` and `scenario1`). A failed check means the reference changed or an assumption is no longer true; re-audit instead of adding a fallback.
 
 ## Ownership rule
 
@@ -31,7 +31,7 @@ There must be one provisioning owner. The target architecture is for the pinned 
 | `R2LAB_IDENTITY_FILE` / `r2lab_ssh.identity_file` | none | Blocking when an explicit identity file is required. |
 | SynthRAN `active`/accepted state | reference `ready` | Not equivalent. SynthRAN acceptance requires its own fresh evidence. |
 
-The machine-readable form is `third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json`.
+The machine-readable form is `third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json`. Its `validation_matrix` records the no-hardware combinations that the checker must normalize, render, and plan successfully at the pinned SHA.
 
 ## Confirmed gaps and owners
 

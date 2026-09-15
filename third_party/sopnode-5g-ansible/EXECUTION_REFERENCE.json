@@ -9,12 +9,57 @@
     "cores": ["open5gs", "oai", "free5gc"],
     "rans": ["oai", "srsRAN", "ueransim"],
     "platforms": ["r2lab", "rfsim"],
-    "profiles": ["default"],
+    "profiles": ["default", "scenario1"],
     "r2lab_probe_ues": {
       "qhats": ["qhat01"],
       "qfits": ["qfit07"]
     }
   },
+  "validation_matrix": [
+    {
+      "name": "colocated-oai-rfsim",
+      "core": "oai",
+      "ran": "oai",
+      "topology": "colocated",
+      "platform": "rfsim",
+      "profile": "scenario1"
+    },
+    {
+      "name": "split-srsran-r2lab-qhat",
+      "core": "open5gs",
+      "ran": "srsRAN",
+      "topology": "split",
+      "platform": "r2lab",
+      "profile": "default",
+      "ue": "qhat01"
+    },
+    {
+      "name": "split-srsran-r2lab-qfit",
+      "core": "open5gs",
+      "ran": "srsRAN",
+      "topology": "split",
+      "platform": "r2lab",
+      "profile": "scenario1",
+      "ue": "qfit07"
+    },
+    {
+      "name": "split-oai-r2lab-qhat",
+      "core": "oai",
+      "ran": "oai",
+      "topology": "split",
+      "platform": "r2lab",
+      "profile": "default",
+      "ue": "qhat01"
+    },
+    {
+      "name": "split-ueransim-rfsim",
+      "core": "free5gc",
+      "ran": "ueransim",
+      "topology": "split",
+      "platform": "rfsim",
+      "profile": "default"
+    }
+  ],
   "mapping": [
     {"synthran": "deployment.core", "reference": "core.type", "status": "direct"},
     {"synthran": "deployment.ran", "reference": "ran.type", "status": "adapt", "rule": "srsran -> srsRAN; oai/ueransim unchanged"},
