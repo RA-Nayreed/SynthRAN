@@ -17,24 +17,35 @@
     regexp: 'mgmt_addr=[0-9.]+,addr=[0-9.]+'
     replace: 'mgmt_addr={{ oai_r2lab_n320_sdr_ip }},addr={{ oai_r2lab_n320_sdr_ip }}'
 
-- name: Select ipvlan for the R2Lab N320 RU attachment
-  ansible.builtin.replace:
-    path: "{{ item }}"
-    after: '^- name: "ru"$'
-    regexp: '^  type: macvlan$'
-    replace: '  type: {{ oai_r2lab_n320_ru_cni_type }}'
-  loop:
-    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml"
-    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml"
-    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml"
-    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"
+- name: Configure the staged R2Lab N320 RU values
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - "{{ item }}" "{{ oai_r2lab_n320_ru_cni_type }}" "{{ oai_r2lab_n320_ru_cni_mode }}" <<'PY'
+    from pathlib import Path
+    import sys
 
-- name: Select ipvlan L2 mode for the R2Lab N320 RU attachment
-  ansible.builtin.replace:
-    path: "{{ item }}"
-    after: '^- name: "ru"$'
-    regexp: '^  mode: "bridge"$'
-    replace: '  mode: "{{ oai_r2lab_n320_ru_cni_mode }}"'
+    path = Path(sys.argv[1])
+    cni_type = sys.argv[2]
+    cni_mode = sys.argv[3]
+    text = path.read_text()
+    marker = '- name: "ru"'
+    if marker not in text:
+        raise SystemExit(f"RU block not found in {path}")
+
+    prefix, ru = text.split(marker, 1)
+    old_type = '  type: macvlan'
+    old_mode = '  mode: "bridge"'
+    if old_type not in ru:
+        raise SystemExit(f"RU macvlan type not found in {path}")
+    if old_mode not in ru:
+        raise SystemExit(f"RU bridge mode not found in {path}")
+
+    ru = ru.replace(old_type, f'  type: {cni_type}', 1)
+    ru = ru.replace(old_mode, f'  mode: "{cni_mode}"', 1)
+    path.write_text(prefix + marker + ru)
+    PY
+  args:
+    executable: /bin/bash
   loop:
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml"
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml"
@@ -71,19 +82,48 @@
 - name: Verify the staged R2Lab N320 transport contract
   ansible.builtin.shell: |
     set -euo pipefail
-    grep -F 'IP_GNB_RU="{{ oai_r2lab_n320_ru_ip }}"' "{{ repo_dest }}/rru/n320.env"
-    grep -F 'MTU_GNB_RU="{{ oai_r2lab_n320_ru_mtu }}"' "{{ repo_dest }}/rru/n320.env"
-    grep -F 'mgmt_addr={{ oai_r2lab_n320_sdr_ip }},addr={{ oai_r2lab_n320_sdr_ip }}' "{{ repo_dest }}/rru/n320.env"
-    for file in \
+    python3 - \
+      "{{ repo_dest }}/rru/n320.env" \
+      "{{ oai_r2lab_n320_ru_ip }}" \
+      "{{ oai_r2lab_n320_ru_mtu }}" \
+      "{{ oai_r2lab_n320_sdr_ip }}" \
+      "{{ oai_r2lab_n320_ru_cni_type }}" \
+      "{{ oai_r2lab_n320_ru_cni_mode }}" \
       "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml" \
       "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml" \
       "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml" \
-      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"; do
-      awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  type: {{ oai_r2lab_n320_ru_cni_type }}'
-      awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  mode: "{{ oai_r2lab_n320_ru_cni_mode }}"'
-    done
-    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml"
-    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml"
+      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml" <<'PY'
+    from pathlib import Path
+    import sys
+
+    env_path = Path(sys.argv[1])
+    ru_ip, ru_mtu, sdr_ip, cni_type, cni_mode = sys.argv[2:7]
+    value_paths = [Path(p) for p in sys.argv[7:]]
+
+    env = env_path.read_text()
+    required_env = (
+        f'IP_GNB_RU="{ru_ip}"',
+        f'MTU_GNB_RU="{ru_mtu}"',
+        f'mgmt_addr={sdr_ip},addr={sdr_ip}',
+    )
+    for expected in required_env:
+        if expected not in env:
+            raise SystemExit(f"missing {expected!r} in {env_path}")
+
+    marker = '- name: "ru"'
+    for path in value_paths:
+        text = path.read_text()
+        if marker not in text:
+            raise SystemExit(f"RU block not found in {path}")
+        ru = text.split(marker, 1)[1]
+        if f'  type: {cni_type}' not in ru:
+            raise SystemExit(f"RU CNI type is not {cni_type} in {path}")
+        if f'  mode: "{cni_mode}"' not in ru:
+            raise SystemExit(f"RU CNI mode is not {cni_mode} in {path}")
+    PY
+
+    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml" >/dev/null
+    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml" >/dev/null
   args:
     executable: /bin/bash
   changed_when: false
