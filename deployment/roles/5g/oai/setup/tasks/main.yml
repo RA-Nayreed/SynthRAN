@@ -92,6 +92,12 @@
     fail_msg: >-
       OAI charts checkout does not match pinned revision {{ tag_oai_cn5g_fed }}.
 
+- name: Report the immutable OAI source revisions used by this run
+  ansible.builtin.debug:
+    msg: >-
+      OAI sources: helper={{ oai_helper_revision.stdout | trim }},
+      charts={{ oai_charts_revision.stdout | trim }}
+
 - name: Install OAI helper scripts from the immutable checkout
   ansible.builtin.copy:
     src: "{{ item.src }}"
