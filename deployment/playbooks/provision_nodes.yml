@@ -38,7 +38,7 @@
         while read -r device type; do
           [ "$type" = part ] || continue
           [ "$(blkid -s TYPE -o value "$device" 2>/dev/null || true)" = ext4 ] || continue
-          [ -z "$(findmnt -n -o TARGET "$device" 2>/dev/null || true)" ] || continue
+          [ -z "$(findmnt -nr -S "$device" -o TARGET 2>/dev/null || true)" ] || continue
           basename "$device"
           exit 0
         done < <(lsblk -pnro NAME,TYPE)
@@ -46,6 +46,7 @@
         exit 1
       args:
         executable: /bin/bash
+      become: true
       register: synthran_storage_discovery
       changed_when: false
       failed_when: false
@@ -92,8 +93,8 @@
     - name: Validate the selected storage filesystem and mounted state
       ansible.builtin.shell: |
         set -eu
-        fstype="$(lsblk -nrpo FSTYPE /dev/{{ storage }} | head -n 1 | xargs)"
-        target="$(findmnt -n -o TARGET /dev/{{ storage }} 2>/dev/null || true)"
+        fstype="$(blkid -s TYPE -o value /dev/{{ storage }} 2>/dev/null || true)"
+        target="$(findmnt -nr -S /dev/{{ storage }} -o TARGET 2>/dev/null | head -n 1 || true)"
         if [ -n "$target" ]; then
           case "$fstype" in
             ext4|xfs|btrfs) ;;
@@ -112,6 +113,7 @@
         fi
       args:
         executable: /bin/bash
+      become: true
       register: synthran_storage_state
       changed_when: false
       when: synthran_host_preparation == 'fresh'
