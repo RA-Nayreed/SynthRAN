@@ -4,6 +4,8 @@ Experiment 2 tests whether the **timing structure** of an event-identical Ambien
 
 The executable contract is [`experiment.yml`](experiment.yml). The research rationale and inference contract are in [`Ex2_Flagship_Causal_5G_Transport.md`](Ex2_Flagship_Causal_5G_Transport.md).
 
+The detailed hypothesis, literature, interpretation of the initial calibration stop, and scientific limitations are in [`SCIENTIFIC_RATIONALE.md`](SCIENTIFIC_RATIONALE.md).
+
 ## Interface
 
 Use only:
@@ -33,7 +35,21 @@ The primary confirmation campaign uses:
 
 The timing arms are `native`, `gap_permutation_r1`, `gap_permutation_r2`, and `periodic`. Source seed is the independent experimental unit; the two gap permutations are repeated matched controls, not extra independent samples.
 
-The competing-load levels are selected automatically before confirmation from a prespecified UDP calibration curve as **below**, **near**, and **above** the first median-delivery-ratio crossing of 0.98.
+The competing-load levels are selected automatically before confirmation from a prespecified UDP calibration curve. **ABOVE** is the first ascending rate whose median UDP delivery ratio falls below 0.98, **NEAR** is its immediate predecessor, and **BELOW** is the preceding rate.
+
+Design version 2 preserves the original 5–50 Mbps anchors and uses the complete grid:
+
+```text
+5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250 Mbps
+```
+
+Every repeat must achieve 95–105% of its requested application-payload rate without sender errors. These levels describe a measured UDP loss boundary; they do not identify the first onset of queueing or prove that the radio is the bottleneck. No crossing or an invalid generator measurement stops confirmation and retains the calibration evidence.
+
+## Revising the initial calibration campaign
+
+After updating to design version 2, choose qualification or the full Experiment-2 sequence in `experiment.sh`. A different design contract starts a new campaign even when the accepted deployment is unchanged. The old campaign remains intact; selecting only calibration/confirmation on a legacy campaign is rejected. Prepared source bundles can be reused unchanged.
+
+Inspect `calibration/load-selection.json` for measured sender rates, per-probe validity, medians and the selection status. If the grid remains unbracketed, retain it as a pilot and revise the calibration design explicitly before another campaign. Do not lower the 0.98 threshold or force the highest tested rate into the ABOVE label to make confirmation start.
 
 ## Roihu → Duckburg source handoff
 
@@ -49,7 +65,7 @@ Copy that directory directly to the same repository-relative path on Duckburg wi
 
 For physical/testbed phases, Experiment 2 consumes the testbed already accepted by `deploy.sh`. It records the actual deployment hash, core, RAN, radio, nodes, UE bindings and slices as provenance rather than prescribing them in advance.
 
-If reservation coverage is missing or expired, Experiment 2 stops; it never books or repairs infrastructure. If the same deployment later has extended reservation coverage, rerunning `experiment.sh` resumes the incomplete campaign from retained run records. If a different deployment hash is active, qualification/full execution starts a separate campaign instead of mixing testbeds.
+If reservation coverage is missing or expired, Experiment 2 stops; it never books or repairs infrastructure. If the same deployment and scientific design later have extended reservation coverage, rerunning `experiment.sh` resumes the incomplete campaign from retained run records. A different deployment or scientific design starts a separate campaign during qualification/full execution.
 
 ## Results
 
