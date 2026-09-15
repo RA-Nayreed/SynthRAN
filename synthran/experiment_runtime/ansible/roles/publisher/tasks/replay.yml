@@ -1,4 +1,14 @@
 ---
+- name: Count workload events assigned to this R2Lab UE
+  command: >-
+    /opt/synthran-venv/bin/python -c
+    "import json; p='/tmp/synthran-events.jsonl';
+    print(sum(1 for line in open(p, encoding='utf-8')
+    if (lambda row: row.get('gateway', row['device']) == '{{ inventory_hostname }}')(json.loads(line))))"
+  register: synthran_r2lab_gateway_event_count
+  changed_when: false
+  when: platform == 'r2lab'
+
 - name: Replay through the upstream-managed R2Lab UE
   command: >-
     /opt/synthran-venv/bin/python -m synthran.cli workload replay
@@ -9,13 +19,18 @@
     --start-utc {{ hostvars['localhost'].synthran_r2lab_start_utc }}
     --horizon-seconds {{ synthran_replay_horizon_seconds }} --drain-seconds {{ mqtt_drain_seconds }}
     --max-inflight {{ mqtt_max_inflight }} --max-queued {{ mqtt_max_queued }}
-    --output /var/log/synthran-publisher-{{ run_dir | basename }}.jsonl
+    --output /var/log/synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl
   environment:
     PYTHONPATH: /opt/synthran-source
-  when: platform == 'r2lab'
+  when:
+    - platform == 'r2lab'
+    - synthran_r2lab_gateway_event_count.stdout | int > 0
 
 - name: Fetch publisher records
   fetch:
-    src: "/var/log/synthran-publisher-{{ run_dir | basename }}.jsonl"
+    src: "/var/log/synthran-publisher-{{ run_dir | hash('sha256') }}.jsonl"
     dest: "{{ run_dir }}/publisher-{{ inventory_hostname }}.jsonl"
     flat: true
+  when:
+    - platform == 'r2lab'
+    - synthran_r2lab_gateway_event_count.stdout | int > 0

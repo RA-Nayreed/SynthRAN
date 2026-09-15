@@ -1,14 +1,28 @@
-"""Install an optional runtime once per interpreter and dependency declaration."""
+"""Create/reuse SynthRAN's shared repository runtime and install optional extras."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+VENV = ROOT / ".venv"
+VENV_PYTHON = VENV / "bin" / "python"
+
+
+def shared_python() -> Path:
+    """Return the single repository-local Python runtime, creating it if needed."""
+
+    if VENV_PYTHON.is_file() and os.access(VENV_PYTHON, os.X_OK):
+        return VENV_PYTHON
+    subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
+    if not VENV_PYTHON.is_file() or not os.access(VENV_PYTHON, os.X_OK):
+        raise SystemExit(f"Shared SynthRAN virtual environment is incomplete: {VENV_PYTHON}")
+    return VENV_PYTHON
 
 
 def ensure(extra: str, log: Path) -> None:
@@ -43,9 +57,18 @@ def ensure(extra: str, log: Path) -> None:
     stamp.touch()
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("extra")
-    parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("action")
+    parser.add_argument("--log", type=Path)
     args = parser.parse_args()
-    ensure(args.extra, args.log)
+    if args.action == "python":
+        print(shared_python())
+        return
+    if args.log is None:
+        parser.error("--log is required when preparing a runtime extra")
+    ensure(args.action, args.log)
+
+
+if __name__ == "__main__":
+    main()

@@ -103,13 +103,8 @@ deployment_section() {
   printf '%*s\n' "${#1}" '' | tr ' ' '-'
 }
 
-if [[ -x .venv/bin/python ]]; then
-  SYNTHRAN_PYTHON=.venv/bin/python
-else
-  command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
-  python3 -m venv .venv
-  SYNTHRAN_PYTHON=.venv/bin/python
-fi
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+SYNTHRAN_PYTHON="$(python3 -m synthran.runtime python)"
 
 deployment_section "Preparing the local SynthRAN runtime"
 "$SYNTHRAN_PYTHON" -m synthran.runtime deployment --log "$RUN_DIR/bootstrap.log"
@@ -426,7 +421,7 @@ BANNER
     1) SELECTED_RAN=oai ;;
     2) SELECTED_RAN=srsran ;;
     3) SELECTED_RAN=ueransim ;;
-    *) echo "Invalid RAN choice" >&2; exit 2 ;;
+    *) echo "Invalid ran choice" >&2; exit 2 ;;
   esac
 
   echo

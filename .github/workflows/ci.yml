@@ -27,11 +27,13 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Check deploy.sh syntax
-        run: bash -n deploy.sh
+      - name: Check shell entrypoint syntax
+        run: |
+          bash -n deploy.sh
+          bash -n experiment.sh
 
       - name: Compile Python sources
-        run: python -m compileall -q synthran
+        run: python -m compileall -q synthran Experiments
 
       - name: Validate project metadata
         run: |
@@ -47,13 +49,311 @@ jobs:
           print(f"validated pyproject.toml for {project['name']} {project['version']}")
           PY
 
-      - name: Install package and configuration parser
-        run: |
-          python -m pip install --disable-pip-version-check --no-deps -e .
-          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - name: Install package and experiment runtime
+        run: python -m pip install --disable-pip-version-check -e '.[experiment]'
 
       - name: Import SynthRAN package
         run: python -c "import synthran; print('synthran import OK')"
+
+      - name: Validate experiment planner
+        run: python -m synthran.experiments plan --experiment ex1 --phase all --dry-run
+
+      - name: Validate Experiment 2 scientific contracts
+        run: python -m unittest discover -s Experiments/Ex2_Flagship_Causal_5G_Transport -p 'test_*.py' -v
+
+      - name: Run Experiment 1 qualification gate
+        run: |
+          python Experiments/Ex1_Energy_Correlation_and_Burst_Formation/qualification.py \
+            --output "$RUNNER_TEMP/ex1-qualification"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "ex1-qualification/qualification.json").read_text()
+          )
+          assert result["status"] == "passed", result
+          assert result["checks_failed"] == [], result
+          print(f"qualification passed: {result['checks_passed']}/{result['checks_total']}")
+          PY
+
+      - name: Validate calibration selection contracts
+        run: |
+          python - <<'PY'
+          import yaml
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import campaign
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import population_calibration
+
+          manifest = yaml.safe_load(open(
+              "Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml",
+              encoding="utf-8",
+          ))
+          power_design = manifest["study"]["power_calibration"]
+          active = [0.08, 0.21, 0.49, 0.79, 0.94]
+          power_rows = [
+              {"mean_power_w": power, "active_fraction_mean": fraction}
+              for power, fraction in zip(power_design["candidate_mean_power_w"], active)
+          ]
+          power = campaign._select_power_points(power_rows, power_design)
+          assert power["selected"]["low"]["mean_power_w"] == 0.0005, power
+          assert power["selected"]["knee"]["mean_power_w"] == 0.001, power
+          assert power["selected"]["high"]["mean_power_w"] == 0.002, power
+
+          population_design = manifest["study"]["population_calibration"]
+          collisions = [0.01, 0.04, 0.11, 0.22, 0.40]
+          decode = [10.0, 20.0, 30.0, 27.0, 15.0]
+          population_rows = [
+              {
+                  "sensor_count": count,
+                  "collision_exposure_mean": collision,
+                  "decode_rate_per_s_mean": rate,
+                  "jain_decode_fairness_mean": 0.9,
+              }
+              for count, collision, rate in zip(
+                  population_design["candidate_sensor_counts"], collisions, decode
+              )
+          ]
+          population = population_calibration._select_population(
+              population_rows, population_design
+          )
+          assert population["selected"]["sensor_count"] == 32, population
+          print("calibration selection contracts OK")
+          PY
+
+      - name: Validate freeze and confirmation matrix contracts
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import confirmation
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import freeze
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              (root / "calibration/power").mkdir(parents=True)
+              (root / "calibration/population").mkdir(parents=True)
+              (root / "campaign.json").write_text(json.dumps({
+                  "schema_version": 1,
+                  "campaign_id": "ci-freeze",
+                  "experiment": "ex1",
+                  "source_revision": "ci",
+              }))
+              (root / "calibration/power/selection.json").write_text(json.dumps({
+                  "status": "selected",
+                  "selected": {
+                      "low": {"mean_power_w": 0.0005},
+                      "knee": {"mean_power_w": 0.001},
+                      "high": {"mean_power_w": 0.002},
+                  },
+              }))
+              (root / "calibration/population/selection.json").write_text(json.dumps({
+                  "status": "selected",
+                  "selected": {"sensor_count": 32},
+              }))
+              design = freeze.run(root)
+              freeze.validate(design)
+              tasks = confirmation.build_tasks(root, design)
+              assert len(design["confirmation"]["conditions"]) == 7
+              assert len(design["confirmation"]["seeds"]) == 30
+              assert design["confirmation"]["sensor_count"] == 32
+              assert len(tasks) == 210
+              assert len({task["name"] for task in tasks}) == 210
+              print("freeze and confirmation matrix contracts OK")
+          PY
+
+      - name: Validate analysis metric contracts
+        run: |
+          python - <<'PY'
+          import math
+          from Experiments.Ex1_Energy_Correlation_and_Burst_Formation import analyze
+
+          assert math.isclose(analyze._fano([0, 2, 0, 2]), 1.0)
+          assert math.isclose(analyze._gap_cv([0.0, 1.0, 3.0]), 1 / 3)
+          bursts = analyze._burst_stats([0.0, 0.5, 2.0, 2.4], 1.0)
+          assert bursts["burst_count"] == 2, bursts
+          assert bursts["burst_size_max"] == 2, bursts
+          ci = analyze._bootstrap_ci([1.0, 2.0, 3.0], resamples=100, seed=7)
+          assert ci["n_pairs"] == 3
+          assert ci["ci95"][0] is not None and ci["ci95"][1] is not None
+          print("analysis metric contracts OK")
+          PY
+
+      - name: Validate immutable archive lifecycle
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from synthran import archive
+
+          settings = {
+              "enabled": True,
+              "backend": "s3",
+              "alias": "slices",
+              "bucket": "research-bucket",
+              "prefix": "SynthRAN/experiments/ex1",
+              "remote_verify": True,
+          }
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp) / "run"
+              root.mkdir()
+              science = root / "result.txt"
+              science.write_text("scientific evidence\n")
+              calls = {}
+              archive._mc_binary = lambda: "fake-mc"
+
+              def put(mc, local, remote, expected):
+                  assert mc == "fake-mc"
+                  assert archive._sha256(local) == expected
+                  calls[remote] = expected
+
+              archive._put_immutable = put
+              result = archive.archive_directory(
+                  root,
+                  settings=settings,
+                  experiment="ex1",
+                  campaign_id="campaign-ci",
+                  archive_kind="run",
+                  archive_id="run-ci",
+                  phase="confirmation",
+                  source_revision="deadbeef",
+                  remote_suffix="runs/run-ci",
+              )
+              assert result["archive_status"] == "VERIFIED", result
+              assert (root / "_ARCHIVED.json").is_file()
+              manifest = json.loads((root / "archive-manifest.json").read_text())
+              assert manifest["files"]["result.txt"]["sha256"] == archive._sha256(science)
+              assert not any("credential" in key.lower() for key in manifest)
+              assert any(path.endswith("/_ARCHIVED.json") for path in calls)
+
+              failed = Path(tmp) / "failed"
+              failed.mkdir()
+              retained = failed / "result.txt"
+              retained.write_text("retain me\n")
+              original = archive._sha256(retained)
+
+              def fail_put(*args, **kwargs):
+                  raise archive.ArchiveError("object store offline")
+
+              archive._put_immutable = fail_put
+              try:
+                  archive.archive_directory(
+                      failed,
+                      settings=settings,
+                      experiment="ex1",
+                      campaign_id="campaign-ci",
+                      archive_kind="run",
+                      archive_id="run-failed",
+                      phase="confirmation",
+                      source_revision="deadbeef",
+                      remote_suffix="runs/run-failed",
+                  )
+              except archive.ArchiveError:
+                  pass
+              else:
+                  raise AssertionError("archive failure did not propagate")
+              status = json.loads((failed / "archive-status.json").read_text())
+              assert status["archive_status"] == "FAILED", status
+              assert archive._sha256(retained) == original
+              assert not (failed / "_ARCHIVED.json").exists()
+              print("archive lifecycle contracts OK")
+          PY
+
+      - name: Validate read-only accepted-testbed attachment
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+
+          from synthran.deployment_state import content_hash
+          from synthran.testbed_attachment import AttachmentError, attach_active_deployment
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              private = root / "private"
+              result = root / "deployment-result"
+              private.mkdir()
+              result.mkdir()
+              (private / "inventory.yml").write_text("all: {}\n")
+              (private / "deployment-vars.yml").write_text("{}\n")
+
+              deployment = {
+                  "core": "oai",
+                  "ran": "srsran",
+                  "platform": "rfsim",
+                  "radio_unit": "rfsim",
+                  "network_profile": "ci",
+                  "bridge_enabled": True,
+                  "nodes": {"core": "f2", "ran": "f3", "broker": "f2"},
+                  "slices": [
+                      {"name": "default", "sst": "1", "sd": "000001", "dnn": "internet"}
+                  ],
+                  "ues": [
+                      {
+                          "device": "uesim01",
+                          "index": 1,
+                          "imsi": "001010000000001",
+                          "slice": "default",
+                          "sst": "1",
+                          "sd": "000001",
+                          "dnn": "internet",
+                          "tunnel": {"namespace": "oai", "interface": "tun_srsue1"},
+                      }
+                  ],
+              }
+              deployment_hash = content_hash(deployment)
+              identity = root / "active.json"
+              evidence = root / "evidence.json"
+              endpoint = root / "endpoint.json"
+              identity.write_text(json.dumps({
+                  "schema_version": 2,
+                  "status": "active",
+                  "deployment_hash": deployment_hash,
+                  "deployment": deployment,
+                  "attested_at": "2026-09-13T00:00:00+00:00",
+              }))
+              evidence.write_text(json.dumps({
+                  "deployment_hash": deployment_hash,
+                  "cluster_identity_verified": True,
+              }))
+              endpoint.write_text(json.dumps({
+                  "schema_version": 1,
+                  "status": "active",
+                  "deployment_hash": deployment_hash,
+                  "run_id": "ci-deployment",
+                  "identity_file": str(identity),
+                  "evidence_file": str(evidence),
+                  "private_execution_dir": str(private),
+                  "result_dir": str(result),
+                  "published_at": "2026-09-13T00:00:00+00:00",
+              }))
+
+              attached = attach_active_deployment({
+                  "core": "oai",
+                  "ran": ["srsran", "oai"],
+                  "platform": "rfsim",
+                  "radio_unit": "rfsim",
+                  "nodes": {"core": "f2", "ran": "f3"},
+                  "ue_devices": ["uesim01"],
+                  "exact_ue_devices": True,
+                  "ues": [{"device": "uesim01", "dnn": "internet", "interface": "tun_srsue1"}],
+                  "slices": [{"name": "default", "dnn": "internet"}],
+              }, endpoint_path=endpoint)
+              assert attached["status"] == "attached", attached
+              assert attached["mode"] == "read_only", attached
+              assert attached["deployment_hash"] == deployment_hash, attached
+
+              try:
+                  attach_active_deployment({"ran": "oai"}, endpoint_path=endpoint)
+              except AttachmentError:
+                  pass
+              else:
+                  raise AssertionError("incompatible accepted deployment was not rejected")
+              print("accepted-testbed attachment contract OK")
+          PY
 
       - name: Parse versioned YAML and citation metadata
         run: |
@@ -64,6 +364,7 @@ jobs:
           paths = [Path("synthran/configs/reference.yml")]
           paths += sorted(Path("deployment/group_vars/all").glob("network_profile_*.yaml"))
           paths.append(Path("deployment/group_vars/all/ue_catalog.yaml"))
+          paths.append(Path("Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml"))
           paths.append(Path("CITATION.cff"))
 
           for path in paths:

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-import argparse, datetime as dt, json, math, os, subprocess
+import argparse
+import datetime as dt
+import json
+import math
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -167,9 +172,7 @@ def common_active_coverage(events, selected, now):
             and stamp(event["start_date"]) <= now < stamp(event["end_date"])
         ]
         if not covering:
-            raise SystemExit(
-                f"Selected SOP node {node} has no active calendar coverage"
-            )
+            raise SystemExit(f"Selected SOP node {node} has no active calendar coverage")
         starts.append(min(stamp(event["start_date"]) for event in covering))
         ends.append(max(stamp(event["end_date"]) for event in covering))
     start = max(starts)
@@ -187,13 +190,50 @@ def classify_allocation(node, allocation):
             f"POS is still processing an allocation command for {node}. "
             "Wait for that command to finish, then rerun SynthRAN."
         )
-    # Check semantic state before the return code: POS may report an
-    # idempotent already-active allocation with either success or failure.
+    # POS uses the same "already allocated" error whether the allocation belongs
+    # to this user or is stale/owned by somebody else. Treat it as occupied, not
+    # as proof that the current user may mutate the node.
     if "already allocated" in output_lower:
         return "already-active"
     if allocation.returncode == 0:
         return "new"
     raise SystemExit(output.strip())
+
+
+def reclaim_allocation_for_reset(node):
+    """Take control of an already-allocated node before a destructive reset.
+
+    POS calendar ownership and POS allocation ownership are separate. A node can
+    be inside the caller's active calendar reservation while an older allocation
+    still occupies it. The official POS workflow uses ``allocations free -k`` to
+    clear such a previous allocation. We only do this when SynthRAN is already
+    going to reset/reimage the node; the reuse path never force-frees anything.
+    """
+    print(
+        f"{node} is already allocated; reset/reimage requires a fresh allocation "
+        "owned by this deployment",
+        flush=True,
+    )
+    print(f"Reclaiming the existing POS allocation for {node}", flush=True)
+    released = run_visible("pos", "allocations", "free", "-k", node, check=False)
+
+    # A failed force-free can be a race (for example, the allocation vanished
+    # between allocate and free). Retrying allocate is authoritative. If POS
+    # still reports the node as allocated, stop rather than attempting image/reset
+    # against an allocation we have not proven we own.
+    print(f"Allocating {node} again after reclaim", flush=True)
+    retry = run_visible("pos", "allocations", "allocate", node, check=False)
+    state = classify_allocation(node, retry)
+    if state != "new":
+        detail = retry.stdout.strip() or released.stdout.strip()
+        raise SystemExit(
+            f"Unable to obtain an allocation owned by this deployment for {node}. "
+            "POS still reports the node as allocated after a forced release. "
+            "Refusing to image/reset an allocation whose ownership is not proven."
+            + (f"\n{detail}" if detail else "")
+        )
+    print(f"{node} is now freshly allocated to this deployment", flush=True)
+    return "reclaimed"
 
 
 def prepare_nodes(nodes, image, *, ask_existing=False):
@@ -203,7 +243,11 @@ def prepare_nodes(nodes, image, *, ask_existing=False):
         allocation = run_visible("pos", "allocations", "allocate", node, check=False)
         allocation_states[node] = classify_allocation(node, allocation)
         if allocation_states[node] == "already-active":
-            print(f"Reusing the active allocation for {node}", flush=True)
+            print(
+                f"POS reports an existing allocation on {node}; ownership is not "
+                "assumed from that message",
+                flush=True,
+            )
 
     existing_nodes = [
         node for node in nodes if allocation_states[node] == "already-active"
@@ -222,7 +266,8 @@ def prepare_nodes(nodes, image, *, ask_existing=False):
     preserved_nodes = []
     reset_nodes = []
     for node in nodes:
-        if preserve_existing and allocation_states[node] == "already-active":
+        state = allocation_states[node]
+        if preserve_existing and state == "already-active":
             print(
                 f"Preserving current image and node state on {node}; "
                 "skipping POS image selection and reset",
@@ -230,12 +275,22 @@ def prepare_nodes(nodes, image, *, ask_existing=False):
             )
             preserved_nodes.append(node)
             continue
-        if ask_existing and allocation_states[node] != "already-active":
+
+        if state == "already-active":
+            allocation_states[node] = reclaim_allocation_for_reset(node)
+            state = allocation_states[node]
+        elif ask_existing:
             print(
                 f"{node} has calendar coverage but no active allocation; "
                 "preparing it normally before deployment",
                 flush=True,
             )
+
+        if state not in {"new", "reclaimed"}:
+            raise SystemExit(
+                f"Internal reservation state for {node} is not safe to prepare: {state}"
+            )
+
         print(f"Selecting image {image} on {node}", flush=True)
         run_visible("pos", "nodes", "image", node, image)
         print(
@@ -244,6 +299,7 @@ def prepare_nodes(nodes, image, *, ask_existing=False):
         run_visible("pos", "nodes", "reset", "--blocking", "--verbose", node)
         print(f"{node} finished its POS reset", flush=True)
         reset_nodes.append(node)
+
     return allocation_states, preserved_nodes, reset_nodes
 
 
@@ -259,6 +315,7 @@ def main():
     if not reservation.get("enabled", True):
         write_resolved_scenario(path, scenario)
         return
+
     duration = int(reservation.get("duration_minutes", 120))
     image = reservation.get("image", "ubuntu-jammy")
     owner = os.environ.get("USER") or run("id", "-un").stdout.strip()
@@ -271,6 +328,7 @@ def main():
         if e.get("owner") == owner
         and stamp(e["start_date"]) <= now < stamp(e["end_date"])
     ]
+
     nodes = dict(deployment["nodes"])
     requested = set(nodes.values())
     configured_pool = reservation.get("node_pool", [])
@@ -279,6 +337,7 @@ def main():
     ):
         raise SystemExit("deployment.reservation.node_pool must be a list of hostnames")
     pool = list(dict.fromkeys([*configured_pool, *nodes.values()]))
+
     related = [e for e in own_active if requested.intersection(e["nodes"])]
     managed_state = load_managed_state()
     managed_event_id = str(managed_state.get("event_id", ""))
@@ -296,7 +355,8 @@ def main():
         print("\nActive reservation owned by you:")
         for event in related:
             print(
-                f"  {', '.join(event['nodes'])}: {event['start_date']} to {event['end_date']}"
+                f"  {', '.join(event['nodes'])}: "
+                f"{event['start_date']} to {event['end_date']}"
             )
         action = choice(
             "How should SynthRAN handle it?",
@@ -320,14 +380,16 @@ def main():
                 nodes = automatic_nodes(nodes, reserved_nodes)
                 print("Using the nodes covered by the active reservation:")
                 print(
-                    f"  core={nodes['core']}, ran={nodes['ran']}, broker={nodes['broker']}"
+                    f"  core={nodes['core']}, ran={nodes['ran']}, "
+                    f"broker={nodes['broker']}"
                 )
             selected = list(dict.fromkeys(nodes.values()))
             coverage_start, coverage_end = common_active_coverage(
                 own_active, selected, now
             )
             print(
-                f"Keeping the active SOP calendar reservation for {', '.join(selected)}"
+                f"Keeping the active SOP calendar reservation for "
+                f"{', '.join(selected)}"
             )
             allocation_states, preserved_nodes, reset_nodes = prepare_nodes(
                 selected, image, ask_existing=True
@@ -353,7 +415,10 @@ def main():
             return
         if action == 1:
             replace_events = list(
-                {str(event["id"]): event for event in related + managed_events}.values()
+                {
+                    str(event["id"]): event
+                    for event in related + managed_events
+                }.values()
             )
 
     replace_ids = [event["id"] for event in replace_events]
@@ -390,11 +455,19 @@ def main():
             raise SystemExit(
                 "Future reservation created; rerun deploy.sh when it becomes active"
             )
+
     selected = list(dict.fromkeys(nodes.values()))
     deleted = []
     try:
         for event in replace_events:
-            run("pos", "calendar", "delete", "--id", str(event["id"]), *event["nodes"])
+            run(
+                "pos",
+                "calendar",
+                "delete",
+                "--id",
+                str(event["id"]),
+                *event["nodes"],
+            )
             deleted.append(event)
         result = run(
             "pos",
@@ -414,6 +487,7 @@ def main():
             "Unable to replace the SOP calendar reservation; previous remaining "
             f"coverage was restored where possible:\n{detail}"
         )
+
     reservation_id = result.stdout.strip()
     created = next(
         (
@@ -427,8 +501,10 @@ def main():
     coverage_end = stamp(created["end_date"]) if created else end
     save_managed_state(reservation_id, selected, coverage_start, coverage_end)
     print(
-        f"SOP calendar reservation ready (event {reservation_id}) for {', '.join(selected)}"
+        f"SOP calendar reservation ready (event {reservation_id}) for "
+        f"{', '.join(selected)}"
     )
+
     allocation_states, _, reset_nodes = prepare_nodes(selected, image)
     deployment["nodes"] = nodes
     write_resolved_scenario(path, scenario)

@@ -8,15 +8,23 @@ between testbed infrastructure and scientific experiments.
 
 Keep changes in the layer that owns them:
 
-- `deploy.sh` and `deployment/` own testbed deployment.
+- `deploy.sh` and `deployment/` own testbed deployment, reservation, verification, and activation.
+- `experiment.sh` and `Experiments/` own scientific campaign selection and study-specific execution.
 - `synthran/model/` and `synthran/ambient_iot/` contain the Ambient-IoT model and its integration.
+- `synthran/experiment_runtime/` contains read-only accepted-testbed runtime mechanics used by physical experiments.
 - `synthran/configs/reference.yml` is the single bundled scientific reference configuration.
 - `synthran/` contains the remaining Python support modules used by the platform.
-- `Experiment/` contains scientific studies and experiment work in progress.
 - `third_party/` preserves upstream provenance and component-specific notices.
 - `results/` and `.synthran/` are runtime state and evidence, not source code.
 
-The project is converging on `./deploy.sh` as the supported public workflow. Internal Python commands may exist for development or unfinished experiment work, but should not be promoted as stable user interfaces unless the repository explicitly adopts them.
+The supported user-facing controllers are deliberately separate:
+
+```text
+./deploy.sh       testbed deployment and accepted infrastructure state
+./experiment.sh   scientific experiment planning and campaign execution
+```
+
+Internal Python commands remain implementation surfaces unless a study explicitly documents them for development or reproducibility.
 
 ## Before changing deployment behavior
 
@@ -28,13 +36,16 @@ Deployment changes can affect shared infrastructure and physical hardware. Befor
 4. Keep infrastructure configuration separate from scientific model and experiment parameters.
 5. Do not hard-code user-specific credentials, slice identities, SSH keys, tokens, host secrets, or temporary reservation identifiers.
 
+Scientific experiment code must not reserve, repair, rebuild, power-cycle, or reconfigure a testbed merely to make a campaign pass. Physical experiments may attach read-only to a deployment that `deploy.sh` has already accepted and must fail clearly when the active deployment is incompatible.
+
 ## Validation
 
 Run the smallest validation set that actually covers the change. At minimum, repository-level documentation or control-flow changes should not break basic syntax checks:
 
 ```bash
 bash -n deploy.sh
-python3 -m compileall -q synthran
+bash -n experiment.sh
+python3 -m compileall -q synthran Experiments
 ```
 
 For deployment changes, also exercise the relevant configuration path with `--dry-run` where the required hostname and dependency environment is available. A caller-supplied deployment file can be tested with:
@@ -43,7 +54,13 @@ For deployment changes, also exercise the relevant configuration path with `--dr
 ./deploy.sh --config path/to/deployment.yml --dry-run
 ```
 
-A dry run is not a substitute for physical acceptance when a change affects R2Lab hardware, radio behavior, modem bring-up, or live network state. Report exactly what was and was not exercised.
+For experiment-control changes, validate the planner without running a campaign:
+
+```bash
+python3 -m synthran.experiments plan --experiment ex1 --phase all --dry-run
+```
+
+A dry run is not a substitute for physical acceptance when a change affects R2Lab hardware, radio behavior, modem bring-up, or live network state. Likewise, a CI contract does not substitute for executing the real stochastic confirmation campaign. Report exactly what was and was not exercised.
 
 ## Pull requests
 
@@ -54,15 +71,16 @@ Prefer focused pull requests with a clear purpose. A useful PR description inclu
 - why the change is necessary;
 - validation performed;
 - hardware/testbed acceptance performed, if any;
+- scientific campaign execution performed, if any;
 - known limitations or follow-up work.
 
 Do not describe planned behavior as implemented, implemented behavior as validated, or one successful run as a general scientific result.
 
 ## Research and experiment contributions
 
-The scientific experiment layer is under active construction. Experiment work should keep the research question, treatments, seeds/configuration, workload identity, deployment identity, measurements, and produced evidence traceable.
+Study implementations live under `Experiments/`, while reusable control/runtime code belongs under `synthran/`. Experiment work should keep the research question, treatments, independent experimental units, seeds/configuration, workload identity, accepted deployment identity, measurements, and produced evidence traceable.
 
-Do not move unfinished internal commands into the root quick start merely to make them visible. The root README should document the intended public workflow; experiment-specific material can live beside the study until the integration is ready.
+For prespecified campaigns, preserve dependency barriers such as qualification → calibration → freeze → confirmation → analysis. Do not silently change a frozen design or regenerate a valid stochastic run because archival failed. Archive state and scientific state are separate.
 
 ## Generated artefacts and sensitive material
 
