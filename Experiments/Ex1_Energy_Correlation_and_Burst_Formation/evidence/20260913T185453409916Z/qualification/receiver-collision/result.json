@@ -1,0 +1,39 @@
+{
+  "check": "receiver-collision",
+  "criterion": "Equal-power overlapping airtime collides without SIC, while boundary-adjacent non-overlapping packets decode independently.",
+  "observed": {
+    "adjacent": [
+      {
+        "decode_stage": 0,
+        "interference_w": 0.0,
+        "outcome": "decoded",
+        "residual_w": 1e-09,
+        "sinr_db": 30.0
+      },
+      {
+        "decode_stage": 1,
+        "interference_w": 0.0,
+        "outcome": "decoded",
+        "residual_w": 1e-09,
+        "sinr_db": 30.0
+      }
+    ],
+    "overlapping": [
+      {
+        "decode_stage": null,
+        "interference_w": 1e-09,
+        "outcome": "collision",
+        "residual_w": 1e-09,
+        "sinr_db": -0.0043407747931867415
+      },
+      {
+        "decode_stage": null,
+        "interference_w": 1e-09,
+        "outcome": "collision",
+        "residual_w": 1e-09,
+        "sinr_db": -0.0043407747931867415
+      }
+    ]
+  },
+  "status": "passed"
+}
