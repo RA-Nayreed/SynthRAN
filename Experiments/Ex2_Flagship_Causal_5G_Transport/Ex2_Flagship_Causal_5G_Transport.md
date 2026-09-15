@@ -100,6 +100,8 @@ Within each source-seed/load block, the four timing arms are deterministically r
 
 Before starting a matched block, Experiment 2 checks how much reservation time remains. If the next block does not fit with the configured safety margin, the campaign pauses **before** that block. After reservation coverage is extended for the same deployment, rerunning `experiment.sh` reuses completed run records and continues.
 
+Each confirmation replay also retains the actual competing-flow sender result. Analysis treats an arm as a valid load treatment only when its sender achieved 95–105% of the frozen requested rate and reported zero sender errors. An invalid load treatment is not silently reclassified; it is excluded only from the contrasts that require that arm, with the reason retained.
+
 ## Measurement
 
 Each run retains stable event identity and the planned/publisher/application timing evidence needed for:
@@ -112,7 +114,9 @@ Each run retains stable event identity and the planned/publisher/application tim
 - background-flow requested and achieved rate plus delivery ratio;
 - deployment and UE-binding provenance.
 
-Cross-host timing claims require an explicit clock-uncertainty bound. Experiment 2 collects controller-bracketed UTC probes from the workload-publisher host and broker host and records the resulting uncertainty bound with the campaign.
+Cross-host timing claims require an explicit clock-uncertainty bound. Before qualification and each confirmation session, Experiment 2 collects controller-bracketed UTC probes from the workload-publisher host and broker host. Timing execution is blocked unless **both endpoints report NTP synchronization** and the controller can retain a finite, nonnegative relative-clock uncertainty bound.
+
+Revision 2 deliberately does not invent an arbitrary maximum acceptable uncertainty. The observed bound is retained with the campaign and must be reported and considered against the magnitude of any claimed timing effect. This clock gate prevents plainly unsynchronized runs; it does not prove zero clock drift throughout a long session.
 
 ## Analysis
 
@@ -125,7 +129,7 @@ For each load level and source seed, the principal paired contrasts are:
 
 for the prespecified principal outcomes. Positive values mean native timing is worse for outcomes where lower is better.
 
-Eligibility is **contrast-specific**. `ΔNP` requires only valid native and periodic measurements. `ΔNR` requires native plus both gap permutations. Consequently, a missing, clock-invalid, or undefined gap-permutation arm does not discard an otherwise valid native-versus-periodic estimate. Every exclusion is retained with its seed, affected arm and reason.
+Eligibility is **contrast-specific**. `ΔNP` requires only valid native and periodic measurements. `ΔNR` requires native plus both gap permutations. Consequently, a missing, clock-invalid, load-treatment-invalid, or undefined gap-permutation arm does not discard an otherwise valid native-versus-periodic estimate. Every exclusion is retained with its seed, affected arm and reason.
 
 Experiment 2 also estimates the prespecified paired load interactions:
 
