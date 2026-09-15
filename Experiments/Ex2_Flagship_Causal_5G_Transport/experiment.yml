@@ -148,7 +148,7 @@ study:
       it does not discard an otherwise valid native-versus-periodic contrast.
     confirmation_load_treatment_validity: >-
       Every replay is eligible only if its recorded competing-flow sender achieved
-      95-105% of the frozen requested load and reported zero sender errors. An
+      95-105% of the frozen requested load and reported zero sender errors. The
       successful background-send interval must also cover the publisher horizon
       and drain under the retained competitor-publisher clock bounds. An
       invalid load treatment excludes that arm only from contrasts that require it;
