@@ -173,6 +173,36 @@ def _verify_single_covering_lease(
     return evidence, lease
 
 
+def _policy_mode(args: argparse.Namespace) -> str:
+    if args.mode:
+        return args.mode
+    authority_path = args.output.parent / "reservation-authority.json"
+    try:
+        authority = json.loads(authority_path.read_text(encoding="utf-8"))
+        mode = authority["policies"]["r2lab"]
+    except (FileNotFoundError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise SystemExit(
+            "R2Lab acquisition policy is missing; run the SynthRAN reservation authority first or pass --mode explicitly"
+        ) from error
+    if mode not in {"book", "require-existing", "disabled"}:
+        raise SystemExit(f"unsupported R2Lab acquisition policy: {mode!r}")
+    return str(mode)
+
+
+def _write_disabled(args: argparse.Namespace) -> int:
+    record = {
+        "status": "disabled",
+        "policy_mode": "disabled",
+        "requested": {"start": args.start, "end": args.end},
+        "verified_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.log.write_text("R2Lab acquisition disabled by explicit policy\n", encoding="utf-8")
+    print("R2Lab acquisition disabled by explicit policy")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
@@ -184,7 +214,17 @@ def main(argv=None) -> int:
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("book", "require-existing", "disabled"),
+        default="",
+        help="Explicit acquisition policy. deploy.sh normally supplies this through reservation-authority evidence.",
+    )
     args = parser.parse_args(argv)
+
+    mode = _policy_mode(args)
+    if mode == "disabled":
+        return _write_disabled(args)
 
     args.known_hosts = str(Path(args.known_hosts).expanduser().resolve())
     Path(args.known_hosts).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -214,6 +254,10 @@ def main(argv=None) -> int:
         raise SystemExit("multiple owned R2Lab leases cover the requested interval")
     if covering:
         lease = covering[0]
+    elif mode == "require-existing":
+        raise SystemExit(
+            "R2Lab require-existing policy found no single owned lease covering the requested interval"
+        )
     else:
         overlaps = _owned_overlap(leases, args.username)
         if len(overlaps) > 1:
@@ -284,6 +328,7 @@ def main(argv=None) -> int:
 
     record = {
         "status": status,
+        "policy_mode": mode,
         "requested": {
             "start": args.start,
             "end": args.end,
@@ -296,7 +341,7 @@ def main(argv=None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     args.log.write_text(
-        f"R2Lab lease {status}: id={lease.get('id')} slice={lease.get('slice_name')} "
+        f"R2Lab lease {status}: policy={mode} id={lease.get('id')} slice={lease.get('slice_name')} "
         f"from={lease.get('t_from')} until={lease.get('t_until')}\n",
         encoding="utf-8",
     )
