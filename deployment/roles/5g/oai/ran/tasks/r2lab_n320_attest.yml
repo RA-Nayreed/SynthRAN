@@ -51,6 +51,20 @@
         raise SystemExit(f'no pod found for release {release!r}')
     pod = max(pods, key=lambda item: item.get('metadata', {}).get('creationTimestamp', ''))
     pod_name = pod['metadata']['name']
+    pod_uid = pod['metadata']['uid']
+
+    if pod.get('status', {}).get('phase') != 'Running':
+        raise SystemExit(f'RAN pod is not Running: {pod.get("status", {}).get("phase")!r}')
+    ready = next(
+        (
+            condition.get('status') == 'True'
+            for condition in pod.get('status', {}).get('conditions', [])
+            if condition.get('type') == 'Ready'
+        ),
+        False,
+    )
+    if not ready:
+        raise SystemExit(f'RAN pod {pod_name} is not Ready')
 
     network_status_raw = pod.get('metadata', {}).get('annotations', {}).get(
         'k8s.v1.cni.cncf.io/network-status', '[]'
@@ -70,6 +84,11 @@
     container_status = next((item for item in statuses if item.get('name') == container), None)
     if container_status is None:
         raise SystemExit(f'container status {container!r} missing on pod {pod_name}')
+    if not container_status.get('ready', False):
+        raise SystemExit(f'RAN container {container!r} is not Ready')
+    restart_count = int(container_status.get('restartCount', 0))
+    if restart_count != 0:
+        raise SystemExit(f'RAN container restarted during startup: restartCount={restart_count}')
     image_id = container_status.get('imageID', '')
 
     parent_mac = pathlib.Path(f'/sys/class/net/{parent}/address').read_text().strip().lower()
@@ -112,7 +131,9 @@
         'schema_version': 1,
         'release': release,
         'pod': pod_name,
+        'pod_uid': pod_uid,
         'container': container,
+        'restart_count': restart_count,
         'nad': nad_name,
         'ru': {
             'type': actual_plugin['type'],
