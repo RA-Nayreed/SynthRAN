@@ -1,0 +1,38 @@
+name: 5g-Ansible reference contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference-contract:
+    name: Pinned execution reference
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out SynthRAN
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Check out pinned 5g-Ansible reference
+        uses: actions/checkout@v7
+        with:
+          repository: RA-Nayreed/5g-Ansible
+          ref: 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+          path: .reference/5g-ansible
+
+      - name: Verify execution contract
+        run: >-
+          python3 tools/check_5g_ansible_contract.py
+          --reference .reference/5g-ansible
