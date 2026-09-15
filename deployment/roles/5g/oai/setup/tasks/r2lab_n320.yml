@@ -1,0 +1,60 @@
+---
+- name: Configure the R2Lab N320 RU with a static pod-side address
+  ansible.builtin.lineinfile:
+    path: "{{ repo_dest }}/rru/n320.env"
+    regexp: '^IP_GNB_RU='
+    line: 'IP_GNB_RU="{{ oai_r2lab_n320_ru_ip }}"'
+
+- name: Match the N320 RU MTU to the R2Lab parent interface
+  ansible.builtin.lineinfile:
+    path: "{{ repo_dest }}/rru/n320.env"
+    regexp: '^MTU_GNB_RU='
+    line: 'MTU_GNB_RU="{{ oai_r2lab_n320_ru_mtu }}"'
+
+- name: Configure the validated N320 MPM and RFNoC endpoint before Helm rendering
+  ansible.builtin.replace:
+    path: "{{ repo_dest }}/rru/n320.env"
+    regexp: 'mgmt_addr=[0-9.]+,addr=[0-9.]+'
+    replace: 'mgmt_addr={{ oai_r2lab_n320_sdr_ip }},addr={{ oai_r2lab_n320_sdr_ip }}'
+
+- name: Select ipvlan for the R2Lab N320 RU attachment
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    after: '^- name: "ru"$'
+    regexp: '^  type: macvlan$'
+    replace: '  type: {{ oai_r2lab_n320_ru_cni_type }}'
+  loop:
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"
+
+- name: Select ipvlan L2 mode for the R2Lab N320 RU attachment
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    after: '^- name: "ru"$'
+    regexp: '^  mode: "bridge"$'
+    replace: '  mode: "{{ oai_r2lab_n320_ru_cni_mode }}"'
+  loop:
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml"
+    - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"
+
+- name: Verify the staged R2Lab N320 transport contract
+  ansible.builtin.shell: |
+    set -euo pipefail
+    grep -F 'IP_GNB_RU="{{ oai_r2lab_n320_ru_ip }}"' "{{ repo_dest }}/rru/n320.env"
+    grep -F 'MTU_GNB_RU="{{ oai_r2lab_n320_ru_mtu }}"' "{{ repo_dest }}/rru/n320.env"
+    grep -F 'mgmt_addr={{ oai_r2lab_n320_sdr_ip }},addr={{ oai_r2lab_n320_sdr_ip }}' "{{ repo_dest }}/rru/n320.env"
+    for file in \
+      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-gnb.yaml" \
+      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du.yaml" \
+      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml" \
+      "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"; do
+      awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  type: {{ oai_r2lab_n320_ru_cni_type }}'
+      awk '/^- name: "ru"$/{in_ru=1} in_ru{print}' "$file" | grep -F '  mode: "{{ oai_r2lab_n320_ru_cni_mode }}"'
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
