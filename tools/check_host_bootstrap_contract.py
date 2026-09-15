@@ -36,6 +36,14 @@ def _when_text(role: dict) -> str:
     return str(value)
 
 
+def _named_task(tasks: list[dict], name: str) -> dict:
+    for task in tasks:
+        if task.get("name") == name:
+            return task
+    fail(f"task missing from contract: {name}")
+    raise AssertionError("unreachable")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", required=True, type=Path)
@@ -103,6 +111,7 @@ def main() -> None:
     require(pre_k8s, "Mount unmounted ext4 storage at the containerd data directory", "pre_k8s")
     require(pre_k8s, "SynthRAN will not format the device", "pre_k8s")
     require(pre_k8s, "Verify containerd storage is on a real filesystem", "pre_k8s")
+    require(pre_k8s, "storage binding only", "pre_k8s")
     forbid(pre_k8s, "Configure kubelet storage eviction thresholds", "pre_k8s")
     forbid(pre_k8s, "kubeadm", "pre_k8s")
 
@@ -141,12 +150,17 @@ def main() -> None:
                 fail(f"bootstrap_nodes.yml: mutating role lacks fresh-only guard: {role_name}")
 
     for role in destructive_roles:
-        if role not in seen_roles and role not in {"setup/k8s/remove_taint"}:
+        if role not in seen_roles:
             fail(f"bootstrap_nodes.yml: expected lifecycle role missing: {role}")
 
     require(bootstrap, "synthran_host_preparation == 'preserve'", "bootstrap_nodes.yml")
     require(bootstrap, "Verify preserved Kubernetes control plane is reachable", "bootstrap_nodes.yml")
     require(bootstrap, "Verify preserved CNI DHCP binary exists", "bootstrap_nodes.yml")
+    require(bootstrap, "Write shareable bootstrap evidence", "bootstrap_nodes.yml")
+    require(bootstrap, "bootstrap-evidence.json", "bootstrap_nodes.yml")
+    require(bootstrap, "containerd_mount", "bootstrap_nodes.yml")
+    require(bootstrap, "cni_dhcp", "bootstrap_nodes.yml")
+    require(bootstrap, "cluster_nodes", "bootstrap_nodes.yml")
     forbid(bootstrap, "Move the kubeadm join command", "bootstrap_nodes.yml")
     forbid(bootstrap, ".kubeadm_join_command.txt", "bootstrap_nodes.yml")
     forbid(bootstrap, "setup/gre_tunnel", "bootstrap_nodes.yml")
@@ -169,19 +183,29 @@ def main() -> None:
         fail("cni_dhcp must verify /opt/cni/bin/dhcp before service startup")
     require(cni, "synthran_cni_dhcp_binary.stat.executable", "cni_dhcp")
 
-    cluster_create = (
-        ROOT / "deployment/roles/setup/k8s/cluster_create/tasks/main.yml"
-    ).read_text(encoding="utf-8")
+    cluster_create_path = ROOT / "deployment/roles/setup/k8s/cluster_create/tasks/main.yml"
+    cluster_create = cluster_create_path.read_text(encoding="utf-8")
+    cluster_create_tasks = yaml.safe_load(cluster_create)
     require(cluster_create, "Verify pre-k8s containerd storage binding", "cluster_create")
     require(cluster_create, "Configure kubelet storage eviction thresholds", "cluster_create")
     require(cluster_create, "{{ synthran_private_dir }}/kubeadm_join_command.txt", "cluster_create")
-    require(cluster_create, "mode: '0600'", "cluster_create")
-    require(cluster_create, "Save join command in private run directory", "cluster_create")
     forbid(cluster_create, "dest: .kubeadm_join_command.txt", "cluster_create")
     forbid(cluster_create, "/etc/kubernetes/config.conf", "cluster_create")
     forbid(cluster_create, "kubeproxy-config.yaml", "cluster_create")
     forbid(cluster_create, "Remount disk directly after reset", "cluster_create")
     forbid(cluster_create, "Unmount all stacked mounts on /var/lib/containerd after reset", "cluster_create")
+
+    generate_join = _named_task(cluster_create_tasks, "Generate join command")
+    save_join = _named_task(cluster_create_tasks, "Save join command in private run directory")
+    if generate_join.get("no_log") is not True:
+        fail("cluster_create: join-token generation must use no_log")
+    if save_join.get("no_log") is not True:
+        fail("cluster_create: join-token persistence must use no_log")
+    copy_spec = save_join.get("ansible.builtin.copy") or {}
+    if copy_spec.get("dest") != "{{ synthran_private_dir }}/kubeadm_join_command.txt":
+        fail("cluster_create: join token must be born inside synthran_private_dir")
+    if str(copy_spec.get("mode")) != "0600":
+        fail("cluster_create: private join token must use mode 0600")
 
     join = (ROOT / "deployment/roles/setup/k8s/cluster_join/tasks/main.yml").read_text(encoding="utf-8")
     require(join, "{{ synthran_private_dir }}/admin.conf", "cluster_join")
@@ -192,7 +216,7 @@ def main() -> None:
 
     join_material = "kubeadm_join_command.txt"
     allowed_join_paths = {
-        ROOT / "deployment/roles/setup/k8s/cluster_create/tasks/main.yml",
+        cluster_create_path,
         ROOT / "deployment/roles/setup/k8s/cluster_join/tasks/main.yml",
     }
     for path in (ROOT / "deployment").rglob("*.yml"):
