@@ -185,6 +185,14 @@ The deployment workflow can select and prepare the mobile core, RAN, radio/platf
 
 The presence of an integration in the codebase is not treated as proof that every possible combination has passed a current physical acceptance run. Physical capability claims remain tied to actual run evidence.
 
+### Upstream deployment foundation
+
+Substantial portions of SynthRAN's `deployment/` layer derive from [`sopnode/5g_ansible`](https://github.com/sopnode/5g_ansible), developed at **Inria Sophia Antipolis (SophiaNode / R2Lab, SLICES-RI)**. SynthRAN preserves the upstream provenance and records its modifications under [`third_party/sopnode-5g-ansible/`](third_party/sopnode-5g-ansible/). The upstream project is licensed under Apache-2.0.
+
+If the derived deployment layer contributes to research, please also cite:
+
+> Y. Amami, Z. Mabrouk, C. Barakat, T. Turletti, “Toward Real-Time RAN Observability in Open-Source 5G Systems,” 29th Conference on Innovation in Clouds, Internet and Networks (ICIN 2026), Athens, Greece, Mar. 2026. DOI: [10.1109/ICIN69025.2026.11481836](https://doi.org/10.1109/ICIN69025.2026.11481836).
+
 ---
 
 ## One public workflow
@@ -350,4 +358,4 @@ Contribution and validation expectations are documented in [`CONTRIBUTING.md`](C
 
 **Copyright © 2026 Rezwan Ahmad Nayreed.**
 
-SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text.
+SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text. Upstream-derived material retains its own copyright, attribution and provenance as recorded under [`third_party/`](third_party/).
