@@ -18,6 +18,14 @@ demo_oai_script: "{{ dir_oai }}/demo-oai.sh"
 # oai5g-rru repository under the deployment prefix.
 charts_base: "{{ dir_oai }}/charts"
 
+# R2Lab N320 transport values validated on sopnode-f3. Keep these in one place
+# so the staged upstream configuration is corrected before Helm creates the gNB.
+oai_r2lab_n320_ru_ip: "192.168.235.120"
+oai_r2lab_n320_ru_mtu: "9216"
+oai_r2lab_n320_sdr_ip: "192.168.235.105"
+oai_r2lab_n320_ru_cni_type: "ipvlan"
+oai_r2lab_n320_ru_cni_mode: "l2"
+
 # yq is installed centrally from a checksum-pinned release before this role.
 yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
