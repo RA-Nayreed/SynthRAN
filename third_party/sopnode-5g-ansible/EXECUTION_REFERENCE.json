@@ -75,22 +75,41 @@
     {"synthran": "deployment.host_vars", "reference": null, "status": "blocking"},
     {"synthran": "accepted active deployment", "reference": "fiveg ready", "status": "not-equivalent"}
   ],
+  "external_resource_authority": {
+    "owner": "synthran",
+    "reason": "Issue #52 establishes SynthRAN as the sole SLICES/POS/R2Lab acquisition and POS-preparation authority. The pinned reference may provision downstream but must not mutate resource ownership or boot state again.",
+    "reference_spec_overlay": {
+      "provider.manage": false,
+      "reservation.enabled": false,
+      "reservation.r2lab_mode": "none",
+      "deployment.pos_manage_allocation": false,
+      "deployment.extra_vars.no_boot": true
+    }
+  },
   "ownership": {
     "reference_candidate": [
-      "provider context when explicitly delegated",
-      "POS reservation when explicitly delegated",
-      "R2Lab lease authority when explicitly delegated",
-      "supported host/Kubernetes/network/core/RAN lifecycle",
-      "selected-resource teardown"
+      "supported host/Kubernetes/network/core/RAN lifecycle after SynthRAN resource preparation",
+      "selected-resource teardown where later issues prove the boundary"
     ],
     "synthran": [
       "scenario source resolution",
       "translation and fail-closed validation before delegation",
+      "SLICES project/experiment provider context",
+      "exact selected-node POS calendar authority",
+      "POS allocation, image, boot-parameter, reset and post-reset readiness",
+      "R2Lab lease acquisition/extension/require-existing verification and evidence",
       "scientific deployment identity and evidence",
       "physical UE acceptance beyond reference ready",
       "experiment lifecycle"
     ]
   },
+  "resolved_decisions": [
+    {
+      "id": "reservation-policy",
+      "issue": 52,
+      "decision": "SynthRAN is the sole resource-acquisition and POS-preparation authority; downstream reference resource mutation is disabled by the external_resource_authority overlay."
+    }
+  ],
   "known_gaps": [
     {"id": "effective-profile", "issue": 61, "severity": "blocking", "detail": "Machine normalize accepts only repository-named profiles; effective SynthRAN profile injection/render parity is not yet proven."},
     {"id": "host-vars", "issue": 53, "severity": "blocking", "detail": "Machine inventory derives IP/storage/NIC from fixed NODE_FACTS; SynthRAN host_vars is not mapped."},
@@ -99,7 +118,6 @@
     {"id": "physical-ue-attachment", "issue": 56, "severity": "blocking", "detail": "fiveg up does not invoke test-ue-connect.yml; reference ready is provisioning completion only."},
     {"id": "n320-oai-adaptation", "issue": 55, "severity": "blocking-for-oai-n320", "detail": "SynthRAN N320-specific OAI changes are not represented by the generic machine contract."},
     {"id": "srsran-adaptation", "issue": 60, "severity": "blocking-for-srsran-migration", "detail": "SynthRAN chart/profile/log adaptations require rendered parity review before delegation."},
-    {"id": "reservation-policy", "issue": 52, "severity": "blocking-for-lifecycle-migration", "detail": "Exactly one owner must be selected for provider/POS/R2Lab reservation and preparation."},
     {"id": "ready-vs-accepted", "issue": 57, "severity": "blocking", "detail": "Reference ready cannot publish SynthRAN active state without SynthRAN acceptance evidence."},
     {"id": "resume-spec-integrity", "issue": 57, "severity": "blocking", "detail": "Pinned up --resume does not reject normalized spec drift before rewriting runtime files; caller must fail closed."}
   ]
