@@ -1,0 +1,4 @@
+---
+- name: Delegate control-plane taint lifecycle to pinned 5g-Ansible
+  ansible.builtin.include_tasks:
+    file: "{{ synthran_reference_root }}/roles/setup/k8s/remove_cp_taint/tasks/main.yml"
