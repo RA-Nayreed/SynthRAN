@@ -1,0 +1,43 @@
+{
+  "schema": "synthran/5g-ansible-host-bootstrap-adaptations/v1",
+  "reference_commit": "6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3",
+  "delegated_roles": [
+    "setup/containerd",
+    "setup/storage",
+    "setup/k8s/add_taint",
+    "setup/k8s/remove_cp_taint",
+    "setup/k8s/remove_taint"
+  ],
+  "local_adaptations": {
+    "setup/common": [
+      "Do not start cni-dhcp before /opt/cni/bin/dhcp exists.",
+      "Retain SynthRAN host-safety and idempotence handling."
+    ],
+    "setup/netplan": [
+      "Accept controller-selected netplan_config_file instead of reference-relative host files.",
+      "Install generated netplan with mode 0600."
+    ],
+    "setup/pre_k8s": [
+      "Honor the selected storage device and bind a containerd subdirectory when that device is already mounted.",
+      "Never format storage implicitly."
+    ],
+    "setup/k8s/k8s_setup": [
+      "Consume SynthRAN's version-pinned Kubernetes baseline instead of the reference hardcoded package version."
+    ],
+    "setup/k8s/cluster_create": [
+      "Install checksum-pinned CNI plugins before cni-dhcp can start.",
+      "Keep generated join material under the private execution tree before worker join."
+    ],
+    "setup/k8s/cluster_join": [
+      "Use checksum-pinned CNI plugins.",
+      "Move admin and join material only through the private execution tree with restrictive permissions."
+    ],
+    "setup/k8s/cni_dhcp": [
+      "SynthRAN-only ordering adapter: require executable /opt/cni/bin/dhcp before service installation/start."
+    ]
+  },
+  "caller_policy": {
+    "fresh": "May run host/runtime/storage/Kubernetes mutation roles after resource preparation.",
+    "preserve": "Verification-only; must not run reset, storage mutation, package installation, cluster creation, join, taint, or tuning roles."
+  }
+}
