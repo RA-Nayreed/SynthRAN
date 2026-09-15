@@ -48,7 +48,7 @@ def read_json(path: str | Path) -> dict:
 
 
 def resolve_scenario(source: str | Path, output: str | Path) -> dict:
-    data = load_scenario(source)
+    data = load_scenario(source, deployment_only=True)
     data.pop("_source_directory", None)
     _atomic_text(Path(output), yaml.safe_dump(data, sort_keys=False))
     return data
