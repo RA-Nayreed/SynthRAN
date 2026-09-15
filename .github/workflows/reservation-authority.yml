@@ -38,6 +38,7 @@ jobs:
           deployment/scripts/reserve_r2lab.py
           tools/check_reservation_authority.py
           tools/check_reservation_failure_evidence.py
+          tools/check_reservation_cli_fakes.py
           tools/check_resource_authority_contract.py
 
       - name: Validate reservation authority without hardware
@@ -45,3 +46,6 @@ jobs:
 
       - name: Validate failure evidence preservation
         run: python tools/check_reservation_failure_evidence.py
+
+      - name: Validate real CLI wiring through temporary fake commands
+        run: python tools/check_reservation_cli_fakes.py
