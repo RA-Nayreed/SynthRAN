@@ -1,6 +1,6 @@
 """Prepared-workload and accepted-testbed runtime helpers for Experiment 2."""
 from __future__ import annotations
-import hashlib, json, shutil, sys, time
+import hashlib, json, math, shutil, sys, time
 from pathlib import Path
 from typing import Any
 import yaml
@@ -175,10 +175,41 @@ def _clock_interval(environment: dict[str, Any], host: str, samples: int = 12) -
     return best
 
 
+def _clock_contract_satisfied(record: dict[str, Any]) -> bool:
+    try:
+        bound = float(record["clock_uncertainty_seconds"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(bound)
+        and bound >= 0
+        and record.get("publisher", {}).get("ntp_synchronized") is True
+        and record.get("broker", {}).get("ntp_synchronized") is True
+    )
+
+
+def _require_clock_contract(record: dict[str, Any], label: str) -> dict[str, Any]:
+    if _clock_contract_satisfied(record):
+        return record
+    publisher = record.get("publisher", {})
+    broker = record.get("broker", {})
+    raise RuntimeError(
+        "Experiment-2 clock contract failed before timing measurement "
+        f"({label}): publisher_ntp={publisher.get('ntp_synchronized')}, "
+        f"broker_ntp={broker.get('ntp_synchronized')}, "
+        f"uncertainty={record.get('clock_uncertainty_seconds')}. "
+        "Do not run cross-host timing inference until both endpoints report synchronized clocks."
+    )
+
+
 def _clock_evidence(root: Path, environment: dict[str, Any], label: str) -> dict[str, Any]:
     path = root / "clock" / f"{label}.json"
     if path.is_file():
-        return _read_json(path)
+        record = _read_json(path)
+        if "contract_satisfied" not in record:
+            record["contract_satisfied"] = _clock_contract_satisfied(record)
+            _write_json(path, record)
+        return _require_clock_contract(record, label)
     workload, _ = _deployment_roles(environment)
     broker_host = str(environment["deployment"]["nodes"]["broker"])
     publisher_host = _clock_target(environment, workload)
@@ -188,15 +219,16 @@ def _clock_evidence(root: Path, environment: dict[str, Any], label: str) -> dict
     upper = float(publisher["offset_upper_seconds"]) - float(broker["offset_lower_seconds"])
     bound = max(abs(lower), abs(upper))
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "method": "controller-bracketed remote UTC probes; interval bound does not assume symmetric network delay",
         "publisher": publisher,
         "broker": broker,
         "publisher_minus_broker_interval_seconds": [lower, upper],
         "clock_uncertainty_seconds": bound,
     }
+    record["contract_satisfied"] = _clock_contract_satisfied(record)
     _write_json(path, record)
-    return record
+    return _require_clock_contract(record, label)
 
 
 def _science_config(bundle: Path, destination: Path, manifest: dict[str, Any], clock_uncertainty: float) -> Path:
