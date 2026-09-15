@@ -1,0 +1,16 @@
+{
+  "check": "capacitor-accounting",
+  "criterion": "Initial plus source energy closes against stored energy, load, series, leakage and clamp losses.",
+  "observed": {
+    "clamp_loss_j": 0.0,
+    "closure_residual_j": 1.0842021724855044e-19,
+    "initial_j": 2.4000000000000004e-05,
+    "leakage_j": 1.4611740550477994e-05,
+    "load_j": 0.00019945551423065707,
+    "series_loss_j": 0.0005625313828051793,
+    "source_j": 0.0009351482858978099,
+    "stored_j": 0.00018254964831149545,
+    "tolerance_j": 1e-12
+  },
+  "status": "passed"
+}
