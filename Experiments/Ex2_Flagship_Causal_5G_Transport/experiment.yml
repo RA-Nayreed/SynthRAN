@@ -124,10 +124,33 @@ study:
     principal_contrasts:
       - native minus periodic
       - native minus mean of the two gap-permutation controls
+    principal_contrast_ids:
+      - native_minus_periodic
+      - native_minus_mean_gap_permutation
+    contrast_arm_requirements:
+      native_minus_periodic: [native, periodic]
+      native_minus_mean_gap_permutation: [native, gap_permutation_r1, gap_permutation_r2]
+    exclusion_policy: >-
+      Eligibility is contrast- and outcome-specific. A missing, clock-invalid or
+      undefined gap-permutation arm excludes the native-versus-gap contrast only;
+      it does not discard an otherwise valid native-versus-periodic contrast.
+    load_interactions:
+      near_minus_below: {comparison: near, reference: below}
+      above_minus_below: {comparison: above, reference: below}
+    interaction_policy: >-
+      Estimate each load interaction within source seed as the timing contrast at
+      the comparison load minus the same timing contrast at the reference load.
+      Include only seeds for which that contrast is estimable at both loads.
     report_by_load: true
     permutation_arms_do_not_increase_n: true
     bootstrap_resamples: 10000
     bootstrap_seed: 62002
+    confidence_intervals: pointwise percentile 95% bootstrap intervals
+    multiplicity_adjustment: none
+    practical_importance_policy: >-
+      Statistical separation from zero is not evidence of practical importance,
+      equivalence, or a smallest worthwhile effect. Such a claim requires an
+      independently justified margin declared before interpreting confirmation data.
 
 phases:
   - id: prepare
