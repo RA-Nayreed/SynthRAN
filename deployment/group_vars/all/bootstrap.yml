@@ -1,0 +1,11 @@
+---
+# #52 normalizes this field to fresh|preserve in the resolved scenario. Keep the
+# policy controller-side: preserve mode must never be inferred from live hosts.
+synthran_host_preparation: >-
+  {{
+    (
+      (lookup('file', scenario_file) | from_yaml).deployment.reservation
+      | default({})
+    ).host_preparation
+    | default('fresh')
+  }}
