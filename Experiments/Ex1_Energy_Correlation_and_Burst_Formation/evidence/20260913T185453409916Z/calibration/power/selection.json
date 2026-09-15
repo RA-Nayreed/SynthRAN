@@ -1,0 +1,36 @@
+{
+  "acceptance": {
+    "high_min_active_fraction": 0.65,
+    "knee_max_active_fraction": 0.7,
+    "knee_min_active_fraction": 0.3,
+    "low_max_active_fraction": 0.35,
+    "monotonic_tolerance": 0.05
+  },
+  "definition": "Choose three ordered candidate powers jointly minimizing absolute distance to the prespecified low/knee/high mean active-fraction targets, then enforce the prespecified acceptance bands.",
+  "schema_version": 1,
+  "selected": {
+    "high": {
+      "active_fraction_mean": 0.7624846194911734,
+      "mean_power_w": 0.002
+    },
+    "knee": {
+      "active_fraction_mean": 0.4587766226486534,
+      "mean_power_w": 0.001
+    },
+    "low": {
+      "active_fraction_mean": 0.17960651188915897,
+      "mean_power_w": 0.0005
+    }
+  },
+  "selected_candidate_indices": [
+    1,
+    2,
+    3
+  ],
+  "status": "selected",
+  "targets": {
+    "high": 0.8,
+    "knee": 0.5,
+    "low": 0.2
+  }
+}
