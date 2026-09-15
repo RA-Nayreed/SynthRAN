@@ -125,6 +125,12 @@
           Helm-rendered ipvlan RU attachment before the release is launched.
   when: rru in ['n300', 'n320']
 
+- name: Attest the live R2Lab N320 transport after RF readiness
+  ansible.builtin.include_tasks: r2lab_n320_attest.yml
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
 - name: Launch OAI NR-UE pods for RFSIM
   ansible.builtin.command: "{{ demo_oai_script }} {{ ue_cmd }}"
   args:
