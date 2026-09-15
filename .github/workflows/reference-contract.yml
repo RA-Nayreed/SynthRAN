@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install contract parser dependency
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+
       - name: Check out pinned 5g-Ansible reference
         uses: actions/checkout@v7
         with:
@@ -40,4 +43,9 @@ jobs:
       - name: Verify SynthRAN resource authority overlay
         run: >-
           python3 tools/check_resource_authority_contract.py
+          --reference .reference/5g-ansible
+
+      - name: Verify host and Kubernetes bootstrap ownership
+        run: >-
+          python3 tools/check_host_bootstrap_contract.py
           --reference .reference/5g-ansible
