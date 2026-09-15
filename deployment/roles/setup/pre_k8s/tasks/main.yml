@@ -1,7 +1,7 @@
 ---
 # Prepare the selected real filesystem before Kubernetes is installed. This role
 # owns containerd storage binding only; kubelet configuration is generated and
-# patched after kubeadm init in cluster_create.
+# patched later by the cluster-creation role.
 
 - name: Detect live Ubuntu system
   ansible.builtin.shell: |
