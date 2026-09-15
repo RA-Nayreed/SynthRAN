@@ -10,13 +10,15 @@
       "{{ oai_r2lab_n320_ru_cni_type }}" \
       "{{ oai_r2lab_n320_ru_cni_mode }}" \
       "{{ oai_r2lab_n320_ru_ip }}/{{ oai_r2lab_n320_ru_prefix }}" \
+      "{{ oai_r2lab_n320_ru_mtu }}" \
       "{{ oai_r2lab_n320_sdr_ip }}" <<'PY'
     import json
     import pathlib
     import subprocess
     import sys
 
-    namespace, release, container, parent, cni_type, cni_mode, ru_address, sdr_ip = sys.argv[1:]
+    namespace, release, container, parent, cni_type, cni_mode, ru_address, ru_mtu, sdr_ip = sys.argv[1:]
+    expected_mtu = int(ru_mtu)
 
     def kubectl(*args):
         return subprocess.check_output(['kubectl', *args], text=True)
@@ -71,6 +73,11 @@
     image_id = container_status.get('imageID', '')
 
     parent_mac = pathlib.Path(f'/sys/class/net/{parent}/address').read_text().strip().lower()
+    parent_mtu = int(pathlib.Path(f'/sys/class/net/{parent}/mtu').read_text().strip())
+    live_ru_mtu = int(kubectl(
+        '-n', namespace, 'exec', pod_name, '-c', container, '--',
+        'cat', '/sys/class/net/ru/mtu'
+    ).strip())
     ru_mac = str(ru_status.get('mac', '')).lower()
     ru_ip = ru_address.split('/', 1)[0]
 
@@ -94,6 +101,10 @@
         raise SystemExit(f'live N320 RU address missing: expected={ru_ip!r} status={ru_status!r}')
     if ru_mac != parent_mac:
         raise SystemExit(f'live N320 ipvlan MAC mismatch: parent={parent_mac!r} ru={ru_mac!r}')
+    if parent_mtu != expected_mtu or live_ru_mtu != expected_mtu:
+        raise SystemExit(
+            f'live N320 MTU mismatch: expected={expected_mtu} parent={parent_mtu} ru={live_ru_mtu}'
+        )
     if 'sha256:' not in image_id:
         raise SystemExit(f'live OAI imageID is not digest-qualified: {image_id!r}')
 
@@ -109,6 +120,7 @@
             'mode': actual_plugin['mode'],
             'address': actual_plugin['address'],
             'mac': ru_mac,
+            'mtu': live_ru_mtu,
         },
         'sdr_addrs': sdr_addrs,
         'image': container_status.get('image', ''),
