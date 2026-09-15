@@ -1,0 +1,324 @@
+{
+  "condition_means": {
+    "always-powered": {
+      "activation_sync_fraction": null,
+      "active_fraction": 1.0,
+      "burst_count": 1.0,
+      "burst_duration_s_max": 49.95516666666666,
+      "burst_duration_s_mean": 49.95516666666666,
+      "burst_size_max": 2232.733333333333,
+      "burst_size_mean": 2232.733333333333,
+      "collision_exposure": 0.30225361963781455,
+      "count_autocorrelation_lag1": -0.03462281184017612,
+      "decode_rate_per_s": 44.65466666666667,
+      "decoded_events": 2232.733333333333,
+      "fano": 0.3874368465171838,
+      "gap_cv": 0.8104065218893965,
+      "generated_rate_per_s": 63.99933333333333,
+      "jain_decode_fairness": 0.9624417206663636,
+      "n_runs": 30,
+      "peak_window_count": 53.833333333333336,
+      "realized_power_correlation": -8.625610749752364e-05,
+      "silent_runs": 0,
+      "suppression_fraction": 1.0416666666666666e-05,
+      "transmit_rate_per_s": 64.00333333333333
+    },
+    "high-common": {
+      "activation_sync_fraction": 0.9963101378896455,
+      "active_fraction": 0.7562913226767894,
+      "burst_count": 4.233333333333333,
+      "burst_duration_s_max": 20.971666666666668,
+      "burst_duration_s_mean": 11.383527380952382,
+      "burst_size_max": 924.7333333333333,
+      "burst_size_mean": 503.36111111111114,
+      "collision_exposure": 0.28740660811944496,
+      "count_autocorrelation_lag1": 0.6154825065342256,
+      "decode_rate_per_s": 32.797333333333334,
+      "decoded_events": 1639.8666666666666,
+      "fano": 10.511593068999339,
+      "gap_cv": 5.313994086230256,
+      "generated_rate_per_s": 49.355333333333334,
+      "jain_decode_fairness": 0.9570315851362523,
+      "n_runs": 30,
+      "peak_window_count": 52.833333333333336,
+      "realized_power_correlation": 1.0,
+      "silent_runs": 0,
+      "suppression_fraction": 0.22882291666666668,
+      "transmit_rate_per_s": 48.80866666666667
+    },
+    "high-independent": {
+      "activation_sync_fraction": 0.38066087765946716,
+      "active_fraction": 0.7667616254087178,
+      "burst_count": 1.0,
+      "burst_duration_s_max": 49.95116666666667,
+      "burst_duration_s_mean": 49.95116666666667,
+      "burst_size_max": 1806.6666666666667,
+      "burst_size_mean": 1806.6666666666667,
+      "collision_exposure": 0.23517207750622884,
+      "count_autocorrelation_lag1": 0.09350246023490422,
+      "decode_rate_per_s": 36.13333333333333,
+      "decoded_events": 1806.6666666666667,
+      "fano": 0.4289469365007338,
+      "gap_cv": 0.8405762321910427,
+      "generated_rate_per_s": 49.908,
+      "jain_decode_fairness": 0.9337781184814232,
+      "n_runs": 30,
+      "peak_window_count": 44.96666666666667,
+      "realized_power_correlation": -8.625610749752364e-05,
+      "silent_runs": 0,
+      "suppression_fraction": 0.2201875,
+      "transmit_rate_per_s": 49.41133333333333
+    },
+    "knee-common": {
+      "activation_sync_fraction": 0.9978183994306156,
+      "active_fraction": 0.4467093307068197,
+      "burst_count": 4.933333333333334,
+      "burst_duration_s_max": 11.192166666666667,
+      "burst_duration_s_mean": 5.129655423280424,
+      "burst_size_max": 496.76666666666665,
+      "burst_size_mean": 226.32683862433862,
+      "collision_exposure": 0.27449765253545455,
+      "count_autocorrelation_lag1": 0.6798473603286427,
+      "decode_rate_per_s": 18.935333333333332,
+      "decoded_events": 946.7666666666667,
+      "fano": 22.07481645500743,
+      "gap_cv": 8.947346823346168,
+      "generated_rate_per_s": 29.519333333333336,
+      "jain_decode_fairness": 0.9421638818296928,
+      "n_runs": 30,
+      "peak_window_count": 51.666666666666664,
+      "realized_power_correlation": 1.0,
+      "silent_runs": 0,
+      "suppression_fraction": 0.5387604166666667,
+      "transmit_rate_per_s": 28.894000000000002
+    },
+    "knee-independent": {
+      "activation_sync_fraction": 0.4578588653717801,
+      "active_fraction": 0.45148816398334574,
+      "burst_count": 1.0,
+      "burst_duration_s_max": 49.925,
+      "burst_duration_s_mean": 49.925,
+      "burst_size_max": 1158.9,
+      "burst_size_mean": 1158.9,
+      "collision_exposure": 0.1396802830076478,
+      "count_autocorrelation_lag1": 0.28324340905948553,
+      "decode_rate_per_s": 23.178,
+      "decoded_events": 1158.9,
+      "fano": 0.5393054291115544,
+      "gap_cv": 0.8858720842153639,
+      "generated_rate_per_s": 29.932000000000002,
+      "jain_decode_fairness": 0.8358518052092154,
+      "n_runs": 30,
+      "peak_window_count": 31.133333333333333,
+      "realized_power_correlation": -8.625610749752364e-05,
+      "silent_runs": 0,
+      "suppression_fraction": 0.5323125,
+      "transmit_rate_per_s": 29.279999999999998
+    },
+    "low-common": {
+      "activation_sync_fraction": 0.9970972322846218,
+      "active_fraction": 0.14889533886106335,
+      "burst_count": 2.566666666666667,
+      "burst_duration_s_max": 4.829444444444444,
+      "burst_duration_s_mean": 3.018010582010582,
+      "burst_size_max": 189.2,
+      "burst_size_mean": 132.0768959435626,
+      "collision_exposure": 0.24168769939756862,
+      "count_autocorrelation_lag1": 0.5960320751514991,
+      "decode_rate_per_s": 6.087999999999999,
+      "decoded_events": 304.4,
+      "fano": 29.83985961623867,
+      "gap_cv": 8.06903763768981,
+      "generated_rate_per_s": 10.076666666666666,
+      "jain_decode_fairness": 0.7566986522626536,
+      "n_runs": 30,
+      "peak_window_count": 41.5,
+      "realized_power_correlation": 1.0,
+      "silent_runs": 3,
+      "suppression_fraction": 0.8425520833333333,
+      "transmit_rate_per_s": 9.735333333333333
+    },
+    "low-independent": {
+      "activation_sync_fraction": 0.30113226130436155,
+      "active_fraction": 0.16273732760149856,
+      "burst_count": 1.0,
+      "burst_duration_s_max": 49.74883333333333,
+      "burst_duration_s_mean": 49.74883333333333,
+      "burst_size_max": 446.3333333333333,
+      "burst_size_mean": 446.3333333333333,
+      "collision_exposure": 0.05204732233286568,
+      "count_autocorrelation_lag1": 0.34759661471525355,
+      "decode_rate_per_s": 8.926666666666668,
+      "decoded_events": 446.3333333333333,
+      "fano": 0.7490955623090265,
+      "gap_cv": 0.9377757035821658,
+      "generated_rate_per_s": 10.936666666666667,
+      "jain_decode_fairness": 0.6136113135188452,
+      "n_runs": 30,
+      "peak_window_count": 14.933333333333334,
+      "realized_power_correlation": -8.625610749752364e-05,
+      "silent_runs": 0,
+      "suppression_fraction": 0.8291145833333334,
+      "transmit_rate_per_s": 10.557333333333334
+    }
+  },
+  "experiment": "ex1",
+  "experimental_unit": "source_seed",
+  "frozen_design_sha256": "35224c5c07afd10dd6064783bc16145c0916739b75bfddb3cf1fc853746248fb",
+  "metric_definitions": {
+    "activation_sync_fraction": "fraction of activation onsets sharing the prespecified time bin with an onset from another sensor",
+    "burst": "consecutive decoded events separated by no more than the prespecified burst-gap threshold",
+    "count_autocorrelation_lag1": "Pearson correlation between adjacent decoded-count windows",
+    "fano": "variance-to-mean ratio of decoded-event counts in prespecified windows",
+    "gap_cv": "coefficient of variation of inter-decode gaps",
+    "peak_window_count": "maximum decoded-event count in a prespecified peak window",
+    "realized_power_correlation": "mean pairwise Pearson correlation of post-warmup sensor energy-input series"
+  },
+  "paired_common_minus_independent": {
+    "high-common_minus_high-independent": {
+      "activation_sync_fraction": {
+        "ci95": [0.6018174682810505, 0.6269128049965509],
+        "mean_difference": 0.6145919885867485,
+        "n_pairs": 29
+      },
+      "burst_size_mean": {
+        "ci95": [-1439.2955555555557, -1128.8149999999998],
+        "mean_difference": -1303.3055555555554,
+        "n_pairs": 30
+      },
+      "collision_exposure": {
+        "ci95": [0.04572040398048926, 0.05917615108743897],
+        "mean_difference": 0.052234530613216076,
+        "n_pairs": 30
+      },
+      "count_autocorrelation_lag1": {
+        "ci95": [0.4374141513447595, 0.6004883332625984],
+        "mean_difference": 0.5219800462993214,
+        "n_pairs": 30
+      },
+      "decode_rate_per_s": {
+        "ci95": [-5.756000000000001, -1.0266666666666677],
+        "mean_difference": -3.3360000000000003,
+        "n_pairs": 30
+      },
+      "fano": {
+        "ci95": [8.102983392746063, 12.381022584028903],
+        "mean_difference": 10.082646132498606,
+        "n_pairs": 30
+      },
+      "gap_cv": {
+        "ci95": [3.6713670505501166, 5.24143895793673],
+        "mean_difference": 4.473417854039213,
+        "n_pairs": 30
+      },
+      "peak_window_count": {
+        "ci95": [6.766666666666667, 8.9],
+        "mean_difference": 7.866666666666666,
+        "n_pairs": 30
+      },
+      "realized_power_correlation": {
+        "ci95": [0.9983033095305862, 1.0017011723731504],
+        "mean_difference": 1.0000862561074975,
+        "n_pairs": 30
+      }
+    },
+    "knee-common_minus_knee-independent": {
+      "activation_sync_fraction": {
+        "ci95": [0.5302026745614817, 0.5495553959067343],
+        "mean_difference": 0.5399595340588356,
+        "n_pairs": 30
+      },
+      "burst_size_mean": {
+        "ci95": [-984.5268386243387, -875.7332936507936],
+        "mean_difference": -932.5731613756614,
+        "n_pairs": 30
+      },
+      "collision_exposure": {
+        "ci95": [0.12609195287083666, 0.14309123483378453],
+        "mean_difference": 0.13481736952780682,
+        "n_pairs": 30
+      },
+      "count_autocorrelation_lag1": {
+        "ci95": [0.31852640366366813, 0.47549253225738636],
+        "mean_difference": 0.3966039512691572,
+        "n_pairs": 30
+      },
+      "decode_rate_per_s": {
+        "ci95": [-6.751333333333334, -1.6486666666666665],
+        "mean_difference": -4.242666666666667,
+        "n_pairs": 30
+      },
+      "fano": {
+        "ci95": [19.643320962268874, 23.43722392157929],
+        "mean_difference": 21.535511025895875,
+        "n_pairs": 30
+      },
+      "gap_cv": {
+        "ci95": [7.021554276207201, 9.099861530176998],
+        "mean_difference": 8.061474739130803,
+        "n_pairs": 30
+      },
+      "peak_window_count": {
+        "ci95": [19.2, 21.8],
+        "mean_difference": 20.533333333333335,
+        "n_pairs": 30
+      },
+      "realized_power_correlation": {
+        "ci95": [0.9983150717984619, 1.0017301707145658],
+        "mean_difference": 1.0000862561074975,
+        "n_pairs": 30
+      }
+    },
+    "low-common_minus_low-independent": {
+      "activation_sync_fraction": {
+        "ci95": [0.6805687172731983, 0.7169846719898085],
+        "mean_difference": 0.6993788430651031,
+        "n_pairs": 25
+      },
+      "burst_size_mean": {
+        "ci95": [-357.28544973544973, -266.90246913580245],
+        "mean_difference": -316.58977072310404,
+        "n_pairs": 27
+      },
+      "collision_exposure": {
+        "ci95": [0.15498513888959048, 0.21965047193528217],
+        "mean_difference": 0.18964037706470294,
+        "n_pairs": 30
+      },
+      "count_autocorrelation_lag1": {
+        "ci95": [0.13134065535029843, 0.3435424176926789],
+        "mean_difference": 0.23623757475545604,
+        "n_pairs": 26
+      },
+      "decode_rate_per_s": {
+        "ci95": [-4.524666666666667, -1.1586666666666665],
+        "mean_difference": -2.8386666666666667,
+        "n_pairs": 30
+      },
+      "fano": {
+        "ci95": [26.524709610296103, 31.45067732628461],
+        "mean_difference": 29.075714032515563,
+        "n_pairs": 27
+      },
+      "gap_cv": {
+        "ci95": [5.3993162987847425, 8.777558004172814],
+        "mean_difference": 7.137779879430443,
+        "n_pairs": 27
+      },
+      "peak_window_count": {
+        "ci95": [20.3, 32.03333333333333],
+        "mean_difference": 26.566666666666666,
+        "n_pairs": 30
+      },
+      "realized_power_correlation": {
+        "ci95": [0.9983186567112365, 1.0017259077884546],
+        "mean_difference": 1.0000862561074975,
+        "n_pairs": 30
+      }
+    }
+  },
+  "runs_analyzed": 210,
+  "runs_expected": 210,
+  "schema_version": 1,
+  "status": "complete"
+}
