@@ -8,6 +8,7 @@ NO_INPUT=false
 NO_RESERVATION=false
 DRY_RUN=false
 VERBOSE=false
+UE_CATALOG_FILE=deployment/group_vars/all/ue_catalog.yaml
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -156,9 +157,20 @@ discover_network_profiles() {
   done
 }
 
+network_profile_path() {
+  if [[ "$1" == "${DEFAULT_NETWORK_PROFILE:-}" && -n "${BASE_NETWORK_PROFILE_FILE:-}" ]]; then
+    printf '%s\n' "$BASE_NETWORK_PROFILE_FILE"
+  else
+    printf 'deployment/group_vars/all/network_profile_%s.yaml\n' "$1"
+  fi
+}
+
 choose_network_profile() {
   local default_profile="$1" profile_choice default_choice=1 index
   mapfile -t AVAILABLE_NETWORK_PROFILES < <(discover_network_profiles)
+  if [[ -n "${BASE_NETWORK_PROFILE_FILE:-}" && ! " ${AVAILABLE_NETWORK_PROFILES[*]} " == *" $default_profile "* ]]; then
+    AVAILABLE_NETWORK_PROFILES+=("$default_profile")
+  fi
   [[ ${#AVAILABLE_NETWORK_PROFILES[@]} -gt 0 ]] || {
     echo "No network profiles found under deployment/group_vars/all/network_profile_*.yaml" >&2
     exit 1
@@ -188,11 +200,11 @@ choose_network_profile() {
 }
 
 catalog_ues() {
-  "$SYNTHRAN_PYTHON" - "$1" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$1" "$UE_CATALOG_FILE" <<'PY'
 import sys, yaml
 from pathlib import Path
 platform = sys.argv[1]
-catalog = Path('deployment/group_vars/all/ue_catalog.yaml')
+catalog = Path(sys.argv[2])
 data = yaml.safe_load(catalog.read_text()) or {}
 for name, ue in (data.get('ues') or {}).items():
     if str(ue.get('platform', '')).lower() != platform:
@@ -246,11 +258,11 @@ print_ue_matrix() {
 }
 
 expand_ue_selection() {
-  "$SYNTHRAN_PYTHON" - "$1" "$2" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$1" "$2" "$UE_CATALOG_FILE" <<'PY'
 import sys, yaml
 from pathlib import Path
 platform, value = sys.argv[1], sys.argv[2].strip().lower()
-data = yaml.safe_load(Path('deployment/group_vars/all/ue_catalog.yaml').read_text()) or {}
+data = yaml.safe_load(Path(sys.argv[3]).read_text()) or {}
 names = [
     name for name, ue in (data.get('ues') or {}).items()
     if str(ue.get('platform', '')).lower() == platform
@@ -278,10 +290,10 @@ PY
 }
 
 network_profile_slices() {
-  "$SYNTHRAN_PYTHON" - "$1" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$(network_profile_path "$1")" <<'PY'
 import sys, yaml
 from pathlib import Path
-path = Path('deployment/group_vars/all') / f'network_profile_{sys.argv[1]}.yaml'
+path = Path(sys.argv[1])
 data = yaml.safe_load(path.read_text()) or {}
 for item in data.get('slices') or []:
     qos = item.get('qos') or {}
@@ -315,11 +327,11 @@ PY
 }
 
 describe_ue_slice_assignments() {
-  "$SYNTHRAN_PYTHON" - "$1" "$2" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$(network_profile_path "$1")" "$2" <<'PY'
 import sys, yaml
 from pathlib import Path
-profile_name, spec = sys.argv[1:]
-profile = yaml.safe_load((Path('deployment/group_vars/all') / f'network_profile_{profile_name}.yaml').read_text()) or {}
+profile_path, spec = sys.argv[1:]
+profile = yaml.safe_load(Path(profile_path).read_text()) or {}
 by_name = {s['name']: s for s in profile.get('slices') or []}
 for pair in filter(None, spec.split(',')):
     ue, slice_name = pair.split('=', 1)
@@ -331,6 +343,11 @@ PY
 if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   [[ -t 0 ]] || { echo "Interactive input requires a terminal; use --config or --no-input" >&2; exit 2; }
   BASE_CONFIG="$CONFIG"
+  if [[ -n "$BASE_CONFIG" ]]; then
+    "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
+      --source "$BASE_CONFIG" --output "$PRIVATE_RUN_DIR/interactive-base.yml"
+    BASE_CONFIG="$PRIVATE_RUN_DIR/interactive-base.yml"
+  fi
 
   DEFAULT_CORE=open5gs
   DEFAULT_RAN=srsran
@@ -360,7 +377,8 @@ values = [
     n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')),
     d.get('network_profile','default'), ','.join(d.get('ues',[])), str(r.get('enabled',True)).lower(),
     str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''),
-    str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120))
+    str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120)),
+    d.get('network_profile_file',''), d.get('ue_catalog_file','deployment/group_vars/all/ue_catalog.yaml')
 ]
 print('\n'.join(str(value) for value in values))
 PY
@@ -380,6 +398,8 @@ PY
     DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
     DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}
     DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}
+    BASE_NETWORK_PROFILE_FILE=${SCENARIO_DEFAULTS[15]}
+    UE_CATALOG_FILE=${SCENARIO_DEFAULTS[16]}
   fi
 
   echo
@@ -613,6 +633,8 @@ if set(ue_slices) != set(ues):
     raise SystemExit('Interactive UE slice assignments do not match selected UEs')
 
 host_vars = dep.get('host_vars', {})
+if network_profile != dep.get('network_profile'):
+    dep.pop('network_profile_file', None)
 dep.update({
     'core': core,
     'ran': ran,
@@ -626,7 +648,7 @@ dep.update({
 dep['host_vars'] = host_vars
 dep['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
 dep['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
-for legacy in ('profile', 'profile_file', 'ue_profiles', 'network_profile_file', 'ue_catalog_file', 'r2lab_experiment_nodes'):
+for legacy in ('profile', 'profile_file', 'ue_profiles', 'r2lab_experiment_nodes'):
     dep.pop(legacy, None)
 if r2lab_username:
     dep['r2lab_username'] = r2lab_username
@@ -653,25 +675,10 @@ fi
 SOURCE_CONFIG="$CONFIG"
 [[ -n "$SOURCE_CONFIG" && -f "$SOURCE_CONFIG" ]] || { echo "No testbed scenario was produced" >&2; exit 2; }
 
-TESTBED_SOURCE_CONFIG="$PRIVATE_RUN_DIR/testbed-source.yml"
-"$SYNTHRAN_PYTHON" - "$SOURCE_CONFIG" "$TESTBED_SOURCE_CONFIG" <<'PY'
-import copy
-import sys
-from pathlib import Path
-import yaml
-
-source, output = map(Path, sys.argv[1:3])
-data = yaml.safe_load(source.read_text()) or {}
-deployment = data.get('deployment')
-if not isinstance(deployment, dict):
-    raise SystemExit('scenario requires mapping: deployment')
-Path(output).write_text(yaml.safe_dump({'deployment': copy.deepcopy(deployment)}, sort_keys=False))
-PY
-
 PUBLIC_CONFIG="$RUN_DIR/resolved-scenario.yml"
 CONFIG="$PRIVATE_RUN_DIR/resolved-scenario.yml"
 "$SYNTHRAN_PYTHON" -m synthran.deployment_state resolve \
-  --source "$TESTBED_SOURCE_CONFIG" --output "$CONFIG"
+  --source "$SOURCE_CONFIG" --output "$CONFIG"
 
 write_public_scenario() {
   "$SYNTHRAN_PYTHON" - "$CONFIG" "$PUBLIC_CONFIG" <<'PY'

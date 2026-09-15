@@ -71,7 +71,7 @@ def _validate_ssh_policy(deployment: dict, host_vars: dict) -> None:
             )
 
 
-def load_scenario(path: str | Path) -> dict:
+def load_scenario(path: str | Path, *, deployment_only: bool = False) -> dict:
     source = Path(path).resolve()
     with source.open(encoding="utf-8") as stream:
         data = yaml.safe_load(stream)
@@ -79,6 +79,8 @@ def load_scenario(path: str | Path) -> dict:
         raise ValueError("scenario must be a mapping")
     if not isinstance(data.get("deployment"), dict):
         raise ValueError("scenario requires mapping: deployment")
+    if deployment_only:
+        data = {"deployment": data["deployment"]}
     dep = data["deployment"]
 
     legacy = sorted(key for key in ("profile", "profile_file", "ue_profiles") if key in dep)
