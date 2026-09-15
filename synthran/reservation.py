@@ -1,0 +1,575 @@
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import yaml
+
+
+STATE_PATH = Path(".synthran/pos-reservation.json")
+PROVIDER_PREFIX_ATTEMPTS_AFTER_CREATE = 12
+PROVIDER_PREFIX_ATTEMPTS_EXISTING = 3
+PROVIDER_PREFIX_INTERVAL_SECONDS = 5.0
+POS_READY_ATTEMPTS = 60
+POS_READY_INTERVAL_SECONDS = 5.0
+
+ACQUISITION_MODES = {"create", "require-existing", "disabled"}
+PREPARATION_MODES = {"fresh", "preserve"}
+PROVIDER_MODES = {"create", "require-existing", "disabled"}
+R2LAB_MODES = {"book", "require-existing", "disabled"}
+_SAFE_CONTEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+# Pinned from RA-Nayreed/5g-Ansible@6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+# roles/pos/defaults/main.yml. SynthRAN deliberately keeps its configured image,
+# but adopts the reference boot-parameter mechanics for the supported SOP/N3xx path.
+REFERENCE_BOOT_PARAMETERS = (
+    "biosdevname=0 net.ifnames=0 mitigations=off intel_iommu=on iommu=pt "
+    "selinux=0 enforcing=0 nosoftlockup intel_pstate=disable idle=poll nosmt"
+)
+REFERENCE_BOOT_RAN_PARAMETERS = (
+    "biosdevname=0 net.ifnames=0 mitigations=off intel_iommu=on iommu=pt "
+    "selinux=0 enforcing=0 isolcpus=managed_irq,16-63 "
+    "nohz_full=16-63 nohz=on rcu_nocbs=16-63 "
+    "kthread_cpus=0-4 irqaffinity=0-4 rcu_nocb_poll "
+    "nosoftlockup intel_pstate=disable idle=poll skew_tick=1 "
+    "tsc=nowatchdog nmi_watchdog=0 softlockup_panic=0 audit=0 nosmt"
+)
+
+
+class ReservationError(RuntimeError):
+    pass
+
+
+def _output(result: subprocess.CompletedProcess[str]) -> str:
+    return "\n".join(
+        part.strip() for part in (result.stdout or "", result.stderr or "") if part.strip()
+    )
+
+
+def run(
+    argv: Sequence[str],
+    *,
+    check: bool = True,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    options: dict[str, Any] = {
+        "text": True,
+        "capture_output": True,
+        "check": False,
+    }
+    if stdin is None:
+        options["stdin"] = subprocess.DEVNULL
+    else:
+        options["input"] = stdin
+    result = subprocess.run(list(argv), **options)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
+    if check and result.returncode:
+        detail = _output(result) or f"exit status {result.returncode}"
+        raise ReservationError(f"command failed: {' '.join(argv)}\n{detail}")
+    return result
+
+
+def stamp(value: str) -> dt.datetime:
+    parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
+    return parsed
+
+
+def _write_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _safe_mapping(value: Any, label: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ReservationError(f"{label} must be a mapping")
+    return dict(value)
+
+
+def _selected_nodes(deployment: Mapping[str, Any]) -> tuple[dict[str, str], list[str]]:
+    roles = _safe_mapping(deployment.get("nodes"), "deployment.nodes")
+    required = ("core", "ran", "broker")
+    missing = [role for role in required if not isinstance(roles.get(role), str) or not roles[role].strip()]
+    if missing:
+        raise ReservationError("deployment.nodes is missing: " + ", ".join(missing))
+    selected = list(dict.fromkeys(str(roles[role]) for role in required))
+    return {role: str(roles[role]) for role in required}, selected
+
+
+def _owner() -> str:
+    value = os.environ.get("USER", "").strip()
+    if value:
+        return value
+    result = run(["id", "-un"])
+    value = result.stdout.strip()
+    if not value:
+        raise ReservationError("could not determine POS reservation owner")
+    return value
+
+
+def _provider_network(experiment: str, *, attempts: int) -> dict[str, str]:
+    if attempts < 1:
+        raise ReservationError("provider prefix attempts must be positive")
+    interval = float(
+        os.environ.get(
+            "SYNTHRAN_PROVIDER_PREFIX_INTERVAL_SECONDS",
+            str(PROVIDER_PREFIX_INTERVAL_SECONDS),
+        )
+    )
+    last_detail = "no response"
+    for attempt in range(1, attempts + 1):
+        result = run(["post5g", "experiment", "prefix", experiment], check=False)
+        text = result.stdout.strip()
+        if result.returncode == 0 and text:
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                last_detail = "provider response was not JSON"
+            else:
+                if isinstance(value, dict):
+                    missing = [
+                        key
+                        for key in ("subnet", "lb", "expiration_time")
+                        if not isinstance(value.get(key), str) or not value[key].strip()
+                    ]
+                    if not missing:
+                        return {key: str(value[key]) for key in ("subnet", "lb", "expiration_time")}
+                    last_detail = "provider response was missing " + ", ".join(missing)
+                else:
+                    last_detail = "provider response was not one JSON object"
+        else:
+            last_detail = _output(result) or f"provider command exit={result.returncode}"
+        if attempt < attempts and interval > 0:
+            time.sleep(interval)
+    raise ReservationError(
+        f"Post5G provider network acquisition failed after {attempts} attempt(s): {last_detail}"
+    )
+
+
+def provider_context(provider: Mapping[str, Any]) -> dict[str, Any]:
+    mode = str(provider.get("mode", "disabled"))
+    if mode not in PROVIDER_MODES:
+        raise ReservationError(
+            "deployment.provider.mode must be create, require-existing, or disabled"
+        )
+    if mode == "disabled":
+        return {"mode": "disabled", "managed_by": "synthran"}
+
+    project = str(provider.get("project", ""))
+    experiment = str(provider.get("experiment", ""))
+    if _SAFE_CONTEXT.fullmatch(project) is None:
+        raise ReservationError("deployment.provider.project is required and contains unsafe characters")
+    if _SAFE_CONTEXT.fullmatch(experiment) is None:
+        raise ReservationError("deployment.provider.experiment is required and contains unsafe characters")
+    duration = str(provider.get("experiment_duration", "4h"))
+    if re.fullmatch(r"[1-9][0-9]*(?:m|h)", duration) is None:
+        raise ReservationError("deployment.provider.experiment_duration must look like 30m or 4h")
+
+    selected = run(["slices", "project", "use", project], check=False)
+    if selected.returncode:
+        raise ReservationError(
+            "SLICES project selection failed: " + (_output(selected) or f"project={project}")
+        )
+
+    shown = run(["slices", "experiment", "show", experiment], check=False)
+    created = False
+    if shown.returncode:
+        if mode == "require-existing":
+            raise ReservationError(
+                "SLICES experiment is required to exist: "
+                + (_output(shown) or f"experiment={experiment}")
+            )
+        result = run(
+            ["slices", "experiment", "create", experiment, "--duration", duration],
+            check=False,
+        )
+        if result.returncode:
+            raise ReservationError(
+                "SLICES experiment creation failed: "
+                + (_output(result) or f"experiment={experiment}")
+            )
+        created = True
+
+    attempts = (
+        PROVIDER_PREFIX_ATTEMPTS_AFTER_CREATE if created else PROVIDER_PREFIX_ATTEMPTS_EXISTING
+    )
+    network = _provider_network(experiment, attempts=attempts)
+    return {
+        "mode": mode,
+        "managed_by": "synthran",
+        "project": project,
+        "experiment": experiment,
+        "experiment_created": created,
+        "network": network,
+    }
+
+
+def _calendars() -> list[dict[str, Any]]:
+    result = run(["pos", "calendar", "list", "--json"])
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReservationError("POS calendar list did not return JSON") from exc
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ReservationError("POS calendar list returned an unexpected shape")
+    return value
+
+
+def _covering_exact_events(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    owner: str,
+    selected: Sequence[str],
+    now: dt.datetime,
+    end: dt.datetime,
+) -> list[dict[str, Any]]:
+    wanted = set(selected)
+    matches: list[dict[str, Any]] = []
+    for raw in events:
+        nodes = raw.get("nodes")
+        if not isinstance(nodes, list) or set(map(str, nodes)) != wanted:
+            continue
+        if str(raw.get("owner", "")) != owner:
+            continue
+        try:
+            start = stamp(str(raw["start_date"]))
+            stop = stamp(str(raw["end_date"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start <= now and stop >= end:
+            matches.append(dict(raw))
+    return matches
+
+
+def _calendar_record(event: Mapping[str, Any], *, status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "id": str(event.get("id", "")),
+        "owner": str(event.get("owner", "")),
+        "nodes": [str(value) for value in event.get("nodes", [])],
+        "start": stamp(str(event["start_date"])).isoformat(),
+        "end": stamp(str(event["end_date"])).isoformat(),
+        "managed_by": "synthran",
+    }
+
+
+def acquire_calendar(
+    reservation: Mapping[str, Any],
+    *,
+    selected: Sequence[str],
+    owner: str,
+    now: dt.datetime,
+) -> dict[str, Any]:
+    mode = str(reservation.get("mode", ""))
+    if mode not in ACQUISITION_MODES:
+        raise ReservationError(
+            "deployment.reservation.mode must be create, require-existing, or disabled"
+        )
+    duration = reservation.get("duration_minutes", 120)
+    if not isinstance(duration, int) or duration < 1:
+        raise ReservationError("deployment.reservation.duration_minutes must be a positive integer")
+    if mode == "disabled":
+        return {
+            "status": "disabled",
+            "nodes": list(selected),
+            "managed_by": "synthran",
+        }
+
+    required_end = now + dt.timedelta(minutes=duration)
+    covering = _covering_exact_events(
+        _calendars(), owner=owner, selected=selected, now=now, end=required_end
+    )
+    if len(covering) > 1:
+        raise ReservationError(
+            "multiple owned POS calendar events exactly cover the selected nodes; refusing ambiguous authority"
+        )
+    if covering:
+        status = "required-existing" if mode == "require-existing" else "reused"
+        return _calendar_record(covering[0], status=status)
+    if mode == "require-existing":
+        raise ReservationError(
+            "no owned active POS calendar event exactly covers the selected nodes for the requested duration"
+        )
+
+    result = run(
+        [
+            "pos",
+            "calendar",
+            "create",
+            "--start",
+            "now",
+            "--duration",
+            str(duration),
+            *selected,
+        ],
+        check=False,
+    )
+    reservation_id = result.stdout.strip()
+    if result.returncode or not reservation_id or reservation_id == "-1":
+        raise ReservationError(
+            "POS calendar creation failed for the exact selected nodes: "
+            + (_output(result) or f"exit status {result.returncode}")
+        )
+
+    matches = [
+        event
+        for event in _covering_exact_events(
+            _calendars(), owner=owner, selected=selected, now=now, end=required_end
+        )
+        if str(event.get("id")) == reservation_id
+    ]
+    if len(matches) != 1:
+        raise ReservationError(
+            "POS provider evidence did not prove the newly created reservation exactly covers the selected nodes"
+        )
+    return _calendar_record(matches[0], status="created")
+
+
+def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> str:
+    text = _output(result)
+    lower = text.lower()
+    if "a command for allocation" in lower:
+        raise ReservationError(
+            f"POS is still processing an allocation command for {node}: {text}"
+        )
+    if "already allocated" in lower:
+        return "already-active"
+    if result.returncode == 0:
+        return "new"
+    raise ReservationError(f"POS allocation failed for {node}: {text or result.returncode}")
+
+
+def _allocate_for_fresh(node: str) -> str:
+    result = run(["pos", "allocations", "allocate", node], check=False)
+    state = _allocation_state(node, result)
+    if state == "new":
+        return state
+
+    # Fresh/reimage is the only policy that permits this destructive recovery,
+    # and acquire_calendar() has already proved exact caller-owned calendar authority.
+    released = run(["pos", "allocations", "free", "-k", node], check=False)
+    retry = run(["pos", "allocations", "allocate", node], check=False)
+    retry_state = _allocation_state(node, retry)
+    if retry_state != "new":
+        detail = _output(retry) or _output(released)
+        raise ReservationError(
+            f"unable to prove fresh allocation ownership for {node} after explicit reclaim"
+            + (f": {detail}" if detail else "")
+        )
+    return "reclaimed"
+
+
+def _boot_parameters(node: str) -> tuple[str, str]:
+    if node in {"sopnode-f1", "sopnode-f2", "sopnode-f3"}:
+        return "reference-n3xx", REFERENCE_BOOT_RAN_PARAMETERS
+    return "reference-generic", REFERENCE_BOOT_PARAMETERS
+
+
+def _wait_for_ssh(node: str) -> int:
+    attempts = int(os.environ.get("SYNTHRAN_POS_READY_ATTEMPTS", str(POS_READY_ATTEMPTS)))
+    interval = float(
+        os.environ.get("SYNTHRAN_POS_READY_INTERVAL_SECONDS", str(POS_READY_INTERVAL_SECONDS))
+    )
+    if attempts < 1:
+        raise ReservationError("SYNTHRAN_POS_READY_ATTEMPTS must be positive")
+    last = "no response"
+    for attempt in range(1, attempts + 1):
+        result = run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                f"root@{node}",
+                "true",
+            ],
+            check=False,
+        )
+        if result.returncode == 0:
+            return attempt
+        last = _output(result) or f"exit status {result.returncode}"
+        if attempt < attempts and interval > 0:
+            time.sleep(interval)
+    raise ReservationError(f"{node} did not become SSH-ready after POS reset: {last}")
+
+
+def prepare_hosts(
+    reservation: Mapping[str, Any],
+    *,
+    selected: Sequence[str],
+    calendar: Mapping[str, Any],
+) -> dict[str, Any]:
+    mode = str(reservation.get("host_preparation", ""))
+    if mode not in PREPARATION_MODES:
+        raise ReservationError(
+            "deployment.reservation.host_preparation must be fresh or preserve"
+        )
+    if mode == "preserve":
+        return {
+            "mode": "preserve",
+            "nodes": list(selected),
+            "mutations": [],
+            "managed_by": "synthran",
+        }
+    if calendar.get("status") == "disabled":
+        raise ReservationError(
+            "fresh host preparation requires create or require-existing POS calendar authority"
+        )
+
+    image = reservation.get("image", "ubuntu-jammy")
+    if not isinstance(image, str) or not image.strip():
+        raise ReservationError("deployment.reservation.image must be a non-empty string")
+
+    nodes: dict[str, Any] = {}
+    for node in selected:
+        allocation = _allocate_for_fresh(node)
+        boot_profile, boot_parameters = _boot_parameters(node)
+        run(["pos", "nodes", "image", "--staging", node, image])
+        run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
+        run(["pos", "nodes", "reset", "--blocking", "--verbose", node])
+        ready_attempt = _wait_for_ssh(node)
+        nodes[node] = {
+            "allocation": allocation,
+            "image": image,
+            "boot_profile": boot_profile,
+            "reset": "blocking",
+            "ssh_ready_attempt": ready_attempt,
+        }
+    return {
+        "mode": "fresh",
+        "nodes": nodes,
+        "managed_by": "synthran",
+    }
+
+
+def _save_state(calendar: Mapping[str, Any], role_nodes: Mapping[str, str]) -> None:
+    if calendar.get("status") == "disabled":
+        return
+    _write_json(
+        STATE_PATH,
+        {
+            "managed_by": "synthran",
+            "event_id": str(calendar.get("id", "")),
+            "owner": str(calendar.get("owner", "")),
+            "nodes": list(calendar.get("nodes", [])),
+            "roles": dict(role_nodes),
+            "start": str(calendar.get("start", "")),
+            "end": str(calendar.get("end", "")),
+        },
+    )
+
+
+def execute(config_path: Path, run_dir: Path) -> dict[str, Any]:
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("deployment"), dict):
+        raise ReservationError("resolved scenario requires deployment mapping")
+    deployment = raw["deployment"]
+    reservation = _safe_mapping(deployment.get("reservation"), "deployment.reservation")
+    provider = _safe_mapping(deployment.get("provider"), "deployment.provider")
+    r2lab = _safe_mapping(deployment.get("r2lab_reservation"), "deployment.r2lab_reservation")
+    role_nodes, selected = _selected_nodes(deployment)
+
+    evidence_path = run_dir / "reservation-authority.json"
+    evidence: dict[str, Any] = {
+        "schema": "synthran/reservation-authority/v1",
+        "managed_by": "synthran",
+        "status": "preparing",
+        "selected_nodes": role_nodes,
+        "selected_resources": selected,
+        "policies": {
+            "provider": str(provider.get("mode", "disabled")),
+            "pos_calendar": str(reservation.get("mode", "")),
+            "host_preparation": str(reservation.get("host_preparation", "")),
+            "r2lab": str(r2lab.get("mode", "disabled")),
+        },
+        "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    _write_json(evidence_path, evidence)
+
+    try:
+        evidence["provider"] = provider_context(provider)
+        _write_json(evidence_path, evidence)
+
+        now = dt.datetime.now().astimezone()
+        owner = _owner()
+        calendar = acquire_calendar(
+            reservation, selected=selected, owner=owner, now=now
+        )
+        evidence["pos_calendar"] = calendar
+        _save_state(calendar, role_nodes)
+        _write_json(evidence_path, evidence)
+
+        evidence["host_preparation"] = prepare_hosts(
+            reservation, selected=selected, calendar=calendar
+        )
+        evidence["status"] = "ready"
+        evidence["completed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        _write_json(evidence_path, evidence)
+
+        # Compatibility/evidence surface consumed by deploy.sh when constraining
+        # the R2Lab lease interval. It intentionally preserves role identities.
+        pos_selection: dict[str, Any] = {
+            "managed_by": "synthran",
+            "nodes": role_nodes,
+            "selected_resources": selected,
+            "reservation_mode": reservation.get("mode"),
+            "host_preparation": reservation.get("host_preparation"),
+            "provider": evidence.get("provider", {}),
+            "r2lab_mode": r2lab.get("mode", "disabled"),
+        }
+        if calendar.get("status") != "disabled":
+            pos_selection.update(
+                {
+                    "event_id": calendar.get("id"),
+                    "coverage_start": calendar.get("start"),
+                    "coverage_end": calendar.get("end"),
+                }
+            )
+        _write_json(run_dir / "pos-selection.json", pos_selection)
+        return evidence
+    except Exception as exc:
+        evidence["status"] = "failed"
+        evidence["failure"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        evidence["failed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        _write_json(evidence_path, evidence)
+        raise
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Apply SynthRAN's explicit SLICES/POS reservation and host-preparation policy."
+    )
+    parser.add_argument("config", type=Path)
+    parser.add_argument("run_dir", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        execute(args.config, args.run_dir)
+    except (ReservationError, OSError, ValueError, yaml.YAMLError) as exc:
+        raise SystemExit(str(exc)) from exc
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
