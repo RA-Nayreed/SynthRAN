@@ -37,7 +37,11 @@ jobs:
           deployment/scripts/reserve_sop.py
           deployment/scripts/reserve_r2lab.py
           tools/check_reservation_authority.py
+          tools/check_reservation_failure_evidence.py
           tools/check_resource_authority_contract.py
 
       - name: Validate reservation authority without hardware
         run: python tools/check_reservation_authority.py
+
+      - name: Validate failure evidence preservation
+        run: python tools/check_reservation_failure_evidence.py
