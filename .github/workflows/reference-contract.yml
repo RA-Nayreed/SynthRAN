@@ -36,3 +36,8 @@ jobs:
         run: >-
           python3 tools/check_5g_ansible_contract.py
           --reference .reference/5g-ansible
+
+      - name: Verify SynthRAN resource authority overlay
+        run: >-
+          python3 tools/check_resource_authority_contract.py
+          --reference .reference/5g-ansible

@@ -1,0 +1,51 @@
+name: Reservation authority contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reservation-authority:
+    name: Explicit resource ownership
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out SynthRAN
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install SynthRAN
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Compile reservation sources
+        run: >-
+          python -m py_compile
+          synthran/reservation.py
+          synthran/scenario.py
+          deployment/scripts/reserve_sop.py
+          deployment/scripts/reserve_r2lab.py
+          tools/check_reservation_authority.py
+          tools/check_reservation_failure_evidence.py
+          tools/check_reservation_cli_fakes.py
+          tools/check_resource_authority_contract.py
+
+      - name: Validate reservation authority without hardware
+        run: python tools/check_reservation_authority.py
+
+      - name: Validate failure evidence preservation
+        run: python tools/check_reservation_failure_evidence.py
+
+      - name: Validate real CLI wiring through temporary fake commands
+        run: python tools/check_reservation_cli_fakes.py
