@@ -1,0 +1,21 @@
+{
+  "check": "irregular-trace",
+  "criterion": "Hold interpolation changes power at the trace's actual irregular timestamps, not at an assumed fixed sample period.",
+  "observed": {
+    "expected_w": {
+      "0.10": 0.0001,
+      "0.20": 0.0002,
+      "1.29": 0.0002,
+      "1.30": 0.0004,
+      "2.50": 0.0008
+    },
+    "probes_w": {
+      "0.10": 0.0001,
+      "0.20": 0.0002,
+      "1.29": 0.0002,
+      "1.30": 0.0004,
+      "2.50": 0.0008
+    }
+  },
+  "status": "passed"
+}
