@@ -116,6 +116,16 @@ study:
       Before qualification and each confirmation session, bound workload-publisher
       versus broker UTC offset with controller-bracketed remote clock probes. The
       bound is retained with results and supplied to the measurement contract.
+    clock_contract:
+      require_publisher_ntp_synchronized: true
+      require_broker_ntp_synchronized: true
+      require_finite_nonnegative_uncertainty_bound: true
+      policy: >-
+        Cross-host timing execution is blocked when either endpoint does not
+        report NTP synchronization or no finite nonnegative uncertainty bound can
+        be retained. No arbitrary maximum uncertainty is declared in revision 2;
+        the observed bound must be reported with the results and considered when
+        interpreting the magnitude of any timing effect.
   statistics:
     experimental_unit: source_seed
     principal_outcomes:
@@ -134,6 +144,11 @@ study:
       Eligibility is contrast- and outcome-specific. A missing, clock-invalid or
       undefined gap-permutation arm excludes the native-versus-gap contrast only;
       it does not discard an otherwise valid native-versus-periodic contrast.
+    confirmation_load_treatment_validity: >-
+      Every replay is eligible only if its recorded competing-flow sender achieved
+      95-105% of the frozen requested load and reported zero sender errors. An
+      invalid load treatment excludes that arm only from contrasts that require it;
+      it is not reclassified as successful evidence at another load level.
     load_interactions:
       near_minus_below: {comparison: near, reference: below}
       above_minus_below: {comparison: above, reference: below}
