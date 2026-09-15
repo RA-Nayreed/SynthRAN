@@ -41,3 +41,8 @@ jobs:
         run: >-
           python3 tools/check_resource_authority_contract.py
           --reference .reference/5g-ansible
+
+      - name: Verify host and Kubernetes bootstrap ownership
+        run: >-
+          python3 tools/check_host_bootstrap_contract.py
+          --reference .reference/5g-ansible
