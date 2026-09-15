@@ -4,6 +4,10 @@
   args:
     chdir: "{{ repo_dest }}"
 
+- name: Select the expected OAI RAN release
+  ansible.builtin.set_fact:
+    oai_ran_release_name: "{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
+
 - name: Prepare the Helm-owned R2Lab N320 RU attachment
   ansible.builtin.include_tasks: r2lab_n320_chart.yml
   when:
@@ -15,10 +19,74 @@
   args:
     chdir: "{{ repo_dest }}"
   register: gnb_script
-  changed_when: "'When you finish' in gnb_script.stdout"
-  failed_when:
-    - gnb_script.rc != 0
-    - "'timed out waiting for the condition' not in (gnb_script.stderr | default(''))"
+  changed_when: true
+  failed_when: false
+
+- name: Classify the OAI launch result
+  ansible.builtin.set_fact:
+    oai_start_wait_timeout: >-
+      {{
+        gnb_script.rc != 0 and
+        'timed out waiting for the condition' in
+        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
+      }}
+    oai_start_helm_failure: >-
+      {{
+        'INSTALLATION FAILED' in
+        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
+      }}
+
+- name: Inspect the RAN Helm release after an upstream readiness timeout
+  ansible.builtin.command:
+    argv:
+      - helm
+      - status
+      - "{{ oai_ran_release_name }}"
+      - --namespace
+      - "{{ core }}"
+  register: oai_start_helm_status
+  changed_when: false
+  failed_when: false
+  when:
+    - rru in ['n300', 'n320']
+    - oai_start_wait_timeout | bool
+
+- name: Inspect the RAN workload after an upstream readiness timeout
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - deployment
+      - "{{ oai_ran_release_name }}"
+      - --namespace
+      - "{{ core }}"
+      - -o
+      - name
+  register: oai_start_workload
+  changed_when: false
+  failed_when: false
+  when:
+    - rru in ['n300', 'n320']
+    - oai_start_wait_timeout | bool
+
+- name: Require a valid OAI launch result
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        gnb_script.rc == 0 or
+        (
+          rru in ['n300', 'n320'] and
+          (oai_start_wait_timeout | bool) and
+          not (oai_start_helm_failure | bool) and
+          (oai_start_helm_status.rc | default(1)) == 0 and
+          (oai_start_workload.rc | default(1)) == 0
+        )
+    fail_msg: >-
+      OAI start-gnb failed before SynthRAN could perform its RF readiness gate.
+      rc={{ gnb_script.rc }}; expected release={{ oai_ran_release_name }}.
+      A kubectl readiness timeout is tolerated only for N3xx when the Helm release
+      and its Deployment both exist and Helm did not report INSTALLATION FAILED.
 
 - name: Verify N3xx gNB RF-device readiness
   block:
