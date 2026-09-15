@@ -9,3 +9,8 @@ synthran_host_preparation: >-
     ).host_preparation
     | default('fresh')
   }}
+
+# #51 pins this exact reference. synthran.runtime materializes and verifies it
+# before Ansible starts; delegated role wrappers include tasks only from here.
+synthran_reference_root: >-
+  {{ synthran_root }}/.synthran/reference/sopnode-5g-ansible/6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
