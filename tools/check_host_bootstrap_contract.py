@@ -50,14 +50,25 @@ def main() -> None:
     for role in adaptations["delegated_roles"]:
         local = ROOT / "deployment/roles" / role / "tasks/main.yml"
         upstream = args.reference / "roles" / role / "tasks/main.yml"
-        if local.exists():
-            fail(f"delegated role was copied back into SynthRAN: {role}")
+        if not local.is_file():
+            fail(f"delegated role wrapper is missing: {role}")
         if not upstream.is_file():
             fail(f"delegated role missing from pinned reference: {role}")
+        wrapper = local.read_text(encoding="utf-8")
+        require(wrapper, "ansible.builtin.include_tasks", f"delegated wrapper {role}")
+        require(
+            wrapper,
+            f"{{{{ synthran_reference_root }}}}/roles/{role}/tasks/main.yml",
+            f"delegated wrapper {role}",
+        )
+        if len([line for line in wrapper.splitlines() if line.strip()]) > 4:
+            fail(f"delegated role wrapper contains lifecycle logic instead of forwarding: {role}")
 
-    ansible_cfg = (ROOT / "ansible.cfg").read_text(encoding="utf-8")
-    require(ansible_cfg, expected, "ansible.cfg")
-    require(ansible_cfg, ".synthran/reference/sopnode-5g-ansible/", "ansible.cfg")
+    all_vars = (ROOT / "deployment/group_vars/all/all.yml").read_text(encoding="utf-8")
+    require(all_vars, "synthran_host_preparation", "all.yml")
+    require(all_vars, "host_preparation", "all.yml")
+    require(all_vars, "synthran_reference_root", "all.yml")
+    require(all_vars, expected, "all.yml")
 
     site = (ROOT / "deployment/playbooks/site.yml").read_text(encoding="utf-8")
     provision_at = site.index("provision_nodes.yml")
@@ -72,6 +83,8 @@ def main() -> None:
     require(provision, "synthran_configured_storage | length == 0", "provision_nodes.yml")
     require(provision, "Use discovered storage only when inventory did not select one", "provision_nodes.yml")
     require(provision, "refusing to format", "provision_nodes.yml")
+    require(provision, "mounted:%s:%s", "provision_nodes.yml")
+    require(provision, "unmounted:%s", "provision_nodes.yml")
     require(provision, "host_preparation=preserve", "provision_nodes.yml")
     forbid(provision, "Record the selected containerd storage device", "provision_nodes.yml")
 
@@ -124,8 +137,19 @@ def main() -> None:
     reference_containerd = (
         args.reference / "roles/setup/containerd/tasks/main.yml"
     ).read_text(encoding="utf-8")
-    for marker in ("Install containerd", "Switch snapshotter to overlayfs", "Wait for containerd socket"):
+    for marker in (
+        "Install containerd",
+        "Switch snapshotter to overlayfs",
+        "Wait for containerd socket",
+    ):
         require(reference_containerd, marker, "reference containerd role")
+
+    runtime = (ROOT / "synthran/runtime.py").read_text(encoding="utf-8")
+    reference_checkout = (ROOT / "synthran/reference_checkout.py").read_text(encoding="utf-8")
+    require(runtime, "ensure_execution_reference()", "runtime.py")
+    require(reference_checkout, "git", "reference_checkout.py")
+    require(reference_checkout, "rev-parse", "reference_checkout.py")
+    require(reference_checkout, "status", "reference_checkout.py")
 
     print("issue #53 host/bootstrap ownership contract OK")
 
