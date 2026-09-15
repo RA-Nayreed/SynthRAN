@@ -1,6 +1,6 @@
 id: ex2
 display_name: Experiment 2 — Causal 5G transport
-design_version: 1
+design_version: 2
 status: development
 
 purpose: >-
@@ -52,13 +52,25 @@ study:
     packet_bytes: 1200
     probe_duration_seconds: 10
     repeats_per_rate: 3
-    offered_payload_mbps_grid: [5, 10, 15, 20, 25, 30, 40, 50]
+    offered_payload_mbps_grid: [5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250]
     delivery_threshold: 0.98
+    achieved_rate_fraction_min: 0.95
+    achieved_rate_fraction_max: 1.05
+    sender_errors_allowed: 0
     selection_rule: >-
-      Using median end-to-end delivery ratio over repeats at each ascending grid
-      rate, ABOVE is the first rate below 0.98, NEAR is the immediately preceding
-      rate, and BELOW is the rate immediately preceding NEAR. Stop before
-      confirmation if all three levels cannot be selected.
+      Every repeat must satisfy the prespecified sender validity contract: the
+      measured application-payload rate is 95-105% of the requested rate and the
+      sender reports no transmission errors. Using only rates whose complete
+      repeat set is valid, ABOVE is the first ascending rate whose median
+      end-to-end UDP delivery ratio is below 0.98, NEAR is the immediately
+      preceding rate, and BELOW is the rate immediately preceding NEAR. Stop the
+      ascending sweep after the first valid crossing. If the generator is invalid,
+      no crossing is observed, or two valid predecessors are unavailable, retain
+      all completed calibration evidence and block confirmation.
+    interpretation: >-
+      BELOW, NEAR and ABOVE are operational labels around a measured end-to-end
+      UDP loss boundary. They do not identify the first onset of queueing, prove
+      radio-link saturation, or locate the bottleneck without additional telemetry.
     base_port: 39001
   confirmation:
     source_seed_count: 30
