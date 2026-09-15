@@ -48,6 +48,8 @@ jobs:
               Path("deployment/playbooks/bootstrap_nodes.yml"),
               Path("deployment/playbooks/network.yml"),
               Path("deployment/playbooks/site.yml"),
+              Path("deployment/roles/setup/pre_k8s/tasks/main.yml"),
+              Path("deployment/roles/setup/k8s/cluster_create/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/cni_dhcp/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/cluster_join/tasks/main.yml"),
               Path("deployment/roles/setup/containerd/tasks/main.yml"),
@@ -104,6 +106,7 @@ jobs:
           synthran_root: $GITHUB_WORKSPACE
           scenario_file: $fixture/scenario.yml
           synthran_private_dir: $private
+          run_dir: $fixture/result
           core: open5gs
           ran: srsRAN
           platform: rfsim
@@ -114,7 +117,54 @@ jobs:
           bridge_enabled: true
           cpu_low_latency: false
           YAML
+          mkdir -p "$fixture/result"
           echo "SYNTHRAN_BOOTSTRAP_FIXTURE=$fixture" >>"$GITHUB_ENV"
+
+      - name: Exercise mounted and unmounted storage validation
+        env:
+          ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
+          ANSIBLE_FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/synthran-storage.img"
+          mount_dir="$RUNNER_TEMP/synthran-storage-mounted"
+          truncate -s 96M "$image"
+          loop_dev="$(sudo losetup --find --show "$image")"
+          mkdir -p "$mount_dir"
+          cleanup() {
+            mountpoint -q "$mount_dir" && sudo umount "$mount_dir" || true
+            sudo losetup -d "$loop_dev" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sudo mkfs.ext4 -q -F "$loop_dev"
+          storage="$(basename "$loop_dev")"
+          cat >"$RUNNER_TEMP/storage-inventory.yml" <<YAML
+          all:
+            children:
+              sopnodes:
+                hosts:
+                  storage-ci:
+                    ansible_connection: local
+                    ansible_python_interpreter: ${{ env.pythonLocation }}/bin/python
+                    storage: $storage
+          YAML
+
+          ansible-playbook \
+            -i "$RUNNER_TEMP/storage-inventory.yml" \
+            -e synthran_host_preparation=fresh \
+            deployment/playbooks/provision_nodes.yml \
+            | tee "$RUNNER_TEMP/storage-unmounted.log"
+          grep -F "source=inventory" "$RUNNER_TEMP/storage-unmounted.log"
+          grep -F "state=unmounted:ext4" "$RUNNER_TEMP/storage-unmounted.log"
+
+          sudo mount "$loop_dev" "$mount_dir"
+          ansible-playbook \
+            -i "$RUNNER_TEMP/storage-inventory.yml" \
+            -e synthran_host_preparation=fresh \
+            deployment/playbooks/provision_nodes.yml \
+            | tee "$RUNNER_TEMP/storage-mounted.log"
+          grep -F "source=inventory" "$RUNNER_TEMP/storage-mounted.log"
+          grep -F "state=mounted:ext4:" "$RUNNER_TEMP/storage-mounted.log"
 
       - name: Syntax-check node validation and bootstrap
         env:
@@ -130,7 +180,7 @@ jobs:
               --syntax-check
           done
 
-      - name: Inspect fresh and preserve bootstrap task plans
+      - name: Inspect bootstrap task plan
         env:
           ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
           ANSIBLE_ROLES_PATH: ${{ github.workspace }}/deployment/roles
@@ -144,6 +194,7 @@ jobs:
           grep -F "setup/k8s/cluster_create" deployment/playbooks/bootstrap_nodes.yml
           grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "Verify preserved CNI DHCP binary exists" "$RUNNER_TEMP/bootstrap-tasks.txt"
+          grep -F "Write shareable bootstrap evidence" "$RUNNER_TEMP/bootstrap-tasks.txt"
 
       - name: Verify issue 53 ownership contract
         run: >-
