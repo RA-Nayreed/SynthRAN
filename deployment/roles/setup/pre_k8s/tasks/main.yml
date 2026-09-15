@@ -64,12 +64,15 @@
 - name: Read the selected storage filesystem type
   ansible.builtin.command:
     argv:
-      - lsblk
-      - -nrpo
-      - FSTYPE
+      - blkid
+      - -s
+      - TYPE
+      - -o
+      - value
       - "/dev/{{ storage }}"
   register: storage_fstype
   changed_when: false
+  failed_when: false
   become: true
 
 - name: Require a supported selected storage filesystem
