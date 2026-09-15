@@ -24,3 +24,20 @@ keywords:
   - R2Lab
   - research software
   - reproducibility
+references:
+  - type: conference-paper
+    title: Toward Real-Time RAN Observability in Open-Source 5G Systems
+    authors:
+      - family-names: Amami
+        given-names: Yassir
+      - family-names: Mabrouk
+        given-names: Ziyad
+      - family-names: Barakat
+        given-names: Chadi
+      - family-names: Turletti
+        given-names: Thierry
+    collection-title: 29th Conference on Innovation in Clouds, Internet and Networks (ICIN 2026)
+    year: 2026
+    month: 3
+    doi: 10.1109/ICIN69025.2026.11481836
+    url: https://inria.hal.science/hal-05448027v1
