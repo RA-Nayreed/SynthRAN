@@ -61,9 +61,13 @@ results/experiments/ex2-source/<experiment-1-campaign-id>/
 
 Copy that directory directly to the same repository-relative path on Duckburg with `rsync`. No tarball is required for working transfer, and Duckburg does not need the complete 210-run Experiment-1 campaign.
 
-## Testbed and reservation behavior
+## Testbed, telemetry and reservation behavior
 
 For physical/testbed phases, Experiment 2 consumes the testbed already accepted by `deploy.sh`. It records the actual deployment hash, core, RAN, radio, nodes, UE bindings and slices as provenance rather than prescribing them in advance.
+
+Calibration and confirmation also retain **read-only transport snapshots** from the accepted hosts. The snapshots include UE/interface counters, selected kernel IP/TCP/UDP counters, queue disciplines when exposed, relevant gNB/core process presence, Kubernetes pod identity/readiness/restart counts where exposed, host uptime/load/clock state, and the proved workload/competitor routes to the N6 endpoint. Confirmation records these around each session and reservation pause/resume boundary. The experiment does not restart, repair, power-cycle, or reconfigure those components to obtain telemetry.
+
+This evidence can show infrastructure stability and support bottleneck diagnosis, but it is not automatically proof that an observed effect came from radio scheduling. A radio-specific claim still requires the corresponding scheduler/resource evidence to be available and aligned with the replay interval.
 
 If reservation coverage is missing or expired, Experiment 2 stops; it never books or repairs infrastructure. If the same deployment and scientific design later have extended reservation coverage, rerunning `experiment.sh` resumes the incomplete campaign from retained run records. A different deployment or scientific design starts a separate campaign during qualification/full execution.
 
