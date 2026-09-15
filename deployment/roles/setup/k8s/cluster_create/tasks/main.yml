@@ -217,25 +217,6 @@
     daemon_reload: yes
   become: true
 
-# === KUBE-PROXY ===============================================================
-- name: Wait until at least one kube-proxy pod exists
-  ansible.builtin.shell: |
-    until kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system get pod -l k8s-app=kube-proxy --no-headers 2>/dev/null | grep .; do
-      echo "Waiting for kube-proxy pod to appear..."
-      sleep 5
-    done
-  become: true
-
-- name: Restart kube-proxy pods to reload config.conf (if any exist)
-  ansible.builtin.shell: |
-    kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system delete pod -l k8s-app=kube-proxy --ignore-not-found
-  become: true
-
-- name: Wait until kube-proxy pods are Running
-  ansible.builtin.shell: |
-    kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system wait pod -l k8s-app=kube-proxy --for=condition=Ready --timeout=180s || true
-  become: true
-
 - name: Check for deprecated kubelet flags in /etc/default/kubelet
   ansible.builtin.shell: |
     if [ -f /etc/default/kubelet ]; then
@@ -369,7 +350,7 @@
       }
   become: true
 
-- name: Extract the checksum-verified CNI plugin bundle staged by network.yml
+- name: Extract the checksum-verified CNI plugin bundle staged by bootstrap_nodes.yml
   ansible.builtin.unarchive:
     src: /tmp/cni-plugins.tgz
     dest: /opt/cni/bin
@@ -450,12 +431,14 @@
   register: join_cmd
   delegate_to: "{{ groups['core_node'][0] }}"
   run_once: true
+  no_log: true
 
-- name: Save join command locally
+- name: Save join command in private run directory
   ansible.builtin.copy:
     content: "{{ join_cmd.stdout }}"
-    dest: .kubeadm_join_command.txt
-    mode: '0644'
+    dest: "{{ synthran_private_dir }}/kubeadm_join_command.txt"
+    mode: '0600'
   delegate_to: localhost
   become: false
   run_once: true
+  no_log: true
