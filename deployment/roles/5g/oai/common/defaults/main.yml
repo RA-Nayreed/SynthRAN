@@ -20,7 +20,9 @@ charts_base: "{{ dir_oai }}/charts"
 
 # R2Lab N320 transport values validated on sopnode-f3. Keep these in one place
 # so the staged upstream configuration is corrected before Helm creates the gNB.
+oai_r2lab_n320_ru_parent: "r2lab_usrp"
 oai_r2lab_n320_ru_ip: "192.168.235.120"
+oai_r2lab_n320_ru_prefix: "24"
 oai_r2lab_n320_ru_mtu: "9216"
 oai_r2lab_n320_sdr_ip: "192.168.235.105"
 oai_r2lab_n320_ru_cni_type: "ipvlan"
