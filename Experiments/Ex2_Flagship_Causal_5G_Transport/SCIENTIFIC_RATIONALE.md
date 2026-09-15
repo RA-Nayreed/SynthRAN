@@ -23,6 +23,8 @@ Those numbers motivate a timing-sensitive transport study: broadly similar activ
 
 **The hypotheses and their falsification.** For outcome Y, source seed i, and load level l, define:
 
+The newly committed [campaign 20260913T185453409916Z evidence](../Ex1_Energy_Correlation_and_Burst_Formation/evidence/20260913T185453409916Z/analysis/summary.json) is a separate, more recent source of model results. Its population calibration selected 64 sensors, whereas the historical results above used 32. In this newer campaign, knee-independent versus knee-common means are respectively: active fraction 45.15% versus 44.67%; decoded events/s 23.178 versus 18.935; Fano factor 0.539 versus 22.075; gap CV 0.886 versus 8.947; and collision exposure 13.97% versus 27.45%. These figures are read from the committed summary, not independently regenerated from raw bundles. They reinforce the motivation to control event count and isolate timing, but the actual Ex2 source is determined by its prepared-cohort identity; neither table establishes an Ex2 transport effect.
+
 ```text
 NP(i,l) = Y(native,i,l) - Y(periodic,i,l)
 NR(i,l) = Y(native,i,l) - mean[Y(gap_r1,i,l), Y(gap_r2,i,l)]
@@ -94,6 +96,8 @@ UDP itself has no congestion control, making a paced application useful for pres
 Revision 2 retains every probe before stopping, including invalid repeats and failed or unbracketed sweeps, fixing the previous loss of the complete calibration result when selection raised an error. It stops the ascending sweep after the first crossing has three valid repeats; higher points are unnecessary for the declared selector. If valid predecessors cannot be selected, confirmation remains blocked. This is a prospective revision after a calibration pilot, so it requires a new campaign rather than silently replacing the stopped campaign's rules.
 
 The full study contract is frozen with the source cohort, deployment, loads, sessions, measurements, and statistical settings. Analysis uses the frozen design, with contrast-specific exclusions and paired load interactions added in this revision. An invalid permutation arm must not discard a valid native-periodic comparison. For each estimable outcome and contrast, report included seeds and exclusion reasons; infrastructure invalidity is different from genuine overloaded delivery failure.
+
+The execution follow-up also checks that the background sender actually spans the publisher horizon and drain after converting its timestamps through conservative competitor/publisher clock brackets. Preparation precedes the finite background flow; readiness is explicitly acknowledged. Failed attempts are retained before replacement, and missing or failed required sentinels stop resume because a later probe cannot reconstruct historical drift evidence. The existing NTP synchronization gate and read-only transport snapshots remain in force. None of these checks proves continuous service stationarity or uniform microsecond pacing.
 
 Paired bootstrap intervals use source seeds, averaging permutation outcomes within source/load before resampling. Interactions use the same eligible seeds across both loads. Thirty seeds is the available cohort size, not a demonstrated power calculation. A prospective precision or power study needs a justified practical effect and plausible between-seed variability; these remain unresolved. The declared intervals are pointwise 95% intervals without multiplicity adjustment; they cannot be advertised as a familywise-confirmed result across all outcomes, loads, and contrasts.
 

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .common import _read_json, _write_json
+from .source import ARMS
+from synthran.workload.bundle import canonical
 
 
 CONTRASTS: dict[str, tuple[tuple[str, ...], Callable[[dict[str, float]], float]]] = {
@@ -27,6 +29,8 @@ CONTRASTS: dict[str, tuple[tuple[str, ...], Callable[[dict[str, float]], float]]
 
 
 def _bootstrap(values: list[float], *, resamples: int, seed: int) -> dict[str, Any]:
+    if resamples < 1:
+        raise ValueError("bootstrap_resamples must be positive")
     if not values:
         return {"n": 0, "mean": None, "ci95": [None, None]}
     observed = statistics.fmean(values)
@@ -79,6 +83,15 @@ def _background_treatment_validity(
     minimum = float(config["achieved_rate_fraction_min"])
     maximum = float(config["achieved_rate_fraction_max"])
     allowed_errors = int(config.get("sender_errors_allowed", 0))
+    if not math.isfinite(requested) or requested <= 0:
+        reasons.append("invalid requested background rate")
+    expected = config.get("expected_load_levels_mbps", {}).get(row.get("load_level"))
+    if expected is not None and requested != float(expected):
+        reasons.append("recorded background rate differs from frozen treatment level")
+    if not math.isfinite(sender_requested):
+        reasons.append("background sender requested rate is not finite")
+    if background.get("coverage", {}).get("valid") is not True:
+        reasons.append("background exposure coverage unavailable or invalid")
     if math.isfinite(sender_requested) and not math.isclose(
         sender_requested, requested, rel_tol=1e-9, abs_tol=1e-9
     ):
@@ -91,7 +104,7 @@ def _background_treatment_validity(
             )
     elif "background sender achieved rate unavailable" not in reasons:
         reasons.append("background sender achieved rate is not finite")
-    if errors >= 0 and errors > allowed_errors:
+    if errors < 0 or errors > allowed_errors:
         reasons.append("background sender reported transmission errors")
     return not reasons, reasons
 
@@ -107,6 +120,8 @@ def _finite_measurement(
     if not treatment_valid:
         return None, "background treatment invalid: " + "; ".join(treatment_reasons)
     measurement = row.get("measurement") or {}
+    if not isinstance(measurement, dict):
+        return None, "measurement evidence is not an object"
     if measurement.get("clock_contract_satisfied") is not True:
         return None, "clock contract not satisfied"
     raw = measurement.get(outcome)
@@ -114,7 +129,7 @@ def _finite_measurement(
         value = float(raw)
     except (TypeError, ValueError):
         return None, f"undefined {outcome}"
-    if not math.isfinite(value):
+    if isinstance(raw, bool) or not math.isfinite(value):
         return None, f"undefined {outcome}"
     return value, None
 
@@ -202,6 +217,7 @@ def _contrast_result(
     estimate.update(
         {
             "included_source_seeds": [seed for seed in seeds if seed in values_by_seed],
+            "paired_differences": [{"seed": seed, "difference": values_by_seed[seed]} for seed in seeds if seed in values_by_seed],
             "excluded": excluded,
             "required_arms": list(required_arms),
             "estimand": "paired mean difference across source seeds",
@@ -269,6 +285,7 @@ def _interaction_result(
     estimate.update(
         {
             "included_source_seeds": [seed for seed in seeds if seed in differences],
+            "paired_differences": [{"seed": seed, "difference": differences[seed]} for seed in seeds if seed in differences],
             "excluded": excluded,
             "required_arms": list(required_arms),
             "reference_load": reference_load,
@@ -287,36 +304,53 @@ def _interaction_result(
 
 
 def analysis(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any] | None = None) -> dict[str, Any]:
-    del environment
+    # A cached summary must not bypass changed or incomplete source evidence.
+    del manifest, environment
     destination = root / "analysis/summary.json"
-    if destination.is_file():
-        return _read_json(destination)
-
     frozen = _read_json(root / "frozen-design.json")
-    expected = int(frozen["expected_replays"])
-    records = [
-        _read_json(path)
-        for path in sorted((root / "runs").glob("*/run-record.json"))
-    ]
-    if len(records) != expected:
-        raise RuntimeError(
-            f"Experiment-2 analysis requires {expected} completed replays; found {len(records)}"
-        )
-
-    by_key = {
-        (int(row["seed"]), str(row["load_level"]), str(row["timing_arm"])): row
-        for row in records
-    }
-    if len(by_key) != expected:
-        raise RuntimeError("Experiment-2 confirmation contains duplicate treatment cells")
-
-    study = manifest["study"]
+    digest = frozen.get("design_sha256")
+    payload = {key: value for key, value in frozen.items() if key != "design_sha256"}
+    if digest != hashlib.sha256(canonical(payload)).hexdigest():
+        raise RuntimeError("Experiment-2 frozen design failed its integrity check")
+    if frozen.get("experiment") != "ex2" or frozen.get("campaign_id") != root.name:
+        raise RuntimeError("Experiment-2 frozen design belongs to another campaign")
+    study = frozen.get("study")
+    if not isinstance(study, dict):
+        raise RuntimeError("Experiment-2 frozen design has no frozen study; start a new campaign")
     statistics_plan = study["statistics"]
-    background_config = study["transport_calibration"]
     outcomes = list(statistics_plan["principal_outcomes"])
-    loads = ["below", "near", "above"]
+    loads = list(study["confirmation"]["load_levels"])
     arms = list(frozen["timing_arms"])
-    seeds = [int(value) for value in frozen["source_seeds"]]
+    seeds = frozen["source_seeds"]
+    if set(arms) != set(ARMS) or len(arms) != len(ARMS):
+        raise RuntimeError("Experiment-2 frozen timing arms differ from the supported matched design")
+    if (loads != ["below", "near", "above"] or not isinstance(seeds, list) or not seeds
+            or any(type(seed) is not int for seed in seeds) or len(seeds) != len(set(seeds))):
+        raise RuntimeError("Experiment-2 frozen load levels or source seeds are invalid")
+    expected_keys = {(seed, load, arm) for seed in seeds for load in loads for arm in arms}
+    if int(frozen["expected_replays"]) != len(expected_keys):
+        raise RuntimeError("Experiment-2 expected replay count differs from its frozen treatment matrix")
+    by_key = {}
+    for path in sorted((root / "runs").glob("*/run-record.json")):
+        row = _read_json(path)
+        if row.get("status") != "complete":
+            raise RuntimeError(f"Experiment-2 analysis found an incomplete replay: {path.parent.name}")
+        if (type(row.get("seed")) is not int or not isinstance(row.get("load_level"), str)
+                or not isinstance(row.get("timing_arm"), str)):
+            raise RuntimeError(f"Experiment-2 replay has invalid treatment identity: {path.parent.name}")
+        key = (row["seed"], row["load_level"], row["timing_arm"])
+        if key in by_key:
+            raise RuntimeError("Experiment-2 confirmation contains duplicate treatment cells")
+        by_key[key] = row
+    if set(by_key) != expected_keys:
+        missing = sorted(expected_keys - set(by_key))
+        unexpected = sorted(set(by_key) - expected_keys)
+        raise RuntimeError(
+            f"Experiment-2 confirmation does not match its frozen treatment matrix; "
+            f"missing={missing}; unexpected={unexpected}"
+        )
+    records = list(by_key.values())
+    background_config = {**study["transport_calibration"], "expected_load_levels_mbps": frozen["load_levels_mbps"]}
     resamples = int(statistics_plan["bootstrap_resamples"])
     master_seed = int(statistics_plan["bootstrap_seed"])
     contrast_names = list(statistics_plan.get("principal_contrast_ids", CONTRASTS))
@@ -347,6 +381,7 @@ def analysis(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any
         "experiment": "ex2",
         "campaign_id": root.name,
         "deployment_hash": frozen["deployment_hash"],
+        "frozen_design_sha256": digest,
         "experimental_unit": "source_seed",
         "runs_analyzed": len(records),
         "source_seeds": seeds,
@@ -370,6 +405,7 @@ def analysis(root: Path, *, manifest: dict[str, Any], environment: dict[str, Any
         },
         "notes": [
             "Each source seed is one independent experimental unit within each load level.",
+            "Clock uncertainty is not incorporated into bootstrap intervals; session-level dependence is not modeled.",
             "The two gap permutations are repeated matched controls and do not increase n.",
             "Eligibility is contrast-specific: an invalid gap arm does not discard an otherwise valid native-periodic contrast.",
             "A replay whose competing-load sender violates the frozen achieved-rate/error contract is invalid for contrasts requiring that arm.",

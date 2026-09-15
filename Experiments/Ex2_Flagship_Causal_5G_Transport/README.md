@@ -73,6 +73,12 @@ If reservation coverage is missing or expired, Experiment 2 stops; it never book
 
 ## Results
 
+The frozen design retains the full study settings and calibration digest. Analysis validates the exact treatment matrix and uses that frozen study, including contrast-specific background validity, rather than current checkout settings. Clock probes are refreshed for each replay and retained as immutable evidence; the established NTP gate and read-only telemetry policy remain active.
+
+Receiver readiness and successful sender startup are explicit. A replay is accepted only when the competing flow meets its achieved-rate/accounting rules and covers the publisher horizon and drain under the recorded clock bounds. Failed attempts are preserved under `failed-attempts/` before rerunning, so old victim summaries cannot be paired with new background traffic. Missing, interrupted, or failed required drift checkpoints stop resume for diagnosis.
+
+After a calibration setup/probe execution failure or interrupted acquisition, choose qualification/full execution to create a fresh campaign while preserving the failed one. A valid sweep with no crossing, insufficient predecessor levels, or invalid generator/accounting evidence still needs diagnosis and an explicit scientific-design revision; the experiment does not silently retry until a crossing appears. Earlier frozen campaigns without the complete study/calibration provenance must be retained and replaced by a newly qualified campaign.
+
 Campaigns are stored under:
 
 ```text

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import socket
 import struct
 import time
@@ -26,14 +27,17 @@ def main() -> None:
     parser.add_argument("--duration-seconds", type=float, default=10.0)
     parser.add_argument("--packet-bytes", type=int, default=1200)
     parser.add_argument("--sndbuf-bytes", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--report-ready", action="store_true")
     args = parser.parse_args()
 
-    if args.rate_mbps <= 0:
+    if not math.isfinite(args.rate_mbps) or args.rate_mbps <= 0:
         raise SystemExit("--rate-mbps must be > 0")
-    if args.duration_seconds <= 0:
+    if not math.isfinite(args.duration_seconds) or args.duration_seconds <= 0:
         raise SystemExit("--duration-seconds must be > 0")
-    if args.packet_bytes < HEADER.size:
-        raise SystemExit(f"--packet-bytes must be >= {HEADER.size}")
+    if not HEADER.size <= args.packet_bytes <= 65507:
+        raise SystemExit(f"--packet-bytes must be between {HEADER.size} and 65507")
+    if args.sndbuf_bytes <= 0:
+        raise SystemExit("--sndbuf-bytes must be > 0")
 
     destination = socket.gethostbyname(args.destination)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -51,6 +55,12 @@ def main() -> None:
     seq = 0
     bytes_sent = 0
     send_errors = 0
+    packets_sent = 0
+    first_send_epoch_ns = None
+    last_send_epoch_ns = None
+    maximum_pacing_lag_ns = 0
+    maximum_send_gap_ns = 0
+    last_send_monotonic_ns = None
 
     while True:
         now_ns = time.monotonic_ns()
@@ -63,9 +73,20 @@ def main() -> None:
             continue
 
         HEADER.pack_into(payload, 0, seq, now_ns)
+        maximum_pacing_lag_ns = max(maximum_pacing_lag_ns, now_ns - next_send_ns)
+        before_send_epoch_ns = time.time_ns()
         try:
             sent = sock.sendto(payload, (destination, args.port))
             bytes_sent += sent
+            packets_sent += 1
+            last_send_epoch_ns = before_send_epoch_ns
+            if first_send_epoch_ns is None:
+                first_send_epoch_ns = time.time_ns()
+                if args.report_ready:
+                    print(json.dumps({"event": "sender_started", "port": args.port}), flush=True)
+            if last_send_monotonic_ns is not None:
+                maximum_send_gap_ns = max(maximum_send_gap_ns, now_ns - last_send_monotonic_ns)
+            last_send_monotonic_ns = now_ns
         except OSError:
             send_errors += 1
         seq += 1
@@ -80,11 +101,18 @@ def main() -> None:
         "requested_payload_mbps": args.rate_mbps,
         "packet_bytes": args.packet_bytes,
         "packets_attempted": seq,
+        "packets_sent": packets_sent,
         "send_errors": send_errors,
         "payload_bytes_sent": bytes_sent,
         "duration_seconds": actual_duration_s,
         "actual_payload_mbps": bytes_sent * 8 / actual_duration_s / 1e6,
+        "first_send_epoch_ns": first_send_epoch_ns,
+        "last_send_epoch_ns": last_send_epoch_ns,
+        "maximum_pacing_lag_seconds": maximum_pacing_lag_ns / 1e9,
+        "maximum_send_gap_seconds": maximum_send_gap_ns / 1e9,
+        "socket_send_buffer_bytes": sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF),
     }
+    sock.close()
     print(json.dumps(result, sort_keys=True))
 
 
