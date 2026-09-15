@@ -106,6 +106,100 @@ def _base_spec(*, physical: bool) -> dict[str, Any]:
     }
 
 
+def _matrix_specs() -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    cases: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+
+    colocated_oai = _base_spec(physical=False)
+    colocated_oai["id"] = "matrix-colocated-oai-rfsim"
+    colocated_oai["core"] = {"type": "oai", "node": "sopnode-f2"}
+    colocated_oai["ran"] = {"type": "oai", "node": "sopnode-f2"}
+    colocated_oai["profile"] = "scenario1"
+    colocated_oai["deployment"]["selected_ues"] = ["uesim01"]
+    cases["colocated-oai-rfsim"] = (
+        colocated_oai,
+        {
+            "core": "oai",
+            "ran": "oai",
+            "profile": "scenario1",
+            "platform": "rfsim",
+            "bridge_enabled": False,
+            "qhats": [],
+            "qfits": [],
+        },
+    )
+
+    split_srsran_qhat = _base_spec(physical=True)
+    split_srsran_qhat["id"] = "matrix-split-srsran-qhat"
+    split_srsran_qhat["ues"]["qfits"] = []
+    cases["split-srsran-r2lab-qhat"] = (
+        split_srsran_qhat,
+        {
+            "core": "open5gs",
+            "ran": "srsRAN",
+            "profile": "default",
+            "platform": "r2lab",
+            "bridge_enabled": True,
+            "qhats": ["qhat01"],
+            "qfits": [],
+        },
+    )
+
+    split_srsran_qfit = _base_spec(physical=True)
+    split_srsran_qfit["id"] = "matrix-split-srsran-qfit"
+    split_srsran_qfit["ues"]["qhats"] = []
+    split_srsran_qfit["profile"] = "scenario1"
+    cases["split-srsran-r2lab-qfit"] = (
+        split_srsran_qfit,
+        {
+            "core": "open5gs",
+            "ran": "srsRAN",
+            "profile": "scenario1",
+            "platform": "r2lab",
+            "bridge_enabled": True,
+            "qhats": [],
+            "qfits": ["qfit07"],
+        },
+    )
+
+    split_oai = _base_spec(physical=True)
+    split_oai["id"] = "matrix-split-oai-r2lab"
+    split_oai["core"] = {"type": "oai", "node": "sopnode-f2"}
+    split_oai["ran"] = {"type": "oai", "node": "sopnode-f3"}
+    split_oai["ues"]["qfits"] = []
+    cases["split-oai-r2lab-qhat"] = (
+        split_oai,
+        {
+            "core": "oai",
+            "ran": "oai",
+            "profile": "default",
+            "platform": "r2lab",
+            "bridge_enabled": True,
+            "qhats": ["qhat01"],
+            "qfits": [],
+        },
+    )
+
+    split_ueransim = _base_spec(physical=False)
+    split_ueransim["id"] = "matrix-split-ueransim-rfsim"
+    split_ueransim["core"] = {"type": "free5gc", "node": "sopnode-f2"}
+    split_ueransim["ran"] = {"type": "ueransim", "node": "sopnode-f3"}
+    split_ueransim["deployment"]["selected_ues"] = ["uesim01"]
+    cases["split-ueransim-rfsim"] = (
+        split_ueransim,
+        {
+            "core": "free5gc",
+            "ran": "ueransim",
+            "profile": "default",
+            "platform": "rfsim",
+            "bridge_enabled": True,
+            "qhats": [],
+            "qfits": [],
+        },
+    )
+
+    return cases
+
+
 def _expect_error(module, raw: dict[str, Any], needle: str) -> None:
     try:
         module.normalize(raw)
@@ -114,6 +208,71 @@ def _expect_error(module, raw: dict[str, Any], needle: str) -> None:
             raise ContractError(f"unexpected normalize error: {exc}") from exc
     else:
         raise ContractError(f"expected normalize failure containing {needle!r}")
+
+
+def _verify_matrix(machine, entrypoint: Path, reference: Path) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory(prefix="synthran-fiveg-matrix-") as tmp:
+        temporary = Path(tmp)
+        state_root = temporary / "state"
+        for name, (raw, expected) in _matrix_specs().items():
+            normalized = machine.normalize(raw)
+            inventory = machine.inventory(normalized)
+
+            if normalized["core"]["type"] != expected["core"]:
+                raise ContractError(f"{name}: normalized core changed")
+            if normalized["ran"]["type"] != expected["ran"]:
+                raise ContractError(f"{name}: normalized RAN changed")
+            if normalized["profile"] != expected["profile"]:
+                raise ContractError(f"{name}: normalized profile changed")
+            if normalized["platform"]["type"] != expected["platform"]:
+                raise ContractError(f"{name}: normalized platform changed")
+
+            bridge = "true" if expected["bridge_enabled"] else "false"
+            if f"bridge_enabled={bridge}" not in inventory:
+                raise ContractError(f"{name}: bridge topology rendering changed")
+            for ue in expected["qhats"] + expected["qfits"]:
+                if ue not in inventory:
+                    raise ContractError(f"{name}: expected UE {ue} missing from inventory")
+
+            spec_path = temporary / f"{name}.json"
+            spec_path.write_text(json.dumps(raw), encoding="utf-8")
+            plan = _run_json(
+                [
+                    str(entrypoint),
+                    "plan",
+                    "--spec",
+                    str(spec_path),
+                    "--state-root",
+                    str(state_root),
+                    "--json",
+                ],
+                cwd=reference,
+            )
+            if plan.get("spec") != normalized:
+                raise ContractError(f"{name}: CLI plan normalization differs from imported contract")
+
+            commands = [" ".join(map(str, item)) for item in plan.get("commands", [])]
+            joined = "\n".join(commands)
+            if "playbooks/deploy.yml" not in joined:
+                raise ContractError(f"{name}: deploy.yml disappeared from plan")
+            has_r2lab = "playbooks/deploy_r2lab.yml" in joined
+            if has_r2lab != (expected["platform"] == "r2lab"):
+                raise ContractError(f"{name}: R2Lab plan selection changed")
+            if "test-ue-connect.yml" in joined:
+                raise ContractError(f"{name}: UE attachment moved into reference plan")
+
+            results[name] = {
+                "core": normalized["core"],
+                "ran": normalized["ran"],
+                "platform": normalized["platform"],
+                "profile": normalized["profile"],
+                "bridge_enabled": expected["bridge_enabled"],
+                "qhats": normalized["ues"]["qhats"],
+                "qfits": normalized["ues"]["qfits"],
+                "plan": "passed",
+            }
+    return results
 
 
 def _verify_behavior(reference: Path, contract: dict[str, Any]) -> dict[str, Any]:
@@ -142,6 +301,8 @@ def _verify_behavior(reference: Path, contract: dict[str, Any]) -> dict[str, Any
     _expect_error(machine, qhat23, "unsupported values: qhat23")
 
     entrypoint = reference / str(contract["entrypoint"])
+    matrix = _verify_matrix(machine, entrypoint, reference)
+
     with tempfile.TemporaryDirectory(prefix="synthran-fiveg-contract-") as tmp:
         temporary = Path(tmp)
         spec_path = temporary / "physical.json"
@@ -194,6 +355,7 @@ def _verify_behavior(reference: Path, contract: dict[str, Any]) -> dict[str, Any
 
     return {
         "inventory_probe": "passed",
+        "matrix": matrix,
         "host_vars_unmapped": True,
         "unknown_profile_rejected": True,
         "qhat23_rejected": True,
