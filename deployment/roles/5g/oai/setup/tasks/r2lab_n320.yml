@@ -52,34 +52,7 @@
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-f1only.yaml"
     - "{{ repo_dest }}/demo_charts/values/nf-ifs/oai-du-cucpup.yaml"
 
-- name: Teach the staged OAI NAD templates to render ipvlan interfaces
-  ansible.builtin.shell: |
-    set -euo pipefail
-    python3 - "{{ item }}" <<'PY'
-    from pathlib import Path
-    import sys
-
-    path = Path(sys.argv[1])
-    text = path.read_text()
-    braces_open = chr(123) * 2
-    braces_close = chr(125) * 2
-    old_guard = braces_open + '- if eq .type "macvlan" ' + braces_close
-    new_guard = braces_open + '- if or (eq .type "macvlan") (eq .type "ipvlan") ' + braces_close
-    old_type = '"type": "macvlan",'
-    new_type = '"type": "' + braces_open + ' .type ' + braces_close + '",'
-    if old_guard not in text:
-        raise SystemExit(f"macvlan guard not found in {path}")
-    if old_type not in text:
-        raise SystemExit(f"macvlan plugin type not found in {path}")
-    path.write_text(text.replace(old_guard, new_guard, 1).replace(old_type, new_type, 1))
-    PY
-  args:
-    executable: /bin/bash
-  loop:
-    - "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml"
-    - "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml"
-
-- name: Verify the staged R2Lab N320 transport contract
+- name: Verify the staged R2Lab N320 source values
   ansible.builtin.shell: |
     set -euo pipefail
     python3 - \
@@ -101,12 +74,11 @@
     value_paths = [Path(p) for p in sys.argv[7:]]
 
     env = env_path.read_text()
-    required_env = (
+    for expected in (
         f'IP_GNB_RU="{ru_ip}"',
         f'MTU_GNB_RU="{ru_mtu}"',
         f'mgmt_addr={sdr_ip},addr={sdr_ip}',
-    )
-    for expected in required_env:
+    ):
         if expected not in env:
             raise SystemExit(f"missing {expected!r} in {env_path}")
 
@@ -121,9 +93,6 @@
         if f'  mode: "{cni_mode}"' not in ru:
             raise SystemExit(f"RU CNI mode is not {cni_mode} in {path}")
     PY
-
-    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-gnb/nad.yaml" >/dev/null
-    grep -F 'eq .type "ipvlan"' "{{ repo_dest }}/demo_charts/templates/oai-du/nad.yaml" >/dev/null
   args:
     executable: /bin/bash
   changed_when: false
