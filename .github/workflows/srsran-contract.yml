@@ -130,27 +130,44 @@ jobs:
           print("public OCI resolver normalization OK")
           PY
 
-      - name: Resolve the pinned chart's RFSIM UE image to an immutable digest
+      - name: Resolve pinned srsRAN images to immutable digests
         run: |
           set -euo pipefail
-          mapfile -t image_coordinates < <(python - <<'PY'
+          mapfile -t ue_coordinates < <(python - <<'PY'
           import yaml
           values = yaml.safe_load(open("chart/charts/srsue/values.yaml", encoding="utf-8"))
           print(values["image"]["repository"])
           print(values["image"]["tag"])
           PY
           )
-          repository="${image_coordinates[0]}"
-          tag="${image_coordinates[1]}"
-          image="$(python -m synthran.image_digest \
-            --repository "$repository" \
-            --tag "$tag")"
-          if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
-            echo "Unexpected srsUE digest reference: $image" >&2
+          ue_image="$(python -m synthran.image_digest \
+            --repository "${ue_coordinates[0]}" \
+            --tag "${ue_coordinates[1]}")"
+          if [[ ! "$ue_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "Unexpected srsUE digest reference: $ue_image" >&2
             exit 1
           fi
-          echo "SYNTHRAN_CI_SRSUE_IMAGE=$image" >>"$GITHUB_ENV"
-          echo "resolved pinned-chart srsUE image: ${image%@sha256:*}@sha256:<verified>"
+          echo "SYNTHRAN_CI_SRSUE_IMAGE=$ue_image" >>"$GITHUB_ENV"
+          echo "resolved pinned-chart srsUE image: ${ue_image%@sha256:*}@sha256:<verified>"
+
+          mapfile -t gnb_coordinates < <(python - <<'PY'
+          import yaml
+          values = yaml.safe_load(open(
+              "chart/charts/srsran-gnb/values-n320-n78-20MHz.yaml",
+              encoding="utf-8",
+          ))
+          print(values["image"]["repository"])
+          print(values["image"]["tag"])
+          PY
+          )
+          gnb_image="$(python -m synthran.image_digest \
+            --repository "${gnb_coordinates[0]}" \
+            --tag "${gnb_coordinates[1]}")"
+          if [[ ! "$gnb_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "Unexpected N320 gNB digest reference: $gnb_image" >&2
+            exit 1
+          fi
+          echo "resolved pinned-chart N320 image: ${gnb_image%@sha256:*}@sha256:<verified>"
 
       - name: Render one and multiple selected RFSIM UEs
         run: >-
