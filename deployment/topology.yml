@@ -64,6 +64,9 @@ transport_profiles:
       gre: [n3br]
       patches:
         - {a: n3br, b: n4br, a_port: patch-n3-n4, b_port: patch-n4-n3}
+    endpoints:
+      amf_ngap_ip: 10.100.50.234
+      branching_upf_n3_ip: 10.100.50.233
 
 rans:
   srsran:
@@ -103,7 +106,7 @@ rans:
     oai:
       namespace: oai
       transport: *transport_oai
-      network: {amf_ip: 192.168.3.201, amf_port: 38412, n3_bridge: n3br, gnb_ip: 192.168.3.204}
+      network: {amf_ip: 192.168.3.201, amf_port: 38412, gnb_ip: 192.168.3.204}
 
   oai:
     open5gs:
