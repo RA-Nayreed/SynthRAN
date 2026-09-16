@@ -427,6 +427,26 @@ def load_scenario(path: str | Path, *, deployment_only: bool = False) -> dict:
             "sensor/edge/RF hosts are not part of the current testbed contract"
         )
 
+    nodes = dep.get("nodes")
+    if not isinstance(nodes, dict):
+        raise ValueError("deployment.nodes must be a mapping")
+    for role in ("core", "ran"):
+        if not isinstance(nodes.get(role), str) or not nodes[role]:
+            raise ValueError(f"deployment.nodes.{role} must be a non-empty host name")
+    if "broker" in nodes and (not isinstance(nodes["broker"], str) or not nodes["broker"]):
+        raise ValueError("deployment.nodes.broker must be a non-empty host name when provided")
+
+    split_transport = nodes["core"] != nodes["ran"]
+    if "bridge_enabled" in dep:
+        if not isinstance(dep["bridge_enabled"], bool):
+            raise ValueError("deployment.bridge_enabled must be boolean when provided")
+        if dep["bridge_enabled"] != split_transport:
+            raise ValueError(
+                "deployment.bridge_enabled is derived from node placement and cannot "
+                "override the authoritative transport mode"
+            )
+    dep["bridge_enabled"] = split_transport
+
     profile_name = dep.get("network_profile")
     if not isinstance(profile_name, str) or not _SAFE_PROFILE_NAME.fullmatch(profile_name):
         raise ValueError("deployment.network_profile must be a safe non-empty profile name")
