@@ -44,19 +44,28 @@
       register: synthran_prov_kubernetes_python
       changed_when: false
 
-    - name: Require the host to match the pinned runtime baseline
+    - name: Require deployment tooling to match the pinned runtime baseline
       ansible.builtin.assert:
         quiet: true
         that:
-          - "('v' ~ kubernetes_version) in synthran_prov_kubelet.stdout"
           - "('v' ~ helm_version) in synthran_prov_helm.stdout"
           - yq_version in synthran_prov_yq.stdout
           - synthran_prov_kubernetes_python.stdout | trim == kubernetes_python_version
         fail_msg: >-
-          {{ inventory_hostname }} does not match the pinned SynthRAN runtime
-          baseline (Kubernetes {{ kubernetes_version }}, Helm {{ helm_version }},
-          yq {{ yq_version }}, kubernetes-python {{ kubernetes_python_version }}).
-          Refusing activation/reuse until the host is provisioned by this baseline.
+          {{ inventory_hostname }} does not match the pinned SynthRAN deployment
+          tooling baseline (Helm {{ helm_version }}, yq {{ yq_version }},
+          kubernetes-python {{ kubernetes_python_version }}).
+      
+    - name: Require the pinned Kubernetes host baseline after fresh preparation
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - "('v' ~ kubernetes_version) in synthran_prov_kubelet.stdout"
+        fail_msg: >-
+          {{ inventory_hostname }} was freshly prepared but kubelet does not
+          match the pinned Kubernetes v{{ kubernetes_version }} baseline:
+          {{ synthran_prov_kubelet.stdout }}
+      when: synthran_host_preparation == 'fresh'
 
     - name: Read installed Debian package versions
       ansible.builtin.shell: |
@@ -85,6 +94,7 @@
           {{ {
                'schema_version': 1,
                'host': inventory_hostname,
+               'host_preparation': synthran_host_preparation,
                'distribution': ansible_distribution,
                'distribution_version': ansible_distribution_version,
                'kernel': ansible_kernel,
