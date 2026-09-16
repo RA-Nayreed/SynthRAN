@@ -1,11 +1,4 @@
 ---
-- name: Prepare deployment execution runtime
-  hosts: sopnodes
-  become: true
-  any_errors_fatal: true
-  roles:
-    - role: setup/deployment_runtime
-
 - name: Configure core-side transport
   hosts: core_node
   become: true
