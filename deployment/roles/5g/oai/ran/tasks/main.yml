@@ -108,8 +108,6 @@
 
 - name: Classify the complete OAI launch transcript
   ansible.builtin.set_fact:
-    oai_start_output: >-
-      {{ (gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')) }}
     oai_start_wait_timeout: >-
       {{
         'timed out waiting for the condition' in
@@ -153,8 +151,9 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - item.rc == 0
-      - (item.stdout | from_json).info.status == 'deployed'
+      - >-
+        item.rc == 0 and
+        (((item.stdout | default('{}', true)) | from_json).get('info', {}).get('status', '')) == 'deployed'
     fail_msg: >-
       OAI release {{ item.item }} is not deployed after start-gnb; refusing
       to accept a helper wait timeout or masked intermediate failure.
