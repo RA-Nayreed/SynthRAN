@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import subprocess
 
 import yaml
@@ -81,6 +82,45 @@ def _task_module(task: dict) -> str:
     return modules[0]
 
 
+def _command_argv(task: dict) -> list[str]:
+    spec = task.get("ansible.builtin.command")
+    if isinstance(spec, str):
+        return shlex.split(spec)
+    if isinstance(spec, dict):
+        argv = spec.get("argv")
+        if isinstance(argv, list):
+            return [str(item) for item in argv]
+        cmd = spec.get("cmd")
+        if isinstance(cmd, str):
+            return shlex.split(cmd)
+    fail(f"cannot audit command shape for bootstrap task {task.get('name', '<unnamed>')!r}")
+    raise AssertionError("unreachable")
+
+
+def _require_read_only_command(task: dict, lifecycle: str) -> None:
+    name = task.get("name", "<unnamed>")
+    if task.get("changed_when") is not False:
+        fail(f"{lifecycle} command must declare changed_when: false: {name}")
+
+    argv = _command_argv(task)
+    if not argv:
+        fail(f"{lifecycle} command is empty: {name}")
+
+    safe = False
+    if argv[:2] == ["systemctl", "is-active"]:
+        safe = True
+    elif argv[0] == "findmnt":
+        safe = True
+    elif argv[0] == "kubectl" and "get" in argv[1:]:
+        safe = True
+
+    if not safe:
+        fail(
+            f"{lifecycle} command is not in the explicit read-only allowlist: "
+            f"{name}: {argv}"
+        )
+
+
 def _validate_task_lifecycle(task: dict, section: str) -> None:
     name = task.get("name", "<unnamed>")
     lifecycle = _task_tags(task) & LIFECYCLE_TAGS
@@ -105,6 +145,8 @@ def _validate_task_lifecycle(task: dict, section: str) -> None:
             fail(f"preserve-only bootstrap task lacks preserve guard: {name}")
         if module not in PRESERVE_ALLOWED_MODULES:
             fail(f"preserve bootstrap task uses mutating/unapproved module {module}: {name}")
+        if module == "ansible.builtin.command":
+            _require_read_only_command(task, "preserve")
         for forbidden in ("yq", "helm", "get_url", "apt", "package", "pip", "unarchive"):
             if forbidden in serialized.lower():
                 fail(f"preserve bootstrap task references fresh/deployment tooling {forbidden!r}: {name}")
@@ -114,8 +156,8 @@ def _validate_task_lifecycle(task: dict, section: str) -> None:
         fail(f"shared bootstrap invariant must not branch on host_preparation: {name}")
     if module not in SHARED_ALLOWED_MODULES:
         fail(f"shared bootstrap invariant uses unapproved module {module}: {name}")
-    if module == "ansible.builtin.command" and task.get("changed_when") is not False:
-        fail(f"shared command invariant must be explicitly read-only: {name}")
+    if module == "ansible.builtin.command":
+        _require_read_only_command(task, "shared")
     if module == "ansible.builtin.copy":
         if task.get("delegate_to") != "localhost" or task.get("become") is not False:
             fail(f"shared copy is only allowed for controller-local evidence: {name}")
@@ -169,9 +211,20 @@ def main() -> None:
     site = (ROOT / "deployment/playbooks/site.yml").read_text(encoding="utf-8")
     provision_at = site.index("provision_nodes.yml")
     bootstrap_at = site.index("bootstrap_nodes.yml")
+    runtime_at = site.index("deployment_runtime.yml")
     network_at = site.index("network.yml")
-    if not provision_at < bootstrap_at < network_at:
-        fail("site.yml must run node validation, bootstrap, then transport/workloads")
+    provenance_at = site.index("provenance.yml")
+    if not provision_at < bootstrap_at < runtime_at < network_at < provenance_at:
+        fail(
+            "site.yml must run node validation, bootstrap verification/mutation, "
+            "deployment runtime, transport/workloads, then provenance"
+        )
+
+    runtime_playbook = (
+        ROOT / "deployment/playbooks/deployment_runtime.yml"
+    ).read_text(encoding="utf-8")
+    require(runtime_playbook, "hosts: sopnodes", "deployment_runtime.yml")
+    require(runtime_playbook, "role: setup/deployment_runtime", "deployment_runtime.yml")
 
     provision = (ROOT / "deployment/playbooks/provision_nodes.yml").read_text(encoding="utf-8")
     require(provision, "synthran_configured_storage", "provision_nodes.yml")
@@ -273,12 +326,9 @@ def main() -> None:
     forbid(k8s_setup, "kubernetes_python_version", "k8s_setup")
 
     network = (ROOT / "deployment/playbooks/network.yml").read_text(encoding="utf-8")
-    require(network, "Prepare deployment execution runtime", "network.yml")
-    require(network, "setup/deployment_runtime", "network.yml")
     require(network, "setup/gre_tunnel", "network.yml")
     require(network, "5g/open5gs", "network.yml")
-    if network.index("setup/deployment_runtime") > network.index("setup/gre_tunnel"):
-        fail("network.yml must establish deployment runtime before transport/workload roles")
+    forbid(network, "setup/deployment_runtime", "network.yml")
     forbid(network, "setup/k8s/cluster_create", "network.yml")
     forbid(network, "setup/common", "network.yml")
     forbid(network, "setup/pre_k8s", "network.yml")
