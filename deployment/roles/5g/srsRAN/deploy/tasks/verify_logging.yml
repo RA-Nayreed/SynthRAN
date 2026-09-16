@@ -8,12 +8,11 @@
   changed_when: false
   retries: 20
   delay: 3
-  until:
-    - synthran_gnb_logging_pods.resources | length == 1
-    - >-
-      (synthran_gnb_logging_pods.resources[0].status.containerStatuses | default([]) |
-       selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) |
-       list | length) == 1
+  until: >-
+    (synthran_gnb_logging_pods.resources | length == 1) and
+    ((synthran_gnb_logging_pods.resources[0].status.containerStatuses | default([]) |
+      selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) |
+      list | length) == 1)
 
 - name: Select the deployed gNB pod for log verification
   ansible.builtin.set_fact:
@@ -124,14 +123,42 @@
   register: synthran_gnb_logging_state
   changed_when: false
 
+- name: Require the verified gNB workload to still exist with the same identity
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_gnb_logging_state.resources | length == 1
+      - synthran_gnb_logging_state.resources[0].metadata.uid == synthran_gnb_logging_uid
+    fail_msg: >-
+      The gNB workload disappeared or changed identity during log verification.
+
+- name: Resolve live gNB and log-sidecar statuses
+  ansible.builtin.set_fact:
+    synthran_gnb_live_statuses: >-
+      {{ synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'gnb') | list }}
+    synthran_gnb_log_sidecar_statuses: >-
+      {{ synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'gnb-logs') | list }}
+
+- name: Require an unambiguous live gNB container status
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_gnb_live_statuses | length == 1
+      - >-
+        (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
+        (synthran_gnb_log_sidecar_statuses | length == 1)
+    fail_msg: >-
+      The verified srsRAN pod does not expose the expected gNB/log containers.
+
 - name: Resolve configured and live gNB image digests
   ansible.builtin.set_fact:
     synthran_gnb_expected_image_digest: >-
       {{ synthran_srsran_image_reference |
          regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
     synthran_gnb_live_image_id: >-
-      {{ (synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
-          selectattr('name', 'equalto', 'gnb') | first).imageID | default('') }}
+      {{ synthran_gnb_live_statuses[0].imageID | default('') }}
 
 - name: Extract the live gNB image digest
   ansible.builtin.set_fact:
@@ -143,15 +170,10 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_gnb_logging_state.resources | length == 1
-      - synthran_gnb_logging_state.resources[0].metadata.uid == synthran_gnb_logging_uid
-      - >-
-        (synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
-         selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) | list | length) == 1
+      - synthran_gnb_live_statuses[0].ready | default(false) | bool
       - >-
         (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
-        ((synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
-          selectattr('name', 'equalto', 'gnb-logs') | selectattr('ready', 'equalto', true) | list | length) == 1)
+        (synthran_gnb_log_sidecar_statuses[0].ready | default(false) | bool)
       - synthran_gnb_expected_image_digest | length > 0
       - synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest
     fail_msg: >-
