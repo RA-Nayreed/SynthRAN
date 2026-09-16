@@ -260,10 +260,10 @@ def check_sop(root: Path, env: dict[str, str], state: Path, log: Path) -> dict[s
     ]
     if ordered != [
         ["allocations", "allocate"],
+        ["allocations", "allocate"],
         ["nodes", "image"],
         ["nodes", "bootparameter"],
         ["nodes", "reset"],
-        ["allocations", "allocate"],
         ["nodes", "image"],
         ["nodes", "bootparameter"],
         ["nodes", "reset"],
