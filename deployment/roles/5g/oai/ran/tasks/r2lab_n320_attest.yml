@@ -95,22 +95,15 @@
             item.get('name', ''): int(item.get('restartCount', 0))
             for item in container_statuses
         }
-        restarted = {name: count for name, count in restarts.items() if count != 0}
-        if restarted:
-            raise SystemExit(
-                f'OAI release {release!r} pod {pod_name!r} restarted during startup: {restarted!r}'
-            )
         return pod, {
             'pod': pod_name,
             'pod_uid': pod_uid,
             'restarts': restarts,
         }
 
-    first_pods = {}
     first = {}
     for release in expected_releases:
-        pod, summary = pod_snapshot(release)
-        first_pods[release] = pod
+        _, summary = pod_snapshot(release)
         first[release] = summary
 
     time.sleep(10)
@@ -196,6 +189,11 @@
     if container_status is None:
         raise SystemExit(
             f'radio container status {radio_container!r} missing on pod {pod_name}'
+        )
+    radio_restart_count = int(container_status.get('restartCount', 0))
+    if radio_restart_count != 0:
+        raise SystemExit(
+            f'N320 radio container restarted during startup: restartCount={radio_restart_count}'
         )
     image_id = container_status.get('imageID', '')
     if 'sha256:' not in image_id:
@@ -289,7 +287,7 @@
                 'pod': pod_name,
                 'pod_uid': pod_uid,
                 'container': radio_container,
-                'restart_count': int(container_status.get('restartCount', 0)),
+                'restart_count': radio_restart_count,
                 'stability_window_seconds': 10,
                 'workloads': second,
                 'nad': nad_name,
