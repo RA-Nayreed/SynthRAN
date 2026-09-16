@@ -8,20 +8,35 @@
   changed_when: false
   retries: 20
   delay: 3
-  until:
-    - synthran_srsran_health_initial.resources | length == 1
-    - >-
-      (synthran_srsran_health_initial.resources[0].status.containerStatuses | default([]) |
-       selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) |
-       list | length) == 1
+  until: >-
+    (synthran_srsran_health_initial.resources | length == 1) and
+    ((synthran_srsran_health_initial.resources[0].status.containerStatuses | default([]) |
+      selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) |
+      list | length) == 1)
+
+- name: Resolve the initial physical gNB status
+  ansible.builtin.set_fact:
+    synthran_srsran_health_initial_statuses: >-
+      {{ synthran_srsran_health_initial.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'gnb') | list }}
+
+- name: Require the physical health gate to observe the already-verified gNB
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_health_initial_statuses | length == 1
+      - synthran_srsran_health_initial.resources[0].metadata.name == synthran_gnb_logging_pod
+      - synthran_srsran_health_initial.resources[0].metadata.uid == synthran_gnb_logging_uid
+    fail_msg: >-
+      Physical health observation did not start from the gNB workload already
+      accepted by the generic runtime/log gate.
 
 - name: Pin the physical gNB identity for the health window
   ansible.builtin.set_fact:
     synthran_srsran_health_pod: "{{ synthran_srsran_health_initial.resources[0].metadata.name }}"
     synthran_srsran_health_uid: "{{ synthran_srsran_health_initial.resources[0].metadata.uid }}"
     synthran_srsran_health_restart_initial: >-
-      {{ (synthran_srsran_health_initial.resources[0].status.containerStatuses |
-          selectattr('name', 'equalto', 'gnb') | first).restartCount | int }}
+      {{ synthran_srsran_health_initial_statuses[0].restartCount | int }}
 
 - name: Prove the gNB process exists inside the accepted container
   ansible.builtin.command:
@@ -107,6 +122,15 @@
   register: synthran_srsran_health_line_mid
   changed_when: false
 
+- name: Require the authoritative gNB log to remain monotonic through the first window
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (synthran_srsran_health_line_mid.stdout | int) >= (synthran_srsran_health_line_start.stdout | int)
+    fail_msg: >-
+      /var/log/gnb.log was truncated or replaced during the first RF-health
+      window, so the health evidence is not trustworthy.
+
 - name: Read only log lines produced in the first RF-health window
   ansible.builtin.command:
     argv:
@@ -146,6 +170,15 @@
       - wc -l < /var/log/gnb.log
   register: synthran_srsran_health_line_end
   changed_when: false
+
+- name: Require the authoritative gNB log to remain monotonic through the second window
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (synthran_srsran_health_line_end.stdout | int) >= (synthran_srsran_health_line_mid.stdout | int)
+    fail_msg: >-
+      /var/log/gnb.log was truncated or replaced during the second RF-health
+      window, so the health evidence is not trustworthy.
 
 - name: Read only log lines produced in the second RF-health window
   ansible.builtin.command:
@@ -233,11 +266,34 @@
   register: synthran_srsran_health_final
   changed_when: false
 
+- name: Require the physical gNB workload to survive the health window
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_health_final.resources | length == 1
+      - synthran_srsran_health_final.resources[0].metadata.uid == synthran_srsran_health_uid
+    fail_msg: >-
+      The physical gNB workload disappeared or changed identity during the
+      RF-health observation window.
+
+- name: Resolve the final physical gNB status
+  ansible.builtin.set_fact:
+    synthran_srsran_health_final_statuses: >-
+      {{ synthran_srsran_health_final.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'gnb') | list }}
+
+- name: Require exactly one final physical gNB container status
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_health_final_statuses | length == 1
+    fail_msg: >-
+      The physical gNB pod no longer exposes exactly one `gnb` container.
+
 - name: Capture live and configured gNB image identity
   ansible.builtin.set_fact:
     synthran_srsran_live_image_id: >-
-      {{ (synthran_srsran_health_final.resources[0].status.containerStatuses |
-          selectattr('name', 'equalto', 'gnb') | first).imageID | default('') }}
+      {{ synthran_srsran_health_final_statuses[0].imageID | default('') }}
     synthran_srsran_expected_image_digest: >-
       {{ synthran_srsran_image_reference |
          regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
@@ -271,13 +327,9 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_srsran_health_final.resources | length == 1
       - synthran_srsran_health_pod == synthran_gnb_logging_pod
-      - synthran_srsran_health_final.resources[0].metadata.uid == synthran_srsran_health_uid
-      - >-
-        ((synthran_srsran_health_final.resources[0].status.containerStatuses |
-          selectattr('name', 'equalto', 'gnb') | first).restartCount | int) ==
-        (synthran_srsran_health_restart_initial | int)
+      - (synthran_srsran_health_final_statuses[0].restartCount | int) == (synthran_srsran_health_restart_initial | int)
+      - synthran_srsran_health_final_statuses[0].ready | default(false) | bool
       - synthran_srsran_gnb_process.rc == 0
       - synthran_srsran_n2_signal.rc == 0
       - synthran_srsran_live_n2.rc == 0
@@ -299,18 +351,20 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 2,
+           'schema_version': 3,
            'radio': rru,
            'namespace': ran_ns,
            'pod': synthran_srsran_health_pod,
            'pod_uid': synthran_srsran_health_uid,
            'restart_count_before': synthran_srsran_health_restart_initial | int,
-           'restart_count_after': ((synthran_srsran_health_final.resources[0].status.containerStatuses |
-                                    selectattr('name', 'equalto', 'gnb') | first).restartCount | int),
+           'restart_count_after': synthran_srsran_health_final_statuses[0].restartCount | int,
            'gnb_pid': synthran_srsran_gnb_process.stdout | trim,
            'log_path': '/var/log/gnb.log',
            'log_config_verified': synthran_gnb_logging_config.rc == 0,
            'log_process_command': synthran_gnb_logging_cmdline.stdout | trim,
+           'log_line_start': synthran_srsran_health_line_start.stdout | int,
+           'log_line_mid': synthran_srsran_health_line_mid.stdout | int,
+           'log_line_end': synthran_srsran_health_line_end.stdout | int,
            'n2_signal': synthran_srsran_n2_signal.stdout | trim,
            'live_n2_sctp': synthran_srsran_live_n2.stdout | trim,
            'n2_endpoint': {
