@@ -2,6 +2,7 @@
 - import_playbook: provision_nodes.yml
 - import_playbook: provision_r2lab.yml
 - import_playbook: bootstrap_nodes.yml
+- import_playbook: deployment_runtime.yml
 - import_playbook: network.yml
 - import_playbook: attest_deployment.yml
 - import_playbook: connect_ues.yml
