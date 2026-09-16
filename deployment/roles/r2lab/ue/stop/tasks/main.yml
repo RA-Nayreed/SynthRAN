@@ -2,17 +2,17 @@
 - name: START_UE_STOP
   ansible.builtin.meta: noop
 
-- name: Normalize UE name (accept ue or ue_item)
+- name: Resolve selected UE for this stop invocation
   ansible.builtin.set_fact:
-    ue: "{{ ue | default(ue_item) }}"
+    r2lab_stop_target: "{{ ue_item if ue_item is defined else ue }}"
 
 - name: Resolve UE connection mode
   ansible.builtin.set_fact:
-    ue_mode: "{{ hostvars[ue].mode | default('mbim') }}"
+    ue_mode: "{{ hostvars[r2lab_stop_target].mode | default('mbim') }}"
 
 - name: Detect whether this UE is a phone
   ansible.builtin.set_fact:
-    is_phone: "{{ ue in (groups['phones'] | default([])) }}"
+    is_phone: "{{ r2lab_stop_target in (groups['phones'] | default([])) }}"
 
 - name: Resolve direct R2Lab SSH host-key policy
   ansible.builtin.set_fact:
@@ -21,14 +21,14 @@
          if (r2lab_strict_host_key_checking | default(false) | bool)
          else '-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no' }}
 
-- name: Phone - resolve adb / ssh parameters for {{ ue }}
+- name: Phone - resolve adb / ssh parameters for {{ r2lab_stop_target }}
   ansible.builtin.set_fact:
-    phone_ssh: "{{ hostvars[ue].ansible_user | default('tester') }}@{{ hostvars[ue].ansible_host | default('mac' ~ ue) }}"
-    adb_bin: "{{ hostvars[ue].adb_bin | default('adb') }}"
-    adb_opts: "{{ ('-s ' ~ hostvars[ue].serial) if (hostvars[ue].serial is defined and (hostvars[ue].serial | string | length) > 0) else '' }}"
+    phone_ssh: "{{ hostvars[r2lab_stop_target].ansible_user | default('tester') }}@{{ hostvars[r2lab_stop_target].ansible_host | default('mac' ~ r2lab_stop_target) }}"
+    adb_bin: "{{ hostvars[r2lab_stop_target].adb_bin | default('adb') }}"
+    adb_opts: "{{ ('-s ' ~ hostvars[r2lab_stop_target].serial) if (hostvars[r2lab_stop_target].serial is defined and (hostvars[r2lab_stop_target].serial | string | length) > 0) else '' }}"
   when: is_phone
 
-- name: Phone - airplane mode ON for selected UE {{ ue }}
+- name: Phone - airplane mode ON for selected UE {{ r2lab_stop_target }}
   ansible.builtin.shell: >
     ssh {{ r2lab_direct_ssh_options }} -i /home/faraday/r2lab-embedded/mac-ssh-keys/macphone
     {{ phone_ssh }}
@@ -37,7 +37,7 @@
   when: is_phone
   ignore_errors: true
 
-- name: Phone - verify airplane mode is ON for {{ ue }}
+- name: Phone - verify airplane mode is ON for {{ r2lab_stop_target }}
   ansible.builtin.shell: >
     ssh {{ r2lab_direct_ssh_options }} -i /home/faraday/r2lab-embedded/mac-ssh-keys/macphone
     {{ phone_ssh }}
@@ -48,16 +48,16 @@
   changed_when: false
   ignore_errors: true
 
-- name: MBIM - stop selected UE {{ ue }} via jump host
-  ansible.builtin.shell: ssh {{ r2lab_direct_ssh_options }} root@{{ ue }} 'stop.sh'
+- name: MBIM - stop selected UE {{ r2lab_stop_target }} via jump host
+  ansible.builtin.shell: ssh {{ r2lab_direct_ssh_options }} root@{{ r2lab_stop_target }} 'stop.sh'
   delegate_to: faraday.inria.fr
   when:
     - not is_phone
     - ue_mode == 'mbim'
   ignore_errors: true
 
-- name: QMI - detach selected UE {{ ue }} via jump host
-  ansible.builtin.shell: ssh {{ r2lab_direct_ssh_options }} root@{{ ue }} 'python3 /usr/local/bin/ci_ctl_qtel.py /dev/ttyUSB2 detach'
+- name: QMI - detach selected UE {{ r2lab_stop_target }} via jump host
+  ansible.builtin.shell: ssh {{ r2lab_direct_ssh_options }} root@{{ r2lab_stop_target }} 'python3 /usr/local/bin/ci_ctl_qtel.py /dev/ttyUSB2 detach'
   delegate_to: faraday.inria.fr
   when:
     - not is_phone
