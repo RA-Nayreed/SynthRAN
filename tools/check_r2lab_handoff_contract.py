@@ -101,6 +101,15 @@ def main() -> int:
     rru = (ROOT / "deployment/roles/r2lab/rru/tasks/main.yml").read_text(
         encoding="utf-8"
     )
+    connect_playbook = (ROOT / "deployment/playbooks/connect_ues.yml").read_text(
+        encoding="utf-8"
+    )
+    connect_role = (
+        ROOT / "deployment/roles/r2lab/ue/connect/tasks/main.yml"
+    ).read_text(encoding="utf-8")
+    verify_role = (
+        ROOT / "deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml"
+    ).read_text(encoding="utf-8")
 
     require("all-off" not in cleanup, "cleanup still contains global all-off mutation")
     require("r2lab/ue/stop" in cleanup, "cleanup no longer stops only selected UEs")
@@ -146,6 +155,40 @@ def main() -> int:
         "selected MBIM UE stop behavior is missing",
     )
     require("ue_mode == 'qmi'" in stop, "selected QMI UE detach behavior is missing")
+
+    # The mutating connect role is the authoritative owner of attachment. A
+    # failed start, missing wwan0 address, bad link, or route failure must stop
+    # there instead of being swallowed and rediscovered by the read-only gate.
+    require(
+        "ignore_task_errors: false" in connect_playbook,
+        "SynthRAN no longer requires the R2Lab connect owner to fail closed",
+    )
+    require(
+        "ignore_task_errors: true" not in connect_playbook,
+        "SynthRAN R2Lab handoff returned to best-effort attachment",
+    )
+    for task_name in (
+        "Retrieve wwan0 IP for {{ ue_item }}",
+        "Wait until wwan0 interface is fully up",
+        "Add route to UPF IP when wwan0 is ready",
+    ):
+        require(task_name in connect_role, f"required UE connect task disappeared: {task_name}")
+    require(
+        connect_role.count("ignore_errors: true") == 1
+        and "Check wwan0 connectivity on {{ ue_item }} by pinging UPF" in connect_role,
+        "required UE attachment tasks can silently ignore failure",
+    )
+    require(
+        connect_role.count(
+            'ignore_errors: "{{ ignore_task_errors | default(true) }}"'
+        ) >= 8,
+        "R2Lab connect role no longer exposes strict failure control to SynthRAN",
+    )
+    require(
+        "that: synthran_r2lab_probe.rc == 0" in verify_role
+        and "verification does not repair or reattach modem state" in verify_role,
+        "read-only R2Lab UE acceptance gate was weakened or made mutating",
+    )
 
     reserve = (ROOT / "deployment/scripts/reserve_r2lab.py").read_text(encoding="utf-8")
     require(
