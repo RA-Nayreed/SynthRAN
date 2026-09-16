@@ -37,7 +37,7 @@
 
     - name: Deploy and Monitor srsRAN gNB
       block:
-        - name: "Attempt gNB deployment (Attempt {{ item }})"
+        - name: Attempt gNB deployment
           include_tasks: deploy_with_check.yml
           loop: "{{ range(1, max_attempts + 1) | list }}"
           when: not gnb_startup_success
