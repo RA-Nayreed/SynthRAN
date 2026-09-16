@@ -23,7 +23,13 @@
       "Never format storage implicitly and never pre-create kubeadm-generated kubelet configuration."
     ],
     "setup/k8s/k8s_setup": [
-      "Consume SynthRAN's version-pinned Kubernetes baseline instead of the reference hardcoded package version."
+      "Consume SynthRAN's version-pinned Kubernetes baseline instead of the reference hardcoded package version.",
+      "Own Kubernetes packages only; deployment-only Python/Helm/yq tooling is owned by setup/deployment_runtime."
+    ],
+    "setup/deployment_runtime": [
+      "Single checksum/version-pinned authority for the Ansible Kubernetes Python client, Helm, and yq used to execute downstream deployment roles.",
+      "Fresh bootstrap establishes this runtime before infrastructure roles that require it; preserve bootstrap never reaches it.",
+      "network.yml establishes or verifies the runtime after bootstrap so an accepted preserved cluster is not required to contain artifacts installed only by a prior SynthRAN fresh run."
     ],
     "setup/k8s/cluster_create": [
       "Consume the storage binding established by pre_k8s instead of unmounting/remounting it after kubeadm reset.",
@@ -42,6 +48,6 @@
   },
   "caller_policy": {
     "fresh": "May run host/runtime/storage/Kubernetes mutation roles after resource preparation and records shareable mount, CNI daemon and registered-node evidence.",
-    "preserve": "Verification-only; must not run reset, storage mutation, package installation, cluster creation, join, taint, or tuning roles."
+    "preserve": "Bootstrap is verification-only; it must not run reset, storage mutation, package/tool installation, cluster creation, join, taint, or tuning roles. Downstream deployment may establish execution-only tooling after this boundary without rebuilding the accepted host/Kubernetes state."
   }
 }
