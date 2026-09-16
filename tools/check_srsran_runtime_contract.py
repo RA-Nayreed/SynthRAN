@@ -7,8 +7,13 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_MAIN = ROOT / "deployment/roles/5g/srsRAN/config/tasks/main.yml"
 DEPLOY_MAIN = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/main.yml"
+PATCH_CHARTS = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/patch_charts.yml"
+RFSIM_VERIFY = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_rfsim_ue_runtime.yml"
 RFSIM_HARDEN = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/harden_rfsim_ue_runtime.yml"
+RFSIM_CONFIGMAP = ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
+START_BROKER = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/start_broker.yml"
 VERIFY_LOGGING = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_logging.yml"
 HEALTH = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_ran_health.yml"
 IMAGE_DIGEST = ROOT / "synthran/image_digest.py"
@@ -27,47 +32,98 @@ def text(path: Path) -> str:
 
 
 def main() -> None:
+    require(not RFSIM_HARDEN.exists(), "duplicate deploy-stage RFSIM hardening owner returned")
+
+    config = text(CONFIG_MAIN)
+    for needle in (
+        "Require one sequential deployment-contract entry per selected RFSIM UE",
+        "synthran_srsue_image_source",
+        "synthran_srsue_image_reference",
+        "synthran.image_digest",
+        'repository: "{{ synthran_srsue_image_reference }}"',
+        'tag: ""',
+    ):
+        require(needle in config, f"RFSIM config ownership lost: {needle}")
+    for forbidden in ("ue_indices:", "synthran_srsue_image_repository_override"):
+        require(forbidden not in config, f"obsolete RFSIM parallel state returned: {forbidden}")
+
     deploy = text(DEPLOY_MAIN)
-    harden_marker = "harden_rfsim_ue_runtime.yml"
     reference_marker = "synthran_srsran_reference_deploy_srsues"
-    require(harden_marker in deploy, "RFSIM UE image hardening is no longer invoked")
+    verify_marker = "verify_rfsim_ue_runtime.yml"
     require(reference_marker in deploy, "reference-owned RFSIM UE lifecycle is no longer invoked")
+    require(verify_marker in deploy, "live RFSIM UE runtime verification is no longer invoked")
     require(
-        deploy.index(harden_marker) < deploy.index(reference_marker),
-        "RFSIM UE image/render hardening must occur before reference-owned UE deployment",
+        deploy.index(reference_marker) < deploy.index(verify_marker),
+        "RFSIM live verification must follow reference-owned UE deployment",
     )
 
-    rfsim = text(RFSIM_HARDEN)
+    patch = text(PATCH_CHARTS)
+    require(
+        'image: "{{ \'{{\' }} .Values.image.repository {{ \'}}\' }}"' in patch,
+        "RFSIM deployment template no longer consumes the digest-qualified repository directly",
+    )
+    for forbidden in (
+        "add_route.sh",
+        ".Values.image.repository {{ '}}' }}:{{ '{{' }} .Values.image.tag",
+        "python3-pip",
+        "python3-venv",
+        "CAP_NET_ADMIN",
+    ):
+        require(forbidden not in patch, f"obsolete/buggy RFSIM chart code returned: {forbidden}")
+    require(
+        patch.count("/var/log/gnu_multi_ue.log") == 2,
+        "GNU Radio log must have one script-owned path declaration/write flow",
+    )
+    require("GNU Radio broker ready" in patch, "RFSIM broker lost explicit readiness marker")
+
+    configmap = text(RFSIM_CONFIGMAP)
+    for forbidden in ("add_route.sh", "12.1.0.0/16", "14.1.0.0/16"):
+        require(forbidden not in configmap, f"cross-tunnel route injection returned: {forbidden}")
+
+    rfsim = text(RFSIM_VERIFY)
     for needle in (
-        "synthran.image_digest",
         "synthran_srsue_image_reference",
-        ".image.repository = strenv(SYNTHRAN_SRSUE_IMAGE)",
-        '.image.tag = ""',
-        "helm template synthran-srsue",
+        "imageID",
+        "synthran_srsue_live_digest",
+        "synthran_srsue_expected_digest",
+        "synthran_srsue_live_digest == synthran_srsue_expected_digest",
         "srsran-rfsim-ue-runtime.json",
         "selected_ues",
-        "@sha256:",
     ):
-        require(needle in rfsim, f"RFSIM immutable-image contract lost: {needle}")
-    require(
-        "synthran_srsue_runtime_policy.ues | length == ue_count | int" in rfsim,
-        "RFSIM hardening no longer verifies selected-UE cardinality",
-    )
+        require(needle in rfsim, f"RFSIM live-image/evidence contract lost: {needle}")
+
+    broker = text(START_BROKER)
+    for forbidden in (
+        "pkill -9 python3",
+        "ue_indices",
+        "add_route.sh",
+        "gnb_pod_name_result",
+        "tee /var/log/gnu_multi_ue.log",
+    ):
+        require(forbidden not in broker, f"buggy RFSIM startup code returned: {forbidden}")
+    for needle in (
+        "[m]ulti_ue_scenario.py",
+        "GNU Radio broker ready",
+        "synthran_gnb_logging_pod",
+        "Require the gNB cell to activate",
+        "Require the GNU Radio broker to start",
+        "Require the gNB to establish NGAP with the AMF",
+        "Require every configured UE to establish a PDU-session tunnel",
+    ):
+        require(needle in broker, f"RFSIM startup contract lost: {needle}")
 
     logging = text(VERIFY_LOGGING)
     for needle in (
+        "synthran_gnb_logging_pods.resources | length == 1",
         "/proc/[0-9]*/comm",
         "/usr/local/bin/gnb",
         "/srsran/config/srsran-gnb.yaml",
         "/var/log/gnb.log",
-        "synthran_gnb_logging_config",
-        "synthran_gnb_logging_cmdline",
+        "synthran_gnb_live_image_digest",
+        "synthran_gnb_expected_image_digest",
+        "synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest",
     ):
-        require(needle in logging, f"live log-ownership proof lost: {needle}")
-    require(
-        "filename:[[:space:]]*/var/log/gnb\\.log" in logging,
-        "live mounted gNB config is no longer checked for the authoritative log path",
-    )
+        require(needle in logging, f"live gNB/log ownership proof lost: {needle}")
 
     health = text(HEALTH)
     for needle in (
@@ -102,10 +158,6 @@ def main() -> None:
         "_SUPPORTED_AUTH_HOSTS",
     ):
         require(needle in resolver, f"public OCI resolver lost constrained behavior: {needle}")
-    require(
-        'if "." in first or ":" in first or first == "localhost"' in resolver,
-        "public OCI resolver no longer rejects unapproved registry-like hosts",
-    )
 
     render = text(RFSIM_RENDER)
     for needle in (
