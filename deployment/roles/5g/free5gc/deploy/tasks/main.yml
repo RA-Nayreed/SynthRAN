@@ -10,34 +10,6 @@
     name: "{{ core_ns }}"
     state: present
 
-- name: Check if yq is already installed
-  ansible.builtin.stat:
-    path: "{{ yq_bin_path }}"
-  register: yq_bin
-
-- name: Download yq binary using curl or wget
-  ansible.builtin.shell: |
-    set -e
-    if command -v curl >/dev/null 2>&1; then
-      curl -L --fail "{{ yq_url }}" -o "{{ yq_bin_path }}"
-    elif command -v wget >/dev/null 2>&1; then
-      wget -O "{{ yq_bin_path }}" "{{ yq_url }}"
-    else
-      echo "Neither curl nor wget found" >&2
-      exit 1
-    fi
-  args:
-    creates: "{{ yq_bin_path }}"
-  when: not yq_bin.stat.exists
-  become: true
-
-- name: Ensure yq is executable
-  ansible.builtin.file:
-    path: "{{ yq_bin_path }}"
-    mode: '0755'
-    state: file
-  become: true
-
 # ============================================================
 # Step 1: Clean up any existing Helm release (including stuck)
 # ============================================================
@@ -157,7 +129,7 @@
   when: cert_pv_dynamic.stdout | trim | length > 0
   failed_when: false
 
-- name: Wait for dynamic PV to be fully deleted
+- name: Wait for dynamic PV bound to cert-pvc to be fully deleted
   ansible.builtin.shell: kubectl get pv --no-headers | grep "{{ core_ns }}/cert-pvc" | wc -l
   register: pv_dynamic_check
   until: pv_dynamic_check.stdout | trim | int == 0
@@ -221,7 +193,8 @@
 
 - name: Remove orphan NGAP service if not owned by Helm
   ansible.builtin.shell: |
-    if kubectl get svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }}        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null | grep -q "Helm"; then
+    if kubectl get svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }} \
+       -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null | grep -q "Helm"; then
       echo "owned by Helm, skipping"
     else
       kubectl delete svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }} --ignore-not-found
@@ -298,7 +271,7 @@
     - mongodb_pod.resources[0].status.phase == "Running"
     - mongodb_pod.resources[0].status.containerStatuses |
       selectattr('ready', 'equalto', true) | list | length ==
-      mongodb_pod.resources[0].status.containerStatuses | length
+      dbpython_pod.resources[0].status.containerStatuses | length
   retries: 30
   delay: 10
 
