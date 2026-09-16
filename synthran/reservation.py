@@ -59,13 +59,7 @@ def run(
     stdin: str | None = None,
     echo: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a reservation command while keeping machine responses quiet by default.
-
-    JSON/provider queries are implementation details and belong in evidence files,
-    not in the interactive terminal. Mutation paths opt into ``echo=True`` when
-    their provider output is useful to the operator. Errors remain available from
-    the captured result and are included in raised ReservationError messages.
-    """
+    """Run a reservation command while keeping machine responses quiet by default."""
 
     options: dict[str, Any] = {
         "text": True,
@@ -84,6 +78,22 @@ def run(
     if check and result.returncode:
         detail = _output(result) or f"exit status {result.returncode}"
         raise ReservationError(f"command failed: {' '.join(argv)}\n{detail}")
+    return result
+
+
+def run_visible(
+    argv: Sequence[str],
+    *,
+    check: bool = True,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run an operator-facing mutation without changing the historical run() call contract."""
+
+    result = run(argv, check=check, stdin=stdin)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
     return result
 
 
@@ -202,10 +212,9 @@ def provider_context(provider: Mapping[str, Any]) -> dict[str, Any]:
                 "SLICES experiment is required to exist: "
                 + (_output(shown) or f"experiment={experiment}")
             )
-        result = run(
+        result = run_visible(
             ["slices", "experiment", "create", experiment, "--duration", duration],
             check=False,
-            echo=True,
         )
         if result.returncode:
             raise ReservationError(
@@ -424,7 +433,7 @@ def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> st
 
 def _probe_allocation_for_fresh(node: str) -> str:
     print(f"[POS allocation] Probing {node}", flush=True)
-    result = run(["pos", "allocations", "allocate", node], check=False, echo=True)
+    result = run_visible(["pos", "allocations", "allocate", node], check=False)
     state = _allocation_state(node, result)
     if state == "new":
         print(f"[POS allocation] {node}: fresh allocation acquired", flush=True)
@@ -439,9 +448,9 @@ def _probe_allocation_for_fresh(node: str) -> str:
 
 def _reclaim_allocation_for_fresh(node: str) -> str:
     print(f"[POS allocation] {node}: reclaiming existing allocation", flush=True)
-    released = run(["pos", "allocations", "free", "-k", node], check=False, echo=True)
+    released = run_visible(["pos", "allocations", "free", "-k", node], check=False)
     print(f"[POS allocation] {node}: requesting fresh allocation after reclaim", flush=True)
-    retry = run(["pos", "allocations", "allocate", node], check=False, echo=True)
+    retry = run_visible(["pos", "allocations", "allocate", node], check=False)
     retry_state = _allocation_state(node, retry)
     if retry_state != "new":
         detail = _output(retry) or _output(released)
@@ -575,14 +584,14 @@ def prepare_hosts(
             "take several minutes",
             flush=True,
         )
-        run(["pos", "nodes", "image", "--staging", node, image], echo=True)
+        run_visible(["pos", "nodes", "image", "--staging", node, image])
         print(f"[POS prepare] {node}: image staging completed", flush=True)
 
         print(
             f"[POS prepare] {node}: applying boot parameters ({boot_profile})",
             flush=True,
         )
-        run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters], echo=True)
+        run_visible(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
         print(f"[POS prepare] {node}: boot parameters applied", flush=True)
 
         print(
@@ -590,7 +599,7 @@ def prepare_hosts(
             "returns only after POS reports reset completion",
             flush=True,
         )
-        run(["pos", "nodes", "reset", "--blocking", "--verbose", node], echo=True)
+        run_visible(["pos", "nodes", "reset", "--blocking", "--verbose", node])
         print(f"[POS prepare] {node}: POS reset completed", flush=True)
 
         ready_attempt = _wait_for_ssh(node)
