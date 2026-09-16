@@ -20,9 +20,6 @@ data:
         if [ -n "$UE_IP" ]; then
           echo "tun_srsue$1 UP: $UE_IP"
           ip link set dev tun_srsue$1 mtu 1400 || true
-          ip route add 12.1.0.0/16 dev tun_srsue$1 2>/dev/null || true
-          ip route add 14.1.0.0/16 dev tun_srsue$1 2>/dev/null || true
-          ip route
           break
         fi
       fi
@@ -33,8 +30,6 @@ data:
 {{ '{{' }} .Files.Get "files/start_gnu.sh" | indent 4 {{ '}}' }}
   multi_ue_scenario.py: |
 {{ '{{' }} .Files.Get "files/multi_ue_scenario.py" | indent 4 {{ '}}' }}
-  add_route.sh: |
-{{ '{{' }} .Files.Get "files/add_route.sh" | indent 4 {{ '}}' }}
   generate_ue_conf.py: |
     #!/usr/bin/env python3
     import argparse, os
