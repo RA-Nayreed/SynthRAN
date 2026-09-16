@@ -8,24 +8,28 @@ data:
   start_ue.sh: |
     #!/bin/bash
     set -euo pipefail
-    echo "--- Starting UE $1 ---"
-    python3 /srsran/config/generate_ue_conf.py "$1" /tmp/
-    echo "Starting srsUE $1..."
-    /opt/srsRAN_4G/build/srsue/src/srsue /tmp/ue_$1.conf > /proc/1/fd/1 2>&1 &
+    UE_NUMBER=${1:?UE number is required}
+    CONSOLE_LOG="/var/log/ue${UE_NUMBER}.console.log"
+    mkdir -p /var/log
+    : > "$CONSOLE_LOG"
+    echo "--- Starting UE ${UE_NUMBER} ---" >> "$CONSOLE_LOG"
+    python3 /srsran/config/generate_ue_conf.py "$UE_NUMBER" /tmp/ >> "$CONSOLE_LOG" 2>&1
+    echo "Starting srsUE ${UE_NUMBER}..." >> "$CONSOLE_LOG"
+    /opt/srsRAN_4G/build/srsue/src/srsue "/tmp/ue_${UE_NUMBER}.conf" >> "$CONSOLE_LOG" 2>&1 &
     UE_PID=$!
-    echo "Waiting for tun_srsue$1..."
+    echo "Waiting for tun_srsue${UE_NUMBER}..." >> "$CONSOLE_LOG"
     for i in $(seq 1 50); do
-      if ip addr show tun_srsue$1 >/dev/null 2>&1; then
-        UE_IP=$(ip addr show tun_srsue$1 | grep 'inet ' | awk '{print $2}')
+      if ip -4 -o addr show dev "tun_srsue${UE_NUMBER}" >/dev/null 2>&1; then
+        UE_IP=$(ip -4 -o addr show dev "tun_srsue${UE_NUMBER}" | awk '{print $4}' | head -1)
         if [ -n "$UE_IP" ]; then
-          echo "tun_srsue$1 UP: $UE_IP"
-          ip link set dev tun_srsue$1 mtu 1400 || true
+          echo "tun_srsue${UE_NUMBER} UP: $UE_IP" >> "$CONSOLE_LOG"
+          ip link set dev "tun_srsue${UE_NUMBER}" mtu 1400 || true
           break
         fi
       fi
       sleep 2
     done
-    wait $UE_PID
+    wait "$UE_PID"
   start_gnu.sh: |
 {{ '{{' }} .Files.Get "files/start_gnu.sh" | indent 4 {{ '}}' }}
   multi_ue_scenario.py: |
