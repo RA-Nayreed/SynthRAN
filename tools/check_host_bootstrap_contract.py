@@ -29,8 +29,8 @@ def forbid(text: str, needle: str, context: str) -> None:
         fail(f"{context}: forbidden legacy/bootstrap text remains: {needle!r}")
 
 
-def _when_text(role: dict) -> str:
-    value = role.get("when", "")
+def _when_text(entry: dict) -> str:
+    value = entry.get("when", "")
     if isinstance(value, list):
         return "\n".join(str(item) for item in value)
     return str(value)
@@ -42,6 +42,20 @@ def _named_task(tasks: list[dict], name: str) -> dict:
             return task
     fail(f"task missing from contract: {name}")
     raise AssertionError("unreachable")
+
+
+def _bootstrap_tasks(plays: list[dict]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for play in plays:
+        for section in ("pre_tasks", "tasks", "post_tasks"):
+            for task in play.get(section, []) or []:
+                if not isinstance(task, dict) or not task.get("name"):
+                    fail(f"bootstrap_nodes.yml: unnamed or invalid task in {section}")
+                name = str(task["name"])
+                if name in result:
+                    fail(f"bootstrap_nodes.yml: duplicate task name prevents lifecycle classification: {name}")
+                result[name] = task
+    return result
 
 
 def main() -> None:
@@ -152,6 +166,77 @@ def main() -> None:
     for role in destructive_roles:
         if role not in seen_roles:
             fail(f"bootstrap_nodes.yml: expected lifecycle role missing: {role}")
+
+    fresh_only_tasks = {
+        "Resolve the supported yq architecture",
+        "Require a checksum-pinned yq binary for this architecture",
+        "Install the checksum-verified shared yq binary",
+        "Read back the installed yq version",
+        "Require the installed yq binary to match the pinned release",
+        "Resolve the supported CNI plugin architecture",
+        "Require a pinned CNI artifact for this architecture",
+        "Stage the checksum-verified CNI plugin bundle",
+    }
+    preserve_only_tasks = {
+        "Verify preserved containerd is active",
+        "Verify preserved kubelet is active",
+        "Verify preserved CNI DHCP binary exists",
+        "Require preserved CNI DHCP binary",
+        "Verify preserved CNI DHCP daemon is active",
+        "Verify preserved Kubernetes control plane is reachable",
+        "Verify preserved RAN node is registered",
+        "Verify preserved NetworkAttachmentDefinition API",
+    }
+    shared_tasks = {
+        "Read the effective containerd mount",
+        "Read CNI DHCP daemon state",
+        "Read registered Kubernetes nodes",
+        "Initialize bootstrap node evidence",
+        "Collect per-host bootstrap evidence",
+        "Write shareable bootstrap evidence",
+    }
+
+    classified = fresh_only_tasks | preserve_only_tasks | shared_tasks
+    tasks_by_name = _bootstrap_tasks(bootstrap_data)
+    actual_tasks = set(tasks_by_name)
+    unclassified = actual_tasks - classified
+    missing = classified - actual_tasks
+    if unclassified:
+        fail(
+            "bootstrap_nodes.yml: task(s) added without explicit fresh/preserve/shared lifecycle classification: "
+            + ", ".join(sorted(unclassified))
+        )
+    if missing:
+        fail(
+            "bootstrap_nodes.yml: lifecycle contract task(s) missing: "
+            + ", ".join(sorted(missing))
+        )
+
+    fresh_guard = "synthran_host_preparation == 'fresh'"
+    preserve_guard = "synthran_host_preparation == 'preserve'"
+    for name in fresh_only_tasks:
+        if fresh_guard not in _when_text(tasks_by_name[name]):
+            fail(f"bootstrap_nodes.yml: fresh-only task lacks fresh guard: {name}")
+    for name in preserve_only_tasks:
+        if preserve_guard not in _when_text(tasks_by_name[name]):
+            fail(f"bootstrap_nodes.yml: preserve-only task lacks preserve guard: {name}")
+    for name in shared_tasks:
+        if "synthran_host_preparation" in _when_text(tasks_by_name[name]):
+            fail(f"bootstrap_nodes.yml: shared invariant/evidence task is mode-gated: {name}")
+
+    yq_tasks = {
+        "Resolve the supported yq architecture",
+        "Require a checksum-pinned yq binary for this architecture",
+        "Install the checksum-verified shared yq binary",
+        "Read back the installed yq version",
+        "Require the installed yq binary to match the pinned release",
+    }
+    for name in yq_tasks:
+        tags = tasks_by_name[name].get("tags", [])
+        if isinstance(tags, str):
+            tags = [tags]
+        if "fresh_yq" not in tags:
+            fail(f"bootstrap_nodes.yml: yq fresh-path regression task lacks fresh_yq tag: {name}")
 
     require(bootstrap, "synthran_host_preparation == 'preserve'", "bootstrap_nodes.yml")
     require(bootstrap, "Verify preserved Kubernetes control plane is reachable", "bootstrap_nodes.yml")
