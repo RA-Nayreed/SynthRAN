@@ -30,7 +30,7 @@
     - name: Discover containerd storage only when inventory did not select one
       ansible.builtin.shell: |
         set -eu
-        current="$(findmnt -n -o SOURCE /var/lib/containerd 2>/dev/null || true)"
+        current="$(findmnt --nofsroot -n -o SOURCE /var/lib/containerd 2>/dev/null || true)"
         if [ -n "$current" ] && [ "${current#/dev/}" != "$current" ]; then
           basename "$(readlink -f "$current")"
           exit 0

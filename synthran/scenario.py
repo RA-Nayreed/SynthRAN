@@ -37,6 +37,49 @@ def _ue_catalog_source(deployment: dict) -> Path:
     return Path(deployment.get("ue_catalog_file") or "deployment/group_vars/all/ue_catalog.yaml")
 
 
+def _topology_source(deployment: dict) -> Path:
+    return Path(deployment.get("topology_file") or "deployment/topology.yml")
+
+
+def _validate_selected_topology(deployment: dict) -> None:
+    topology_source = _topology_source(deployment)
+    if not topology_source.is_file():
+        raise ValueError(f"topology not found: {topology_source}")
+
+    topologies = yaml.safe_load(topology_source.read_text(encoding="utf-8"))
+    if not isinstance(topologies, dict):
+        raise ValueError(f"topology document must be a mapping: {topology_source}")
+
+    schema_version = topologies.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    ):
+        raise ValueError(
+            f"topology schema_version must be a positive integer: {topology_source}"
+        )
+
+    ran = str(deployment.get("ran", "")).lower()
+    core = str(deployment.get("core", "")).lower()
+    try:
+        selected = topologies["rans"][ran][core]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            f"no asserted topology contract for {ran} + {core}: {topology_source}"
+        ) from error
+    if not isinstance(selected, dict):
+        raise ValueError(
+            f"selected topology contract for {ran} + {core} must be a mapping: "
+            f"{topology_source}"
+        )
+    if not isinstance(selected.get("network"), dict) or not selected["network"]:
+        raise ValueError(
+            f"selected topology contract for {ran} + {core} requires a non-empty "
+            f"network mapping: {topology_source}"
+        )
+
+
 def _mapping(value, label: str) -> dict:
     if value is None:
         return {}
@@ -316,6 +359,7 @@ def load_scenario(path: str | Path, *, deployment_only: bool = False) -> dict:
                 f"not {dep['platform']!r}"
             )
 
+    _validate_selected_topology(dep)
     validate_ue_slice_assignments(dep.get("ue_slices"), ues, network_profile)
 
     data["_source_directory"] = str(source.parent)
