@@ -18,6 +18,82 @@
   ansible.builtin.set_fact:
     synthran_gnb_logging_pod: "{{ synthran_gnb_logging_pods.resources[0].metadata.name }}"
 
+- name: Locate the live gNB process for log ownership
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ synthran_gnb_logging_pod }}"
+      - -c
+      - gnb
+      - --
+      - /bin/sh
+      - -lc
+      - >-
+        for comm in /proc/[0-9]*/comm; do
+          [ -r "$comm" ] || continue;
+          if [ "$(cat "$comm")" = gnb ]; then
+            pid=${comm#/proc/}; pid=${pid%/comm}; printf '%s\n' "$pid"; exit 0;
+          fi;
+        done;
+        exit 1
+  register: synthran_gnb_logging_pid
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: synthran_gnb_logging_pid.rc == 0
+
+- name: Read the live gNB process command line
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ synthran_gnb_logging_pod }}"
+      - -c
+      - gnb
+      - --
+      - /bin/sh
+      - -lc
+      - >-
+        tr '\000' ' ' < /proc/{{ synthran_gnb_logging_pid.stdout | trim }}/cmdline
+  register: synthran_gnb_logging_cmdline
+  changed_when: false
+
+- name: Require the live mounted gNB config to select the authoritative log path
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin | default('/usr/bin/kubectl') }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ synthran_gnb_logging_pod }}"
+      - -c
+      - gnb
+      - --
+      - /bin/sh
+      - -lc
+      - >-
+        grep -Eq '^[[:space:]]*filename:[[:space:]]*/var/log/gnb\.log[[:space:]]*$'
+        /srsran/config/srsran-gnb.yaml
+  register: synthran_gnb_logging_config
+  changed_when: false
+
+- name: Bind the authoritative log path to the deployed gNB process
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_gnb_logging_pid.rc == 0
+      - "'/usr/local/bin/gnb' in synthran_gnb_logging_cmdline.stdout"
+      - "'/srsran/config/srsran-gnb.yaml' in synthran_gnb_logging_cmdline.stdout"
+      - synthran_gnb_logging_config.rc == 0
+    fail_msg: >-
+      The live gNB process is not using the mounted configuration that selects
+      /var/log/gnb.log as the authoritative runtime log.
+
 - name: Require the gNB process to produce the authoritative log file
   ansible.builtin.command:
     argv:
