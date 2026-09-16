@@ -6,7 +6,8 @@ schema_version: 2
 
 # These are the only static host-transport definitions. RAN/core combinations
 # below select one profile through a YAML alias, so inventory, host networking,
-# chart adapters, and evidence all consume the same mapping.
+# chart adapters, and evidence all consume the same mapping. Endpoint scalar
+# anchors keep compatibility views below from becoming second literal owners.
 transport_profiles:
   open5gs: &transport_open5gs
     bridges:
@@ -26,7 +27,7 @@ transport_profiles:
       gre: [n3br]
       patches: []
     endpoints:
-      amf_ngap_ip: 10.10.3.200
+      amf_ngap_ip: &open5gs_amf_ngap 10.10.3.200
 
   oai: &transport_oai
     bridges:
@@ -43,7 +44,7 @@ transport_profiles:
       gre: [n3br]
       patches: []
     endpoints:
-      amf_ngap_ip: 192.168.3.201
+      amf_ngap_ip: &oai_amf_ngap 192.168.3.201
 
   free5gc: &transport_free5gc
     bridges:
@@ -65,7 +66,7 @@ transport_profiles:
       patches:
         - {a: n3br, b: n4br, a_port: patch-n3-n4, b_port: patch-n4-n3}
     endpoints:
-      amf_ngap_ip: 10.100.50.234
+      amf_ngap_ip: &free5gc_amf_ngap 10.100.50.234
       branching_upf_n3_ip: 10.100.50.233
 
 rans:
@@ -75,28 +76,28 @@ rans:
       n3network_name: n3network
       transport: *transport_open5gs
       network:
-        n2: {amf_ip: 10.10.3.200, amf_port: 38412, gnb_ip: 10.10.3.234, gnb_bind_ip: 10.10.3.234}
+        n2: {amf_ip: *open5gs_amf_ngap, amf_port: 38412, gnb_ip: 10.10.3.234, gnb_bind_ip: 10.10.3.234}
         n3: {gnb_ip: 10.10.3.234, ue_ips: [10.10.3.235, 10.10.3.236, 10.10.3.237]}
     free5gc:
       namespace: free5gc
       n3network_name: n3network-free5gc-free5gc-upf
       transport: *transport_free5gc
       network:
-        n2: {amf_ip_split: 10.100.50.234, amf_ip_colocated: 10.100.50.249, amf_port: 38412, gnb_ip: 10.100.50.250, gnb_bind_ip: 10.100.50.250}
+        n2: {amf_ip_split: *free5gc_amf_ngap, amf_ip_colocated: 10.100.50.249, amf_port: 38412, gnb_ip: 10.100.50.250, gnb_bind_ip: 10.100.50.250}
         n3: {gnb_ip: 10.100.50.250, ue_ips: [10.100.50.251, 10.100.50.252, 10.100.50.253]}
     oai:
       namespace: oai
       n3network_name: oai-5g-basic-n3
       transport: *transport_oai
       network:
-        n2: {amf_ip: 192.168.3.201, amf_port: 38412, gnb_ip: 192.168.3.203, gnb_bind_ip: 192.168.3.203}
-        n3: {amf_ip: 192.168.3.201, gnb_ip: 192.168.3.203, ue_ips: [192.168.3.210, 192.168.3.211, 192.168.3.212]}
+        n2: {amf_ip: *oai_amf_ngap, amf_port: 38412, gnb_ip: 192.168.3.203, gnb_bind_ip: 192.168.3.203}
+        n3: {amf_ip: *oai_amf_ngap, gnb_ip: 192.168.3.203, ue_ips: [192.168.3.210, 192.168.3.211, 192.168.3.212]}
 
   ueransim:
     open5gs:
       namespace: open5gs
       transport: *transport_open5gs
-      network: {amf_ip: 10.10.3.200, gnb_ip: 10.10.3.231}
+      network: {amf_ip: *open5gs_amf_ngap, gnb_ip: 10.10.3.231}
     free5gc:
       namespace: free5gc
       transport: *transport_free5gc
@@ -106,17 +107,17 @@ rans:
     oai:
       namespace: oai
       transport: *transport_oai
-      network: {amf_ip: 192.168.3.201, amf_port: 38412, gnb_ip: 192.168.3.204}
+      network: {amf_ip: *oai_amf_ngap, amf_port: 38412, gnb_ip: 192.168.3.204}
 
   oai:
     open5gs:
       namespace: open5gs
       transport: *transport_open5gs
-      network: {amf_ip: 10.10.3.200, transport_bridge: n3br}
+      network: {amf_ip: *open5gs_amf_ngap, transport_bridge: n3br}
     free5gc:
       namespace: free5gc
       transport: *transport_free5gc
-      network: {amf_ip: 10.100.50.234, transport_bridge: n3br}
+      network: {amf_ip: *free5gc_amf_ngap, transport_bridge: n3br}
     oai:
       namespace: oai
       transport: *transport_oai
