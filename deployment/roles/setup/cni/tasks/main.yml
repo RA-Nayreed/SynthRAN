@@ -3,23 +3,8 @@
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
 
-- name: Ensure Open vSwitch is installed
-  apt:
-    name: openvswitch-switch
-    state: present
-    update_cache: yes
-  become: true
-  when: bridge_enabled
-
-- name: Create OVS bridges for ovs-cni
-  command: "ovs-vsctl --may-exist add-br {{ item }}"
-  loop:
-    - n2br
-    - n3br
-    - n4br
-  become: true
-  when: bridge_enabled
-
+# Host bridge lifecycle belongs to setup/ovs and the selected topology contract.
+# This role installs/configures only the Kubernetes network-addons layer.
 - name: Render NetworkAddonsConfig manifest locally (bridge enabled)
   ansible.builtin.template:
     src: network-addons-config.yaml.j2
@@ -117,4 +102,3 @@
 - name: Retain the Kubernetes-enabled Ansible Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
-
