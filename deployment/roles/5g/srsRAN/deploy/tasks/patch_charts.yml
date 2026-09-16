@@ -1,14 +1,9 @@
 ---
-# ============================================================
-# Patch srsRAN Helm charts for rfsim multi-UE GNU Radio mode
-# Idempotent - safe to run multiple times
-# ============================================================
+# RFSIM-only chart adapter for selected multi-UE GNU Radio execution.
 
 - name: Load common variables
-  include_vars:
+  ansible.builtin.include_vars:
     file: "../../common/defaults/main.yml"
-
-# --- GNU Radio files ---
 
 - name: Create charts/srsue/files directory
   ansible.builtin.file:
@@ -22,43 +17,65 @@
     mode: '0755'
     content: |
       #!/usr/bin/env python3
-      """GNU Radio ZMQ broker - srsRAN project gNB + srsRAN 4G UEs"""
+      """GNU Radio ZMQ broker - srsRAN project gNB + srsRAN 4G UEs."""
       from gnuradio import gr, zeromq, blocks
-      import argparse, signal, sys, os
+      import argparse, os, signal, sys
+
       GNB_IP = os.environ.get("GNB_IP", "{{ srsran_network.n3.gnb_ip }}")
-      UE_IP  = os.environ.get("UE_IPS", "{{ srsran_network.n3.ue_ips | join(',') }}").split(",")[0]
+      UE_IP = os.environ.get("UE_IPS", "{{ srsran_network.n3.ue_ips[0] }}").split(",")[0]
       SAMP_RATE = 23.04e6
+
       class MultiUEBroker(gr.top_block):
           def __init__(self, nof_ues):
               gr.top_block.__init__(self, "MultiUE ZMQ Broker")
-              # DL path: gNB -> throttle -> rep_sink per UE
-              gnb_src_dl = zeromq.req_source(gr.sizeof_gr_complex, 1,
-                  f"tcp://{GNB_IP}:2000", 100, False, -1)
+              gnb_src_dl = zeromq.req_source(
+                  gr.sizeof_gr_complex, 1, f"tcp://{GNB_IP}:2000", 100, False, -1
+              )
               throttle_dl = blocks.throttle(gr.sizeof_gr_complex, SAMP_RATE)
               self.connect(gnb_src_dl, throttle_dl)
               for i in range(nof_ues):
-                  pt = blocks.multiply_const_cc(1.0)
-                  sink = zeromq.rep_sink(gr.sizeof_gr_complex, 1,
-                      f"tcp://{UE_IP}:{2100 + i*100}", 100, False, -1)
-                  self.connect(throttle_dl, pt, sink)
-              # UL path: req_source per UE -> adder -> rep_sink to gNB
+                  passthrough = blocks.multiply_const_cc(1.0)
+                  sink = zeromq.rep_sink(
+                      gr.sizeof_gr_complex,
+                      1,
+                      f"tcp://{UE_IP}:{2100 + i * 100}",
+                      100,
+                      False,
+                      -1,
+                  )
+                  self.connect(throttle_dl, passthrough, sink)
+
               adder = blocks.add_vcc(1)
               for i in range(nof_ues):
-                  ue_src = zeromq.req_source(gr.sizeof_gr_complex, 1,
-                      f"tcp://{UE_IP}:{2101 + i*100}", 100, False, -1)
+                  ue_src = zeromq.req_source(
+                      gr.sizeof_gr_complex,
+                      1,
+                      f"tcp://{UE_IP}:{2101 + i * 100}",
+                      100,
+                      False,
+                      -1,
+                  )
                   self.connect(ue_src, (adder, i))
-              gnb_ul_sink = zeromq.rep_sink(gr.sizeof_gr_complex, 1,
-                  f"tcp://{UE_IP}:2001", 100, False, -1)
+              gnb_ul_sink = zeromq.rep_sink(
+                  gr.sizeof_gr_complex, 1, f"tcp://{UE_IP}:2001", 100, False, -1
+              )
               self.connect(adder, gnb_ul_sink)
+
       if __name__ == "__main__":
           parser = argparse.ArgumentParser()
-          parser.add_argument("--nof-ues", type=int, default=1)
+          parser.add_argument("--nof-ues", type=int, required=True)
           args = parser.parse_args()
+          if args.nof_ues < 1:
+              raise SystemExit("--nof-ues must be positive")
           tb = MultiUEBroker(args.nof_ues)
           tb.start()
-          print("Press Enter to quit", flush=True)
+          print("GNU Radio broker ready", flush=True)
+
           def _stop(*_):
-              tb.stop(); tb.wait(); sys.exit(0)
+              tb.stop()
+              tb.wait()
+              sys.exit(0)
+
           signal.signal(signal.SIGTERM, _stop)
           signal.signal(signal.SIGINT, _stop)
           try:
@@ -73,39 +90,18 @@
     content: |
       #!/bin/bash
       set -euo pipefail
-      UE_COUNT=${1:-${UE_COUNT:-1}}
+      UE_COUNT=${1:?UE count is required}
       LOG=/var/log/gnu_multi_ue.log
       mkdir -p /var/log
-      echo "[$(date -u +%FT%TZ)] Starting GNU Radio broker for ${UE_COUNT} UE(s)..." | tee "$LOG"
-      exec python3 /srsran/config/multi_ue_scenario.py --nof-ues "${UE_COUNT}" >> "$LOG" 2>&1
-
-- name: Write add_route.sh
-  ansible.builtin.copy:
-    dest: "{{ repo_dest_abs }}/charts/srsue/files/add_route.sh"
-    mode: '0755'
-    content: |
-      #!/bin/bash
-      UE_COUNT=${UE_COUNT:-1}
-      for i in $(seq 1 "$UE_COUNT"); do
-        iface="tun_srsue${i}"
-        if ip link show "$iface" >/dev/null 2>&1; then
-          ip route add 12.1.0.0/16 dev "$iface" 2>/dev/null || true
-          ip route add 14.1.0.0/16 dev "$iface" 2>/dev/null || true
-          echo "Routes added for $iface"
-        else
-          echo "Interface $iface not found, skipping"
-        fi
-      done
-
-# --- Rewrite configmap.yaml ---
+      : > "$LOG"
+      echo "[$(date -u +%FT%TZ)] Starting GNU Radio broker for ${UE_COUNT} UE(s)..." >> "$LOG"
+      exec python3 /srsran/config/multi_ue_scenario.py --nof-ues "$UE_COUNT" >> "$LOG" 2>&1
 
 - name: Rewrite srsue configmap.yaml
   ansible.builtin.copy:
     dest: "{{ repo_dest_abs }}/charts/srsue/templates/configmap.yaml"
     mode: '0644'
     content: "{{ lookup('template', 'srsue_configmap.yaml.j2') }}"
-
-# --- Rewrite deployment.yaml complet ---
 
 - name: Rewrite srsue deployment.yaml
   ansible.builtin.copy:
@@ -132,19 +128,17 @@
           spec:
             containers:
               - name: ue
-                image: "{{ '{{' }} .Values.image.repository {{ '}}' }}:{{ '{{' }} .Values.image.tag {{ '}}' }}"
+                image: "{{ '{{' }} .Values.image.repository {{ '}}' }}"
                 imagePullPolicy: {{ '{{' }} .Values.image.pullPolicy {{ '}}' }}
                 securityContext:
                   privileged: true
-                  capabilities:
-                    add: ["NET_ADMIN", "SYS_NICE", "IPC_LOCK", "CAP_NET_ADMIN"]
                 command: ["/bin/bash", "-c", "--"]
                 args:
                   - |
                     mkdir -p /dev/net
                     if [ ! -c /dev/net/tun ]; then mknod /dev/net/tun c 10 200; fi
                     ip route del default dev n3 || true
-                    apt update && apt install -y iproute2 tmux python3 python3-pip python3-venv
+                    apt update && apt install -y iputils-ping iperf3 tmux
                     sleep infinity
                 env:
                   - name: PATH
@@ -152,9 +146,9 @@
                   - name: GNB_IP
                     value: "{{ srsran_network.n3.gnb_ip }}"
                   - name: UE_IPS
-                    value: "{{ srsran_network.n3.ue_ips | join(',') }}"
+                    value: "{{ srsran_network.n3.ue_ips[0] }}"
                   - name: UE_COUNT
-                    value: "{{ ue_count | default(3) | string }}"
+                    value: "{{ ue_count | string }}"
                 volumeMounts:
                   - name: ue-config
                     mountPath: /srsran/config
@@ -173,7 +167,7 @@
                   name: {{ '{{' }} include "srsran-ue.fullname" . {{ '}}' }}-{{ '{{' }} .Release.Name {{ '}}' }}-ue-config
                   defaultMode: 0755
 
-- name: Patch gNB configmap - set log level to info
+- name: Set RFSIM gNB log level to info
   ansible.builtin.replace:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/values-rfsim.yaml"
     regexp: 'all_level:\s*warning'
