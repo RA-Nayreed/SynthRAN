@@ -44,6 +44,13 @@
     repo_dest_abs: "{{ (repo_dest | default('~/srsran-helm') | trim)
                        | regex_replace('^~/?', ansible_env.HOME ~ '/') }}"
 
+- name: Require a supported srsRAN radio mode
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (rru | string | trim | lower) in ['rfsim', 'n300', 'n320']
+    fail_msg: "srsRAN supports only rfsim, n300, or n320 in SynthRAN"
+
 - name: Select values filename from rru
   ansible.builtin.set_fact:
     values_filename: "{{ rru_file_map[(rru | string | trim | lower)] }}"
@@ -52,13 +59,6 @@
       n300: values-n300-n78-20MHz.yaml
       n320: values-n320-n78-20MHz.yaml
       rfsim: values-rfsim.yaml
-
-- name: Require a supported srsRAN radio mode
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - (rru | string | trim | lower) in ['rfsim', 'n300', 'n320']
-    fail_msg: "srsRAN supports only rfsim, n300, or n320 in SynthRAN"
 
 - name: Build absolute values_file path
   ansible.builtin.set_fact:
@@ -143,11 +143,27 @@
     name: fiveg
   when: rru == 'rfsim'
 
+- name: Require one sequential deployment-contract entry per selected RFSIM UE
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (ue_count | int) > 0
+      - synthran_ue_map | length == (ue_count | int)
+      - >-
+        (synthran_ue_map | map(attribute='index') | map('int') | list) ==
+        (range(1, (ue_count | int) + 1) | list)
+      - >-
+        (synthran_ue_map | map(attribute='device') | list | unique | list | length) ==
+        (ue_count | int)
+    fail_msg: >-
+      RFSIM requires a non-empty, unique and sequential selected-UE map that
+      exactly matches ue_count.
+  when: rru == 'rfsim'
+
 - name: Validate every selected software UE against the effective network profile
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_ue_map | length > 0
       - item.device in fiveg.ues
       - (fiveg.ues[item.device].imsi_suffix | string) is match('^[0-9]{10}$')
       - fiveg.ues[item.device].slice in fiveg.slices | map(attribute='name') | list
@@ -161,7 +177,6 @@
 - name: Initialize the selected srsUE list
   ansible.builtin.set_fact:
     ue_list: []
-    ue_indices: "{{ range(1, ue_count | int + 1) | list }}"
   when: rru == 'rfsim'
 
 - name: Build one srsUE definition per configured device
@@ -188,10 +203,84 @@
     label: "{{ item.device }}"
   when: rru == 'rfsim'
 
+- name: Read the pinned srsUE image coordinates
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -o=json
+      - '{"repository": .image.repository, "tag": .image.tag, "pull_policy": .image.pullPolicy}'
+      - "{{ [repo_dest_abs, 'charts', 'srsue', 'values.yaml'] | path_join }}"
+  register: synthran_srsue_image_source_json
+  changed_when: false
+  when: rru == 'rfsim'
+
+- name: Decode the pinned srsUE image coordinates
+  ansible.builtin.set_fact:
+    synthran_srsue_image_source: "{{ synthran_srsue_image_source_json.stdout | from_json }}"
+  when: rru == 'rfsim'
+
+- name: Validate the pinned srsUE image coordinates
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_image_source.repository | default('') | length > 0
+      - >-
+        ('@sha256:' in synthran_srsue_image_source.repository) or
+        (synthran_srsue_image_source.tag | default('') | length > 0)
+      - synthran_srsue_image_source.pull_policy | default('') | length > 0
+    fail_msg: The pinned srsUE chart does not identify a resolvable container image.
+  when: rru == 'rfsim'
+
+- name: Reuse an already immutable srsUE image reference
+  ansible.builtin.set_fact:
+    synthran_srsue_image_reference: "{{ synthran_srsue_image_source.repository }}"
+  when:
+    - rru == 'rfsim'
+    - "'@sha256:' in synthran_srsue_image_source.repository"
+
+- name: Resolve the pinned public srsUE image to an immutable digest
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -m
+      - synthran.image_digest
+      - --repository
+      - "{{ synthran_srsue_image_source.repository }}"
+      - --tag
+      - "{{ synthran_srsue_image_source.tag }}"
+  delegate_to: localhost
+  become: false
+  register: synthran_srsue_image_resolution
+  changed_when: false
+  when:
+    - rru == 'rfsim'
+    - "'@sha256:' not in synthran_srsue_image_source.repository"
+
+- name: Freeze the resolved srsUE image reference
+  ansible.builtin.set_fact:
+    synthran_srsue_image_reference: "{{ synthran_srsue_image_resolution.stdout | trim }}"
+  when:
+    - rru == 'rfsim'
+    - synthran_srsue_image_resolution is defined
+    - not (synthran_srsue_image_resolution.skipped | default(false) | bool)
+
+- name: Require an immutable srsUE image before values rendering
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_image_reference is match('^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+    fail_msg: RFSIM srsUE must resolve to an immutable sha256 image reference.
+  when: rru == 'rfsim'
+
 - name: Write srsue values-rfsim.yaml
   ansible.builtin.copy:
     dest: "{{ [repo_dest_abs, 'charts', 'srsue', 'values-rfsim.yaml'] | path_join }}"
     content: |
+      image:
+        repository: "{{ synthran_srsue_image_reference }}"
+        tag: ""
+        pullPolicy: "{{ synthran_srsue_image_source.pull_policy }}"
       gnbIp: "{{ srsran_network.n3.gnb_ip }}"
       ueIp: "{{ srsran_network.n3.ue_ips[0] }}"
       n3networkName: "{{ n3networkName }}"
