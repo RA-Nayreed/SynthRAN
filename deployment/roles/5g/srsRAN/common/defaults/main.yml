@@ -16,12 +16,6 @@ srs_ue_label_selectors:
 ue_count: 3
 kubectl_bin: "/usr/bin/kubectl"
 
-yq_version: "v4.45.1"
-yq_bin_path: "/usr/local/bin/yq"
-# Normal SynthRAN execution installs checksum-verified yq in network.yml.
-# A standalone role invocation fails instead of downloading unchecked bytes.
-yq_url: ""
-
 # Selected from deployment/topology.yml and included in the deployment hash.
 srsran_network: "{{ synthran_topology.network }}"
 n3networkName: "{{ synthran_topology.n3network_name }}"
