@@ -6,8 +6,8 @@
   ansible.builtin.include_tasks: patch_charts.yml
   when: rru == 'rfsim'
 
-- name: Prepare the selected srsRAN UE pod before starting RFSIM processes
-  ansible.builtin.include_tasks: deploy_srsues.yml
+- name: Prepare the selected srsRAN UE pod through the pinned lifecycle
+  ansible.builtin.include_tasks: "{{ synthran_srsran_reference_deploy_srsues }}"
   when: rru == 'rfsim'
 
 - name: Harden the final srsRAN runtime before Helm deployment
