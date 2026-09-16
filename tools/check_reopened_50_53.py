@@ -47,6 +47,13 @@ def when_text(task: dict) -> str:
 
 
 def check_issue_50() -> None:
+    deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+    authoritative_resolve = '--source "$SOURCE_CONFIG" --output "$CONFIG"'
+    if authoritative_resolve not in deploy:
+        fail("#50: deploy.sh no longer resolves the original source into the private snapshot")
+    if deploy.index(authoritative_resolve) >= deploy.index("deployment/scripts/reserve_sop.py"):
+        fail("#50: authoritative source resolution must complete before SOP reservation mutation")
+
     with tempfile.TemporaryDirectory() as temporary:
         fixture = Path(temporary)
         profile = fixture / "profile.yml"
@@ -121,6 +128,15 @@ def check_issue_50() -> None:
         )
 
         topology.write_text(
+            yaml.safe_dump({"schema_version": 0, "rans": {"srsran": {"oai": {"network": {"n2": {}}}}}}),
+            encoding="utf-8",
+        )
+        expect_value_error(
+            lambda: load_scenario(source, deployment_only=True),
+            "topology schema_version must be a positive integer",
+        )
+
+        topology.write_text(
             yaml.safe_dump({"schema_version": 1, "rans": {"srsran": {}}}),
             encoding="utf-8",
         )
@@ -185,6 +201,15 @@ def check_issue_53() -> None:
         task = named_task(tasks, name)
         if retain_guard not in when_text(task):
             fail(f"#53: {name!r} can still mutate an already-correct binding")
+
+    filesystem = named_task(tasks, "Require a supported selected storage filesystem")
+    filesystem_assert = str((filesystem.get("ansible.builtin.assert") or {}).get("that", ""))
+    for marker in (
+        "containerd_existing_binding.stdout | trim == 'selected'",
+        "['ext4', 'xfs', 'btrfs']",
+    ):
+        if marker not in filesystem_assert:
+            fail(f"#53: retained mounted-filesystem validation is missing {marker!r}")
 
     keep = named_task(tasks, "Keep containerd running on the retained storage binding")
     if "containerd_existing_binding.stdout | trim == 'selected'" not in when_text(keep):
