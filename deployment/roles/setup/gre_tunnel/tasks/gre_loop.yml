@@ -6,17 +6,32 @@
          if inventory_hostname in groups['core_node']
          else hostvars[groups['core_node'][0]].ip }}
 
-- name: Configure unkeyed GRE link for {{ synthran_gre_bridge }}
+- name: Converge unkeyed GRE link for {{ synthran_gre_bridge }}
   ansible.builtin.shell: |
     set -eu
     bridge={{ synthran_gre_bridge | quote }}
+    remote={{ synthran_transport_remote_ip | quote }}
     port="gre-${bridge}"
+    current_bridge="$(ovs-vsctl port-to-br "$port" 2>/dev/null || true)"
+    current_type="$(ovs-vsctl --if-exists get interface "$port" type 2>/dev/null | tr -d '"' || true)"
+    current_remote="$(ovs-vsctl --if-exists get interface "$port" options:remote_ip 2>/dev/null | tr -d '"' || true)"
+    current_options="$(ovs-vsctl --if-exists get interface "$port" options 2>/dev/null || true)"
+    if [ "$current_bridge" = "$bridge" ] && \
+       [ "$current_type" = "gre" ] && \
+       [ "$current_remote" = "$remote" ] && \
+       ! printf '%s' "$current_options" | grep -q 'key='; then
+      echo retained
+      exit 0
+    fi
     ovs-vsctl --may-exist add-port "$bridge" "$port"
     ovs-vsctl set interface "$port" type=gre
     ovs-vsctl clear interface "$port" options
-    ovs-vsctl set interface "$port" options:remote_ip={{ synthran_transport_remote_ip | quote }}
+    ovs-vsctl set interface "$port" options:remote_ip="$remote"
+    echo changed
   args:
     executable: /bin/bash
+  register: synthran_gre_converge
+  changed_when: synthran_gre_converge.stdout | trim == 'changed'
   become: true
 
 - name: Verify GRE peer for {{ synthran_gre_bridge }}
