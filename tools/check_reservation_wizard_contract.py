@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract checks for interactive reservation policy selection."""
+"""Static contract checks for the simple interactive reservation UX."""
 
 from pathlib import Path
 
@@ -16,13 +16,10 @@ def require(text: str, needle: str) -> None:
 def main() -> int:
     text = Path("deploy.sh").read_text(encoding="utf-8")
     markers = [
-        "SOP reservation policy (default: $DEFAULT_RESERVATION_MODE)",
-        "Create or reuse the exact selected-node reservation",
-        "Require an existing exact selected-node reservation",
-        "Disable SOP reservation management",
-        "SOP host preparation policy (default: $DEFAULT_HOST_PREPARATION)",
-        "Fresh - prove allocation ownership, image, boot parameters, reset, readiness",
-        "Preserve - keep existing host state; no image/reset/bootparameter mutation",
+        "Ensure selected SOP nodes are reserved?",
+        "How should SynthRAN prepare the selected SOP nodes?",
+        "Reuse current node state",
+        "Reset/reimage nodes before deployment",
         "SELECTED_RESERVATION_MODE=create",
         "SELECTED_RESERVATION_MODE=require-existing",
         "SELECTED_RESERVATION_MODE=disabled",
@@ -30,17 +27,22 @@ def main() -> int:
         "SELECTED_HOST_PREPARATION=preserve",
         "'mode': reservation_mode",
         "'host_preparation': host_preparation",
-        "POS reservation: $SELECTED_RESERVATION_MODE",
-        "POS host state:  $SELECTED_HOST_PREPARATION",
     ]
     for marker in markers:
         require(text, marker)
 
-    old_prompt = "Ensure selected SOP nodes are reserved?"
-    if old_prompt in text:
-        raise CheckError(
-            "legacy boolean-only reservation prompt returned; interactive policy must be explicit"
-        )
+    for leaked_internal_label in (
+        "SOP reservation policy (default:",
+        "Create or reuse the exact selected-node reservation",
+        "Require an existing exact selected-node reservation",
+        "Disable SOP reservation management",
+        "SOP host preparation policy (default:",
+    ):
+        if leaked_internal_label in text:
+            raise CheckError(
+                "internal reservation policy leaked back into the ordinary interactive UX: "
+                + leaked_internal_label
+            )
 
     if text.index("'mode': reservation_mode") > text.index("Path(output).write_text"):
         raise CheckError("reservation mode is not materialized before scenario write")
