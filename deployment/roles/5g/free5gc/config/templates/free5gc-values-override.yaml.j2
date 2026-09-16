@@ -22,8 +22,11 @@
 # ============================================================
 
 {% set multinode = (core_node_name is defined and ran_node_name is defined and core_node_name != ran_node_name) %}
-{% set n2_masterIf = 'n3br' if multinode else nic_interface %}
-{% set n2_type = 'ovs' if multinode else 'ipvlan' %}
+{% set transport = synthran_topology.transport.workload_interfaces.core %}
+{% set n2_masterIf = transport.n2 if multinode else nic_interface %}
+{% set n3_masterIf = transport.n3 if multinode else nic_interface %}
+{% set n2_type = 'ovs' if multinode and n2_masterIf != 'physical' else 'ipvlan' %}
+{% set n3_type = 'ovs' if multinode and n3_masterIf != 'physical' else 'ipvlan' %}
 
 global:
   n2network:
@@ -37,8 +40,8 @@ global:
 {% endif %}
   n3network:
     enabled: true
-    masterIf: "{{ 'n3br' if multinode else nic_interface }}"
-    type: "{{ 'ovs' if multinode else 'ipvlan' }}"
+    masterIf: "{{ n3_masterIf }}"
+    type: "{{ n3_type }}"
 {% if multinode %}
     subnetIP: "10.100.50.0"
     cidr: "24"
@@ -58,7 +61,7 @@ global:
 {% if multinode %}
   amf:
     n2if:
-      ipAddress: "10.100.50.234"
+      ipAddress: "{{ synthran_topology.transport.endpoints.amf_ngap_ip }}"
     service:
       ngap:
         enabled: true
@@ -243,7 +246,7 @@ free5gc-smf:
               interfaces:
                 - interfaceType: N3
                   endpoints:
-                    - 10.100.50.233
+                    - {{ synthran_topology.transport.endpoints.branching_upf_n3_ip }}
                   networkInstances:
 {% for slice in profile.slices %}
                     - {{ slice.dnn }}
