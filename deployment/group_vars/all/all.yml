@@ -10,8 +10,8 @@ kubernetes_python_version: "36.0.3"
 
 # Fixed deployment tooling. setup/deployment_runtime is the single installer and
 # verifier. Fresh bootstrap establishes it before infrastructure roles that need
-# Helm; preserve bootstrap does not touch it, and network.yml establishes it at
-# the downstream deployment boundary before any backend/provenance consumer.
+# Helm; preserve bootstrap does not touch it. deployment_runtime.yml establishes
+# it after bootstrap and before network/backend/provenance consumers.
 helm_version: "3.22.0"
 helm_sha256:
   amd64: "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb"
