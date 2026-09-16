@@ -17,22 +17,27 @@
       Sub 07 requires the reviewed 5g-Ansible execution reference rather than
       an implicit or floating lifecycle source.
 
-- name: Materialize the pinned 5g-Ansible lifecycle source
-  ansible.builtin.git:
-    repo: "{{ synthran_srsran_reference.repository }}"
-    dest: "{{ synthran_private_dir }}/5g-ansible-reference"
-    version: "{{ synthran_srsran_reference.commit }}"
-    update: true
-    force: true
+- name: Materialize the authoritative pinned execution reference
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -m
+      - synthran.reference_checkout
+  register: synthran_srsran_reference_checkout
+  changed_when: false
   delegate_to: localhost
   become: false
+
+- name: Resolve the verified execution-reference root
+  ansible.builtin.set_fact:
+    synthran_srsran_reference_root: "{{ synthran_srsran_reference_checkout.stdout | trim }}"
 
 - name: Read back the materialized lifecycle revision
   ansible.builtin.command:
     argv:
       - git
       - -C
-      - "{{ synthran_private_dir }}/5g-ansible-reference"
+      - "{{ synthran_srsran_reference_root }}"
       - rev-parse
       - HEAD
   register: synthran_srsran_reference_head
@@ -44,17 +49,18 @@
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_srsran_reference_root | length > 0
       - (synthran_srsran_reference_head.stdout | trim) == synthran_srsran_reference.commit
     fail_msg: >-
-      Materialized 5g-Ansible revision does not match the reviewed Sub 07
+      The authoritative 5g-Ansible cache does not match the reviewed Sub 07
       execution reference.
 
 - name: Resolve reference-owned srsRAN lifecycle tasks
   ansible.builtin.set_fact:
     synthran_srsran_reference_deploy_with_check: >-
-      {{ synthran_private_dir }}/5g-ansible-reference/roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml
+      {{ synthran_srsran_reference_root }}/roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml
     synthran_srsran_reference_deploy_srsues: >-
-      {{ synthran_private_dir }}/5g-ansible-reference/roles/5g/srsRAN/deploy/tasks/deploy_srsues.yml
+      {{ synthran_srsran_reference_root }}/roles/5g/srsRAN/deploy/tasks/deploy_srsues.yml
 
 - name: Verify reference-owned srsRAN lifecycle tasks exist
   ansible.builtin.stat:
