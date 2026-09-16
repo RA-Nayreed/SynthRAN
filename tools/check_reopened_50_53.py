@@ -6,15 +6,18 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 
 import yaml
 
-from synthran.deployment_state import resolve_scenario
-from synthran.scenario import load_scenario
-
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from synthran.deployment_state import resolve_scenario
+from synthran.scenario import load_scenario
 
 
 def fail(message: str) -> None:
@@ -128,7 +131,12 @@ def check_issue_50() -> None:
         )
 
         topology.write_text(
-            yaml.safe_dump({"schema_version": 0, "rans": {"srsran": {"oai": {"network": {"n2": {}}}}}}),
+            yaml.safe_dump(
+                {
+                    "schema_version": 0,
+                    "rans": {"srsran": {"oai": {"network": {"n2": {}}}}},
+                }
+            ),
             encoding="utf-8",
         )
         expect_value_error(
