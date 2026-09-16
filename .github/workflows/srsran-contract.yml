@@ -50,7 +50,11 @@ jobs:
         run: helm version --short
 
       - name: Check Sub 07 checker syntax
-        run: python -m compileall -q tools/check_srsran_contract.py
+        run: >-
+          python -m compileall -q
+          tools/check_srsran_contract.py
+          tools/check_srsran_rfsim_render.py
+          synthran/image_digest.py
 
       - name: Parse touched Ansible YAML
         run: |
@@ -64,6 +68,7 @@ jobs:
               Path("deployment/roles/5g/srsRAN/config/tasks/harden_runtime.yml"),
               Path("deployment/roles/5g/srsRAN/deploy/tasks/main.yml"),
               Path("deployment/roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml"),
+              Path("deployment/roles/5g/srsRAN/deploy/tasks/harden_rfsim_ue_runtime.yml"),
               Path("deployment/roles/5g/srsRAN/deploy/tasks/materialize_reference.yml"),
               Path("deployment/roles/5g/srsRAN/deploy/tasks/verify_logging.yml"),
               Path("deployment/roles/5g/srsRAN/deploy/tasks/verify_ran_health.yml"),
@@ -88,6 +93,46 @@ jobs:
 
       - name: Validate local Sub 07 ownership boundary
         run: python tools/check_srsran_contract.py --section local
+
+      - name: Validate public OCI resolver normalization
+        run: |
+          python - <<'PY'
+          from synthran.image_digest import _normalize_public_repository
+
+          assert _normalize_public_repository("busybox") == (
+              "busybox", "registry-1.docker.io", "library/busybox"
+          )
+          assert _normalize_public_repository("r2labuser/srsran-gnb-uhd") == (
+              "r2labuser/srsran-gnb-uhd",
+              "registry-1.docker.io",
+              "r2labuser/srsran-gnb-uhd",
+          )
+          assert _normalize_public_repository("ghcr.io/ziyad-mabrouk/srsue") == (
+              "ghcr.io/ziyad-mabrouk/srsue",
+              "ghcr.io",
+              "ziyad-mabrouk/srsue",
+          )
+          print("public OCI resolver normalization OK")
+          PY
+
+      - name: Resolve the public RFSIM UE image to an immutable digest
+        run: |
+          set -euo pipefail
+          image="$(python -m synthran.image_digest \
+            --repository ghcr.io/ziyad-mabrouk/srsue \
+            --tag v1.0)"
+          if [[ ! "$image" =~ ^ghcr\.io/ziyad-mabrouk/srsue@sha256:[0-9a-f]{64}$ ]]; then
+            echo "Unexpected srsUE digest reference: $image" >&2
+            exit 1
+          fi
+          echo "SYNTHRAN_CI_SRSUE_IMAGE=$image" >>"$GITHUB_ENV"
+          echo "resolved public srsUE image: ${image%@sha256:*}@sha256:<verified>"
+
+      - name: Render one and multiple selected RFSIM UEs
+        run: >-
+          python tools/check_srsran_rfsim_render.py
+          --chart chart
+          --ue-image "$SYNTHRAN_CI_SRSUE_IMAGE"
 
       - name: Exercise an already-hardened N320 render
         run: |
