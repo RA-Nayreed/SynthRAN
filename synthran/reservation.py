@@ -403,15 +403,25 @@ def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> st
     raise ReservationError(f"POS allocation failed for {node}: {text or result.returncode}")
 
 
-def _allocate_for_fresh(node: str) -> str:
+def _probe_allocation_for_fresh(node: str) -> str:
+    print(f"[POS allocation] Probing {node}", flush=True)
     result = run(["pos", "allocations", "allocate", node], check=False)
     state = _allocation_state(node, result)
     if state == "new":
-        return state
+        print(f"[POS allocation] {node}: fresh allocation acquired", flush=True)
+    else:
+        print(
+            f"[POS allocation] {node}: existing allocation detected; fresh policy will "
+            "reclaim it only after every selected SOP node has been probed",
+            flush=True,
+        )
+    return state
 
-    # Fresh/reimage is the only policy that permits this destructive recovery,
-    # and acquire_calendar() has already proved exact caller-owned calendar authority.
+
+def _reclaim_allocation_for_fresh(node: str) -> str:
+    print(f"[POS allocation] {node}: reclaiming existing allocation", flush=True)
     released = run(["pos", "allocations", "free", "-k", node], check=False)
+    print(f"[POS allocation] {node}: requesting fresh allocation after reclaim", flush=True)
     retry = run(["pos", "allocations", "allocate", node], check=False)
     retry_state = _allocation_state(node, retry)
     if retry_state != "new":
@@ -420,7 +430,16 @@ def _allocate_for_fresh(node: str) -> str:
             f"unable to prove fresh allocation ownership for {node} after explicit reclaim"
             + (f": {detail}" if detail else "")
         )
+    print(f"[POS allocation] {node}: fresh allocation ownership proven", flush=True)
     return "reclaimed"
+
+
+def _allocate_for_fresh(node: str) -> str:
+    """Compatibility helper for callers that prepare a single node."""
+    state = _probe_allocation_for_fresh(node)
+    if state == "new":
+        return state
+    return _reclaim_allocation_for_fresh(node)
 
 
 def _boot_parameters(node: str) -> tuple[str, str]:
@@ -436,6 +455,11 @@ def _wait_for_ssh(node: str) -> int:
     )
     if attempts < 1:
         raise ReservationError("SYNTHRAN_POS_READY_ATTEMPTS must be positive")
+    print(
+        f"[POS readiness] {node}: waiting for SSH after reset "
+        f"(up to {attempts} probes)",
+        flush=True,
+    )
     last = "no response"
     for attempt in range(1, attempts + 1):
         result = run(
@@ -453,8 +477,18 @@ def _wait_for_ssh(node: str) -> int:
             check=False,
         )
         if result.returncode == 0:
+            print(
+                f"[POS readiness] {node}: SSH ready on probe {attempt}/{attempts}",
+                flush=True,
+            )
             return attempt
         last = _output(result) or f"exit status {result.returncode}"
+        if attempt % 5 == 0 and attempt < attempts:
+            print(
+                f"[POS readiness] {node}: still waiting for SSH "
+                f"({attempt}/{attempts})",
+                flush=True,
+            )
         if attempt < attempts and interval > 0:
             time.sleep(interval)
     raise ReservationError(f"{node} did not become SSH-ready after POS reset: {last}")
@@ -472,6 +506,11 @@ def prepare_hosts(
             "deployment.reservation.host_preparation must be fresh or preserve"
         )
     if mode == "preserve":
+        print(
+            "POS host preparation policy: preserve existing host state; "
+            "no allocation/image/bootparameter/reset mutation will be performed",
+            flush=True,
+        )
         return {
             "mode": "preserve",
             "nodes": list(selected),
@@ -487,13 +526,62 @@ def prepare_hosts(
     if not isinstance(image, str) or not image.strip():
         raise ReservationError("deployment.reservation.image must be a non-empty string")
 
+    print(
+        "POS fresh preparation phase 1/2: proving allocation authority for every "
+        "selected SOP node before any image/reset mutation",
+        flush=True,
+    )
+    allocation_states: dict[str, str] = {}
+    for node in selected:
+        allocation_states[node] = _probe_allocation_for_fresh(node)
+
+    for node in selected:
+        if allocation_states[node] == "already-active":
+            allocation_states[node] = _reclaim_allocation_for_fresh(node)
+
+    print(
+        "POS fresh preparation phase 1/2 complete: allocation authority is proven "
+        "for all selected SOP nodes",
+        flush=True,
+    )
+    print(
+        "POS fresh preparation phase 2/2: applying image, boot parameters, reset, "
+        "and readiness checks",
+        flush=True,
+    )
+
     nodes: dict[str, Any] = {}
     for node in selected:
-        allocation = _allocate_for_fresh(node)
+        allocation = allocation_states[node]
+        if allocation not in {"new", "reclaimed"}:
+            raise ReservationError(
+                f"internal allocation state for {node} is not safe to prepare: {allocation}"
+            )
         boot_profile, boot_parameters = _boot_parameters(node)
+
+        print(
+            f"[POS prepare] {node}: selecting image {image}; provider staging may "
+            "take several minutes",
+            flush=True,
+        )
         run(["pos", "nodes", "image", "--staging", node, image])
+        print(f"[POS prepare] {node}: image staging completed", flush=True)
+
+        print(
+            f"[POS prepare] {node}: applying boot parameters ({boot_profile})",
+            flush=True,
+        )
         run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
+        print(f"[POS prepare] {node}: boot parameters applied", flush=True)
+
+        print(
+            f"[POS prepare] {node}: resetting node with POS --blocking; this command "
+            "returns only after POS reports reset completion",
+            flush=True,
+        )
         run(["pos", "nodes", "reset", "--blocking", "--verbose", node])
+        print(f"[POS prepare] {node}: POS reset completed", flush=True)
+
         ready_attempt = _wait_for_ssh(node)
         nodes[node] = {
             "allocation": allocation,
