@@ -98,17 +98,45 @@ def main() -> int:
     stop = (ROOT / "deployment/roles/r2lab/ue/stop/tasks/main.yml").read_text(
         encoding="utf-8"
     )
+    rru = (ROOT / "deployment/roles/r2lab/rru/tasks/main.yml").read_text(
+        encoding="utf-8"
+    )
+
     require("all-off" not in cleanup, "cleanup still contains global all-off mutation")
     require("r2lab/ue/stop" in cleanup, "cleanup no longer stops only selected UEs")
-    require(
-        'rhubarbe pdu off "{{ rru }}"' in cleanup,
-        "cleanup no longer targets only the selected RRU",
-    )
     require(
         "groups['qhats']" in cleanup and "groups['qfits']" in cleanup,
         "cleanup no longer derives the selected physical UE groups",
     )
-    require("root@{{ ue }} 'stop.sh'" in stop, "selected MBIM UE stop behavior is missing")
+    require(
+        'rhubarbe-pdu off "{{ rru }}"' in cleanup,
+        "selected N3xx RRU cleanup no longer uses the maintained SophiaNode helper",
+    )
+    require(
+        'rhubarbe pdu off "{{ rru }}"' not in cleanup,
+        "obsolete pinned-reference N3xx RRU power-off command returned",
+    )
+    require(
+        'rhubarbe-pdu on "{{ rru }}"' in rru,
+        "selected N3xx RRU power-on no longer uses the maintained SophiaNode helper",
+    )
+    require(
+        'rhubarbe pdu on "{{ rru }}"' not in rru,
+        "obsolete pinned-reference N3xx RRU power-on command returned",
+    )
+
+    require(
+        "r2lab_stop_target: \"{{ ue_item if ue_item is defined else ue }}\"" in stop,
+        "UE stop role no longer resolves each include-loop item deterministically",
+    )
+    require(
+        'ue: "{{ ue | default(ue_item) }}"' not in stop,
+        "sticky UE fact can cause a second selected UE to reuse the first UE identity",
+    )
+    require(
+        "root@{{ r2lab_stop_target }} 'stop.sh'" in stop,
+        "selected MBIM UE stop behavior is missing",
+    )
     require("ue_mode == 'qmi'" in stop, "selected QMI UE detach behavior is missing")
 
     reserve = (ROOT / "deployment/scripts/reserve_r2lab.py").read_text(encoding="utf-8")
