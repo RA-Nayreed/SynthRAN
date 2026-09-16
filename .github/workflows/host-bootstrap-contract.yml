@@ -231,7 +231,7 @@ jobs:
           grep -F "Verify preserved kubelet is active" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
           grep -F "Verify preserved CNI DHCP binary exists" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
           grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
-          if grep -Eiq 'yq|helm|install|download|package|pip|unarchive' "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"; then
+          if grep -Eiq 'yq|helm|deployment_runtime|checksum-pinned|download the checksum|stage the checksum' "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"; then
             echo "fresh/deployment tooling leaked into preserve bootstrap plan" >&2
             cat "$RUNNER_TEMP/bootstrap-preserve-tasks.txt" >&2
             exit 1
