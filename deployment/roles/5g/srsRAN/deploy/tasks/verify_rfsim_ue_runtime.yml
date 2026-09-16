@@ -1,0 +1,72 @@
+---
+- name: Read the deployed RFSIM srsUE pod
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ ran_ns }}"
+    name: "{{ ue_pod_name }}"
+  register: synthran_srsue_live_pod
+  changed_when: false
+
+- name: Resolve configured and live srsUE image digests
+  ansible.builtin.set_fact:
+    synthran_srsue_expected_digest: >-
+      {{ synthran_srsue_image_reference |
+         regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
+    synthran_srsue_live_image_id: >-
+      {{ (synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
+          selectattr('name', 'equalto', 'ue') | first).imageID | default('') }}
+
+- name: Extract the live srsUE image digest
+  ansible.builtin.set_fact:
+    synthran_srsue_live_digest: >-
+      {{ synthran_srsue_live_image_id |
+         regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
+
+- name: Require the live RFSIM UE workload to match the rendered contract
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_live_pod.resources | length == 1
+      - >-
+        (synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'ue') | selectattr('ready', 'equalto', true) |
+         list | length) == 1
+      - synthran_srsue_expected_digest | length > 0
+      - synthran_srsue_live_digest == synthran_srsue_expected_digest
+      - ue_list | length == (ue_count | int)
+      - >-
+        (ue_list | map(attribute='index') | map('int') | list) ==
+        (synthran_ue_map | map(attribute='index') | map('int') | list)
+    fail_msg: >-
+      The deployed RFSIM srsUE pod does not match the selected-UE/image contract.
+
+- name: Ensure the shareable srsRAN provenance directory exists
+  ansible.builtin.file:
+    path: "{{ run_dir }}/provenance"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Retain verified RFSIM UE runtime provenance
+  ansible.builtin.copy:
+    dest: "{{ run_dir }}/provenance/srsran-rfsim-ue-runtime.json"
+    mode: '0644'
+    content: >-
+      {{ {
+           'schema_version': 2,
+           'chart_repository': repo_url,
+           'chart_revision': version,
+           'source_repository': synthran_srsue_image_source.repository,
+           'source_tag': synthran_srsue_image_source.tag,
+           'configured_image': synthran_srsue_image_reference,
+           'live_image_id': synthran_srsue_live_image_id,
+           'configured_image_digest': synthran_srsue_expected_digest,
+           'live_image_digest': synthran_srsue_live_digest,
+           'pod': ue_pod_name,
+           'pod_uid': synthran_srsue_live_pod.resources[0].metadata.uid,
+           'ue_count': ue_count | int,
+           'selected_ues': ue_list
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false
