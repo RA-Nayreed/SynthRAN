@@ -5,7 +5,6 @@
   any_errors_fatal: true
   roles:
     - role: setup/gre_tunnel
-      when: bridge_enabled
 
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
