@@ -596,55 +596,46 @@ BANNER
   done
   SELECTED_UE_SLICE_SPEC=$(IFS=,; echo "${UE_SLICE_ASSIGNMENTS[*]}")
 
-  echo
-  case "$DEFAULT_RESERVATION_MODE" in
-    create) DEFAULT_RESERVATION_MODE_CHOICE=1 ;;
-    require-existing) DEFAULT_RESERVATION_MODE_CHOICE=2 ;;
-    disabled) DEFAULT_RESERVATION_MODE_CHOICE=3 ;;
-    *) DEFAULT_RESERVATION_MODE=create; DEFAULT_RESERVATION_MODE_CHOICE=1 ;;
-  esac
-  echo "SOP reservation policy (default: $DEFAULT_RESERVATION_MODE)"
-  echo "1) Create or reuse the exact selected-node reservation"
-  echo "2) Require an existing exact selected-node reservation"
-  echo "3) Disable SOP reservation management"
-  read -r -p "Enter choice [1-3]: " RESERVATION_MODE_CHOICE
-  case "${RESERVATION_MODE_CHOICE:-$DEFAULT_RESERVATION_MODE_CHOICE}" in
-    1) SELECTED_RESERVATION_MODE=create ;;
-    2) SELECTED_RESERVATION_MODE=require-existing ;;
-    3) SELECTED_RESERVATION_MODE=disabled ;;
-    *) echo "Invalid SOP reservation policy" >&2; exit 2 ;;
-  esac
+  [[ "$DEFAULT_RESERVE" == true ]] && RESERVE_PROMPT="Y/n" || RESERVE_PROMPT="y/N"
+  read -r -p "Ensure selected SOP nodes are reserved? [$RESERVE_PROMPT]: " RESERVE_CHOICE
+  SELECTED_RESERVE=$DEFAULT_RESERVE
+  [[ "${RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_RESERVE=true
+  [[ "${RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_RESERVE=false
 
-  SELECTED_RESERVE=false
-  SELECTED_HOST_PREPARATION=preserve
   SELECTED_DURATION=$DEFAULT_DURATION
   SELECTED_POS_IMAGE=$DEFAULT_POS_IMAGE
-  if [[ "$SELECTED_RESERVATION_MODE" != disabled ]]; then
-    SELECTED_RESERVE=true
+  SELECTED_HOST_PREPARATION=preserve
+  if $SELECTED_RESERVE; then
+    if [[ "$DEFAULT_RESERVATION_MODE" == require-existing ]]; then
+      SELECTED_RESERVATION_MODE=require-existing
+    else
+      SELECTED_RESERVATION_MODE=create
+    fi
     read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION
     SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
     [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
 
     case "$DEFAULT_HOST_PREPARATION" in
-      fresh) DEFAULT_HOST_PREPARATION_CHOICE=1 ;;
-      preserve) DEFAULT_HOST_PREPARATION_CHOICE=2 ;;
-      *) DEFAULT_HOST_PREPARATION=fresh; DEFAULT_HOST_PREPARATION_CHOICE=1 ;;
+      preserve) DEFAULT_PREP_CHOICE=1 ;;
+      *) DEFAULT_PREP_CHOICE=2 ;;
     esac
     echo
-    echo "SOP host preparation policy (default: $DEFAULT_HOST_PREPARATION)"
-    echo "1) Fresh - prove allocation ownership, image, boot parameters, reset, readiness"
-    echo "2) Preserve - keep existing host state; no image/reset/bootparameter mutation"
-    read -r -p "Enter choice [1-2]: " HOST_PREPARATION_CHOICE
-    case "${HOST_PREPARATION_CHOICE:-$DEFAULT_HOST_PREPARATION_CHOICE}" in
-      1) SELECTED_HOST_PREPARATION=fresh ;;
-      2) SELECTED_HOST_PREPARATION=preserve ;;
-      *) echo "Invalid SOP host preparation policy" >&2; exit 2 ;;
+    echo "How should SynthRAN prepare the selected SOP nodes?"
+    echo "1) Reuse current node state"
+    echo "2) Reset/reimage nodes before deployment"
+    read -r -p "Enter choice [1-2] [$DEFAULT_PREP_CHOICE]: " PREP_CHOICE
+    case "${PREP_CHOICE:-$DEFAULT_PREP_CHOICE}" in
+      1) SELECTED_HOST_PREPARATION=preserve ;;
+      2) SELECTED_HOST_PREPARATION=fresh ;;
+      *) echo "Invalid SOP preparation choice" >&2; exit 2 ;;
     esac
 
     if [[ "$SELECTED_HOST_PREPARATION" == fresh ]]; then
       read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE
       SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
     fi
+  else
+    SELECTED_RESERVATION_MODE=disabled
   fi
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
@@ -715,9 +706,15 @@ PY
   echo "  Network profile: $SELECTED_NETWORK_PROFILE"
   echo "  UE slices:"
   describe_ue_slice_assignments "$SELECTED_NETWORK_PROFILE" "$SELECTED_UE_SLICE_SPEC"
-  echo "  POS reservation: $SELECTED_RESERVATION_MODE, ${SELECTED_DURATION}m"
-  echo "  POS host state:  $SELECTED_HOST_PREPARATION"
-  [[ "$SELECTED_HOST_PREPARATION" == fresh ]] && echo "  POS image:       $SELECTED_POS_IMAGE"
+  if $SELECTED_RESERVE; then
+    if [[ "$SELECTED_HOST_PREPARATION" == fresh ]]; then
+      echo "  POS:             true, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+    else
+      echo "  POS:             true, ${SELECTED_DURATION}m, reuse current host state"
+    fi
+  else
+    echo "  POS:             false"
+  fi
   [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:           $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
