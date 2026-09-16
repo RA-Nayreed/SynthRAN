@@ -57,7 +57,16 @@ def run(
     *,
     check: bool = True,
     stdin: str | None = None,
+    echo: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Run a reservation command while keeping machine responses quiet by default.
+
+    JSON/provider queries are implementation details and belong in evidence files,
+    not in the interactive terminal. Mutation paths opt into ``echo=True`` when
+    their provider output is useful to the operator. Errors remain available from
+    the captured result and are included in raised ReservationError messages.
+    """
+
     options: dict[str, Any] = {
         "text": True,
         "capture_output": True,
@@ -68,9 +77,9 @@ def run(
     else:
         options["input"] = stdin
     result = subprocess.run(list(argv), **options)
-    if result.stdout:
+    if echo and result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
-    if result.stderr:
+    if echo and result.stderr:
         print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
     if check and result.returncode:
         detail = _output(result) or f"exit status {result.returncode}"
@@ -196,6 +205,7 @@ def provider_context(provider: Mapping[str, Any]) -> dict[str, Any]:
         result = run(
             ["slices", "experiment", "create", experiment, "--duration", duration],
             check=False,
+            echo=True,
         )
         if result.returncode:
             raise ReservationError(
@@ -352,7 +362,12 @@ def acquire_calendar(
                 f"for {booked_minutes} minute(s), shorter than requested {duration}; "
                 "refusing an overlapping calendar create"
             )
-        return _calendar_record(active[0], status="reused")
+        record = _calendar_record(active[0], status="reused")
+        print(
+            f"Reusing active SOP reservation {record['id']} through {record['end']}",
+            flush=True,
+        )
+        return record
 
     result = run(
         [
@@ -386,6 +401,10 @@ def acquire_calendar(
         raise ReservationError(
             "POS provider evidence did not prove the newly created reservation exactly covers the selected nodes for the requested booked duration"
         )
+    print(
+        f"Created SOP reservation {reservation_id} for {', '.join(selected)}",
+        flush=True,
+    )
     return _calendar_record(matches[0], status="created")
 
 
@@ -405,13 +424,13 @@ def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> st
 
 def _probe_allocation_for_fresh(node: str) -> str:
     print(f"[POS allocation] Probing {node}", flush=True)
-    result = run(["pos", "allocations", "allocate", node], check=False)
+    result = run(["pos", "allocations", "allocate", node], check=False, echo=True)
     state = _allocation_state(node, result)
     if state == "new":
         print(f"[POS allocation] {node}: fresh allocation acquired", flush=True)
     else:
         print(
-            f"[POS allocation] {node}: existing allocation detected; fresh policy will "
+            f"[POS allocation] {node}: existing allocation detected; fresh preparation will "
             "reclaim it only after every selected SOP node has been probed",
             flush=True,
         )
@@ -420,9 +439,9 @@ def _probe_allocation_for_fresh(node: str) -> str:
 
 def _reclaim_allocation_for_fresh(node: str) -> str:
     print(f"[POS allocation] {node}: reclaiming existing allocation", flush=True)
-    released = run(["pos", "allocations", "free", "-k", node], check=False)
+    released = run(["pos", "allocations", "free", "-k", node], check=False, echo=True)
     print(f"[POS allocation] {node}: requesting fresh allocation after reclaim", flush=True)
-    retry = run(["pos", "allocations", "allocate", node], check=False)
+    retry = run(["pos", "allocations", "allocate", node], check=False, echo=True)
     retry_state = _allocation_state(node, retry)
     if retry_state != "new":
         detail = _output(retry) or _output(released)
@@ -507,8 +526,7 @@ def prepare_hosts(
         )
     if mode == "preserve":
         print(
-            "POS host preparation policy: preserve existing host state; "
-            "no allocation/image/bootparameter/reset mutation will be performed",
+            "Reusing existing SOP host state; no allocation, image, boot-parameter, or reset mutation will be performed",
             flush=True,
         )
         return {
@@ -527,8 +545,7 @@ def prepare_hosts(
         raise ReservationError("deployment.reservation.image must be a non-empty string")
 
     print(
-        "POS fresh preparation phase 1/2: proving allocation authority for every "
-        "selected SOP node before any image/reset mutation",
+        "Preparing selected SOP nodes: first proving allocation authority for every node before image/reset mutation",
         flush=True,
     )
     allocation_states: dict[str, str] = {}
@@ -540,13 +557,7 @@ def prepare_hosts(
             allocation_states[node] = _reclaim_allocation_for_fresh(node)
 
     print(
-        "POS fresh preparation phase 1/2 complete: allocation authority is proven "
-        "for all selected SOP nodes",
-        flush=True,
-    )
-    print(
-        "POS fresh preparation phase 2/2: applying image, boot parameters, reset, "
-        "and readiness checks",
+        "Allocation authority proven for all selected SOP nodes; applying image, boot parameters, reset, and readiness checks",
         flush=True,
     )
 
@@ -564,14 +575,14 @@ def prepare_hosts(
             "take several minutes",
             flush=True,
         )
-        run(["pos", "nodes", "image", "--staging", node, image])
+        run(["pos", "nodes", "image", "--staging", node, image], echo=True)
         print(f"[POS prepare] {node}: image staging completed", flush=True)
 
         print(
             f"[POS prepare] {node}: applying boot parameters ({boot_profile})",
             flush=True,
         )
-        run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
+        run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters], echo=True)
         print(f"[POS prepare] {node}: boot parameters applied", flush=True)
 
         print(
@@ -579,7 +590,7 @@ def prepare_hosts(
             "returns only after POS reports reset completion",
             flush=True,
         )
-        run(["pos", "nodes", "reset", "--blocking", "--verbose", node])
+        run(["pos", "nodes", "reset", "--blocking", "--verbose", node], echo=True)
         print(f"[POS prepare] {node}: POS reset completed", flush=True)
 
         ready_attempt = _wait_for_ssh(node)
