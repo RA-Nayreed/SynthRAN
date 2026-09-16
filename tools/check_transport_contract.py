@@ -237,7 +237,30 @@ def validate_source_gate() -> None:
 
         scenario["deployment"]["topology_file"] = str(TOPOLOGY.resolve())
         scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
-        load_scenario(scenario_path, deployment_only=True)
+        split = load_scenario(scenario_path, deployment_only=True)
+        if split["deployment"].get("bridge_enabled") is not True:
+            fail("source gate: split core/RAN placement must derive bridge_enabled=true")
+
+        scenario["deployment"]["bridge_enabled"] = False
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+        expect_value_error(
+            lambda: load_scenario(scenario_path, deployment_only=True),
+            "deployment.bridge_enabled is derived from node placement",
+        )
+
+        scenario["deployment"].pop("bridge_enabled")
+        scenario["deployment"]["nodes"]["ran"] = scenario["deployment"]["nodes"]["core"]
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+        colocated = load_scenario(scenario_path, deployment_only=True)
+        if colocated["deployment"].get("bridge_enabled") is not False:
+            fail("source gate: colocated core/RAN placement must derive bridge_enabled=false")
+
+        scenario["deployment"]["bridge_enabled"] = "false"
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+        expect_value_error(
+            lambda: load_scenario(scenario_path, deployment_only=True),
+            "deployment.bridge_enabled must be boolean when provided",
+        )
 
 
 def validate_reference(reference: Path) -> None:
@@ -257,6 +280,19 @@ def validate_reference(reference: Path) -> None:
     )
     require(reference_gre, "type=gre", "pinned reference GRE role")
     forbid(reference_gre, "options:key", "pinned reference GRE role")
+
+    reference_ovs = (reference / "roles/setup/ovs/tasks/main.yml").read_text(
+        encoding="utf-8"
+    )
+    for bridge in ("n2br", "n3br", "n4br"):
+        require(reference_ovs, bridge, "pinned reference OVS role")
+
+    reference_machine = (reference / "tools/fiveg_machine.py").read_text(encoding="utf-8")
+    require(
+        reference_machine,
+        "bridge_enabled={'true' if ran_node != core_node else 'false'}",
+        "pinned reference machine placement contract",
+    )
 
     reference_free5gc = (
         reference / "roles/5g/free5gc/config/templates/free5gc-values-override.yaml.j2"
@@ -278,6 +314,8 @@ def validate_consumers() -> None:
     scenario = read("synthran/scenario.py")
     require(scenario, "_validate_selected_transport", "scenario.py")
     require(scenario, "ipaddress.ip_interface", "scenario.py")
+    require(scenario, 'split_transport = nodes["core"] != nodes["ran"]', "scenario.py")
+    require(scenario, 'dep["bridge_enabled"] = split_transport', "scenario.py")
 
     ovs = read("deployment/roles/setup/ovs/tasks/main.yml")
     require(ovs, "synthran_topology.transport.bridges", "setup/ovs")
@@ -288,6 +326,13 @@ def validate_consumers() -> None:
     cni = read("deployment/roles/setup/cni/tasks/main.yml")
     forbid(cni, "ovs-vsctl", "setup/cni")
     forbid(cni, "openvswitch-switch", "setup/cni")
+    forbid(cni, "network-addons-config-full-oai", "setup/cni")
+    forbid(cni, "when: bridge_enabled", "setup/cni")
+    require(cni, "Render the shared NetworkAddonsConfig manifest", "setup/cni")
+    cni_manifest = read("deployment/roles/setup/cni/templates/network-addons-config.yaml.j2")
+    require(cni_manifest, "ovs: {}", "shared CNAO manifest")
+    if (ROOT / "deployment/roles/setup/cni/templates/network-addons-config-full-oai.yaml.j2").exists():
+        fail("setup/cni: obsolete bridge-disabled CNAO template still exists")
 
     gre_main = read("deployment/roles/setup/gre_tunnel/tasks/main.yml")
     gre_loop = read("deployment/roles/setup/gre_tunnel/tasks/gre_loop.yml")
@@ -319,6 +364,7 @@ def validate_consumers() -> None:
     if network.count("setup/gre_tunnel") != 1:
         fail("network.yml: transport role must have one orchestration owner")
     require(network, "Configure authoritative N2/N3/N4 host transport", "network.yml")
+    forbid(network, "when: bridge_enabled", "network.yml transport orchestration")
 
     open5gs_deploy = read("deployment/roles/5g/open5gs/deploy/tasks/main.yml")
     require(open5gs_deploy, "synthran_topology.transport.bridges.core", "Open5GS deploy")
@@ -387,6 +433,7 @@ def validate_consumers() -> None:
         "10.10.3.254/24",
         "10.100.50.238/29",
         "192.168.3.254/24",
+        "placement-derived",
         "transport-evidence.json",
     ):
         require(documentation, marker, "transport-contract.md")
