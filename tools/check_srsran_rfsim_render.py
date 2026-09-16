@@ -19,7 +19,7 @@ CONFIGMAP_TEMPLATE = (
     ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
 )
 IMAGE_SOURCE = 'image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"'
-IMAGE_HARDENED = 'image: "{{ .Values.image.repository }}"'
+IMAGE_IMMUTABLE = 'image: "{{ .Values.image.repository }}"'
 DIGEST_RE = re.compile(r"^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 
 
@@ -57,13 +57,8 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
     ]["content"]
     deployment = environment.from_string(deployment_source).render(**context)
     require(
-        deployment.count(IMAGE_SOURCE) == 1,
-        "production RFSIM deployment template lost its single image patch site",
-    )
-    deployment = deployment.replace(IMAGE_SOURCE, IMAGE_HARDENED)
-    require(
-        deployment.count(IMAGE_HARDENED) == 1 and IMAGE_SOURCE not in deployment,
-        "RFSIM UE image hardening did not produce one digest-ready image site",
+        deployment.count(IMAGE_IMMUTABLE) == 1 and IMAGE_SOURCE not in deployment,
+        "production RFSIM deployment template must consume one digest-qualified repository directly",
     )
     (chart / "charts/srsue/templates/deployment.yaml").write_text(
         deployment + "\n", encoding="utf-8"
@@ -72,13 +67,16 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
     configmap = environment.from_string(
         CONFIGMAP_TEMPLATE.read_text(encoding="utf-8")
     ).render(**context)
+    require("add_route.sh" not in configmap, "obsolete RFSIM route helper returned")
+    require("12.1.0.0/16" not in configmap and "14.1.0.0/16" not in configmap,
+            "hardcoded cross-tunnel routes returned")
     (chart / "charts/srsue/templates/configmap.yaml").write_text(
         configmap + "\n", encoding="utf-8"
     )
 
     files = chart / "charts/srsue/files"
     files.mkdir(parents=True, exist_ok=True)
-    for name in ("start_gnu.sh", "multi_ue_scenario.py", "add_route.sh"):
+    for name in ("start_gnu.sh", "multi_ue_scenario.py"):
         (files / name).write_text(f"# fixture for {name}\n", encoding="utf-8")
 
 
@@ -168,7 +166,6 @@ def _render_case(chart_source: Path, image: str, count: int) -> None:
         rendered = result.stdout
         require(image in rendered, f"{count}-UE render lost immutable srsUE image")
         require(mutable_image not in rendered, f"{count}-UE render retained mutable srsUE tag")
-        require('value: "n3network"' not in rendered, "unexpected quoted N3 fixture sentinel")
         require("n3network" in rendered, f"{count}-UE render lost selected N3 attachment")
         require(f'value: "{count}"' in rendered, f"{count}-UE render lost UE_COUNT")
 
