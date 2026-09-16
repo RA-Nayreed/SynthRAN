@@ -11,7 +11,7 @@
   when: venv_python.stat.exists
 
 - name: Load common variables
-  include_vars:
+  ansible.builtin.include_vars:
     file: "../../common/defaults/main.yml"
 
 - name: Remove existing srsRAN Helm directory to ensure clean state
@@ -24,8 +24,8 @@
     repo: "{{ repo_url }}"
     dest: "{{ repo_dest }}"
     version: "{{ version | default('main') }}"
-    update: no
-    force: yes
+    update: false
+    force: true
 
 - name: Ensure namespace exists
   kubernetes.core.k8s:
@@ -49,8 +49,8 @@
     values_filename: "{{ rru_file_map[(rru | string | trim | lower)] }}"
   vars:
     rru_file_map:
-      n300: values-n300-n78-20MHz.yaml # values-n300.yaml is original FDD, band 3
-      n320: values-n320-n78-20MHz.yaml # values-n320.yaml is original FDD, band 3
+      n300: values-n300-n78-20MHz.yaml
+      n320: values-n320-n78-20MHz.yaml
       rfsim: values-rfsim.yaml
 
 - name: Require a supported srsRAN radio mode
@@ -105,7 +105,7 @@
   ansible.builtin.include_tasks: apply_network_profile.yaml
 
 - name: Report the srsRAN AMF endpoint
-  debug:
+  ansible.builtin.debug:
     msg:
       - "amf_ip={{ srsran_network.n2.amf_ip | quote }}"
       - "amf_port={{ srsran_network.n2.amf_port | quote }}"
@@ -122,7 +122,7 @@
       .namespace = "{{ ran_ns }}"
     ' "{{ values_file }}"
 
-- name: Fix device_args for rfsim GNU Radio single-channel multi-UE
+- name: Fix device_args for RFSIM GNU Radio single-channel multi-UE
   ansible.builtin.shell: >
     {{ yq_bin_path }} eval -i '
       .gnbConfig.cell_cfg.channel_bandwidth_MHz = 20 |
@@ -133,17 +133,9 @@
     ' "{{ values_file }}"
   when: rru == 'rfsim'
 
-- name: Parameterize the gNB shared N3 attachment
-  ansible.builtin.replace:
-    path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
-    regexp: '"name":\s*"n3network"'
-    replace: '"name": "{{ ''{{'' }} .Values.n3networkName {{ ''}}'' }}"'
-
 - name: Configure srsRAN interoperability with an OAI core
   ansible.builtin.include_tasks: oai_core_network.yml
   when: core == 'oai'
-
-# --- rfsim only: UE list + srsue values file ---
 
 - name: Load resolved network profile vars for RFSIM UE rendering
   ansible.builtin.include_vars:
