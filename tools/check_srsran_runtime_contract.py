@@ -59,26 +59,42 @@ def main() -> None:
 
     patch = text(PATCH_CHARTS)
     require(
-        'image: "{{ \'{{\' }} .Values.image.repository {{ \'}}\' }}"' in patch,
-        "RFSIM deployment template no longer consumes the digest-qualified repository directly",
+        ".Values.image.repository" in patch and ".Values.image.tag" not in patch,
+        "RFSIM deployment template must consume the digest-qualified repository directly",
     )
     for forbidden in (
         "add_route.sh",
-        ".Values.image.repository {{ '}}' }}:{{ '{{' }} .Values.image.tag",
         "python3-pip",
         "python3-venv",
         "CAP_NET_ADMIN",
     ):
         require(forbidden not in patch, f"obsolete/buggy RFSIM chart code returned: {forbidden}")
     require(
-        patch.count("/var/log/gnu_multi_ue.log") == 2,
-        "GNU Radio log must have one script-owned path declaration/write flow",
+        patch.count("LOG=/var/log/gnu_multi_ue.log") == 1,
+        "GNU Radio startup must declare exactly one authoritative log path",
     )
+    require(
+        'exec python3 /srsran/config/multi_ue_scenario.py --nof-ues "$UE_COUNT" >> "$LOG" 2>&1'
+        in patch,
+        "GNU Radio broker must write through the script-owned log exactly once",
+    )
+    require('tee "$LOG"' not in patch, "GNU Radio script must not add a second log writer")
     require("GNU Radio broker ready" in patch, "RFSIM broker lost explicit readiness marker")
 
     configmap = text(RFSIM_CONFIGMAP)
-    for forbidden in ("add_route.sh", "12.1.0.0/16", "14.1.0.0/16"):
-        require(forbidden not in configmap, f"cross-tunnel route injection returned: {forbidden}")
+    for forbidden in (
+        "add_route.sh",
+        "12.1.0.0/16",
+        "14.1.0.0/16",
+        "/proc/1/fd/1",
+    ):
+        require(forbidden not in configmap, f"obsolete RFSIM UE behavior returned: {forbidden}")
+    for needle in (
+        'CONSOLE_LOG="/var/log/ue${UE_NUMBER}.console.log"',
+        '>> "$CONSOLE_LOG" 2>&1 &',
+        'filename = {log_file}',
+    ):
+        require(needle in configmap, f"RFSIM UE log ownership lost: {needle}")
 
     rfsim = text(RFSIM_VERIFY)
     for needle in (
@@ -99,12 +115,16 @@ def main() -> None:
         "add_route.sh",
         "gnb_pod_name_result",
         "tee /var/log/gnu_multi_ue.log",
+        "tee /var/log/ue",
+        "PDU Session Establishment successful",
     ):
-        require(forbidden not in broker, f"buggy RFSIM startup code returned: {forbidden}")
+        require(forbidden not in broker, f"buggy RFSIM startup/evidence code returned: {forbidden}")
     for needle in (
         "[m]ulti_ue_scenario.py",
         "GNU Radio broker ready",
         "synthran_gnb_logging_pod",
+        ".console.log",
+        "ip -4 -o addr show dev tun_srsue",
         "Require the gNB cell to activate",
         "Require the GNU Radio broker to start",
         "Require the gNB to establish NGAP with the AMF",
