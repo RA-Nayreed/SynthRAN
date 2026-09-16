@@ -117,12 +117,20 @@ def main() -> int:
         "obsolete pinned-reference N3xx RRU power-off command returned",
     )
     require(
+        "seconds: 20" in cleanup,
+        "N3xx power-off settle interval was removed",
+    )
+    require(
         'rhubarbe-pdu on "{{ rru }}"' in rru,
         "selected N3xx RRU power-on no longer uses the maintained SophiaNode helper",
     )
     require(
         'rhubarbe pdu on "{{ rru }}"' not in rru,
         "obsolete pinned-reference N3xx RRU power-on command returned",
+    )
+    require(
+        "seconds: 60" in rru,
+        "N3xx cold-boot interval was removed",
     )
 
     require(
