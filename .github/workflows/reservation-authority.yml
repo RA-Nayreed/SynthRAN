@@ -33,11 +33,13 @@ jobs:
         run: >-
           python -m py_compile
           synthran/reservation.py
+          synthran/pos_images.py
           synthran/scenario.py
           deployment/scripts/reserve_sop.py
           deployment/scripts/reserve_r2lab.py
           tools/check_reservation_authority.py
           tools/check_pos_calendar_reuse_regression.py
+          tools/check_pos_image_resolution.py
           tools/check_reservation_failure_evidence.py
           tools/check_reservation_cli_fakes.py
           tools/check_resource_authority_contract.py
@@ -47,6 +49,9 @@ jobs:
 
       - name: Validate active POS calendar reuse regression
         run: python tools/check_pos_calendar_reuse_regression.py
+
+      - name: Validate POS image alias resolution
+        run: python tools/check_pos_image_resolution.py
 
       - name: Validate failure evidence preservation
         run: python tools/check_reservation_failure_evidence.py
