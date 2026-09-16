@@ -99,9 +99,13 @@
     quiet: true
     that:
       - >-
-        (storage_existing_mount.stdout | trim | length > 0 and
+        (containerd_existing_binding.stdout | trim == 'selected' and
          storage_fstype.stdout | trim in ['ext4', 'xfs', 'btrfs']) or
-        (storage_existing_mount.stdout | trim | length == 0 and
+        (containerd_existing_binding.stdout | trim != 'selected' and
+         storage_existing_mount.stdout | trim | length > 0 and
+         storage_fstype.stdout | trim in ['ext4', 'xfs', 'btrfs']) or
+        (containerd_existing_binding.stdout | trim != 'selected' and
+         storage_existing_mount.stdout | trim | length == 0 and
          storage_fstype.stdout | trim == 'ext4')
     fail_msg: >-
       Selected storage /dev/{{ storage }} uses '{{ storage_fstype.stdout | trim }}'.
