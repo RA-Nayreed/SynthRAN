@@ -48,14 +48,19 @@ transport_profiles:
 
   free5gc: &transport_free5gc
     bridges:
-      # The pinned Free5GC multi-node chart puts logical N2 and N3 on n3br.
-      # n4br is retained only for the pinned reference's local N3<->N4 patch
-      # compatibility path; it is not a second inter-host tunnel.
+      # The retained Free5GC multi-node chart puts logical N2 and N3 on n3br.
+      # n4br is retained only for the reference-compatible local N3<->N4 patch
+      # path; it is not a second inter-host tunnel.
       core: [n3br, n4br]
       ran: [n3br, n4br]
     workload_interfaces:
       core: {n2: n3br, n3: n3br, n4: physical}
       ran: {n2: primary, n3: n3br}
+    # These are chart attachment networks, distinct from the narrower host GRE
+    # address prefix. They are consumed by the Free5GC values adapter.
+    chart_networks:
+      n2: {subnet_ip: 10.100.50.0, cidr: 24}
+      n3: {subnet_ip: 10.100.50.0, cidr: 24}
     colocated:
       addresses: {}
     split:
@@ -68,6 +73,9 @@ transport_profiles:
     endpoints:
       amf_ngap_ip: &free5gc_amf_ngap 10.100.50.234
       branching_upf_n3_ip: 10.100.50.233
+      branching_upf_n4_ip: 10.100.50.241
+      anchor_upf1_n4_ip: 10.100.50.242
+      anchor_upf2_n4_ip: 10.100.50.243
 
 rans:
   srsran:
@@ -84,7 +92,7 @@ rans:
       transport: *transport_free5gc
       network:
         n2: {amf_ip_split: *free5gc_amf_ngap, amf_ip_colocated: 10.100.50.249, amf_port: 38412, gnb_ip: 10.100.50.250, gnb_bind_ip: 10.100.50.250}
-        n3: {gnb_ip: 10.100.50.250, ue_ips: [10.100.50.251, 10.100.50.252, 10.100.50.253]}
+        n3: {gnb_ip: 10.100.50.250, ue_ips: [10.100.50.251, 10.100.50.252, 10.100.50.253], route_cidr: 10.100.50.248/29}
     oai:
       namespace: oai
       n3network_name: oai-5g-basic-n3
@@ -103,7 +111,7 @@ rans:
       transport: *transport_free5gc
       network:
         n2: {subnet_ip: 10.100.50.248, cidr: 29, gateway: 10.100.50.254, gnb_ip: 10.100.50.250, amf_ip: free5gc-free5gc-amf-amf-n2, amf_ngap_port: 38412}
-        n3: {subnet_ip: 10.100.50.232, cidr: 29, gateway: 10.100.50.238, gnb_ip: 10.100.50.236}
+        n3: {subnet_ip: 10.100.50.232, cidr: 29, gateway: 10.100.50.238, gnb_ip: 10.100.50.236, route_cidr: 10.100.50.232/29}
     oai:
       namespace: oai
       transport: *transport_oai
@@ -117,7 +125,10 @@ rans:
     free5gc:
       namespace: free5gc
       transport: *transport_free5gc
-      network: {amf_ip: *free5gc_amf_ngap, transport_bridge: n3br}
+      network:
+        amf_ip: *free5gc_amf_ngap
+        transport_bridge: n3br
+        n3: {route_cidr: 10.100.50.0/24}
     oai:
       namespace: oai
       transport: *transport_oai
