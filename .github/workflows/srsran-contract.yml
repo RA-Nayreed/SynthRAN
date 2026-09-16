@@ -53,6 +53,7 @@ jobs:
         run: >-
           python -m compileall -q
           tools/check_srsran_contract.py
+          tools/check_srsran_runtime_contract.py
           tools/check_srsran_rfsim_render.py
           synthran/image_digest.py
 
@@ -94,6 +95,9 @@ jobs:
       - name: Validate local Sub 07 ownership boundary
         run: python tools/check_srsran_contract.py --section local
 
+      - name: Validate final runtime ownership boundary
+        run: python tools/check_srsran_runtime_contract.py
+
       - name: Validate public OCI resolver normalization
         run: |
           python - <<'PY'
@@ -112,21 +116,41 @@ jobs:
               "ghcr.io",
               "ziyad-mabrouk/srsue",
           )
+          for invalid in (
+              "quay.io/example/image",
+              "localhost:5000/example/image",
+              "https://ghcr.io/example/image",
+          ):
+              try:
+                  _normalize_public_repository(invalid)
+              except ValueError:
+                  pass
+              else:
+                  raise AssertionError(f"unsupported registry accepted: {invalid}")
           print("public OCI resolver normalization OK")
           PY
 
-      - name: Resolve the public RFSIM UE image to an immutable digest
+      - name: Resolve the pinned chart's RFSIM UE image to an immutable digest
         run: |
           set -euo pipefail
+          mapfile -t image_coordinates < <(python - <<'PY'
+          import yaml
+          values = yaml.safe_load(open("chart/charts/srsue/values.yaml", encoding="utf-8"))
+          print(values["image"]["repository"])
+          print(values["image"]["tag"])
+          PY
+          )
+          repository="${image_coordinates[0]}"
+          tag="${image_coordinates[1]}"
           image="$(python -m synthran.image_digest \
-            --repository ghcr.io/ziyad-mabrouk/srsue \
-            --tag v1.0)"
-          if [[ ! "$image" =~ ^ghcr\.io/ziyad-mabrouk/srsue@sha256:[0-9a-f]{64}$ ]]; then
+            --repository "$repository" \
+            --tag "$tag")"
+          if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
             echo "Unexpected srsUE digest reference: $image" >&2
             exit 1
           fi
           echo "SYNTHRAN_CI_SRSUE_IMAGE=$image" >>"$GITHUB_ENV"
-          echo "resolved public srsUE image: ${image%@sha256:*}@sha256:<verified>"
+          echo "resolved pinned-chart srsUE image: ${image%@sha256:*}@sha256:<verified>"
 
       - name: Render one and multiple selected RFSIM UEs
         run: >-
