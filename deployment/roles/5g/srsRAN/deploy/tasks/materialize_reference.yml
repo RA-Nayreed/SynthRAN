@@ -49,15 +49,20 @@
       Materialized 5g-Ansible revision does not match the reviewed Sub 07
       execution reference.
 
-- name: Resolve the reference-owned physical startup task
+- name: Resolve reference-owned srsRAN lifecycle tasks
   ansible.builtin.set_fact:
     synthran_srsran_reference_deploy_with_check: >-
       {{ synthran_private_dir }}/5g-ansible-reference/roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml
+    synthran_srsran_reference_deploy_srsues: >-
+      {{ synthran_private_dir }}/5g-ansible-reference/roles/5g/srsRAN/deploy/tasks/deploy_srsues.yml
 
-- name: Verify the reference-owned physical startup task exists
+- name: Verify reference-owned srsRAN lifecycle tasks exist
   ansible.builtin.stat:
-    path: "{{ synthran_srsran_reference_deploy_with_check }}"
-  register: synthran_srsran_reference_task
+    path: "{{ item }}"
+  loop:
+    - "{{ synthran_srsran_reference_deploy_with_check }}"
+    - "{{ synthran_srsran_reference_deploy_srsues }}"
+  register: synthran_srsran_reference_tasks
   delegate_to: localhost
   become: false
 
@@ -65,8 +70,9 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_srsran_reference_task.stat.exists
-      - synthran_srsran_reference_task.stat.isreg
+      - synthran_srsran_reference_tasks.results | length == 2
+      - synthran_srsran_reference_tasks.results | map(attribute='stat.exists') | min
+      - synthran_srsran_reference_tasks.results | map(attribute='stat.isreg') | min
     fail_msg: >-
-      The pinned 5g-Ansible checkout does not contain the reviewed srsRAN
-      physical startup task.
+      The pinned 5g-Ansible checkout does not contain all reviewed srsRAN
+      lifecycle tasks required by Sub 07.
