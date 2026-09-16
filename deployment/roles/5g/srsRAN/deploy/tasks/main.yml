@@ -6,6 +6,10 @@
   ansible.builtin.include_tasks: patch_charts.yml
   when: rru == 'rfsim'
 
+- name: Freeze RFSIM selected-UE image and rendered identity
+  ansible.builtin.include_tasks: harden_rfsim_ue_runtime.yml
+  when: rru == 'rfsim'
+
 - name: Prepare the selected srsRAN UE pod through the pinned lifecycle
   ansible.builtin.include_tasks: "{{ synthran_srsran_reference_deploy_srsues }}"
   when: rru == 'rfsim'
