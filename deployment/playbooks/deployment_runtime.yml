@@ -1,0 +1,7 @@
+---
+- name: Prepare deterministic deployment execution tooling
+  hosts: sopnodes
+  become: true
+  any_errors_fatal: true
+  roles:
+    - role: setup/deployment_runtime
