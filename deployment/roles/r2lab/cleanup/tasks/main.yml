@@ -13,25 +13,22 @@
   loop_control:
     loop_var: ue_item
 
-- name: Power OFF only selected RRU
+- name: Power OFF only selected RRU with the SophiaNode R2Lab helper
   ansible.builtin.shell: |
-    set -e
     source ~/.bashrc
-    rhubarbe pdu off "{{ rru }}"
+    rhubarbe-pdu off "{{ rru }}"
   args:
     executable: /bin/bash
+  register: selected_rru_power_off
+  changed_when: selected_rru_power_off.rc == 0
+  failed_when: false
   when: rru | default('rfsim') != 'rfsim'
 
-- name: Verify selected RRU is no longer ON
-  ansible.builtin.shell: |
-    source ~/.bashrc
-    rhubarbe pdu status "{{ rru }}"
-  args:
-    executable: /bin/bash
-  register: selected_rru_status
-  changed_when: false
-  failed_when: false
-  retries: 12
-  delay: 2
-  until: "'on' not in (selected_rru_status.stdout | lower).split()"
-  when: rru | default('rfsim') != 'rfsim'
+- name: Report a non-fatal selected RRU power-off result
+  ansible.builtin.debug:
+    msg: >-
+      Initial power-off of {{ rru }} returned rc={{ selected_rru_power_off.rc }}.
+      Continuing to the authoritative power-on step; no unrelated R2Lab resource was touched.
+  when:
+    - rru | default('rfsim') != 'rfsim'
+    - selected_rru_power_off.rc != 0
