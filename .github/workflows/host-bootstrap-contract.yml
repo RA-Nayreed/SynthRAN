@@ -76,6 +76,11 @@ jobs:
             reservation:
               host_preparation: fresh
           YAML
+          cat >"$fixture/scenario-preserve.yml" <<'YAML'
+          deployment:
+            reservation:
+              host_preparation: preserve
+          YAML
           cat >"$fixture/inventory.yml" <<'YAML'
           all:
             children:
@@ -196,6 +201,133 @@ jobs:
           grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "Verify preserved CNI DHCP binary exists" "$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "Write shareable bootstrap evidence" "$RUNNER_TEMP/bootstrap-tasks.txt"
+
+      - name: Exercise fresh checksum-pinned yq lifecycle
+        env:
+          ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/deployment/roles
+          ANSIBLE_FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          sudo rm -f /usr/local/bin/yq
+          ansible-playbook \
+            -i "$SYNTHRAN_BOOTSTRAP_FIXTURE/inventory.yml" \
+            -e @deployment/group_vars/all/all.yml \
+            -e @"$SYNTHRAN_BOOTSTRAP_FIXTURE/vars.yml" \
+            deployment/playbooks/bootstrap_nodes.yml \
+            --tags fresh_yq \
+            | tee "$RUNNER_TEMP/bootstrap-fresh-yq.log"
+          test -x /usr/local/bin/yq
+          /usr/local/bin/yq --version
+          grep -F "Install the checksum-verified shared yq binary" "$RUNNER_TEMP/bootstrap-fresh-yq.log"
+          grep -F "Require the installed yq binary to match the pinned release" "$RUNNER_TEMP/bootstrap-fresh-yq.log"
+
+      - name: Exercise preserve bootstrap with fresh-only yq absent
+        env:
+          ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/deployment/roles
+          ANSIBLE_FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          fixture="$SYNTHRAN_BOOTSTRAP_FIXTURE"
+          fakebin="$RUNNER_TEMP/synthran-preserve-fakebin"
+          backup="$RUNNER_TEMP/synthran-preserve-backup"
+          mkdir -p "$fakebin" "$backup"
+
+          cleanup() {
+            sudo rm -f /opt/cni/bin/dhcp
+            sudo rm -f /usr/local/bin/systemctl /usr/local/bin/kubectl /usr/local/bin/findmnt
+            for command in systemctl kubectl findmnt; do
+              if [ -e "$backup/$command" ]; then
+                sudo cp -a "$backup/$command" "/usr/local/bin/$command"
+              fi
+            done
+          }
+          trap cleanup EXIT
+
+          for command in systemctl kubectl findmnt; do
+            if [ -e "/usr/local/bin/$command" ]; then
+              sudo cp -a "/usr/local/bin/$command" "$backup/$command"
+            fi
+          done
+
+          cat >"$fakebin/systemctl" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = "is-active" ]; then
+            case "${2:-}" in
+              containerd|kubelet|cni-dhcp.service)
+                echo active
+                exit 0
+                ;;
+            esac
+          fi
+          echo "unexpected systemctl invocation: $*" >&2
+          exit 64
+          SH
+
+          cat >"$fakebin/findmnt" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "$*" in
+            *"/var/lib/containerd"*)
+              echo "/dev/loop0 ext4 /var/lib/containerd"
+              exit 0
+              ;;
+          esac
+          echo "unexpected findmnt invocation: $*" >&2
+          exit 64
+          SH
+
+          cat >"$fakebin/kubectl" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "$*" in
+            *"get --raw=/readyz"*)
+              echo ok
+              ;;
+            *"get node ran-ci -o name"*)
+              echo node/ran-ci
+              ;;
+            *"get crd network-attachment-definitions.k8s.cni.cncf.io -o name"*)
+              echo customresourcedefinition.apiextensions.k8s.io/network-attachment-definitions.k8s.cni.cncf.io
+              ;;
+            *"get nodes -o json"*)
+              printf '%s\n' '{"apiVersion":"v1","items":[{"metadata":{"name":"core-ci"}},{"metadata":{"name":"ran-ci"}}]}'
+              ;;
+            *)
+              echo "unexpected kubectl invocation: $*" >&2
+              exit 64
+              ;;
+          esac
+          SH
+
+          chmod 0755 "$fakebin/systemctl" "$fakebin/findmnt" "$fakebin/kubectl"
+          sudo install -m 0755 "$fakebin/systemctl" /usr/local/bin/systemctl
+          sudo install -m 0755 "$fakebin/findmnt" /usr/local/bin/findmnt
+          sudo install -m 0755 "$fakebin/kubectl" /usr/local/bin/kubectl
+          sudo install -d -m 0755 /opt/cni/bin
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/cni/bin/dhcp >/dev/null
+          sudo chmod 0755 /opt/cni/bin/dhcp
+
+          sudo rm -f /usr/local/bin/yq
+          test ! -e /usr/local/bin/yq
+
+          ansible-playbook \
+            -i "$fixture/inventory.yml" \
+            -e @deployment/group_vars/all/all.yml \
+            -e @"$fixture/vars.yml" \
+            -e "scenario_file=$fixture/scenario-preserve.yml" \
+            deployment/playbooks/bootstrap_nodes.yml \
+            | tee "$RUNNER_TEMP/bootstrap-preserve.log"
+
+          test ! -e /usr/local/bin/yq
+          grep -F "Verify preserved containerd is active" "$RUNNER_TEMP/bootstrap-preserve.log"
+          grep -F "Verify preserved kubelet is active" "$RUNNER_TEMP/bootstrap-preserve.log"
+          grep -F "Verify preserved CNI DHCP daemon is active" "$RUNNER_TEMP/bootstrap-preserve.log"
+          grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-preserve.log"
+          grep -F "Verify preserved NetworkAttachmentDefinition API" "$RUNNER_TEMP/bootstrap-preserve.log"
+          grep -F '"host_preparation": "preserve"' "$fixture/result/bootstrap-evidence.json"
 
       - name: Verify issue 53 ownership contract
         run: >-
