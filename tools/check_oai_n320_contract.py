@@ -65,8 +65,9 @@ def shell_function(script: str, name: str) -> str:
 
 
 def validate_helper(helper: Path, pin: str) -> None:
-    if git_head(helper) != pin:
-        fail(f"pinned helper drift: expected {pin}, found {git_head(helper)}")
+    actual_head = git_head(helper)
+    if actual_head != pin:
+        fail(f"pinned helper drift: expected {pin}, found {actual_head}")
 
     n320_env = text(helper / "rru/n320.env")
     require(n320_env, 'IP_GNB_RU="dhcp"', "pinned helper n320.env")
@@ -77,6 +78,17 @@ def validate_helper(helper: Path, pin: str) -> None:
         "pinned helper n320.env",
     )
 
+    gnb_ifs = text(helper / "demo_charts/values/nf-ifs/oai-gnb.yaml")
+    du_ifs = text(helper / "demo_charts/values/nf-ifs/oai-du.yaml")
+    require(gnb_ifs, '- name: "ru"', "pinned helper gNB interface fragment")
+    require(gnb_ifs, "type: macvlan", "pinned helper gNB RU interface")
+    require(du_ifs, '- name: "ru"', "pinned helper DU interface fragment")
+    require(du_ifs, "type: macvlan", "pinned helper DU RU interface")
+
+    # The helper also carries replacement NAD templates, but they do not add an
+    # ipvlan case. The exact staged GitLab chart is still validated at runtime
+    # by SynthRAN with `helm template`; this check only proves the helper itself
+    # has no native ipvlan renderer that makes the local adapter redundant.
     for relative in (
         "demo_charts/templates/oai-gnb/nad.yaml",
         "demo_charts/templates/oai-du/nad.yaml",
@@ -87,14 +99,21 @@ def validate_helper(helper: Path, pin: str) -> None:
         forbid(nad, 'eq .type "ipvlan"', f"pinned helper {relative}")
 
     prepare = text(helper / "testing/prepare-demo-oai.sh")
-    require(
+    configure_branch = re.search(
+        r"elif \[\[ \"\$action\" = 'configure' \]\]; then\s+configure_all_scripts",
         prepare,
-        "elif [[ \"$action\" = 'configure' ]]; then\n    configure_all_scripts",
-        "pinned helper prepare-demo-oai.sh",
     )
+    if configure_branch is None:
+        fail("pinned helper prepare-demo-oai.sh: configure-only branch changed")
 
-    launch = shell_function(text(helper / "demo-oai.sh"), "start-gnb")
+    demo = text(helper / "demo-oai.sh")
+    require(demo, 'export RAN_TAG="2026.w26"', "pinned helper OAI image tag")
+    launch = shell_function(demo, "start-gnb")
     require(launch, "helm -n $NS install oai-gnb", "pinned helper start-gnb")
+    require(launch, "helm -n $NS install oai-cu", "pinned helper start-gnb")
+    require(launch, "helm -n $NS install oai-cu-cp", "pinned helper start-gnb")
+    require(launch, "helm -n $NS install oai-cu-up", "pinned helper start-gnb")
+    require(launch, "helm install -n $NS oai-du", "pinned helper start-gnb")
     require(launch, "kubectl -n $NS wait pod", "pinned helper start-gnb")
     forbid(launch, "set -e", "pinned helper start-gnb")
 
@@ -123,12 +142,14 @@ def validate_local_contract(pin: str) -> None:
         fail("OAI defaults helper pin changed during validation")
 
     require(setup, "ansible.builtin.include_tasks: r2lab_n320.yml", "OAI setup")
+    include_index = setup.index("ansible.builtin.include_tasks: r2lab_n320.yml")
+    gate_window = setup[include_index : include_index + 300]
     for gate in (
         "platform == 'r2lab'",
         "ran == 'oai'",
         "rru == 'n320'",
     ):
-        require(setup, gate, "OAI setup N320 gate")
+        require(gate_window, gate, "OAI setup N320 gate")
 
     for needle in (
         "IF_NAME_GNB_RU=",
@@ -183,15 +204,18 @@ def validate_local_contract(pin: str) -> None:
     ):
         require(attest, needle, "N320 runtime attestation")
 
+
+def validate_legacy_absence() -> None:
     if LEGACY_SWAP.exists():
         fail("legacy generic n3xx_ip_swap role must not exist on the #55 branch")
-    oai_tree = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for path in (ROOT / "deployment/roles/5g/oai").rglob("*")
-        if path.is_file()
-    )
-    forbid(oai_tree, "n3xx_ip_swap", "OAI role tree")
-    forbid(oai_tree, "deploy_nr_ue", "OAI role tree")
+
+    role_root = ROOT / "deployment/roles/5g/oai"
+    for path in role_root.rglob("*"):
+        if not path.is_file():
+            continue
+        body = path.read_text(encoding="utf-8", errors="replace")
+        forbid(body, "n3xx_ip_swap", f"legacy scan {path.relative_to(ROOT)}")
+        forbid(body, "deploy_nr_ue", f"legacy scan {path.relative_to(ROOT)}")
 
 
 def main() -> None:
@@ -202,13 +226,26 @@ def main() -> None:
         required=True,
         help="Exact checkout of the pinned sopnode/oai5g-rru helper",
     )
+    parser.add_argument(
+        "--section",
+        choices=("all", "helper", "local", "legacy"),
+        default="all",
+        help="Contract section to validate",
+    )
     args = parser.parse_args()
 
-    defaults = text(DEFAULTS)
-    pin = helper_pin(defaults)
-    validate_helper(args.helper.resolve(), pin)
-    validate_local_contract(pin)
-    print(f"OAI N320 contract OK: helper={pin}")
+    pin = helper_pin(text(DEFAULTS))
+    helper = args.helper.resolve()
+
+    if args.section in ("all", "helper"):
+        validate_helper(helper, pin)
+        print(f"OAI N320 helper prerequisites OK: helper={pin}")
+    if args.section in ("all", "local"):
+        validate_local_contract(pin)
+        print("OAI N320 local adaptation/acceptance contract OK")
+    if args.section in ("all", "legacy"):
+        validate_legacy_absence()
+        print("OAI N320 legacy-path absence contract OK")
 
 
 if __name__ == "__main__":
