@@ -34,6 +34,8 @@ jobs:
           python -m py_compile
           synthran/reservation.py
           synthran/pos_images.py
+          synthran/r2lab.py
+          synthran/inventory.py
           synthran/scenario.py
           deployment/scripts/reserve_sop.py
           deployment/scripts/reserve_r2lab.py
@@ -42,6 +44,7 @@ jobs:
           tools/check_pos_image_resolution.py
           tools/check_pos_preparation_regression.py
           tools/check_reservation_wizard_contract.py
+          tools/check_r2lab_handoff_contract.py
           tools/check_reservation_failure_evidence.py
           tools/check_reservation_cli_fakes.py
           tools/check_resource_authority_contract.py
@@ -63,6 +66,9 @@ jobs:
 
       - name: Validate explicit reservation wizard policies
         run: python tools/check_reservation_wizard_contract.py
+
+      - name: Validate R2Lab Ansible handoff and cleanup scope
+        run: python tools/check_r2lab_handoff_contract.py
 
       - name: Validate failure evidence preservation
         run: python tools/check_reservation_failure_evidence.py
