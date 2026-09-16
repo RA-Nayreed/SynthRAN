@@ -25,6 +25,7 @@
           {{ 'amd64' if ansible_architecture in ['x86_64', 'amd64'] else
              'arm64' if ansible_architecture in ['aarch64', 'arm64'] else '' }}
       when: synthran_host_preparation == 'fresh'
+      tags: [fresh_yq]
 
     - name: Require a checksum-pinned yq binary for this architecture
       ansible.builtin.assert:
@@ -36,6 +37,7 @@
           No checksum-pinned yq binary is defined for architecture
           {{ ansible_architecture }}.
       when: synthran_host_preparation == 'fresh'
+      tags: [fresh_yq]
 
     - name: Install the checksum-verified shared yq binary
       ansible.builtin.get_url:
@@ -46,11 +48,14 @@
         force: true
         checksum: "sha256:{{ yq_sha256[synthran_yq_arch] }}"
       when: synthran_host_preparation == 'fresh'
+      tags: [fresh_yq]
 
     - name: Read back the installed yq version
       ansible.builtin.command: /usr/local/bin/yq --version
       register: synthran_yq_version
       changed_when: false
+      when: synthran_host_preparation == 'fresh'
+      tags: [fresh_yq]
 
     - name: Require the installed yq binary to match the pinned release
       ansible.builtin.assert:
@@ -60,6 +65,8 @@
         fail_msg: >-
           /usr/local/bin/yq does not match the pinned {{ yq_version }} baseline:
           {{ synthran_yq_version.stdout | default(synthran_yq_version.stderr) }}
+      when: synthran_host_preparation == 'fresh'
+      tags: [fresh_yq]
 
     - name: Verify preserved containerd is active
       ansible.builtin.command: systemctl is-active containerd
