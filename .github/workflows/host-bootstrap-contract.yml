@@ -47,8 +47,11 @@ jobs:
               Path("deployment/playbooks/provision_nodes.yml"),
               Path("deployment/playbooks/bootstrap_nodes.yml"),
               Path("deployment/playbooks/network.yml"),
+              Path("deployment/playbooks/provenance.yml"),
               Path("deployment/playbooks/site.yml"),
               Path("deployment/roles/setup/pre_k8s/tasks/main.yml"),
+              Path("deployment/roles/setup/deployment_runtime/tasks/main.yml"),
+              Path("deployment/roles/setup/k8s/k8s_setup/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/cluster_create/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/cni_dhcp/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/cluster_join/tasks/main.yml"),
@@ -57,13 +60,17 @@ jobs:
               Path("deployment/roles/setup/k8s/add_taint/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/remove_cp_taint/tasks/main.yml"),
               Path("deployment/roles/setup/k8s/remove_taint/tasks/main.yml"),
+              Path("deployment/roles/5g/free5gc/config/tasks/main.yml"),
+              Path("deployment/roles/5g/free5gc/deploy/tasks/main.yml"),
+              Path("deployment/roles/5g/ueransim/config/tasks/main.yml"),
+              Path("deployment/roles/5g/ueransim/config/tasks/config_open5gs.yml"),
           ]
           for path in yaml_paths:
               yaml.safe_load(path.read_text(encoding="utf-8"))
           json.loads(Path(
               "third_party/sopnode-5g-ansible/HOST_BOOTSTRAP_ADAPTATIONS.json"
           ).read_text(encoding="utf-8"))
-          print(f"parsed {len(yaml_paths)} bootstrap YAML files and adaptation manifest")
+          print(f"parsed {len(yaml_paths)} issue-53 YAML files and adaptation manifest")
           PY
 
       - name: Build staged local Ansible fixture
@@ -167,12 +174,12 @@ jobs:
           grep -F "source=inventory" "$RUNNER_TEMP/storage-mounted.log"
           grep -F "state=mounted:ext4:" "$RUNNER_TEMP/storage-mounted.log"
 
-      - name: Syntax-check node validation and bootstrap
+      - name: Syntax-check repaired deployment boundary
         env:
           ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
           ANSIBLE_ROLES_PATH: ${{ github.workspace }}/deployment/roles
         run: |
-          for playbook in provision_nodes.yml bootstrap_nodes.yml; do
+          for playbook in provision_nodes.yml bootstrap_nodes.yml network.yml provenance.yml; do
             ansible-playbook \
               -i "$SYNTHRAN_BOOTSTRAP_FIXTURE/inventory.yml" \
               -e @deployment/group_vars/all/all.yml \
@@ -193,9 +200,53 @@ jobs:
             deployment/playbooks/bootstrap_nodes.yml \
             --list-tasks >"$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "setup/k8s/cluster_create" deployment/playbooks/bootstrap_nodes.yml
+          grep -F "setup/deployment_runtime" deployment/playbooks/bootstrap_nodes.yml
           grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "Verify preserved CNI DHCP binary exists" "$RUNNER_TEMP/bootstrap-tasks.txt"
           grep -F "Write shareable bootstrap evidence" "$RUNNER_TEMP/bootstrap-tasks.txt"
+
+      - name: Exercise preserve lifecycle with no fresh-only yq artifact
+        env:
+          ANSIBLE_CONFIG: ${{ github.workspace }}/deployment/ansible.cfg
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/deployment/roles
+          ANSIBLE_FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          sudo rm -f /usr/local/bin/yq
+          test ! -e /usr/local/bin/yq
+          sudo mkdir -p /opt/cni/bin
+          sudo install -m 0755 /bin/true /opt/cni/bin/dhcp
+
+          ansible-playbook \
+            -i "$SYNTHRAN_BOOTSTRAP_FIXTURE/inventory.yml" \
+            -e @deployment/group_vars/all/all.yml \
+            -e @"$SYNTHRAN_BOOTSTRAP_FIXTURE/vars.yml" \
+            -e synthran_host_preparation=preserve \
+            deployment/playbooks/bootstrap_nodes.yml \
+            --list-tasks \
+            --tags synthran_preserve_only \
+            >"$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
+
+          grep -F "Verify preserved containerd is active" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
+          grep -F "Verify preserved kubelet is active" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
+          grep -F "Verify preserved CNI DHCP binary exists" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
+          grep -F "Verify preserved Kubernetes control plane is reachable" "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"
+          if grep -Eiq 'yq|helm|install|download|package|pip|unarchive' "$RUNNER_TEMP/bootstrap-preserve-tasks.txt"; then
+            echo "fresh/deployment tooling leaked into preserve bootstrap plan" >&2
+            cat "$RUNNER_TEMP/bootstrap-preserve-tasks.txt" >&2
+            exit 1
+          fi
+
+          ansible-playbook \
+            -i "$SYNTHRAN_BOOTSTRAP_FIXTURE/inventory.yml" \
+            -e @deployment/group_vars/all/all.yml \
+            -e @"$SYNTHRAN_BOOTSTRAP_FIXTURE/vars.yml" \
+            -e synthran_host_preparation=preserve \
+            deployment/playbooks/bootstrap_nodes.yml \
+            --check \
+            --tags synthran_preserve_only
+
+          test ! -e /usr/local/bin/yq
 
       - name: Verify issue 53 ownership contract
         run: >-
