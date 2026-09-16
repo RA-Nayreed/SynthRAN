@@ -1,0 +1,216 @@
+---
+- name: Resolve the generated RFSIM UE values path
+  ansible.builtin.set_fact:
+    synthran_srsue_values_file: >-
+      {{ [repo_dest_abs, 'charts', 'srsue', 'values-rfsim.yaml'] | path_join }}
+    synthran_srsue_default_values_file: >-
+      {{ [repo_dest_abs, 'charts', 'srsue', 'values.yaml'] | path_join }}
+
+- name: Require the generated RFSIM UE values file
+  ansible.builtin.stat:
+    path: "{{ synthran_srsue_values_file }}"
+  register: synthran_srsue_values_stat
+
+- name: Refuse RFSIM deployment without generated selected-UE values
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_values_stat.stat.exists
+      - synthran_srsue_values_stat.stat.isreg
+    fail_msg: >-
+      RFSIM srsUE deployment requires the selected-UE values file produced by
+      the SynthRAN topology/profile adapter.
+
+- name: Read any RFSIM UE image repository override
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.repository // ""'
+      - "{{ synthran_srsue_values_file }}"
+  register: synthran_srsue_image_repository_override
+  changed_when: false
+
+- name: Read any RFSIM UE image tag override
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.tag // ""'
+      - "{{ synthran_srsue_values_file }}"
+  register: synthran_srsue_image_tag_override
+  changed_when: false
+
+- name: Read the pinned chart's default srsUE image repository
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.repository // ""'
+      - "{{ synthran_srsue_default_values_file }}"
+  register: synthran_srsue_image_repository_default
+  changed_when: false
+
+- name: Read the pinned chart's default srsUE image tag
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -r
+      - '.image.tag // ""'
+      - "{{ synthran_srsue_default_values_file }}"
+  register: synthran_srsue_image_tag_default
+  changed_when: false
+
+- name: Select the effective RFSIM UE image coordinates
+  ansible.builtin.set_fact:
+    synthran_srsue_image_repository: >-
+      {{ (synthran_srsue_image_repository_override.stdout | trim)
+         if (synthran_srsue_image_repository_override.stdout | trim | length > 0)
+         else (synthran_srsue_image_repository_default.stdout | trim) }}
+    synthran_srsue_image_tag: >-
+      {{ (synthran_srsue_image_tag_override.stdout | trim)
+         if (synthran_srsue_image_tag_override.stdout | trim | length > 0)
+         else (synthran_srsue_image_tag_default.stdout | trim) }}
+
+- name: Validate the selected RFSIM UE image coordinates
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_image_repository | length > 0
+      - >-
+        ('@sha256:' in synthran_srsue_image_repository) or
+        (synthran_srsue_image_tag | length > 0)
+    fail_msg: The RFSIM srsUE chart does not identify a resolvable container image.
+
+- name: Reuse an already immutable RFSIM UE image reference
+  ansible.builtin.set_fact:
+    synthran_srsue_image_reference: "{{ synthran_srsue_image_repository }}"
+  when: "'@sha256:' in synthran_srsue_image_repository"
+
+- name: Resolve the public RFSIM UE image tag to an immutable digest
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -m
+      - synthran.image_digest
+      - --repository
+      - "{{ synthran_srsue_image_repository }}"
+      - --tag
+      - "{{ synthran_srsue_image_tag }}"
+  delegate_to: localhost
+  become: false
+  register: synthran_srsue_image_resolution
+  changed_when: false
+  when: "'@sha256:' not in synthran_srsue_image_repository"
+
+- name: Freeze the resolved RFSIM UE image reference
+  ansible.builtin.set_fact:
+    synthran_srsue_image_reference: "{{ synthran_srsue_image_resolution.stdout | trim }}"
+  when:
+    - synthran_srsue_image_resolution is defined
+    - not (synthran_srsue_image_resolution.skipped | default(false) | bool)
+
+- name: Require an immutable RFSIM UE image digest
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_image_reference is match('^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+    fail_msg: RFSIM srsUE must use an immutable sha256 image reference.
+
+- name: Make the RFSIM UE chart render the frozen image reference directly
+  ansible.builtin.replace:
+    path: "{{ repo_dest_abs }}/charts/srsue/templates/deployment.yaml"
+    regexp: '(^\s*image:\s*)"\{\{\s*\.Values\.image\.repository\s*\}\}:\{\{\s*\.Values\.image\.tag\s*\}\}"'
+    replace: '\1"{{ ''{{'' }} .Values.image.repository {{ ''}}'' }}"'
+
+- name: Freeze the RFSIM UE image in the selected-UE values file
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -i
+      - '.image.repository = strenv(SYNTHRAN_SRSUE_IMAGE) | .image.tag = ""'
+      - "{{ synthran_srsue_values_file }}"
+  environment:
+    SYNTHRAN_SRSUE_IMAGE: "{{ synthran_srsue_image_reference }}"
+  changed_when: true
+
+- name: Read back the frozen RFSIM UE image policy
+  ansible.builtin.command:
+    argv:
+      - "{{ yq_bin_path }}"
+      - eval
+      - -o=json
+      - '{"repository": .image.repository, "tag": .image.tag, "ue_count": .ueCount, "ues": .ues}'
+      - "{{ synthran_srsue_values_file }}"
+  register: synthran_srsue_runtime_policy_json
+  changed_when: false
+
+- name: Decode the RFSIM UE runtime policy
+  ansible.builtin.set_fact:
+    synthran_srsue_runtime_policy: "{{ synthran_srsue_runtime_policy_json.stdout | from_json }}"
+
+- name: Require selected-UE identity and immutable image before Helm rendering
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_runtime_policy.repository == synthran_srsue_image_reference
+      - synthran_srsue_runtime_policy.tag == ''
+      - (synthran_srsue_runtime_policy.ue_count | int) == (ue_count | int)
+      - synthran_srsue_runtime_policy.ues | length == ue_count | int
+    fail_msg: >-
+      RFSIM srsUE values lost immutable image or selected-UE cardinality before
+      the reference-owned Helm deployment.
+
+- name: Render the RFSIM UE chart as the final selected-UE/image contract
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rendered="$(helm template synthran-srsue \
+      "{{ repo_dest_abs }}/charts/srsue" \
+      --namespace "{{ ran_ns }}" \
+      -f "{{ synthran_srsue_values_file }}")"
+    printf '%s\n' "$rendered" | grep -F -- "$SYNTHRAN_SRSUE_IMAGE" >/dev/null
+    if [ -n "$SYNTHRAN_SRSUE_MUTABLE_IMAGE" ]; then
+      if printf '%s\n' "$rendered" | grep -F -- "$SYNTHRAN_SRSUE_MUTABLE_IMAGE" >/dev/null; then
+        echo 'Rendered srsUE chart retained the mutable source tag.' >&2
+        exit 1
+      fi
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    SYNTHRAN_SRSUE_IMAGE: "{{ synthran_srsue_image_reference }}"
+    SYNTHRAN_SRSUE_MUTABLE_IMAGE: >-
+      {{ (synthran_srsue_image_repository ~ ':' ~ synthran_srsue_image_tag)
+         if ('@sha256:' not in synthran_srsue_image_repository) else '' }}
+  changed_when: false
+
+- name: Ensure the shareable srsRAN provenance directory exists
+  ansible.builtin.file:
+    path: "{{ run_dir }}/provenance"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Retain RFSIM UE image and selected-UE provenance
+  ansible.builtin.copy:
+    dest: "{{ run_dir }}/provenance/srsran-rfsim-ue-runtime.json"
+    mode: '0644'
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'chart_repository': repo_url,
+           'chart_revision': version,
+           'source_repository': synthran_srsue_image_repository,
+           'source_tag': synthran_srsue_image_tag,
+           'resolved_image': synthran_srsue_image_reference,
+           'ue_count': ue_count | int,
+           'selected_ues': ue_list
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false

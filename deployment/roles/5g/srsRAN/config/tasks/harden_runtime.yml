@@ -59,7 +59,7 @@
     - synthran_srsran_image_resolution is defined
     - not (synthran_srsran_image_resolution.skipped | default(false) | bool)
 
-- name: Require an immutable srsRAN image digest
+- name: Require immutable srsRAN runtime images
   ansible.builtin.assert:
     quiet: true
     that:
@@ -67,29 +67,17 @@
       - synthran_log_sidecar_image is match('^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$')
     fail_msg: "srsRAN and its log sidecar must both use immutable sha256 image references."
 
-- name: Make the chart render the frozen gNB image reference directly
+- name: Make the chart render a digest-qualified gNB image directly
   ansible.builtin.replace:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
     regexp: '(^\s*image:\s*)"\{\{\s*\.Values\.image\.repository\s*\}\}:\{\{\s*\.Values\.image\.tag\s*\}\}"'
     replace: '\1"{{ ''{{'' }} .Values.image.repository {{ ''}}'' }}"'
-  register: synthran_gnb_image_template_patch
 
 - name: Make the chart render the pinned log sidecar image
   ansible.builtin.replace:
     path: "{{ repo_dest_abs }}/charts/srsran-gnb/templates/deployment.yaml"
     regexp: '(^\s*image:\s*)busybox\s*$'
     replace: '\1"{{ ''{{'' }} .Values.logSidecarImage {{ ''}}'' }}"'
-  register: synthran_log_sidecar_template_patch
-
-- name: Require the expected chart image sites to be hardened
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - synthran_gnb_image_template_patch.changed
-      - synthran_log_sidecar_template_patch.changed
-    fail_msg: >-
-      The pinned srsRAN chart no longer matches the expected image template shape;
-      refusing deployment instead of silently leaving a mutable image reference.
 
 - name: Freeze image references and the authoritative gNB log path
   ansible.builtin.command:
@@ -143,7 +131,7 @@
       Refusing to render srsRAN because image immutability, log-path consistency,
       or remote-control hardening was lost after configuration.
 
-- name: Render the hardened srsRAN chart as a pre-deployment acceptance gate
+- name: Render the hardened srsRAN chart as the final adapter contract
   ansible.builtin.shell: |
     set -euo pipefail
     rendered="$(helm template synthran-srsran-gnb \
@@ -175,20 +163,24 @@
   delegate_to: localhost
   become: false
 
-- name: Retain the resolved srsRAN runtime provenance
+- name: Retain resolved srsRAN source, image and log provenance
   ansible.builtin.copy:
     dest: "{{ run_dir }}/provenance/srsran-runtime.json"
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 1,
+           'schema_version': 2,
+           'chart_repository': repo_url,
+           'chart_revision': version,
            'source_repository': synthran_srsran_image_repository.stdout | trim,
            'source_tag': synthran_srsran_image_tag.stdout | trim,
            'resolved_image': synthran_srsran_image_reference,
            'log_sidecar_image': synthran_log_sidecar_image,
            'log_filename': '/var/log/gnb.log',
            'remote_control_enabled': synthran_srsran_runtime_policy.remote_control.enabled | bool,
-           'remote_control_bind_addr': synthran_srsran_runtime_policy.remote_control.bind_addr
+           'remote_control_bind_addr': synthran_srsran_runtime_policy.remote_control.bind_addr,
+           'lifecycle_reference_repository': synthran_srsran_reference.repository,
+           'lifecycle_reference_commit': synthran_srsran_reference.commit
          } | to_nice_json }}
   delegate_to: localhost
   become: false
