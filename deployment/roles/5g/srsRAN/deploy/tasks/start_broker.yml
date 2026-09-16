@@ -108,9 +108,8 @@
       - |
         for i in {{ ue_list | map(attribute='index') | map('int') | join(' ') }}; do
           tmux kill-window -t "ran:ue${i}" 2>/dev/null || true
-          rm -f "/var/log/ue${i}.log"
           tmux new-window -t ran -n "ue${i}" \
-            "bash -lc \"/srsran/config/start_ue.sh ${i} 2>&1 | tee /var/log/ue${i}.log\""
+            "bash -lc \"/srsran/config/start_ue.sh ${i}\""
         done
   changed_when: true
 
@@ -145,7 +144,7 @@
       - |
         for i in {{ ue_list | map(attribute='index') | map('int') | join(' ') }}; do
           echo "=== UE ${i} console ==="
-          tail -n 160 "/var/log/ue${i}.log" 2>/dev/null || true
+          tail -n 160 "/var/log/ue${i}.console.log" 2>/dev/null || true
           echo "=== UE ${i} native log ==="
           tail -n 160 "/tmp/ue${i}.log" 2>/dev/null || true
         done
@@ -211,7 +210,7 @@
       - -lc
       - |
         echo '--- srsUE console ---'
-        tail -n 220 /var/log/ue{{ item.index }}.log 2>/dev/null || true
+        tail -n 220 /var/log/ue{{ item.index }}.console.log 2>/dev/null || true
         echo '--- relevant native events ---'
         grep -Ei 'RACH|RNTI|RRC|NAS|registration|authentication|security|PDU|session|slice|NSSAI|reject|fail|error' \
           /tmp/ue{{ item.index }}.log 2>/dev/null | tail -n 220 || true
@@ -280,7 +279,7 @@
       - /bin/sh
       - -lc
       - |
-        grep -m1 'Built in Release mode using commit' /var/log/ue1.log 2>/dev/null || true
+        grep -m1 'Built in Release mode using commit' /var/log/ue1.console.log 2>/dev/null || true
   register: srsue_build_provenance
   changed_when: false
   failed_when: false
@@ -289,10 +288,10 @@
   ansible.builtin.debug:
     msg: "{{ srsue_build_provenance.stdout | default('srsUE source commit unavailable') }}"
 
-- name: Extract UE IP addresses from logs
+- name: Read live UE tunnel addresses
   ansible.builtin.command: >
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} -- /bin/sh -lc
-    "grep -m1 'PDU Session Establishment successful' /var/log/ue{{ item.index }}.log 2>/dev/null | awk '{print \$NF}'"
+    "ip -4 -o addr show dev tun_srsue{{ item.index }} | awk '{print \$4}' | head -1"
   loop: "{{ ue_list }}"
   register: ue_ips
   changed_when: false
@@ -311,4 +310,5 @@
       - "UEs started in tmux session 'ran': {{ ue_list | map(attribute='name') | list }}"
       - "GNU Radio broker in tmux window 'gnu'"
       - "GNU Radio log: /var/log/gnu_multi_ue.log"
+      - "UE console logs: /var/log/ue<N>.console.log; native logs: /tmp/ue<N>.log"
       - "Inspect: {{ kubectl_bin }} -n {{ ran_ns }} exec -it {{ ue_pod_name }} -- tmux attach -t ran"
