@@ -7,14 +7,36 @@
   register: synthran_srsue_live_pod
   changed_when: false
 
+- name: Require the reference-deployed RFSIM UE pod to still exist
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_live_pod.resources | length == 1
+    fail_msg: >-
+      The reference-deployed RFSIM srsUE pod disappeared before runtime
+      verification.
+
+- name: Resolve the live srsUE container status
+  ansible.builtin.set_fact:
+    synthran_srsue_live_statuses: >-
+      {{ synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
+         selectattr('name', 'equalto', 'ue') | list }}
+
+- name: Require exactly one live srsUE container status
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsue_live_statuses | length == 1
+    fail_msg: >-
+      The deployed RFSIM pod does not expose exactly one `ue` container.
+
 - name: Resolve configured and live srsUE image digests
   ansible.builtin.set_fact:
     synthran_srsue_expected_digest: >-
       {{ synthran_srsue_image_reference |
          regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
     synthran_srsue_live_image_id: >-
-      {{ (synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
-          selectattr('name', 'equalto', 'ue') | first).imageID | default('') }}
+      {{ synthran_srsue_live_statuses[0].imageID | default('') }}
 
 - name: Extract the live srsUE image digest
   ansible.builtin.set_fact:
@@ -26,11 +48,7 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_srsue_live_pod.resources | length == 1
-      - >-
-        (synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
-         selectattr('name', 'equalto', 'ue') | selectattr('ready', 'equalto', true) |
-         list | length) == 1
+      - synthran_srsue_live_statuses[0].ready | default(false) | bool
       - synthran_srsue_expected_digest | length > 0
       - synthran_srsue_live_digest == synthran_srsue_expected_digest
       - ue_list | length == (ue_count | int)
