@@ -31,11 +31,28 @@
     mode: '0755'
   become: true
 
+- name: Detect whether selected storage already backs containerd
+  ansible.builtin.shell: |
+    set -eu
+    current="$(findmnt --nofsroot -n -o SOURCE /var/lib/containerd 2>/dev/null || true)"
+    selected="$(readlink -f /dev/{{ storage }})"
+    if [ -n "$current" ] && [ "$(readlink -f "$current")" = "$selected" ]; then
+      echo selected
+    else
+      echo other
+    fi
+  args:
+    executable: /bin/bash
+  register: containerd_existing_binding
+  changed_when: false
+  become: true
+
 - name: Stop containerd before changing its storage binding
   ansible.builtin.systemd:
     name: containerd
     state: stopped
   become: true
+  when: containerd_existing_binding.stdout | trim != 'selected'
 
 - name: Remove stale /var/lib/containerd fstab entries
   ansible.builtin.lineinfile:
@@ -43,6 +60,7 @@
     regexp: '.*/var/lib/containerd.*'
     state: absent
   become: true
+  when: containerd_existing_binding.stdout | trim != 'selected'
 
 - name: Clear stale containerd mounts
   ansible.builtin.shell: |
@@ -53,6 +71,7 @@
     done
   changed_when: false
   become: true
+  when: containerd_existing_binding.stdout | trim != 'selected'
 
 - name: Find an existing mountpoint for the selected storage device
   ansible.builtin.shell: |
@@ -95,19 +114,25 @@
     state: directory
     mode: '0755'
   become: true
-  when: storage_existing_mount.stdout | trim | length > 0
+  when:
+    - containerd_existing_binding.stdout | trim != 'selected'
+    - storage_existing_mount.stdout | trim | length > 0
 
 - name: Bind already-mounted storage to the containerd data directory
   ansible.builtin.shell: |
     mount --bind "{{ storage_existing_mount.stdout | trim }}/containerd" /var/lib/containerd
   become: true
-  when: storage_existing_mount.stdout | trim | length > 0
+  when:
+    - containerd_existing_binding.stdout | trim != 'selected'
+    - storage_existing_mount.stdout | trim | length > 0
 
 - name: Mount unmounted ext4 storage at the containerd data directory
   ansible.builtin.shell: |
     mount -t ext4 -o defaults,noatime /dev/{{ storage }} /var/lib/containerd
   become: true
-  when: storage_existing_mount.stdout | trim | length == 0
+  when:
+    - containerd_existing_binding.stdout | trim != 'selected'
+    - storage_existing_mount.stdout | trim | length == 0
 
 - name: Verify containerd storage is on a real filesystem
   ansible.builtin.shell: |
@@ -125,7 +150,7 @@
   ansible.builtin.debug:
     msg: >-
       /dev/{{ storage }} ({{ storage_fstype.stdout | trim }}) ->
-      {{ storage_existing_mount.stdout | trim if storage_existing_mount.stdout | trim | length > 0 else '/var/lib/containerd' }} ->
+      {{ 'retained /var/lib/containerd' if containerd_existing_binding.stdout | trim == 'selected' else (storage_existing_mount.stdout | trim if storage_existing_mount.stdout | trim | length > 0 else '/var/lib/containerd') }} ->
       /var/lib/containerd ({{ containerd_storage_fstype.stdout | trim }})
 
 - name: Ensure kubelet base directory exists
@@ -147,13 +172,22 @@
     - live_image_check.stdout == "live"
     - ran_node_name == core_node_name
 
-- name: Restart containerd on the selected storage binding
+- name: Restart containerd after changing its storage binding
   ansible.builtin.systemd:
     name: containerd
     state: restarted
     enabled: true
     daemon_reload: true
   become: true
+  when: containerd_existing_binding.stdout | trim != 'selected'
+
+- name: Keep containerd running on the retained storage binding
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: true
+  become: true
+  when: containerd_existing_binding.stdout | trim == 'selected'
 
 - name: Wait for containerd to accept requests
   ansible.builtin.command: ctr version
