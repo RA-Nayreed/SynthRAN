@@ -9,14 +9,16 @@
   retries: 20
   delay: 3
   until:
-    - synthran_gnb_logging_pods.resources | length > 0
+    - synthran_gnb_logging_pods.resources | length == 1
     - >-
       (synthran_gnb_logging_pods.resources[0].status.containerStatuses | default([]) |
-       selectattr('name', 'equalto', 'gnb') | list | length) == 1
+       selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) |
+       list | length) == 1
 
 - name: Select the deployed gNB pod for log verification
   ansible.builtin.set_fact:
     synthran_gnb_logging_pod: "{{ synthran_gnb_logging_pods.resources[0].metadata.name }}"
+    synthran_gnb_logging_uid: "{{ synthran_gnb_logging_pods.resources[0].metadata.uid }}"
 
 - name: Locate the live gNB process for log ownership
   ansible.builtin.command:
@@ -122,10 +124,27 @@
   register: synthran_gnb_logging_state
   changed_when: false
 
+- name: Resolve configured and live gNB image digests
+  ansible.builtin.set_fact:
+    synthran_gnb_expected_image_digest: >-
+      {{ synthran_srsran_image_reference |
+         regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
+    synthran_gnb_live_image_id: >-
+      {{ (synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
+          selectattr('name', 'equalto', 'gnb') | first).imageID | default('') }}
+
+- name: Extract the live gNB image digest
+  ansible.builtin.set_fact:
+    synthran_gnb_live_image_digest: >-
+      {{ synthran_gnb_live_image_id |
+         regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
+
 - name: Require the gNB and configured log sidecar to be running
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_gnb_logging_state.resources | length == 1
+      - synthran_gnb_logging_state.resources[0].metadata.uid == synthran_gnb_logging_uid
       - >-
         (synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
          selectattr('name', 'equalto', 'gnb') | selectattr('ready', 'equalto', true) | list | length) == 1
@@ -133,5 +152,8 @@
         (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
         ((synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
           selectattr('name', 'equalto', 'gnb-logs') | selectattr('ready', 'equalto', true) | list | length) == 1)
+      - synthran_gnb_expected_image_digest | length > 0
+      - synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest
     fail_msg: >-
-      srsRAN started without a healthy authoritative /var/log/gnb.log producer/collector path.
+      srsRAN started without a single stable digest-qualified gNB workload and
+      healthy authoritative /var/log/gnb.log producer/collector path.
