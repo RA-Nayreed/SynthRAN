@@ -35,17 +35,20 @@ jobs:
       - name: Check contract checker syntax
         run: python -m compileall -q tools/check_oai_n320_contract.py
 
-      - name: Validate OAI N320 adaptation boundary
-        shell: bash
-        run: |
-          set +e
-          output="$(python tools/check_oai_n320_contract.py --helper oai5g-rru-reference 2>&1)"
-          status=$?
-          printf '%s\n' "$output"
-          {
-            echo '### OAI N320 contract'
-            echo '```text'
-            printf '%s\n' "$output"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+      - name: Validate pinned helper prerequisites
+        run: >-
+          python tools/check_oai_n320_contract.py
+          --helper oai5g-rru-reference
+          --section helper
+
+      - name: Validate local N320 adaptation and acceptance
+        run: >-
+          python tools/check_oai_n320_contract.py
+          --helper oai5g-rru-reference
+          --section local
+
+      - name: Validate removed legacy paths stay absent
+        run: >-
+          python tools/check_oai_n320_contract.py
+          --helper oai5g-rru-reference
+          --section legacy
