@@ -15,7 +15,7 @@ import yaml
 
 from .deployment_state import build_manifest, build_ue_map, content_hash
 from .profile_validation import validate_network_profile, validate_ue_catalog
-from .r2lab import access
+from .r2lab import access, ssh_options
 from .scenario import redacted
 
 
@@ -112,23 +112,19 @@ def render_inventory(
     children["faraday"] = {"hosts": {}}
     if d["platform"] == "r2lab":
         settings = access(d)
-        ssh = [
-            "ssh",
-            "-o",
-            f"UserKnownHostsFile={faraday_known_hosts}",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-        ]
-        if settings["identity_file"]:
-            ssh += ["-i", settings["identity_file"]]
+        gateway_options = ssh_options(
+            settings["host"],
+            faraday_known_hosts,
+            settings["identity_file"],
+        )
         target = (
             settings["username"] + "@" if settings["username"] else ""
         ) + settings["host"]
-        proxy = shlex.join(ssh + ["-W", "%h:%p", target])
+        proxy = shlex.join(["ssh", *gateway_options, "-W", "%h:%p", target])
         faraday_vars = {
             "ansible_host": settings["host"],
             "ansible_python_interpreter": "/usr/bin/python3",
-            "ansible_ssh_common_args": _ssh_common_args(faraday_known_hosts),
+            "ansible_ssh_common_args": shlex.join(gateway_options),
         }
         if settings["username"]:
             faraday_vars["ansible_user"] = settings["username"]
@@ -160,8 +156,6 @@ def render_inventory(
                 ),
                 "mode": ue["tunnel"]["mode"],
             }
-            if settings["identity_file"]:
-                host["ansible_ssh_private_key_file"] = settings["identity_file"]
             host.update(host_vars)
             children[group]["hosts"][name] = host
         children["physical_ues"] = {"children": {"qhats": {}, "qfits": {}}}
