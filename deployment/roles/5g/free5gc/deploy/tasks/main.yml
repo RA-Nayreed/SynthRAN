@@ -271,7 +271,7 @@
     - mongodb_pod.resources[0].status.phase == "Running"
     - mongodb_pod.resources[0].status.containerStatuses |
       selectattr('ready', 'equalto', true) | list | length ==
-      dbpython_pod.resources[0].status.containerStatuses | length
+      mongodb_pod.resources[0].status.containerStatuses | length
   retries: 30
   delay: 10
 
