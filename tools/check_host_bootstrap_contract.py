@@ -14,6 +14,22 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = ROOT / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
 ADAPTATIONS = ROOT / "third_party/sopnode-5g-ansible/HOST_BOOTSTRAP_ADAPTATIONS.json"
 
+LIFECYCLE_TAGS = {
+    "synthran_fresh_only",
+    "synthran_preserve_only",
+    "synthran_shared_invariant",
+}
+PRESERVE_ALLOWED_MODULES = {
+    "ansible.builtin.command",
+    "ansible.builtin.stat",
+    "ansible.builtin.assert",
+}
+SHARED_ALLOWED_MODULES = {
+    "ansible.builtin.command",
+    "ansible.builtin.set_fact",
+    "ansible.builtin.copy",
+}
+
 
 def fail(message: str) -> None:
     raise SystemExit(message)
@@ -29,8 +45,8 @@ def forbid(text: str, needle: str, context: str) -> None:
         fail(f"{context}: forbidden legacy/bootstrap text remains: {needle!r}")
 
 
-def _when_text(role: dict) -> str:
-    value = role.get("when", "")
+def _when_text(entry: dict) -> str:
+    value = entry.get("when", "")
     if isinstance(value, list):
         return "\n".join(str(item) for item in value)
     return str(value)
@@ -42,6 +58,67 @@ def _named_task(tasks: list[dict], name: str) -> dict:
             return task
     fail(f"task missing from contract: {name}")
     raise AssertionError("unreachable")
+
+
+def _task_tags(task: dict) -> set[str]:
+    tags = task.get("tags", [])
+    if isinstance(tags, str):
+        return {tags}
+    return {str(tag) for tag in tags}
+
+
+def _task_module(task: dict) -> str:
+    modules = [
+        key
+        for key in task
+        if key.startswith("ansible.builtin.") or key.startswith("kubernetes.core.")
+    ]
+    if len(modules) != 1:
+        fail(
+            f"bootstrap task {task.get('name', '<unnamed>')!r} must expose exactly "
+            f"one module for lifecycle auditing, found {modules}"
+        )
+    return modules[0]
+
+
+def _validate_task_lifecycle(task: dict, section: str) -> None:
+    name = task.get("name", "<unnamed>")
+    lifecycle = _task_tags(task) & LIFECYCLE_TAGS
+    if len(lifecycle) != 1:
+        fail(
+            f"bootstrap {section} task {name!r} must declare exactly one lifecycle "
+            f"tag from {sorted(LIFECYCLE_TAGS)}, found {sorted(lifecycle)}"
+        )
+
+    lifecycle_tag = next(iter(lifecycle))
+    when = _when_text(task)
+    module = _task_module(task)
+    serialized = json.dumps(task, sort_keys=True)
+
+    if lifecycle_tag == "synthran_fresh_only":
+        if "synthran_host_preparation == 'fresh'" not in when:
+            fail(f"fresh-only bootstrap task lacks fresh guard: {name}")
+        return
+
+    if lifecycle_tag == "synthran_preserve_only":
+        if "synthran_host_preparation == 'preserve'" not in when:
+            fail(f"preserve-only bootstrap task lacks preserve guard: {name}")
+        if module not in PRESERVE_ALLOWED_MODULES:
+            fail(f"preserve bootstrap task uses mutating/unapproved module {module}: {name}")
+        for forbidden in ("yq", "helm", "get_url", "apt", "package", "pip", "unarchive"):
+            if forbidden in serialized.lower():
+                fail(f"preserve bootstrap task references fresh/deployment tooling {forbidden!r}: {name}")
+        return
+
+    if "synthran_host_preparation" in when:
+        fail(f"shared bootstrap invariant must not branch on host_preparation: {name}")
+    if module not in SHARED_ALLOWED_MODULES:
+        fail(f"shared bootstrap invariant uses unapproved module {module}: {name}")
+    if module == "ansible.builtin.command" and task.get("changed_when") is not False:
+        fail(f"shared command invariant must be explicitly read-only: {name}")
+    if module == "ansible.builtin.copy":
+        if task.get("delegate_to") != "localhost" or task.get("become") is not False:
+            fail(f"shared copy is only allowed for controller-local evidence: {name}")
 
 
 def main() -> None:
@@ -86,6 +163,8 @@ def main() -> None:
     require(all_vars, "host_preparation", "all.yml")
     require(all_vars, "synthran_reference_root", "all.yml")
     require(all_vars, expected, "all.yml")
+    require(all_vars, "setup/deployment_runtime", "all.yml")
+    forbid(all_vars, "yq_url", "all.yml")
 
     site = (ROOT / "deployment/playbooks/site.yml").read_text(encoding="utf-8")
     provision_at = site.index("provision_nodes.yml")
@@ -124,6 +203,7 @@ def main() -> None:
         "setup/containerd",
         "setup/pre_k8s",
         "setup/k8s/k8s_setup",
+        "setup/deployment_runtime",
         "setup/optimization/cpu",
         "setup/ovs",
         "setup/k8s/cluster_create",
@@ -148,6 +228,9 @@ def main() -> None:
             seen_roles.add(role_name)
             if role_name in destructive_roles and "synthran_host_preparation == 'fresh'" not in _when_text(role):
                 fail(f"bootstrap_nodes.yml: mutating role lacks fresh-only guard: {role_name}")
+        for section in ("pre_tasks", "tasks", "post_tasks"):
+            for task in play.get(section, []):
+                _validate_task_lifecycle(task, section)
 
     for role in destructive_roles:
         if role not in seen_roles:
@@ -161,17 +244,54 @@ def main() -> None:
     require(bootstrap, "containerd_mount", "bootstrap_nodes.yml")
     require(bootstrap, "cni_dhcp", "bootstrap_nodes.yml")
     require(bootstrap, "cluster_nodes", "bootstrap_nodes.yml")
+    require(bootstrap, "role: setup/deployment_runtime", "bootstrap_nodes.yml")
+    forbid(bootstrap, "Read back the installed yq version", "bootstrap_nodes.yml")
+    forbid(bootstrap, "Install the checksum-verified shared yq binary", "bootstrap_nodes.yml")
     forbid(bootstrap, "Move the kubeadm join command", "bootstrap_nodes.yml")
     forbid(bootstrap, ".kubeadm_join_command.txt", "bootstrap_nodes.yml")
     forbid(bootstrap, "setup/gre_tunnel", "bootstrap_nodes.yml")
     forbid(bootstrap, "name: 5g/", "bootstrap_nodes.yml")
 
+    deployment_runtime = (
+        ROOT / "deployment/roles/setup/deployment_runtime/tasks/main.yml"
+    ).read_text(encoding="utf-8")
+    for marker in (
+        "kubernetes_python_version",
+        "helm_sha256",
+        "yq_sha256",
+        "Install the checksum-pinned yq release",
+        "Require the checksum-pinned Helm release",
+        "Require the checksum-pinned yq release",
+        "Use the shared Kubernetes-enabled Python runtime",
+    ):
+        require(deployment_runtime, marker, "setup/deployment_runtime")
+    forbid(deployment_runtime, "yq_url", "setup/deployment_runtime")
+
+    k8s_setup = (ROOT / "deployment/roles/setup/k8s/k8s_setup/tasks/main.yml").read_text(encoding="utf-8")
+    forbid(k8s_setup, "helm_version", "k8s_setup")
+    forbid(k8s_setup, "yq_version", "k8s_setup")
+    forbid(k8s_setup, "kubernetes_python_version", "k8s_setup")
+
     network = (ROOT / "deployment/playbooks/network.yml").read_text(encoding="utf-8")
+    require(network, "Prepare deployment execution runtime", "network.yml")
+    require(network, "setup/deployment_runtime", "network.yml")
     require(network, "setup/gre_tunnel", "network.yml")
     require(network, "5g/open5gs", "network.yml")
+    if network.index("setup/deployment_runtime") > network.index("setup/gre_tunnel"):
+        fail("network.yml must establish deployment runtime before transport/workload roles")
     forbid(network, "setup/k8s/cluster_create", "network.yml")
     forbid(network, "setup/common", "network.yml")
     forbid(network, "setup/pre_k8s", "network.yml")
+
+    for relative in (
+        "deployment/roles/5g/free5gc/config/tasks/main.yml",
+        "deployment/roles/5g/free5gc/deploy/tasks/main.yml",
+        "deployment/roles/5g/ueransim/config/tasks/main.yml",
+        "deployment/roles/5g/ueransim/config/tasks/config_open5gs.yml",
+    ):
+        backend = (ROOT / relative).read_text(encoding="utf-8")
+        forbid(backend, "Download yq binary", relative)
+        forbid(backend, "yq_url", relative)
 
     common = (ROOT / "deployment/roles/setup/common/tasks/main.yml").read_text(encoding="utf-8")
     forbid(common, "cni-dhcp.service", "common")
@@ -232,6 +352,13 @@ def main() -> None:
         "Wait for containerd socket",
     ):
         require(reference_containerd, marker, "reference containerd role")
+
+    provenance = (ROOT / "deployment/playbooks/provenance.yml").read_text(encoding="utf-8")
+    require(provenance, "Require deployment tooling to match the pinned runtime baseline", "provenance.yml")
+    require(provenance, "Require the pinned Kubernetes host baseline after fresh preparation", "provenance.yml")
+    require(provenance, "when: synthran_host_preparation == 'fresh'", "provenance.yml")
+    require(provenance, "'host_preparation': synthran_host_preparation", "provenance.yml")
+    forbid(provenance, "Refusing activation/reuse until the host is provisioned by this baseline", "provenance.yml")
 
     runtime = (ROOT / "synthran/runtime.py").read_text(encoding="utf-8")
     reference_checkout = (ROOT / "synthran/reference_checkout.py").read_text(encoding="utf-8")
