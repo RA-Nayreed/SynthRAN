@@ -8,12 +8,19 @@ import ipaddress
 import json
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = ROOT / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
 TOPOLOGY = ROOT / "deployment/topology.yml"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from synthran.scenario import load_scenario
 
 
 def fail(message: str) -> None:
@@ -34,14 +41,34 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def expect_value_error(call, expected: str) -> None:
+    try:
+        call()
+    except ValueError as error:
+        if expected not in str(error):
+            fail(f"expected ValueError containing {expected!r}, got: {error}")
+    else:
+        fail(f"expected ValueError containing {expected!r}")
+
+
 def validate_topology() -> dict:
-    topology = yaml.safe_load(TOPOLOGY.read_text(encoding="utf-8"))
+    topology_text = TOPOLOGY.read_text(encoding="utf-8")
+    topology = yaml.safe_load(topology_text)
     if topology.get("schema_version") != 2:
         fail("deployment/topology.yml: issue #54 requires schema_version 2")
 
     profiles = topology.get("transport_profiles")
     if not isinstance(profiles, dict) or set(profiles) != {"open5gs", "free5gc", "oai"}:
         fail("deployment/topology.yml: expected open5gs/free5gc/oai transport profiles")
+
+    # Compatibility views below the transport profiles may reference these
+    # endpoints through YAML aliases, but they must not become second literals.
+    for endpoint in ("10.10.3.200", "10.100.50.234", "192.168.3.201"):
+        if topology_text.count(endpoint) != 1:
+            fail(
+                f"deployment/topology.yml: endpoint {endpoint} must have exactly one "
+                "literal owner"
+            )
 
     managed_bridges = {"n2br", "n3br", "n4br"}
     for name, profile in profiles.items():
@@ -54,9 +81,28 @@ def validate_topology() -> dict:
             values = bridges.get(role)
             if not isinstance(values, list):
                 fail(f"transport profile {name}: bridges.{role} must be a list")
+            if len(values) != len(set(values)):
+                fail(f"transport profile {name}: bridges.{role} contains duplicates")
             unknown = set(values) - managed_bridges
             if unknown:
                 fail(f"transport profile {name}: unknown managed bridges: {sorted(unknown)}")
+
+        interfaces = profile["workload_interfaces"]
+        for role in ("core", "ran"):
+            values = interfaces.get(role)
+            if not isinstance(values, dict) or not isinstance(values.get("n3"), str):
+                fail(f"transport profile {name}: workload_interfaces.{role}.n3 is required")
+            for plane, interface in values.items():
+                if not isinstance(interface, str) or not interface:
+                    fail(
+                        f"transport profile {name}: workload interface {role}.{plane} "
+                        "must be a name"
+                    )
+                if interface not in {"physical", "primary"} and interface not in bridges[role]:
+                    fail(
+                        f"transport profile {name}: workload interface {role}.{plane} "
+                        f"references undeclared bridge {interface}"
+                    )
 
         for mode in ("colocated", "split"):
             addresses = profile[mode].get("addresses", {})
@@ -66,6 +112,11 @@ def validate_topology() -> dict:
                 if bridge not in managed_bridges:
                     fail(f"transport profile {name}: address assigned to unknown bridge {bridge}")
                 candidates = value.values() if isinstance(value, dict) else (value,)
+                if isinstance(value, dict) and set(value) != {"core", "ran"}:
+                    fail(
+                        f"transport profile {name}: {mode} bridge {bridge} mapping must "
+                        "define core and ran"
+                    )
                 for candidate in candidates:
                     try:
                         ipaddress.ip_interface(str(candidate))
@@ -77,6 +128,8 @@ def validate_topology() -> dict:
         patches = split.get("patches", [])
         if not isinstance(gre, list) or not isinstance(patches, list):
             fail(f"transport profile {name}: split.gre and split.patches must be lists")
+        if len(gre) != len(set(gre)):
+            fail(f"transport profile {name}: split.gre contains duplicates")
         for bridge in gre:
             if bridge not in split.get("addresses", {}):
                 fail(f"transport profile {name}: GRE bridge {bridge} lacks split addresses")
@@ -89,8 +142,18 @@ def validate_topology() -> dict:
             required = {"a", "b", "a_port", "b_port"}
             if not isinstance(patch, dict) or not required <= set(patch):
                 fail(f"transport profile {name}: malformed patch contract: {patch!r}")
-            if patch["a"] not in bridges["core"] or patch["b"] not in bridges["core"]:
-                fail(f"transport profile {name}: patch references undeclared core bridge")
+            if not all(isinstance(patch[key], str) and patch[key] for key in required):
+                fail(f"transport profile {name}: patch names must be non-empty strings")
+            for bridge in (patch["a"], patch["b"]):
+                if bridge not in bridges["core"] or bridge not in bridges["ran"]:
+                    fail(
+                        f"transport profile {name}: patch bridge {bridge} must exist on "
+                        "both split hosts"
+                    )
+
+        endpoints = profile["endpoints"]
+        if not endpoints or not all(isinstance(value, str) and value for value in endpoints.values()):
+            fail(f"transport profile {name}: endpoints must contain non-empty values")
 
     rans = topology.get("rans")
     if not isinstance(rans, dict) or not rans:
@@ -107,6 +170,74 @@ def validate_topology() -> dict:
                 fail(f"deployment/topology.yml: {ran_name}+{core_name} network mapping is empty")
 
     return topology
+
+
+def validate_source_gate() -> None:
+    deploy = read("deploy.sh")
+    authoritative_resolve = '--source "$SOURCE_CONFIG" --output "$CONFIG"'
+    require(deploy, authoritative_resolve, "deploy.sh")
+    if deploy.index(authoritative_resolve) >= deploy.index("deployment/scripts/reserve_sop.py"):
+        fail("deploy.sh: selected transport must be validated before SOP reservation mutation")
+
+    with tempfile.TemporaryDirectory() as temporary:
+        fixture = Path(temporary)
+        topology_path = fixture / "topology.yml"
+        scenario_path = fixture / "scenario.yml"
+        scenario = {
+            "deployment": {
+                "core": "oai",
+                "ran": "srsran",
+                "platform": "rfsim",
+                "network_profile": "default",
+                "network_profile_file": str(
+                    (ROOT / "deployment/group_vars/all/network_profile_default.yaml").resolve()
+                ),
+                "ue_catalog_file": str(
+                    (ROOT / "deployment/group_vars/all/ue_catalog.yaml").resolve()
+                ),
+                "topology_file": str(topology_path.resolve()),
+                "ues": ["uesim01"],
+                "ue_slices": {"uesim01": "slice1"},
+                "nodes": {"core": "sopnode-f2", "ran": "sopnode-f3"},
+                "reservation": {"mode": "disabled", "host_preparation": "preserve"},
+                "provider": {"mode": "disabled"},
+                "r2lab_reservation": {"mode": "disabled"},
+            }
+        }
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+
+        missing_transport = {
+            "schema_version": 2,
+            "rans": {
+                "srsran": {
+                    "oai": {
+                        "namespace": "oai",
+                        "network": {"n2": {"amf_ip": "192.168.3.201"}},
+                    }
+                }
+            },
+        }
+        topology_path.write_text(
+            yaml.safe_dump(missing_transport, sort_keys=False), encoding="utf-8"
+        )
+        expect_value_error(
+            lambda: load_scenario(scenario_path, deployment_only=True),
+            "selected topology transport for srsran + oai must be a mapping",
+        )
+
+        malformed_transport = yaml.safe_load(yaml.safe_dump(missing_transport))
+        malformed_transport["rans"]["srsran"]["oai"]["transport"] = {}
+        topology_path.write_text(
+            yaml.safe_dump(malformed_transport, sort_keys=False), encoding="utf-8"
+        )
+        expect_value_error(
+            lambda: load_scenario(scenario_path, deployment_only=True),
+            "selected topology transport for srsran + oai.bridges must be a mapping",
+        )
+
+        scenario["deployment"]["topology_file"] = str(TOPOLOGY.resolve())
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+        load_scenario(scenario_path, deployment_only=True)
 
 
 def validate_reference(reference: Path) -> None:
@@ -144,6 +275,10 @@ def validate_consumers() -> None:
     require(inventory, '"synthran_topology": topology', "inventory.py")
     require(inventory, 'topology["contract_version"]', "inventory.py")
 
+    scenario = read("synthran/scenario.py")
+    require(scenario, "_validate_selected_transport", "scenario.py")
+    require(scenario, "ipaddress.ip_interface", "scenario.py")
+
     ovs = read("deployment/roles/setup/ovs/tasks/main.yml")
     require(ovs, "synthran_topology.transport.bridges", "setup/ovs")
     forbid(ovs, "core == 'free5gc'", "setup/ovs")
@@ -162,6 +297,9 @@ def validate_consumers() -> None:
         "synthran_transport_mode",
         "synthran_transport_gre_bridges",
         "options:remote_ip",
+        "echo retained",
+        "changed_when: synthran_gre_converge.stdout | trim == 'changed'",
+        "changed_when: synthran_patch_converge.stdout | trim == 'changed'",
     ):
         require(gre, marker, "setup/gre_tunnel")
     for marker in (
@@ -260,6 +398,7 @@ def main() -> None:
     args = parser.parse_args()
 
     validate_topology()
+    validate_source_gate()
     validate_reference(args.reference)
     validate_consumers()
     print("issue #54 N2/N3/N4 transport ownership contract OK")
