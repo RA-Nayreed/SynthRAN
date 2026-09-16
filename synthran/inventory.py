@@ -156,6 +156,8 @@ def render_inventory(
                 ),
                 "mode": ue["tunnel"]["mode"],
             }
+            if settings["identity_file"]:
+                host["ansible_ssh_private_key_file"] = settings["identity_file"]
             host.update(host_vars)
             children[group]["hosts"][name] = host
         children["physical_ues"] = {"children": {"qhats": {}, "qfits": {}}}
