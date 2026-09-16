@@ -1,7 +1,4 @@
 ---
-- name: START_UE_STOP
-  ansible.builtin.meta: noop
-
 - name: Resolve selected UE for this stop invocation
   ansible.builtin.set_fact:
     r2lab_stop_target: "{{ ue_item if ue_item is defined else ue }}"
