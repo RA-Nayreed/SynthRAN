@@ -1,0 +1,21 @@
+name: Reopened 50/53 contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reopened-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check PyYAML
+      - run: python tools/check_reopened_50_53.py
+      - run: python -m compileall -q synthran tools/check_reopened_50_53.py
+      - run: bash -n deploy.sh
