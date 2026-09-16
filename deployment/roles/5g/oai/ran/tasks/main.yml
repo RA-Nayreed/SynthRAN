@@ -1,54 +1,68 @@
 ---
+- name: Require a supported OAI RAN mode
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (oai_gnb_mode | default('monolithic')) in ['monolithic', 'cudu', 'cucpup']
+    fail_msg: >-
+      Unsupported OAI RAN mode {{ oai_gnb_mode | default('monolithic') }}.
+      Expected one of monolithic, cudu or cucpup.
+
+- name: Resolve OAI RAN lifecycle identities
+  ansible.builtin.set_fact:
+    oai_ran_release_name: "{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
+    oai_n2_release_name: >-
+      {{ 'oai-gnb'
+         if (oai_gnb_mode | default('monolithic')) == 'monolithic'
+         else 'oai-cu'
+         if (oai_gnb_mode | default('monolithic')) == 'cudu'
+         else 'oai-cu-cp' }}
+    oai_expected_ran_releases: >-
+      {{ ['oai-gnb']
+         if (oai_gnb_mode | default('monolithic')) == 'monolithic'
+         else ['oai-cu', 'oai-du']
+         if (oai_gnb_mode | default('monolithic')) == 'cudu'
+         else ['oai-cu-cp', 'oai-cu-up', 'oai-du'] }}
+
 - name: Remove previous OAI RAN deployment if any
   ansible.builtin.command: "{{ demo_oai_script }} stop-ran"
   args:
     chdir: "{{ repo_dest }}"
 
-- name: Select the expected OAI RAN release
-  ansible.builtin.set_fact:
-    oai_ran_release_name: "{{ 'oai-du' if (oai_gnb_mode | default('monolithic')) in ['cudu', 'cucpup'] else 'oai-gnb' }}"
-
-- name: Prepare the Helm-owned R2Lab N320 RU attachment
-  ansible.builtin.include_tasks: r2lab_n320_chart.yml
-  when:
-    - platform == 'r2lab'
-    - rru == 'n320'
-
-- name: Launch OAI gNB pod
-  ansible.builtin.command: "{{ demo_oai_script }} start-gnb"
-  args:
-    chdir: "{{ repo_dest }}"
-  register: gnb_script
-  changed_when: true
-  failed_when: false
-
-- name: Classify the OAI launch result
-  ansible.builtin.set_fact:
-    oai_start_wait_timeout: >-
-      {{
-        gnb_script.rc != 0 and
-        'timed out waiting for the condition' in
-        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
-      }}
-
-- name: Inspect the RAN Helm release after an upstream readiness timeout
+- name: Prove the R2Lab N320 Helm lifecycle starts clean
   ansible.builtin.command:
     argv:
       - helm
       - status
-      - "{{ oai_ran_release_name }}"
+      - "{{ item }}"
       - --namespace
       - "{{ core }}"
       - --output
       - json
-  register: oai_start_helm_status
+  loop: "{{ oai_expected_ran_releases }}"
+  register: oai_n320_prelaunch_releases
   changed_when: false
   failed_when: false
   when:
-    - rru in ['n300', 'n320']
-    - oai_start_wait_timeout | bool
+    - platform == 'r2lab'
+    - rru == 'n320'
 
-- name: Inspect the RAN workload after an upstream readiness timeout
+- name: Reject stale R2Lab N320 Helm releases before launch
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.rc != 0
+    fail_msg: >-
+      OAI release {{ item.item }} still exists after stop-ran; refusing to
+      launch N320 against stale Helm state.
+  loop: "{{ oai_n320_prelaunch_releases.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('unknown') }}"
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Prove the R2Lab N320 radio workload starts clean
   ansible.builtin.command:
     argv:
       - kubectl
@@ -59,42 +73,145 @@
       - "{{ core }}"
       - -o
       - name
-  register: oai_start_workload
+  register: oai_n320_prelaunch_radio_workload
   changed_when: false
   failed_when: false
   when:
-    - rru in ['n300', 'n320']
-    - oai_start_wait_timeout | bool
+    - platform == 'r2lab'
+    - rru == 'n320'
 
-- name: Classify the timed-out Helm release state
-  ansible.builtin.set_fact:
-    oai_start_helm_deployed: >-
-      {{
-        (oai_start_helm_status.rc | default(1)) == 0 and
-        ((oai_start_helm_status.stdout | from_json).info.status | default('')) == 'deployed'
-      }}
+- name: Reject a stale R2Lab N320 radio workload before launch
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (oai_n320_prelaunch_radio_workload.rc | default(1)) != 0
+    fail_msg: >-
+      Deployment {{ oai_ran_release_name }} still exists after stop-ran;
+      refusing to let a stale workload satisfy N320 startup evidence.
   when:
-    - rru in ['n300', 'n320']
-    - oai_start_wait_timeout | bool
-    - (oai_start_helm_status.rc | default(1)) == 0
+    - platform == 'r2lab'
+    - rru == 'n320'
 
-- name: Require a valid OAI launch result
+- name: Prepare the Helm-owned R2Lab N320 RU attachment
+  ansible.builtin.include_tasks: r2lab_n320_chart.yml
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Launch OAI RAN through the pinned helper
+  ansible.builtin.command: "{{ demo_oai_script }} start-gnb"
+  args:
+    chdir: "{{ repo_dest }}"
+  register: gnb_script
+  changed_when: true
+  failed_when: false
+
+- name: Classify the complete OAI launch transcript
+  ansible.builtin.set_fact:
+    oai_start_output: >-
+      {{ (gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')) }}
+    oai_start_wait_timeout: >-
+      {{
+        'timed out waiting for the condition' in
+        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
+      }}
+    oai_start_installation_failed: >-
+      {{
+        'INSTALLATION FAILED' in
+        ((gnb_script.stdout | default('')) ~ '\n' ~ (gnb_script.stderr | default('')))
+      }}
+
+- name: Reject explicit Helm installation failures from the helper transcript
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - not (oai_start_installation_failed | bool)
+    fail_msg: >-
+      OAI start-gnb reported a Helm installation failure. The pinned helper
+      continues after some failed commands, so a later command must not mask
+      this launch failure.
+
+- name: Inspect every expected R2Lab N320 Helm release after launch
+  ansible.builtin.command:
+    argv:
+      - helm
+      - status
+      - "{{ item }}"
+      - --namespace
+      - "{{ core }}"
+      - --output
+      - json
+  loop: "{{ oai_expected_ran_releases }}"
+  register: oai_n320_postlaunch_releases
+  changed_when: false
+  failed_when: false
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Require every expected R2Lab N320 Helm release to be deployed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.rc == 0
+      - (item.stdout | from_json).info.status == 'deployed'
+    fail_msg: >-
+      OAI release {{ item.item }} is not deployed after start-gnb; refusing
+      to accept a helper wait timeout or masked intermediate failure.
+  loop: "{{ oai_n320_postlaunch_releases.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('unknown') }}"
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Inspect the R2Lab N320 radio Deployment after launch
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - deployment
+      - "{{ oai_ran_release_name }}"
+      - --namespace
+      - "{{ core }}"
+      - -o
+      - name
+  register: oai_n320_postlaunch_radio_workload
+  changed_when: false
+  failed_when: false
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Require the R2Lab N320 radio Deployment after launch
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (oai_n320_postlaunch_radio_workload.rc | default(1)) == 0
+    fail_msg: >-
+      OAI start-gnb did not create the expected radio Deployment
+      {{ oai_ran_release_name }}.
+  when:
+    - platform == 'r2lab'
+    - rru == 'n320'
+
+- name: Require a valid OAI helper exit result
   ansible.builtin.assert:
     quiet: true
     that:
       - >-
         gnb_script.rc == 0 or
         (
-          rru in ['n300', 'n320'] and
+          platform == 'r2lab' and
+          rru == 'n320' and
           (oai_start_wait_timeout | bool) and
-          (oai_start_helm_deployed | default(false) | bool) and
-          (oai_start_workload.rc | default(1)) == 0
+          not (oai_start_installation_failed | bool)
         )
     fail_msg: >-
-      OAI start-gnb failed before SynthRAN could perform its RF readiness gate.
-      rc={{ gnb_script.rc }}; expected release={{ oai_ran_release_name }}.
-      A kubectl readiness timeout is tolerated only for N3xx when Helm reports
-      the expected release as deployed and its Deployment exists.
+      OAI start-gnb failed before SynthRAN's acceptance gates.
+      rc={{ gnb_script.rc }}. A nonzero result is tolerated only for the
+      evidence-backed R2Lab N320 readiness timeout; all other launch failures
+      remain fatal.
 
 - name: Verify N3xx gNB RF-device readiness
   block:
@@ -133,7 +250,7 @@
           Helm-rendered ipvlan RU attachment before the release is launched.
   when: rru in ['n300', 'n320']
 
-- name: Attest the live R2Lab N320 transport after RF readiness
+- name: Attest the live R2Lab N320 RAN-local contract after RF readiness
   ansible.builtin.include_tasks: r2lab_n320_attest.yml
   when:
     - platform == 'r2lab'
