@@ -107,19 +107,38 @@
   changed_when: synthran_patch_reconcile.stdout | trim == 'changed'
   become: true
 
-- name: Configure required local OVS patch links
+- name: Converge required local OVS patch links
   ansible.builtin.shell: |
     set -eu
-    ovs-vsctl --may-exist add-port {{ item.a }} {{ item.a_port }} -- \
-      set interface {{ item.a_port }} type=patch options:peer={{ item.b_port }}
-    ovs-vsctl --may-exist add-port {{ item.b }} {{ item.b_port }} -- \
-      set interface {{ item.b_port }} type=patch options:peer={{ item.a_port }}
+    a={{ item.a | quote }}
+    b={{ item.b | quote }}
+    a_port={{ item.a_port | quote }}
+    b_port={{ item.b_port | quote }}
+    a_bridge="$(ovs-vsctl port-to-br "$a_port" 2>/dev/null || true)"
+    b_bridge="$(ovs-vsctl port-to-br "$b_port" 2>/dev/null || true)"
+    a_type="$(ovs-vsctl --if-exists get interface "$a_port" type 2>/dev/null | tr -d '"' || true)"
+    b_type="$(ovs-vsctl --if-exists get interface "$b_port" type 2>/dev/null | tr -d '"' || true)"
+    a_peer="$(ovs-vsctl --if-exists get interface "$a_port" options:peer 2>/dev/null | tr -d '"' || true)"
+    b_peer="$(ovs-vsctl --if-exists get interface "$b_port" options:peer 2>/dev/null | tr -d '"' || true)"
+    if [ "$a_bridge" = "$a" ] && [ "$b_bridge" = "$b" ] && \
+       [ "$a_type" = "patch" ] && [ "$b_type" = "patch" ] && \
+       [ "$a_peer" = "$b_port" ] && [ "$b_peer" = "$a_port" ]; then
+      echo retained
+      exit 0
+    fi
+    ovs-vsctl --may-exist add-port "$a" "$a_port"
+    ovs-vsctl --may-exist add-port "$b" "$b_port"
+    ovs-vsctl set interface "$a_port" type=patch options:peer="$b_port"
+    ovs-vsctl set interface "$b_port" type=patch options:peer="$a_port"
+    echo changed
   args:
     executable: /bin/bash
   loop: "{{ synthran_transport_patches }}"
   loop_control:
     label: "{{ item.a }}<->{{ item.b }}"
   when: synthran_transport_mode == 'split'
+  register: synthran_patch_converge
+  changed_when: synthran_patch_converge.stdout | trim == 'changed'
   become: true
 
 - name: Verify authoritative transport bridges exist
