@@ -8,16 +8,16 @@ kubernetes_debian_revision: "1.1"
 kubernetes_package_version: "{{ kubernetes_version }}-{{ kubernetes_debian_revision }}"
 kubernetes_python_version: "36.0.3"
 
-# Fixed deployment tooling. Downloads are checksum verified before installation.
+# Fixed deployment tooling. setup/deployment_runtime is the single installer and
+# verifier. Fresh bootstrap establishes it before infrastructure roles that need
+# Helm; preserve bootstrap does not touch it, and network.yml establishes it at
+# the downstream deployment boundary before any backend/provenance consumer.
 helm_version: "3.22.0"
 helm_sha256:
   amd64: "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb"
   arm64: "0236e2ebea9577799375a236c5e0e98d0eded4b9a3260678e51bfbc9dcca97a1"
 yq_version: "v4.45.1"
 yq_bin_path: "/usr/local/bin/yq"
-# Legacy role download tasks are intentionally fail-closed. The bootstrap play
-# installs this binary from the checksum-pinned release before any 5G backend.
-yq_url: ""
 yq_sha256:
   amd64: "654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049"
   arm64: "ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d"
