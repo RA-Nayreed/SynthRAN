@@ -157,12 +157,15 @@
   vars:
     profile: "{{ fiveg }}"
 
-- name: Add iupf1 n3 route for gNB subnet (same-node only)
+- name: Add iupf1 N3 route for the selected colocated gNB network
   ansible.builtin.replace:
     path: "{{ free5gc_repo_dest }}/charts/free5gc/charts/free5gc-upf/templates/iupf1/iupf1-configmap.yaml"
     regexp: '(    ip route add 10\.100\.50\.224/29 dev n9 2>/dev/null \|\| true)'
-    replace: '\1\n    ip route add 10.100.50.248/29 dev n3 2>/dev/null || true'
-  when: core_node_name == ran_node_name
+    replace: '\1\n    ip route add {{ synthran_topology.network.n3.route_cidr }} dev n3 2>/dev/null || true'
+  when:
+    - core_node_name == ran_node_name
+    - synthran_topology.network.n3 is defined
+    - synthran_topology.network.n3.route_cidr is defined
 
 - name: Enable CoreDNS cache for cluster.local
   ansible.builtin.shell: |

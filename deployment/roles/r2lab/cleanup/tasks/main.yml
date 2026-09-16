@@ -1,8 +1,41 @@
 ---
-- name: Power OFF R2Lab testbed
-  shell: |
+- name: Resolve selected R2Lab UEs
+  ansible.builtin.set_fact:
+    r2lab_selected_ues: >-
+      {{ (groups['qhats'] | default([]))
+         + (groups['qfits'] | default([]))
+         + (groups['phones'] | default([])) }}
+
+- name: Stop only selected R2Lab UEs
+  ansible.builtin.include_role:
+    name: r2lab/ue/stop
+  loop: "{{ r2lab_selected_ues }}"
+  loop_control:
+    loop_var: ue_item
+
+- name: Power OFF only selected RRU with the SophiaNode R2Lab helper
+  ansible.builtin.shell: |
     source ~/.bashrc
-    all-off
+    rhubarbe-pdu off "{{ rru }}"
   args:
     executable: /bin/bash
-  ignore_errors: yes
+  register: selected_rru_power_off
+  changed_when: selected_rru_power_off.rc == 0
+  failed_when: false
+  when: rru | default('rfsim') != 'rfsim'
+
+- name: Allow selected N3xx RRU power rail to settle after power-off
+  ansible.builtin.pause:
+    seconds: 20
+  when:
+    - rru in ['n300', 'n320']
+    - selected_rru_power_off.rc == 0
+
+- name: Report a non-fatal selected RRU power-off result
+  ansible.builtin.debug:
+    msg: >-
+      Initial power-off of {{ rru }} returned rc={{ selected_rru_power_off.rc }}.
+      Continuing to the authoritative power-on step; no unrelated R2Lab resource was touched.
+  when:
+    - rru | default('rfsim') != 'rfsim'
+    - selected_rru_power_off.rc != 0

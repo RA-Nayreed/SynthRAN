@@ -1,19 +1,10 @@
 ---
-- name: Configure core-side transport
-  hosts: core_node
+- name: Configure authoritative N2/N3/N4 host transport
+  hosts: sopnodes
   become: true
   any_errors_fatal: true
   roles:
     - role: setup/gre_tunnel
-      when: bridge_enabled and core_node_name != ran_node_name
-
-- name: Configure RAN-side transport
-  hosts: ran_node
-  become: true
-  any_errors_fatal: true
-  roles:
-    - role: setup/gre_tunnel
-      when: bridge_enabled and core_node_name != ran_node_name
 
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node

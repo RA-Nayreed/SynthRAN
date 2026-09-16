@@ -118,10 +118,10 @@
     multus_ran_if: "{{ hostvars[groups['ran_node'][0]].nic_interface }}"
   when: not bridge_enabled
 
-- name: Retrieve bridge interfaces for multus on the core and ran nodes
+- name: Retrieve topology-selected bridge interfaces for multus
   ansible.builtin.set_fact:
-    multus_core_if: n3br
-    multus_ran_if: n3br
+    multus_core_if: "{{ synthran_topology.transport.workload_interfaces.core.n3 }}"
+    multus_ran_if: "{{ synthran_topology.transport.workload_interfaces.ran.n3 }}"
   when: bridge_enabled or (core == 'oai' and ran == 'ueransim')
 
 - name: Update NS variable in prepare-demo-oai.sh

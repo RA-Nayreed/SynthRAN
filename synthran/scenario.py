@@ -1,5 +1,5 @@
 from __future__ import annotations
-import copy, re
+import copy, ipaddress, re
 from pathlib import Path
 import yaml
 
@@ -41,6 +41,137 @@ def _topology_source(deployment: dict) -> Path:
     return Path(deployment.get("topology_file") or "deployment/topology.yml")
 
 
+def _validate_selected_transport(
+    selected: dict, topology_source: Path, ran: str, core: str
+) -> None:
+    context = f"selected topology transport for {ran} + {core}"
+    transport = selected.get("transport")
+    if not isinstance(transport, dict):
+        raise ValueError(f"{context} must be a mapping: {topology_source}")
+
+    for key in ("bridges", "workload_interfaces", "colocated", "split", "endpoints"):
+        if not isinstance(transport.get(key), dict):
+            raise ValueError(f"{context}.{key} must be a mapping: {topology_source}")
+
+    bridges = transport["bridges"]
+    declared_bridges: dict[str, set[str]] = {}
+    for role in ("core", "ran"):
+        values = bridges.get(role)
+        if (
+            not isinstance(values, list)
+            or not all(isinstance(item, str) and item for item in values)
+            or len(values) != len(set(values))
+        ):
+            raise ValueError(
+                f"{context}.bridges.{role} must be a unique list of names: "
+                f"{topology_source}"
+            )
+        declared_bridges[role] = set(values)
+
+    interfaces = transport["workload_interfaces"]
+    for role in ("core", "ran"):
+        values = interfaces.get(role)
+        if not isinstance(values, dict):
+            raise ValueError(
+                f"{context}.workload_interfaces.{role} must be a mapping: "
+                f"{topology_source}"
+            )
+        if not isinstance(values.get("n3"), str) or not values["n3"]:
+            raise ValueError(
+                f"{context}.workload_interfaces.{role}.n3 must be a non-empty "
+                f"interface name: {topology_source}"
+            )
+        for plane, interface in values.items():
+            if not isinstance(interface, str) or not interface:
+                raise ValueError(
+                    f"{context}.workload_interfaces.{role}.{plane} must be a "
+                    f"non-empty interface name: {topology_source}"
+                )
+            if interface not in {"physical", "primary"} and interface not in declared_bridges[role]:
+                raise ValueError(
+                    f"{context}.workload_interfaces.{role}.{plane} references "
+                    f"undeclared bridge {interface!r}: {topology_source}"
+                )
+
+    all_bridges = declared_bridges["core"] | declared_bridges["ran"]
+    for mode in ("colocated", "split"):
+        addresses = transport[mode].get("addresses")
+        if not isinstance(addresses, dict):
+            raise ValueError(
+                f"{context}.{mode}.addresses must be a mapping: {topology_source}"
+            )
+        for bridge, value in addresses.items():
+            if bridge not in all_bridges:
+                raise ValueError(
+                    f"{context}.{mode}.addresses references undeclared bridge "
+                    f"{bridge!r}: {topology_source}"
+                )
+            if isinstance(value, dict):
+                if set(value) != {"core", "ran"}:
+                    raise ValueError(
+                        f"{context}.{mode}.addresses.{bridge} must define exactly "
+                        f"core and ran: {topology_source}"
+                    )
+                candidates = value.values()
+            else:
+                candidates = (value,)
+            for candidate in candidates:
+                try:
+                    ipaddress.ip_interface(str(candidate))
+                except ValueError as error:
+                    raise ValueError(
+                        f"{context}.{mode}.addresses.{bridge} contains invalid "
+                        f"interface {candidate!r}: {topology_source}"
+                    ) from error
+
+    split = transport["split"]
+    gre = split.get("gre", [])
+    patches = split.get("patches", [])
+    if (
+        not isinstance(gre, list)
+        or not all(isinstance(bridge, str) and bridge for bridge in gre)
+        or len(gre) != len(set(gre))
+    ):
+        raise ValueError(f"{context}.split.gre must be a unique list: {topology_source}")
+    if not isinstance(patches, list):
+        raise ValueError(f"{context}.split.patches must be a list: {topology_source}")
+
+    for bridge in gre:
+        address = split["addresses"].get(bridge)
+        if bridge not in declared_bridges["core"] or bridge not in declared_bridges["ran"]:
+            raise ValueError(
+                f"{context}.split.gre bridge {bridge!r} must exist on core and ran: "
+                f"{topology_source}"
+            )
+        if not isinstance(address, dict) or set(address) != {"core", "ran"}:
+            raise ValueError(
+                f"{context}.split.gre bridge {bridge!r} requires core/ran addresses: "
+                f"{topology_source}"
+            )
+
+    required_patch = {"a", "b", "a_port", "b_port"}
+    for patch in patches:
+        if not isinstance(patch, dict) or not required_patch <= set(patch):
+            raise ValueError(f"{context}.split.patches contains a malformed patch: {topology_source}")
+        if not all(isinstance(patch[key], str) and patch[key] for key in required_patch):
+            raise ValueError(f"{context}.split.patches requires non-empty names: {topology_source}")
+        for bridge_key in ("a", "b"):
+            bridge = patch[bridge_key]
+            if bridge not in declared_bridges["core"] or bridge not in declared_bridges["ran"]:
+                raise ValueError(
+                    f"{context}.split.patches references bridge {bridge!r} that is "
+                    f"not declared on both split hosts: {topology_source}"
+                )
+
+    endpoints = transport["endpoints"]
+    if not endpoints or not all(
+        isinstance(value, str) and value for value in endpoints.values()
+    ):
+        raise ValueError(
+            f"{context}.endpoints must contain non-empty endpoint values: {topology_source}"
+        )
+
+
 def _validate_selected_topology(deployment: dict) -> None:
     topology_source = _topology_source(deployment)
     if not topology_source.is_file():
@@ -78,6 +209,7 @@ def _validate_selected_topology(deployment: dict) -> None:
             f"selected topology contract for {ran} + {core} requires a non-empty "
             f"network mapping: {topology_source}"
         )
+    _validate_selected_transport(selected, topology_source, ran, core)
 
 
 def _mapping(value, label: str) -> dict:
@@ -294,6 +426,26 @@ def load_scenario(path: str | Path, *, deployment_only: bool = False) -> dict:
             "deployment.r2lab_experiment_nodes is disabled; auxiliary R2Lab "
             "sensor/edge/RF hosts are not part of the current testbed contract"
         )
+
+    nodes = dep.get("nodes")
+    if not isinstance(nodes, dict):
+        raise ValueError("deployment.nodes must be a mapping")
+    for role in ("core", "ran"):
+        if not isinstance(nodes.get(role), str) or not nodes[role]:
+            raise ValueError(f"deployment.nodes.{role} must be a non-empty host name")
+    if "broker" in nodes and (not isinstance(nodes["broker"], str) or not nodes["broker"]):
+        raise ValueError("deployment.nodes.broker must be a non-empty host name when provided")
+
+    split_transport = nodes["core"] != nodes["ran"]
+    if "bridge_enabled" in dep:
+        if not isinstance(dep["bridge_enabled"], bool):
+            raise ValueError("deployment.bridge_enabled must be boolean when provided")
+        if dep["bridge_enabled"] != split_transport:
+            raise ValueError(
+                "deployment.bridge_enabled is derived from node placement and cannot "
+                "override the authoritative transport mode"
+            )
+    dep["bridge_enabled"] = split_transport
 
     profile_name = dep.get("network_profile")
     if not isinstance(profile_name, str) or not _SAFE_PROFILE_NAME.fullmatch(profile_name):

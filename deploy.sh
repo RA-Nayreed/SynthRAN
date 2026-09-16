@@ -359,6 +359,8 @@ if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   DEFAULT_NETWORK_PROFILE=default
   DEFAULT_UES=uesim01,uesim02
   DEFAULT_RESERVE=true
+  DEFAULT_RESERVATION_MODE=create
+  DEFAULT_HOST_PREPARATION=fresh
   DEFAULT_DURATION=120
   DEFAULT_POS_IMAGE=ubuntu-jammy
   DEFAULT_R2LAB_USERNAME=${R2LAB_USERNAME:-}
@@ -372,10 +374,13 @@ from pathlib import Path
 data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
 d = data.get('deployment') or {}
 n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservation', {})
+enabled = bool(r.get('enabled', True))
+mode = r.get('mode', 'create' if enabled else 'disabled')
+preparation = r.get('host_preparation', 'fresh' if mode != 'disabled' else 'preserve')
 values = [
     d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'),
     n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')),
-    d.get('network_profile','default'), ','.join(d.get('ues',[])), str(r.get('enabled',True)).lower(),
+    d.get('network_profile','default'), ','.join(d.get('ues',[])), str(enabled).lower(), mode, preparation,
     str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''),
     str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120)),
     d.get('network_profile_file',''), d.get('ue_catalog_file','deployment/group_vars/all/ue_catalog.yaml')
@@ -393,13 +398,15 @@ PY
     DEFAULT_NETWORK_PROFILE=${SCENARIO_DEFAULTS[7]}
     DEFAULT_UES=${SCENARIO_DEFAULTS[8]}
     DEFAULT_RESERVE=${SCENARIO_DEFAULTS[9]}
-    DEFAULT_DURATION=${SCENARIO_DEFAULTS[10]}
-    DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[11]}
-    DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[12]}
-    DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[13]}
-    DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[14]}
-    BASE_NETWORK_PROFILE_FILE=${SCENARIO_DEFAULTS[15]}
-    UE_CATALOG_FILE=${SCENARIO_DEFAULTS[16]}
+    DEFAULT_RESERVATION_MODE=${SCENARIO_DEFAULTS[10]}
+    DEFAULT_HOST_PREPARATION=${SCENARIO_DEFAULTS[11]}
+    DEFAULT_DURATION=${SCENARIO_DEFAULTS[12]}
+    DEFAULT_POS_IMAGE=${SCENARIO_DEFAULTS[13]}
+    DEFAULT_R2LAB_USERNAME=${SCENARIO_DEFAULTS[14]}
+    DEFAULT_R2LAB_RESERVE=${SCENARIO_DEFAULTS[15]}
+    DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[16]}
+    BASE_NETWORK_PROFILE_FILE=${SCENARIO_DEFAULTS[17]}
+    UE_CATALOG_FILE=${SCENARIO_DEFAULTS[18]}
   fi
 
   echo
@@ -594,18 +601,45 @@ BANNER
   SELECTED_RESERVE=$DEFAULT_RESERVE
   [[ "${RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_RESERVE=true
   [[ "${RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_RESERVE=false
+
+  SELECTED_DURATION=$DEFAULT_DURATION
+  SELECTED_POS_IMAGE=$DEFAULT_POS_IMAGE
+  SELECTED_HOST_PREPARATION=preserve
   if $SELECTED_RESERVE; then
+    if [[ "$DEFAULT_RESERVATION_MODE" == require-existing ]]; then
+      SELECTED_RESERVATION_MODE=require-existing
+    else
+      SELECTED_RESERVATION_MODE=create
+    fi
     read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION
     SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
     [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
-    read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE
-    SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
+
+    case "$DEFAULT_HOST_PREPARATION" in
+      preserve) DEFAULT_PREP_CHOICE=1 ;;
+      *) DEFAULT_PREP_CHOICE=2 ;;
+    esac
+    echo
+    echo "How should SynthRAN prepare the selected SOP nodes?"
+    echo "1) Reuse current node state"
+    echo "2) Reset/reimage nodes before deployment"
+    read -r -p "Enter choice [1-2] [$DEFAULT_PREP_CHOICE]: " PREP_CHOICE
+    case "${PREP_CHOICE:-$DEFAULT_PREP_CHOICE}" in
+      1) SELECTED_HOST_PREPARATION=preserve ;;
+      2) SELECTED_HOST_PREPARATION=fresh ;;
+      *) echo "Invalid SOP preparation choice" >&2; exit 2 ;;
+    esac
+
+    if [[ "$SELECTED_HOST_PREPARATION" == fresh ]]; then
+      read -r -p "POS image [$DEFAULT_POS_IMAGE]: " SELECTED_POS_IMAGE
+      SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
+    fi
+  else
+    SELECTED_RESERVATION_MODE=disabled
   fi
-  SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
-  SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_NETWORK_PROFILE" "$SELECTED_UES" "$SELECTED_UE_SLICE_SPEC" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_NETWORK_PROFILE" "$SELECTED_UES" "$SELECTED_UE_SLICE_SPEC" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_RESERVATION_MODE" "$SELECTED_HOST_PREPARATION" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
 import copy
 import sys
 from pathlib import Path
@@ -613,8 +647,8 @@ import yaml
 
 (
     source, output, core, ran, platform, ru, core_node, ran_node, broker_node,
-    network_profile, ue_csv, ue_slice_spec, r2lab_username, reserve, duration,
-    pos_image, r2_reserve, r2_duration,
+    network_profile, ue_csv, ue_slice_spec, r2lab_username, reserve,
+    reservation_mode, host_preparation, duration, pos_image, r2_reserve, r2_duration,
 ) = sys.argv[1:]
 source_data = {}
 if source:
@@ -646,7 +680,13 @@ dep.update({
     'ue_slices': ue_slices,
 })
 dep['host_vars'] = host_vars
-dep['reservation'] = {'enabled': reserve == 'true', 'duration_minutes': int(duration), 'image': pos_image}
+dep['reservation'] = {
+    'enabled': reserve == 'true',
+    'mode': reservation_mode,
+    'host_preparation': host_preparation,
+    'duration_minutes': int(duration),
+    'image': pos_image,
+}
 dep['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
 for legacy in ('profile', 'profile_file', 'ue_profiles', 'r2lab_experiment_nodes'):
     dep.pop(legacy, None)
@@ -666,7 +706,15 @@ PY
   echo "  Network profile: $SELECTED_NETWORK_PROFILE"
   echo "  UE slices:"
   describe_ue_slice_assignments "$SELECTED_NETWORK_PROFILE" "$SELECTED_UE_SLICE_SPEC"
-  echo "  POS:             $SELECTED_RESERVE, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+  if $SELECTED_RESERVE; then
+    if [[ "$SELECTED_HOST_PREPARATION" == fresh ]]; then
+      echo "  POS:             true, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+    else
+      echo "  POS:             true, ${SELECTED_DURATION}m, reuse current host state"
+    fi
+  else
+    echo "  POS:             false"
+  fi
   [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:           $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0

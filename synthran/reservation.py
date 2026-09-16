@@ -57,7 +57,10 @@ def run(
     *,
     check: bool = True,
     stdin: str | None = None,
+    echo: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Run a reservation command while keeping machine responses quiet by default."""
+
     options: dict[str, Any] = {
         "text": True,
         "capture_output": True,
@@ -68,13 +71,29 @@ def run(
     else:
         options["input"] = stdin
     result = subprocess.run(list(argv), **options)
-    if result.stdout:
+    if echo and result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
-    if result.stderr:
+    if echo and result.stderr:
         print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
     if check and result.returncode:
         detail = _output(result) or f"exit status {result.returncode}"
         raise ReservationError(f"command failed: {' '.join(argv)}\n{detail}")
+    return result
+
+
+def run_visible(
+    argv: Sequence[str],
+    *,
+    check: bool = True,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run an operator-facing mutation without changing the historical run() call contract."""
+
+    result = run(argv, check=check, stdin=stdin)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
     return result
 
 
@@ -193,7 +212,7 @@ def provider_context(provider: Mapping[str, Any]) -> dict[str, Any]:
                 "SLICES experiment is required to exist: "
                 + (_output(shown) or f"experiment={experiment}")
             )
-        result = run(
+        result = run_visible(
             ["slices", "experiment", "create", experiment, "--duration", duration],
             check=False,
         )
@@ -229,13 +248,12 @@ def _calendars() -> list[dict[str, Any]]:
     return value
 
 
-def _covering_exact_events(
+def _active_exact_events(
     events: Sequence[Mapping[str, Any]],
     *,
     owner: str,
     selected: Sequence[str],
     now: dt.datetime,
-    end: dt.datetime,
 ) -> list[dict[str, Any]]:
     wanted = set(selected)
     matches: list[dict[str, Any]] = []
@@ -250,9 +268,39 @@ def _covering_exact_events(
             stop = stamp(str(raw["end_date"]))
         except (KeyError, TypeError, ValueError):
             continue
-        if start <= now and stop >= end:
+        if start <= now < stop:
             matches.append(dict(raw))
     return matches
+
+
+def _covering_exact_events(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    owner: str,
+    selected: Sequence[str],
+    now: dt.datetime,
+    end: dt.datetime,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for raw in _active_exact_events(
+        events, owner=owner, selected=selected, now=now
+    ):
+        try:
+            stop = stamp(str(raw["end_date"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if stop >= end:
+            matches.append(dict(raw))
+    return matches
+
+
+def _booked_duration(event: Mapping[str, Any]) -> dt.timedelta:
+    try:
+        start = stamp(str(event["start_date"]))
+        stop = stamp(str(event["end_date"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ReservationError("POS calendar event has invalid start/end timestamps") from exc
+    return stop - start
 
 
 def _calendar_record(event: Mapping[str, Any], *, status: str) -> dict[str, Any]:
@@ -290,20 +338,45 @@ def acquire_calendar(
         }
 
     required_end = now + dt.timedelta(minutes=duration)
-    covering = _covering_exact_events(
-        _calendars(), owner=owner, selected=selected, now=now, end=required_end
-    )
-    if len(covering) > 1:
-        raise ReservationError(
-            "multiple owned POS calendar events exactly cover the selected nodes; refusing ambiguous authority"
-        )
-    if covering:
-        status = "required-existing" if mode == "require-existing" else "reused"
-        return _calendar_record(covering[0], status=status)
+    events = _calendars()
+
     if mode == "require-existing":
+        covering = _covering_exact_events(
+            events, owner=owner, selected=selected, now=now, end=required_end
+        )
+        if len(covering) > 1:
+            raise ReservationError(
+                "multiple owned POS calendar events exactly cover the selected nodes; refusing ambiguous authority"
+            )
+        if covering:
+            return _calendar_record(covering[0], status="required-existing")
         raise ReservationError(
             "no owned active POS calendar event exactly covers the selected nodes for the requested duration"
         )
+
+    active = _active_exact_events(
+        events, owner=owner, selected=selected, now=now
+    )
+    if len(active) > 1:
+        raise ReservationError(
+            "multiple owned active POS calendar events exactly cover the selected nodes; refusing ambiguous authority"
+        )
+    if active:
+        booked = _booked_duration(active[0])
+        requested = dt.timedelta(minutes=duration)
+        if booked < requested:
+            booked_minutes = max(0, int(booked.total_seconds() // 60))
+            raise ReservationError(
+                "owned active POS calendar event exactly covers the selected nodes but was booked "
+                f"for {booked_minutes} minute(s), shorter than requested {duration}; "
+                "refusing an overlapping calendar create"
+            )
+        record = _calendar_record(active[0], status="reused")
+        print(
+            f"Reusing active SOP reservation {record['id']} through {record['end']}",
+            flush=True,
+        )
+        return record
 
     result = run(
         [
@@ -327,15 +400,20 @@ def acquire_calendar(
 
     matches = [
         event
-        for event in _covering_exact_events(
-            _calendars(), owner=owner, selected=selected, now=now, end=required_end
+        for event in _active_exact_events(
+            _calendars(), owner=owner, selected=selected, now=now
         )
         if str(event.get("id")) == reservation_id
+        and _booked_duration(event) >= dt.timedelta(minutes=duration)
     ]
     if len(matches) != 1:
         raise ReservationError(
-            "POS provider evidence did not prove the newly created reservation exactly covers the selected nodes"
+            "POS provider evidence did not prove the newly created reservation exactly covers the selected nodes for the requested booked duration"
         )
+    print(
+        f"Created SOP reservation {reservation_id} for {', '.join(selected)}",
+        flush=True,
+    )
     return _calendar_record(matches[0], status="created")
 
 
@@ -353,16 +431,26 @@ def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> st
     raise ReservationError(f"POS allocation failed for {node}: {text or result.returncode}")
 
 
-def _allocate_for_fresh(node: str) -> str:
-    result = run(["pos", "allocations", "allocate", node], check=False)
+def _probe_allocation_for_fresh(node: str) -> str:
+    print(f"[POS allocation] Probing {node}", flush=True)
+    result = run_visible(["pos", "allocations", "allocate", node], check=False)
     state = _allocation_state(node, result)
     if state == "new":
-        return state
+        print(f"[POS allocation] {node}: fresh allocation acquired", flush=True)
+    else:
+        print(
+            f"[POS allocation] {node}: existing allocation detected; fresh preparation will "
+            "reclaim it only after every selected SOP node has been probed",
+            flush=True,
+        )
+    return state
 
-    # Fresh/reimage is the only policy that permits this destructive recovery,
-    # and acquire_calendar() has already proved exact caller-owned calendar authority.
-    released = run(["pos", "allocations", "free", "-k", node], check=False)
-    retry = run(["pos", "allocations", "allocate", node], check=False)
+
+def _reclaim_allocation_for_fresh(node: str) -> str:
+    print(f"[POS allocation] {node}: reclaiming existing allocation", flush=True)
+    released = run_visible(["pos", "allocations", "free", "-k", node], check=False)
+    print(f"[POS allocation] {node}: requesting fresh allocation after reclaim", flush=True)
+    retry = run_visible(["pos", "allocations", "allocate", node], check=False)
     retry_state = _allocation_state(node, retry)
     if retry_state != "new":
         detail = _output(retry) or _output(released)
@@ -370,7 +458,16 @@ def _allocate_for_fresh(node: str) -> str:
             f"unable to prove fresh allocation ownership for {node} after explicit reclaim"
             + (f": {detail}" if detail else "")
         )
+    print(f"[POS allocation] {node}: fresh allocation ownership proven", flush=True)
     return "reclaimed"
+
+
+def _allocate_for_fresh(node: str) -> str:
+    """Compatibility helper for callers that prepare a single node."""
+    state = _probe_allocation_for_fresh(node)
+    if state == "new":
+        return state
+    return _reclaim_allocation_for_fresh(node)
 
 
 def _boot_parameters(node: str) -> tuple[str, str]:
@@ -386,6 +483,11 @@ def _wait_for_ssh(node: str) -> int:
     )
     if attempts < 1:
         raise ReservationError("SYNTHRAN_POS_READY_ATTEMPTS must be positive")
+    print(
+        f"[POS readiness] {node}: waiting for SSH after reset "
+        f"(up to {attempts} probes)",
+        flush=True,
+    )
     last = "no response"
     for attempt in range(1, attempts + 1):
         result = run(
@@ -403,8 +505,18 @@ def _wait_for_ssh(node: str) -> int:
             check=False,
         )
         if result.returncode == 0:
+            print(
+                f"[POS readiness] {node}: SSH ready on probe {attempt}/{attempts}",
+                flush=True,
+            )
             return attempt
         last = _output(result) or f"exit status {result.returncode}"
+        if attempt % 5 == 0 and attempt < attempts:
+            print(
+                f"[POS readiness] {node}: still waiting for SSH "
+                f"({attempt}/{attempts})",
+                flush=True,
+            )
         if attempt < attempts and interval > 0:
             time.sleep(interval)
     raise ReservationError(f"{node} did not become SSH-ready after POS reset: {last}")
@@ -422,6 +534,10 @@ def prepare_hosts(
             "deployment.reservation.host_preparation must be fresh or preserve"
         )
     if mode == "preserve":
+        print(
+            "Reusing existing SOP host state; no allocation, image, boot-parameter, or reset mutation will be performed",
+            flush=True,
+        )
         return {
             "mode": "preserve",
             "nodes": list(selected),
@@ -437,13 +553,55 @@ def prepare_hosts(
     if not isinstance(image, str) or not image.strip():
         raise ReservationError("deployment.reservation.image must be a non-empty string")
 
+    print(
+        "Preparing selected SOP nodes: first proving allocation authority for every node before image/reset mutation",
+        flush=True,
+    )
+    allocation_states: dict[str, str] = {}
+    for node in selected:
+        allocation_states[node] = _probe_allocation_for_fresh(node)
+
+    for node in selected:
+        if allocation_states[node] == "already-active":
+            allocation_states[node] = _reclaim_allocation_for_fresh(node)
+
+    print(
+        "Allocation authority proven for all selected SOP nodes; applying image, boot parameters, reset, and readiness checks",
+        flush=True,
+    )
+
     nodes: dict[str, Any] = {}
     for node in selected:
-        allocation = _allocate_for_fresh(node)
+        allocation = allocation_states[node]
+        if allocation not in {"new", "reclaimed"}:
+            raise ReservationError(
+                f"internal allocation state for {node} is not safe to prepare: {allocation}"
+            )
         boot_profile, boot_parameters = _boot_parameters(node)
-        run(["pos", "nodes", "image", "--staging", node, image])
-        run(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
-        run(["pos", "nodes", "reset", "--blocking", "--verbose", node])
+
+        print(
+            f"[POS prepare] {node}: selecting image {image}; provider staging may "
+            "take several minutes",
+            flush=True,
+        )
+        run_visible(["pos", "nodes", "image", "--staging", node, image])
+        print(f"[POS prepare] {node}: image staging completed", flush=True)
+
+        print(
+            f"[POS prepare] {node}: applying boot parameters ({boot_profile})",
+            flush=True,
+        )
+        run_visible(["pos", "nodes", "bootparameter", node, "--raw", boot_parameters])
+        print(f"[POS prepare] {node}: boot parameters applied", flush=True)
+
+        print(
+            f"[POS prepare] {node}: resetting node with POS --blocking; this command "
+            "returns only after POS reports reset completion",
+            flush=True,
+        )
+        run_visible(["pos", "nodes", "reset", "--blocking", "--verbose", node])
+        print(f"[POS prepare] {node}: POS reset completed", flush=True)
+
         ready_attempt = _wait_for_ssh(node)
         nodes[node] = {
             "allocation": allocation,

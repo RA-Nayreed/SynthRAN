@@ -148,28 +148,16 @@
   loop: "{{ nad_list }}"
   when: item not in (nad_info.resources | map(attribute='metadata.name') | list)
 
-- name: Bring OVS bridges up for single-node Open5GS
-  ansible.builtin.shell: |
-    ip link set dev n2br up
-    ip link set dev n3br up
-    ip link set dev n4br up
-    for br in n2br n3br n4br; do
-      for port in $(ovs-vsctl list-ports "$br" 2>/dev/null | grep veth || true); do
-        ovs-vsctl del-port "$br" "$port" || true
-      done
-    done
-  become: true
+- name: Verify topology-owned Open5GS bridges are present
+  ansible.builtin.command:
+    argv:
+      - ovs-vsctl
+      - br-exists
+      - "{{ item }}"
+  loop: "{{ synthran_topology.transport.bridges.core }}"
   changed_when: false
-  when: core_node_name == ran_node_name and core == 'open5gs'
-
-- name: Assign gateway IPs to OVS bridges for single-node SCTP bind
-  ansible.builtin.shell: |
-    ip addr add 10.10.2.254/24 dev n2br || true
-    ip addr add 10.10.3.254/24 dev n3br || true
-    ip addr add 10.10.4.254/24 dev n4br || true
+  when: bridge_enabled
   become: true
-  changed_when: false
-  when: core_node_name == ran_node_name and core == 'open5gs'
 
 - name: Force cleanup existing Open5GS pods
   ansible.builtin.shell: kubectl delete pods -n {{ open5gs_ns }} -l app=open5gs --force --grace-period=0 || true
@@ -228,10 +216,11 @@
       Open5GS core readiness timed out. {{ open5gs_nf_wait.stdout | default('') }}
       {{ open5gs_nf_diagnostics.stdout | default('No pod diagnostics were available.') }}
 
-- name: Verify the AMF NGAP endpoint on the shared srsRAN compatibility network
+- name: Verify the AMF NGAP endpoint on the topology-selected compatibility network
   ansible.builtin.shell: |
     AMF_POD=$(kubectl get pods -n {{ open5gs_ns }} -l nf=amf -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n {{ open5gs_ns }} $AMF_POD -- ip addr show n3 | grep "inet 10.10.3.200"
+    kubectl exec -n {{ open5gs_ns }} "$AMF_POD" -- ip addr show n3 | \
+      grep -F "inet {{ synthran_topology.transport.endpoints.amf_ngap_ip }}"
   register: amf_ngap_check
   until: amf_ngap_check.rc == 0
   retries: 15
