@@ -66,6 +66,61 @@
       The pod spec must retain the exact immutable configured image reference and
       the running container must expose a digest-qualified imageID.
 
+- name: Verify baked RFSIM runtime prerequisites
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/bash
+      - -lc
+      - >-
+        command -v tmux >/dev/null &&
+        command -v python3 >/dev/null &&
+        command -v ip >/dev/null &&
+        python3 -c 'from gnuradio import gr, zeromq, blocks'
+  register: synthran_srsue_runtime_prerequisites
+  changed_when: false
+
+- name: Ensure the RFSIM tmux session exists without runtime package mutation
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/bash
+      - -lc
+      - >-
+        if tmux has-session -t ran 2>/dev/null; then
+          printf '%s\n' existing;
+        else
+          tmux new-session -d -s ran && printf '%s\n' created;
+        fi
+  register: synthran_srsue_tmux_session
+  changed_when: "'created' in synthran_srsue_tmux_session.stdout"
+
+- name: Require a usable RFSIM tmux session
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - tmux
+      - has-session
+      - -t
+      - ran
+  register: synthran_srsue_tmux_verified
+  changed_when: false
+
 - name: Ensure the shareable srsRAN provenance directory exists
   ansible.builtin.file:
     path: "{{ run_dir }}/provenance"
@@ -80,7 +135,7 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 3,
+           'schema_version': 4,
            'chart_repository': repo_url,
            'chart_revision': version,
            'source_repository': synthran_srsue_image_source.repository,
@@ -92,6 +147,9 @@
            'live_image_digest': synthran_srsue_live_digest,
            'pod': ue_pod_name,
            'pod_uid': synthran_srsue_live_pod.resources[0].metadata.uid,
+           'runtime_prerequisites_verified': synthran_srsue_runtime_prerequisites.rc == 0,
+           'tmux_session': 'ran',
+           'tmux_session_verified': synthran_srsue_tmux_verified.rc == 0,
            'ue_count': ue_count | int,
            'selected_ues': ue_list
          } | to_nice_json }}
