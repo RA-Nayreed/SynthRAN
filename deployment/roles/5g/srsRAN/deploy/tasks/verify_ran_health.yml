@@ -276,19 +276,24 @@
       The physical gNB workload disappeared or changed identity during the
       RF-health observation window.
 
-- name: Resolve the final physical gNB status
+- name: Resolve the final physical gNB configured image and status
   ansible.builtin.set_fact:
+    synthran_srsran_health_final_images: >-
+      {{ synthran_srsran_health_final.resources[0].spec.containers | default([]) |
+         selectattr('name', 'equalto', 'gnb') | map(attribute='image') | list }}
     synthran_srsran_health_final_statuses: >-
       {{ synthran_srsran_health_final.resources[0].status.containerStatuses | default([]) |
          selectattr('name', 'equalto', 'gnb') | list }}
 
-- name: Require exactly one final physical gNB container status
+- name: Require exactly one final configured and live physical gNB container
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_srsran_health_final_images | length == 1
       - synthran_srsran_health_final_statuses | length == 1
     fail_msg: >-
-      The physical gNB pod no longer exposes exactly one `gnb` container.
+      The physical gNB pod no longer exposes exactly one configured/live `gnb`
+      container.
 
 - name: Capture live and configured gNB image identity
   ansible.builtin.set_fact:
@@ -328,22 +333,23 @@
     quiet: true
     that:
       - synthran_srsran_health_pod == synthran_gnb_logging_pod
+      - synthran_srsran_health_final_images[0] == synthran_srsran_image_reference
       - (synthran_srsran_health_final_statuses[0].restartCount | int) == (synthran_srsran_health_restart_initial | int)
       - synthran_srsran_health_final_statuses[0].ready | default(false) | bool
       - synthran_srsran_gnb_process.rc == 0
       - synthran_srsran_n2_signal.rc == 0
       - synthran_srsran_live_n2.rc == 0
       - synthran_srsran_expected_image_digest | length > 0
-      - synthran_srsran_live_image_digest == synthran_srsran_expected_image_digest
+      - synthran_srsran_live_image_digest | length > 0
       - (synthran_srsran_health_window1_counts.reference_fatal | int) == 0
       - (synthran_srsran_health_window2_counts.reference_fatal | int) == 0
       - synthran_srsran_persistent_rf_failures | length == 0
     fail_msg: >-
       Physical srsRAN failed its RAN-local acceptance window. The workload must
-      keep the same UID/restart state and configured image digest, the gNB process
-      and live N2 SCTP association must remain present, reference-fatal radio
-      errors must be absent, and RF/PHY timing failures must not persist across
-      consecutive post-stability windows.
+      keep the same UID/restart state and exact immutable pod-spec image, expose
+      a digest-qualified runtime imageID, keep the gNB process and live N2 SCTP
+      association present, contain no reference-fatal radio errors, and avoid
+      persistent RF/PHY timing failures across consecutive post-stability windows.
 
 - name: Retain physical srsRAN RAN-local health evidence
   ansible.builtin.copy:
@@ -351,7 +357,7 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 3,
+           'schema_version': 4,
            'radio': rru,
            'namespace': ran_ns,
            'pod': synthran_srsran_health_pod,
@@ -384,6 +390,7 @@
              'revision': version
            },
            'configured_image': synthran_srsran_image_reference,
+           'pod_spec_image': synthran_srsran_health_final_images[0],
            'live_image_id': synthran_srsran_live_image_id,
            'configured_image_digest': synthran_srsran_expected_image_digest,
            'live_image_digest': synthran_srsran_live_image_digest,
