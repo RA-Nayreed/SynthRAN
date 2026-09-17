@@ -97,9 +97,10 @@
   ansible.builtin.template:
     src: generate-data-fiveg.py.j2
     dest: "{{ repo_dest }}/mongo-tools/generate-data-fiveg.py"
-    mode: "0755"
+    mode: "0700"
   vars:
     profile: "{{ fiveg }}"
+  no_log: true
 
 - name: Generate Open5GS network-profile check file
   ansible.builtin.template:
