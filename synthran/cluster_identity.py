@@ -105,7 +105,7 @@ def selected_cluster_runtime(
     deployment: dict[str, Any],
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return immutable runtime identity for only the selected deployment workloads."""
+    """Return runtime identity for only workloads owned by the selected deployment."""
 
     namespace = _namespace(deployment)
     if str(snapshot.get("namespace", "")) != namespace:
@@ -126,6 +126,8 @@ def selected_cluster_runtime(
         if owner is None:
             continue
         selected_pods += 1
+        if str(pod.get("phase", "")) != "Running" or pod.get("ready") is not True:
+            raise ValueError(f"selected workload {owner} pod is not Running and Ready")
         containers = pod.get("containers")
         if not isinstance(containers, list) or not containers:
             raise ValueError(f"selected workload {owner} exposes no container identity")
