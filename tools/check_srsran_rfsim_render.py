@@ -7,6 +7,7 @@ import copy
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -68,8 +69,10 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
         CONFIGMAP_TEMPLATE.read_text(encoding="utf-8")
     ).render(**context)
     require("add_route.sh" not in configmap, "obsolete RFSIM route helper returned")
-    require("12.1.0.0/16" not in configmap and "14.1.0.0/16" not in configmap,
-            "hardcoded cross-tunnel routes returned")
+    require(
+        "12.1.0.0/16" not in configmap and "14.1.0.0/16" not in configmap,
+        "hardcoded cross-tunnel routes returned",
+    )
     (chart / "charts/srsue/templates/configmap.yaml").write_text(
         configmap + "\n", encoding="utf-8"
     )
@@ -118,6 +121,51 @@ def _selected_ues(count: int) -> list[dict]:
     ]
     require(count in (1, 3), f"unsupported fixture UE count: {count}")
     return candidates[:count]
+
+
+def _configmap_data(rendered: str, key: str) -> str:
+    matches = []
+    for document in yaml.safe_load_all(rendered):
+        if not isinstance(document, dict) or document.get("kind") != "ConfigMap":
+            continue
+        data = document.get("data", {})
+        if isinstance(data, dict) and key in data:
+            matches.append(str(data[key]))
+    require(len(matches) == 1, f"rendered chart must contain exactly one ConfigMap key {key!r}")
+    return matches[0]
+
+
+def _validate_generated_ue_configs(rendered: str, selected: list[dict], root: Path) -> None:
+    generator = root / "generate_ue_conf.py"
+    generator.write_text(_configmap_data(rendered, "generate_ue_conf.py"), encoding="utf-8")
+    generated = root / "generated"
+    generated.mkdir()
+
+    for index, ue in enumerate(selected, 1):
+        subprocess.run(
+            [sys.executable, str(generator), str(index), str(generated)],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        config = (generated / f"ue_{index}.conf").read_text(encoding="utf-8")
+        require("[slicing]" in config, f"UE {index} lost slicing section")
+        require("enable = true" in config, f"UE {index} did not enable selected slicing")
+        require(
+            f"nssai-sst = {int(ue['sst'])}" in config,
+            f"UE {index} lost selected SST {ue['sst']}",
+        )
+        if ue["sd"]:
+            require(
+                f"nssai-sd = {int(ue['sd'])}" in config,
+                f"UE {index} lost selected SD {ue['sd']}",
+            )
+        else:
+            require(
+                "nssai-sd =" not in config,
+                f"UE {index} invented an SD for an SST-only slice",
+            )
 
 
 def _render_case(chart_source: Path, image: str, count: int) -> None:
@@ -192,6 +240,8 @@ def _render_case(chart_source: Path, image: str, count: int) -> None:
                 "one-UE render leaked an unselected UE",
             )
 
+        _validate_generated_ue_configs(rendered, selected, Path(temporary))
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -202,7 +252,7 @@ def main() -> None:
     require((chart / "charts/srsue/Chart.yaml").is_file(), f"invalid chart checkout: {chart}")
     _render_case(chart, args.ue_image.strip(), 1)
     _render_case(chart, args.ue_image.strip(), 3)
-    print("srsRAN RFSIM one/multi-UE render contract OK")
+    print("srsRAN RFSIM one/multi-UE render and generated-config contract OK")
 
 
 if __name__ == "__main__":
