@@ -122,3 +122,75 @@
              | to_nice_json }}
         dest: "{{ run_dir }}/live-deployment-evidence.json"
       when: platform == 'r2lab'
+
+- name: Prove selected software UE identity and user-plane reachability
+  hosts: ran_node
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Install the read-only software UE acceptance probe
+      ansible.builtin.copy:
+        src: "{{ synthran_root }}/deployment/scripts/probe_software_ues.py"
+        dest: /tmp/synthran-probe-software-ues.py
+        mode: '0755'
+      when: platform == 'rfsim'
+
+    - name: Stage the exact expected deployment contract for the probe
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', synthran_deployment_contract_file) }}\n"
+        dest: /tmp/synthran-expected-deployment.json
+        mode: '0600'
+      when: platform == 'rfsim'
+
+    - name: Probe every selected software UE without changing testbed state
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /tmp/synthran-probe-software-ues.py
+          - --expected
+          - /tmp/synthran-expected-deployment.json
+      register: synthran_software_ue_probe
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: synthran_software_ue_probe.rc == 0
+      when: platform == 'rfsim'
+
+    - name: Decode proved software UE bindings
+      ansible.builtin.set_fact:
+        synthran_software_ue_bindings: "{{ synthran_software_ue_probe.stdout | from_json }}"
+      when: platform == 'rfsim'
+
+- name: Retain structured live software UE bindings
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the existing cluster attestation for software UE acceptance
+      ansible.builtin.set_fact:
+        synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"
+      when: platform == 'rfsim'
+
+    - name: Require a matching cluster attestation before adding software UE evidence
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_cluster_evidence.cluster_identity_verified is sameas true
+          - synthran_cluster_evidence.deployment_hash == synthran_deployment_contract.deployment_hash
+          - hostvars[ran_node_name].synthran_software_ue_bindings is defined
+          - hostvars[ran_node_name].synthran_software_ue_bindings | length == synthran_deployment_contract.deployment.ues | length
+        fail_msg: >-
+          Software UE observations cannot replace a missing/mismatched cluster
+          attestation, and every selected UE must expose one proved live binding.
+      when: platform == 'rfsim'
+
+    - name: Retain live software UE bindings with the run
+      ansible.builtin.copy:
+        content: >-
+          {{ synthran_cluster_evidence
+             | combine({'bindings': hostvars[ran_node_name].synthran_software_ue_bindings,
+                        'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')})
+             | to_nice_json }}
+        dest: "{{ run_dir }}/live-deployment-evidence.json"
+      when: platform == 'rfsim'
