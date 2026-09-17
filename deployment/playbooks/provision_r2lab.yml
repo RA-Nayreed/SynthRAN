@@ -1,9 +1,11 @@
 ---
-- name: Cleanup R2Lab
+- name: Cleanup selected R2Lab resources before provisioning
   hosts: faraday
   gather_facts: false
   roles:
     - role: r2lab/cleanup
+      vars:
+        synthran_cleanup_phase: predeploy
       when:
         - platform == 'r2lab'
         - not no_r2lab_cleanup | default(false)
@@ -32,9 +34,9 @@
         mode: '0700'
       when: platform == 'r2lab'
 
-    - name: Install the staged SynthRAN SSH verification wrapper on Faraday
+    - name: Install the SynthRAN SSH verification wrapper on Faraday
       ansible.builtin.copy:
-        src: "{{ synthran_execution_root }}/scripts/secure_ssh_wrapper.py"
+        src: "{{ synthran_root }}/deployment/scripts/secure_ssh_wrapper.py"
         dest: "{{ synthran_nested_ssh_dir }}/bin/ssh"
         mode: '0755'
       when: platform == 'r2lab'

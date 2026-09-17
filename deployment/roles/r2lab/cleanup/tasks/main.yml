@@ -1,20 +1,37 @@
 ---
-- name: Resolve selected R2Lab UEs
+- name: Resolve selected R2Lab cleanup identity from the deployment contract
   ansible.builtin.set_fact:
-    r2lab_selected_ues: >-
-      {{ (groups['qhats'] | default([]))
-         + (groups['qfits'] | default([]))
-         + (groups['phones'] | default([])) }}
+    r2lab_cleanup_phase: "{{ synthran_cleanup_phase | default('predeploy') }}"
+    r2lab_selected_ues: "{{ synthran_ue_map | map(attribute='device') | list }}"
+    r2lab_inventory_ues: >-
+      {{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}
 
-- name: Stop only selected R2Lab UEs
+- name: Require cleanup inventory to match the exact selected UE contract
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - r2lab_cleanup_phase in ['predeploy', 'teardown']
+      - r2lab_selected_ues | unique | length == r2lab_selected_ues | length
+      - r2lab_selected_ues | difference(r2lab_inventory_ues) | length == 0
+      - r2lab_inventory_ues | difference(r2lab_selected_ues) | length == 0
+    fail_msg: >-
+      R2Lab cleanup inventory differs from the selected deployment-contract UE set;
+      refusing to stop any ambiguous or unrelated UE.
+
+- name: Stop each selected R2Lab UE exactly once
   ansible.builtin.include_role:
     name: r2lab/ue/stop
-  loop: "{{ r2lab_selected_ues }}"
+  vars:
+    synthran_r2lab_ue: "{{ synthran_cleanup_ue }}"
+    synthran_cleanup_phase: "{{ r2lab_cleanup_phase }}"
+  loop: "{{ synthran_ue_map }}"
   loop_control:
-    loop_var: ue_item
+    loop_var: synthran_cleanup_ue
+    label: "{{ synthran_cleanup_ue.device }}"
 
-- name: Power OFF only selected RRU with the SophiaNode R2Lab helper
+- name: Power OFF only the selected RRU with the SophiaNode R2Lab helper
   ansible.builtin.shell: |
+    set -e
     source ~/.bashrc
     rhubarbe-pdu off "{{ rru }}"
   args:
@@ -24,18 +41,34 @@
   failed_when: false
   when: rru | default('rfsim') != 'rfsim'
 
+- name: Retain selected RRU power-off evidence before enforcing success
+  ansible.builtin.copy:
+    content: |
+      phase={{ r2lab_cleanup_phase }}
+      rru={{ rru }}
+      command=rhubarbe-pdu off {{ rru }}
+      rc={{ selected_rru_power_off.rc | default('not-run') }}
+      stdout={{ selected_rru_power_off.stdout | default('') }}
+      stderr={{ selected_rru_power_off.stderr | default('') }}
+    dest: "{{ run_dir }}/r2lab-rru-{{ rru }}-{{ r2lab_cleanup_phase }}-stop.log"
+  delegate_to: localhost
+  become: false
+  when: rru | default('rfsim') != 'rfsim'
+
+- name: Require selected RRU power-off to succeed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - selected_rru_power_off.rc == 0
+    fail_msg: >-
+      Selected RRU power-off failed for {{ rru }} during {{ r2lab_cleanup_phase }}
+      cleanup. See r2lab-rru-{{ rru }}-{{ r2lab_cleanup_phase }}-stop.log;
+      unrelated R2Lab resources were not used as a recovery path.
+  when: rru | default('rfsim') != 'rfsim'
+
 - name: Allow selected N3xx RRU power rail to settle after power-off
   ansible.builtin.pause:
-    seconds: 20
+    seconds: "{{ synthran_cleanup_power_settle_seconds | default(20) | int }}"
   when:
     - rru in ['n300', 'n320']
-    - selected_rru_power_off.rc == 0
-
-- name: Report a non-fatal selected RRU power-off result
-  ansible.builtin.debug:
-    msg: >-
-      Initial power-off of {{ rru }} returned rc={{ selected_rru_power_off.rc }}.
-      Continuing to the authoritative power-on step; no unrelated R2Lab resource was touched.
-  when:
-    - rru | default('rfsim') != 'rfsim'
-    - selected_rru_power_off.rc != 0
+    - (synthran_cleanup_power_settle_seconds | default(20) | int) > 0
