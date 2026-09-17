@@ -125,6 +125,8 @@ def binding_identity(item: dict) -> tuple:
         _normalized_index(item.get("index")),
         str(item.get("imsi")) if item.get("imsi") is not None else None,
         str(item.get("slice")) if item.get("slice") is not None else None,
+        str(item.get("sst")) if item.get("sst") is not None else None,
+        str(item.get("sd")) if item.get("sd") is not None else None,
         str(item.get("dnn")) if item.get("dnn") is not None else None,
         str(_transport_value(item, "host")) if _transport_value(item, "host") is not None else None,
         str(_transport_value(item, "namespace")) if _transport_value(item, "namespace") is not None else None,

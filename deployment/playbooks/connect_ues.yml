@@ -1,5 +1,5 @@
 ---
-- name: Connect R2Lab UEs with the upstream 5g_ansible role
+- name: Attach selected R2Lab UEs from the deployment contract
   hosts: faraday
   gather_facts: false
   any_errors_fatal: true
@@ -24,7 +24,7 @@
         fail_msg: The secured nested SSH wrapper is missing on Faraday; refusing unverified UE connection.
       when: platform == 'r2lab'
 
-    - name: Connect UEs on R2Lab to 5G network
+    - name: Attach each selected R2Lab UE
       ansible.builtin.include_role:
         name: r2lab/ue/connect
         apply:
@@ -32,18 +32,13 @@
             PATH: "{{ synthran_nested_ssh_dir }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             SYNTHRAN_SSH_KNOWN_HOSTS: "{{ synthran_nested_ssh_dir }}/known_hosts"
       vars:
-        ue_item: "{{ item }}"
-        # The mutating connect role owns UE attachment. In SynthRAN it must fail
-        # where attachment/IP/route establishment fails instead of deferring a
-        # known-bad session to the read-only acceptance verifier below.
-        ignore_task_errors: false
-        # Upstream embeds phone_ssh in a task name inside a conditionally skipped
-        # phone block. Seed it so non-phone UEs do not emit undefined-template
-        # warnings before that block's set_fact would run.
-        phone_ssh: ""
-      loop: "{{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}"
+        synthran_r2lab_ue: "{{ item }}"
+        ue_item: "{{ item.device }}"
+      loop: "{{ synthran_ue_map }}"
       loop_control:
-        label: "{{ item }}"
+        label: >-
+          {{ item.device }} -> {{ item.slice }} / {{ item.dnn }} /
+          {{ item.tunnel.mode }}
       when: platform == 'r2lab'
 
     - name: Retain nested R2Lab SSH host keys with the run
