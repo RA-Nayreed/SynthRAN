@@ -110,20 +110,22 @@ free5gc-amf:
           - plmnId:
               mcc: {{ profile.plmn.mcc }}
               mnc: {{ profile.plmn.mnc }}
-            s_nssai:
+            snssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
                 sd: {{ resolve_sd(slice.sd) }}
 {% endfor %}
+        supportDnnList:
+{% for slice in profile.slices %}
+          - {{ slice.dnn }}
+{% endfor %}
         security:
-          integrity_order: [ NIA2, NIA1, NIA0 ]
-          ciphering_order: [ NEA0, NEA1, NEA2 ]
-        network_name:
-          full: Open5GS
-        amf_name: open5gs-amf0
-
-        t3512:
-          value: 540
+          integrityOrder: [ NIA2, NIA1, NIA0 ]
+          cipheringOrder: [ NEA0, NEA1, NEA2 ]
+        networkName:
+          full: free5GC
+          short: free
+        t3512Value: 540
 
 # ============================================================
 # SMF
