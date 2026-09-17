@@ -1,6 +1,6 @@
 {
   "schema": "synthran/5g-ansible-execution-reference/v1",
-  "repository": "https://github.com/RA-Nayreed/5g-Ansible",
+  "repository": "https://github.com/nayreed/5g-Ansible",
   "commit": "6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3",
   "entrypoint": "bin/fiveg",
   "machine_schema": "fiveg/deployment/v1",

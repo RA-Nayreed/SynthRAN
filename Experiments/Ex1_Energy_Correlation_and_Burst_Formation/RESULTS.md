@@ -1,18 +1,18 @@
-# Experiment 1 completed results
+# Experiment 1 — retained completed results
 
-Experiment 1 — **Energy Correlation and Burst Formation** — was completed before the experiment-directory cleanup. Its raw run bundles are under the repository-local path `results/exp1-energy-correlation/`. The top-level `.gitignore` excludes `/results/`, so those raw run directories were not tracked in GitHub.
+This file records the retained results from the completed historical **Energy Correlation and Burst Formation** campaign. Raw run bundles are stored under the repository-local path `results/exp1-energy-correlation/`; the top-level `.gitignore` excludes `/results/`, so those raw directories are not tracked in GitHub.
 
-The reproducibility code for this completed experiment now lives in this same directory:
+Reproducibility assets in this directory are:
 
-- `experiment-plan.json` — frozen campaign definition and historical integrity record.
-- `run_experiment.py` — reproduces the power calibration, population calibration, and 7-arm × 30-seed confirmation campaign while refusing to overwrite immutable bundles.
-- `analyze.py` — the current frozen-campaign analysis entry point. The historical analyzer used for the results below remains available in Git history before the analysis consolidation; these results are retained historical evidence.
+- `experiment-plan.json` — frozen campaign definition and integrity record;
+- `run_experiment.py` — reconstructs the power calibration, population calibration, and 7-arm × 30-seed confirmation campaign while refusing to overwrite immutable bundles;
+- `analyze.py` — retained-campaign analysis entry point.
 
-The original one-off orchestration script used during the completed campaign was not preserved. `run_experiment.py` reconstructs the campaign from the frozen experiment record and current SynthRAN model contract, while preserving the existing run-directory names used downstream by Experiment 2 (including `knee-common-seed1001`).
+The original execution wrapper used for the historical campaign is not part of the retained repository state. Reproduction therefore uses the frozen experiment record together with the current SynthRAN model contract, while preserving the historical run-directory identities consumed by downstream work, including `knee-common-seed1001`.
 
 ## Calibration
 
-Calibration used 8 modeled sensors, 60-second runs, 1-second sensing, lognormal harvested-power CV 1, 0.1-second source interval, 5-second correlation time, independent harvesting, and pilot seeds 1–5.
+Calibration used 8 modeled sensors, 60-second runs, 1-second sensing, lognormal harvested-power CV 1, a 0.1-second source interval, a 5-second correlation time, independent harvesting, and pilot seeds 1–5.
 
 | Mean harvested power | Active fraction | Generated | Transmitted | Decoded | Collisions | Suppressed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -40,20 +40,22 @@ The confirmation campaign used 7 conditions × 30 independent seeds (`1001–103
 
 `low-common-seed1028` is a valid zero-event blackout and is retained. It is one silent run out of 30; conditional event-process metrics for that arm therefore use `n=29` where applicable.
 
-## Result boundary
+## Supported result
 
-The supported mechanism is:
+The retained campaign supports the mechanism:
 
 **common energy harvesting → synchronized activation → much burstier decoded traffic → higher collision exposure.**
 
-The reader-side AoI common-minus-independent confidence intervals crossed zero, so Experiment 1 does **not** establish a reader-freshness degradation. That downstream question remains for Experiment 2.
+The reader-side AoI common-minus-independent confidence intervals crossed zero, so this campaign does **not** establish reader-freshness degradation. That downstream transport question is addressed separately by Experiment 2.
 
-## Raw artifacts
+## Evidence boundary
 
-Expected local root:
+These are historical retained aggregates from the completed campaign. They remain valid as evidence about that campaign, but they are not a substitute for recalibration after a material implementation or scientific-design change.
+
+Expected local raw-artifact root:
 
 ```text
 results/exp1-energy-correlation/
 ```
 
-Those artifacts are source data for Experiment 2; for example, the frozen Experiment-2 pilot selected `knee-common-seed1001`. Do not regenerate or replace the raw Experiment-1 bundles merely to make them tracked files.
+Those bundles are source data for Experiment 2. They should not be regenerated or replaced merely to make raw result directories tracked by Git.

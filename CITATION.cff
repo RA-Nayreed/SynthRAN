@@ -13,8 +13,8 @@ abstract: >-
   experimentation. It combines energy-aware Ambient-IoT source modelling with
   virtual and physical mobile-network deployment, verification, provenance and
   an evolving end-to-end experiment workflow.
-repository-code: https://github.com/RA-Nayreed/SynthRAN
-url: https://github.com/RA-Nayreed/SynthRAN
+repository-code: https://github.com/nayreed/SynthRAN
+url: https://github.com/nayreed/SynthRAN
 keywords:
   - Ambient IoT
   - energy harvesting

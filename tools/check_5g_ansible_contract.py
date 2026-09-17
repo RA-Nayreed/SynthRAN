@@ -370,7 +370,7 @@ def main() -> int:
         "--reference",
         required=True,
         type=Path,
-        help="checkout of the pinned RA-Nayreed/5g-Ansible repository",
+        help="checkout of the pinned nayreed/5g-Ansible repository",
     )
     args = parser.parse_args()
     reference = args.reference.expanduser().resolve()

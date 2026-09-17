@@ -31,7 +31,7 @@ jobs:
       - name: Check out pinned 5g-Ansible reference
         uses: actions/checkout@v7
         with:
-          repository: RA-Nayreed/5g-Ansible
+          repository: nayreed/5g-Ansible
           ref: 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
           path: .reference/5g-ansible
 
