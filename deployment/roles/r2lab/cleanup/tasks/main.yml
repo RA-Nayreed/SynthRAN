@@ -6,17 +6,16 @@
     r2lab_inventory_ues: >-
       {{ (groups['qhats'] | default([])) + (groups['qfits'] | default([])) }}
 
-- name: Require cleanup inventory to match the exact selected UE contract
+- name: Require every selected UE to exist in the R2Lab inventory
   ansible.builtin.assert:
     quiet: true
     that:
       - r2lab_cleanup_phase in ['predeploy', 'teardown']
       - r2lab_selected_ues | unique | length == r2lab_selected_ues | length
       - r2lab_selected_ues | difference(r2lab_inventory_ues) | length == 0
-      - r2lab_inventory_ues | difference(r2lab_selected_ues) | length == 0
     fail_msg: >-
-      R2Lab cleanup inventory differs from the selected deployment-contract UE set;
-      refusing to stop any ambiguous or unrelated UE.
+      One or more deployment-contract UEs are absent from the R2Lab inventory;
+      refusing ambiguous cleanup. Unselected inventory UEs remain untouched.
 
 - name: Stop each selected R2Lab UE exactly once
   ansible.builtin.include_role:
