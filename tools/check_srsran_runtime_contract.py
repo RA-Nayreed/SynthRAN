@@ -177,6 +177,27 @@ def main() -> None:
         "Require the GNU Radio broker to remain alive after UE establishment",
     ):
         require(needle in broker, f"RFSIM startup contract lost: {needle}")
+
+    cleanup = named_task(
+        broker_tasks, "Stop stale RFSIM UE and broker processes before a new baseline"
+    )
+    cleanup_command = cleanup.get("ansible.builtin.command", {})
+    cleanup_argv = cleanup_command.get("argv", []) if isinstance(cleanup_command, dict) else []
+    cleanup_script = "\n".join(str(value) for value in cleanup_argv)
+    for needle in (
+        "pkill -TERM -x srsue",
+        "pkill -TERM -f '[m]ulti_ue_scenario.py'",
+        "pkill -KILL -x srsue",
+        "pkill -KILL -f '[m]ulti_ue_scenario.py'",
+        "stale RFSIM UE or GNU Radio process survived targeted cleanup",
+    ):
+        require(needle in cleanup_script, f"targeted stale-process cleanup lost: {needle}")
+    require("failed_when" not in cleanup, "stale RFSIM process cleanup must fail closed")
+    require(
+        cleanup_script.index("pkill -TERM -x srsue") < cleanup_script.index("pkill -KILL -x srsue"),
+        "RFSIM cleanup must attempt graceful termination before targeted kill",
+    )
+
     broker_start = named_task(broker_tasks, "Start GNU Radio broker in tmux window 'gnu'")
     require("failed_when" not in broker_start, "GNU Radio startup mutation must fail immediately")
     tunnel_wait = named_task(broker_tasks, "Wait for all configured UE tunnels")
