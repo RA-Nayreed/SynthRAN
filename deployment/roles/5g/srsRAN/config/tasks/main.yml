@@ -302,6 +302,13 @@
       {% endfor %}
   when: rru == 'rfsim'
 
+- name: Prepare the RFSIM chart from the selected UE contract
+  ansible.builtin.include_tasks: prepare_rfsim_chart.yml
+  when: rru == 'rfsim'
+
+- name: Freeze and validate the final srsRAN runtime chart
+  ansible.builtin.include_tasks: harden_runtime.yml
+
 - name: Retain the Kubernetes-enabled Ansible Python runtime
   ansible.builtin.set_fact:
     ansible_python_interpreter: /opt/ansible-venv/bin/python
