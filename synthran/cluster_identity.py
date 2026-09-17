@@ -5,20 +5,16 @@ from typing import Any
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _OPEN5GS_NFS = {
-    "nrf",
-    "scp",
-    "amf",
-    "udr",
-    "bsf",
-    "ausf",
-    "nssf",
-    "pcf",
-    "udm",
-    "smf",
-    "upf",
-    "webui",
+    "nrf", "scp", "amf", "udr", "bsf", "ausf", "nssf", "pcf", "udm", "smf", "upf", "webui"
 }
-_OAI_RAN_PREFIXES = ("oai-gnb", "oai-nr-ue")
+_OAI_RAN_PREFIXES = (
+    "oai-gnb",
+    "oai-nr-ue",
+    "oai-cu-cp",
+    "oai-cu-up",
+    "oai-cu",
+    "oai-du",
+)
 
 
 def _namespace(deployment: dict[str, Any]) -> str:
@@ -102,8 +98,7 @@ def _pod_owner(deployment: dict[str, Any], pod: dict[str, Any]) -> str | None:
 
 
 def selected_cluster_runtime(
-    deployment: dict[str, Any],
-    snapshot: dict[str, Any],
+    deployment: dict[str, Any], snapshot: dict[str, Any]
 ) -> dict[str, Any]:
     """Return runtime identity for only workloads owned by the selected deployment."""
 
@@ -112,7 +107,6 @@ def selected_cluster_runtime(
         raise ValueError(
             f"cluster snapshot namespace {snapshot.get('namespace')!r} does not match {namespace!r}"
         )
-
     pods = snapshot.get("pods")
     if not isinstance(pods, list):
         raise ValueError("cluster snapshot pods must be a list")
@@ -146,15 +140,13 @@ def selected_cluster_runtime(
                 )
             if kind == "container" and container.get("ready") is not True:
                 raise ValueError(f"selected workload {owner}/{name} is not Ready")
-            workloads.append(
-                {
-                    "owner": owner,
-                    "kind": kind,
-                    "container": name,
-                    "configured_image": configured,
-                    "runtime_image_id": runtime_image_id,
-                }
-            )
+            workloads.append({
+                "owner": owner,
+                "kind": kind,
+                "container": name,
+                "configured_image": configured,
+                "runtime_image_id": runtime_image_id,
+            })
 
     if selected_pods == 0 or not workloads:
         raise ValueError("cluster snapshot contains no workloads owned by the selected deployment")
@@ -174,24 +166,17 @@ def selected_cluster_runtime(
         values_sha256 = str(release.get("values_sha256", ""))
         if not re.fullmatch(r"[0-9a-f]{64}", values_sha256):
             raise ValueError(f"selected Helm release {name} has no values digest")
-        selected_releases.append(
-            {
-                "name": name,
-                "chart": release.get("chart"),
-                "app_version": release.get("app_version"),
-                "values_sha256": values_sha256,
-            }
-        )
+        selected_releases.append({
+            "name": name,
+            "chart": release.get("chart"),
+            "app_version": release.get("app_version"),
+            "values_sha256": values_sha256,
+        })
 
-    workloads.sort(
-        key=lambda item: (
-            str(item["owner"]),
-            str(item["kind"]),
-            str(item["container"]),
-            str(item["configured_image"]),
-            str(item["runtime_image_id"]),
-        )
-    )
+    workloads.sort(key=lambda item: (
+        str(item["owner"]), str(item["kind"]), str(item["container"]),
+        str(item["configured_image"]), str(item["runtime_image_id"]),
+    ))
     selected_releases.sort(key=lambda item: str(item["name"]))
     return {
         "schema_version": 1,
@@ -202,8 +187,7 @@ def selected_cluster_runtime(
 
 
 def validate_current_cluster(
-    identity: dict[str, Any],
-    snapshot: dict[str, Any],
+    identity: dict[str, Any], snapshot: dict[str, Any]
 ) -> dict[str, Any]:
     """Require a fresh cluster snapshot to match one historical accepted identity."""
 
@@ -211,15 +195,13 @@ def validate_current_cluster(
     implementation = identity.get("implementation")
     if not isinstance(deployment, dict) or not isinstance(implementation, dict):
         raise ValueError("accepted deployment identity is missing deployment implementation data")
-    configuration_hash = str(identity.get("configuration_hash", ""))
     cluster_attestation = snapshot.get("cluster_attestation")
     if not isinstance(cluster_attestation, dict):
         raise ValueError("fresh cluster snapshot has no deployment ConfigMap attestation")
-    if cluster_attestation.get("configuration_hash") != configuration_hash:
+    if cluster_attestation.get("configuration_hash") != str(identity.get("configuration_hash", "")):
         raise ValueError("live deployment ConfigMap does not match the accepted configuration identity")
 
     current = selected_cluster_runtime(deployment, snapshot)
-    expected = implementation.get("cluster_runtime")
-    if current != expected:
+    if current != implementation.get("cluster_runtime"):
         raise ValueError("selected live workload/image/Helm identity differs from accepted-testbed state")
     return current
