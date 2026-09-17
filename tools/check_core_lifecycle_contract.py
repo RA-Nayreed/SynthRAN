@@ -76,6 +76,7 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
 
     defaults = text(repo / "deployment/roles/5g/open5gs/config/defaults/main.yml")
     config = text(repo / "deployment/roles/5g/open5gs/config/tasks/main.yml")
+    validate = text(repo / "deployment/roles/5g/open5gs/config/tasks/validate_profile.yml")
     deploy = text(repo / "deployment/roles/5g/open5gs/deploy/tasks/main.yml")
     subscriber_template = text(
         repo / "deployment/roles/5g/open5gs/config/templates/generate-data-fiveg.py.j2"
@@ -83,10 +84,12 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
 
     require(OPEN5GS_SHA in defaults, "Open5GS source is not pinned to the reviewed SHA")
     require("network_profile_file" in config, "Open5GS does not load the effective profile")
+    require("validate_profile.yml" in config, "Open5GS does not execute its fail-closed profile validator")
     require(
-        re.search(r"fiveg\.slices\s*\|\s*length\s*==\s*2", config) is not None,
+        re.search(r"fiveg\.slices\s*\|\s*length\s*==\s*2", validate) is not None,
         "Open5GS two-slot downstream constraint is not enforced",
     )
+    require("ue.value.slice" in validate, "Open5GS UE-to-slice validation is missing")
     require('mode: "0700"' in config, "Open5GS credential-bearing generator is not owner-only")
     require("no_log: true" in config, "Open5GS credential-bearing render is not protected from logs")
     require("os.umask(0o077)" in subscriber_template, "Open5GS generated files do not enforce a private umask")
@@ -112,10 +115,7 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
         require(marker in deploy, f"Open5GS adapter lost required contract marker: {marker}")
 
     requirements = text(downstream / "requirements.txt")
-    for dependency in (
-        "pymongo==4.5.0",
-        "ruamel.yaml==0.18.5",
-    ):
+    for dependency in ("pymongo==4.5.0", "ruamel.yaml==0.18.5"):
         require(dependency in requirements, f"Open5GS subscriber dependency is no longer pinned: {dependency}")
 
     base_kustomization = text(downstream / "open5gs/kustomization.yaml")
@@ -143,6 +143,7 @@ def check_free5gc(repo: Path, reference: Path, downstream: Path) -> None:
 
     defaults = text(repo / "deployment/roles/5g/free5gc/config/defaults/main.yml")
     config = text(repo / "deployment/roles/5g/free5gc/config/tasks/main.yml")
+    validate = text(repo / "deployment/roles/5g/free5gc/config/tasks/validate_profile.yml")
     deploy = text(repo / "deployment/roles/5g/free5gc/deploy/tasks/main.yml")
     verify = text(repo / "deployment/roles/5g/free5gc/verify/tasks/main.yml")
     values_template = text(
@@ -157,13 +158,15 @@ def check_free5gc(repo: Path, reference: Path, downstream: Path) -> None:
         "Free5GC root is not bound to its own checkout",
     )
     require("network_profile_file" in config, "Free5GC does not load the effective profile")
+    require("validate_profile.yml" in config, "Free5GC does not execute its fail-closed profile validator")
+    require("ue.value.slice" in validate, "Free5GC UE-to-slice validation is missing")
     require("coredns" not in config.lower(), "Free5GC adapter still mutates cluster-wide CoreDNS")
     for surface, source in (("defaults", defaults), ("config", config), ("deploy", deploy)):
         require("yq" not in source.lower(), f"Free5GC {surface} still owns obsolete yq tooling")
     require('gatewayIP: ""' in values_template, "Free5GC colocated N2 gateway is not rendered in the values adapter")
 
     # Cleanup tolerance is inherited from the pinned reference, but the local
-    # adapter must now prove the required terminal states before Helm can run.
+    # adapter must prove the required terminal states before Helm can run.
     require("failed_when: false" in upstream_deploy, "pinned Free5GC cleanup tolerance changed; re-audit")
     for marker in (
         "Require the previous Free5GC Helm release to be absent",
