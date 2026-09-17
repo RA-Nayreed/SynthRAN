@@ -205,7 +205,7 @@ def _run_playbook(
         os.environ["SYNTHRAN_PRIVATE_DIR"] = str(private)
 
     environment = dict(os.environ)
-    environment["ANSIBLE_CONFIG"] = str(ROOT / "deployment/ansible.cfg")
+    environment["ANSIBLE_CONFIG"] = str(private / "ansible/ansible.cfg")
     environment["ANSIBLE_ROLES_PATH"] = os.pathsep.join(
         [str(EXPERIMENT_ANSIBLE / "roles"), str(private / "ansible/roles")]
     )
