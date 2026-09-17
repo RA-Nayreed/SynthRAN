@@ -8,11 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .deployment_identity import (
-    build_implementation_identity,
-    controller_source_provenance,
-    validate_current_cluster_runtime,
-)
+from .deployment_identity import build_implementation_identity, validate_current_cluster_runtime
 from .deployment_state import bindings_match_deployment, content_hash, read_json
 
 ACCEPTANCE_SCHEMA_VERSION = 1
@@ -108,9 +104,6 @@ def seal_provisioning(
     candidate["implementation"] = implementation
     candidate["implementation_identity_sha256"] = implementation_hash
     candidate["prerequisite_evidence"] = bind_prerequisite_evidence(run_dir, configuration_hash)
-    candidate["provenance"] = {
-        "controller_source": controller_source_provenance(run_dir),
-    }
     candidate["deployment_hash"] = content_hash(
         {"deployment": candidate["deployment"], "implementation": implementation}
     )
