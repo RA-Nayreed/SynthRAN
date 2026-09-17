@@ -1,5 +1,2 @@
 ---
 - import_playbook: connect_ues.yml
-  vars:
-    synthran_deployment_contract: >-
-      {{ lookup('ansible.builtin.file', synthran_deployment_contract_file) | from_json }}
