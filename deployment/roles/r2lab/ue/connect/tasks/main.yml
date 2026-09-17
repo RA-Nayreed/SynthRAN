@@ -29,12 +29,38 @@
       {{ synthran_r2lab_ue.address_cidr |
          regex_replace('\.0/[0-9]+$', '.1') }}
 
+# Pure upstream attaches MBIM with the plain DNN. Physical qhat03 acceptance in
+# SynthRAN proved that RM500Q qhat-init exposes a real SST=1/SD context as
+# <dnn>_EMBB<sd>, and selecting the plain DNN makes the UE request SD FFFFFF.
+# Keep this narrow physical adapter while retaining the upstream helper lifecycle.
+- name: Require a supported slice-qualified MBIM context convention
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        ue_mode != 'mbim' or
+        current_slice_sd in ['EMPTY', 'FFFFFF'] or
+        (current_slice_sst | int) == 1
+    fail_msg: >-
+      R2Lab MBIM slice selection is only proven for the RM500Q SST=1 context
+      convention. Refusing to drop non-empty SD {{ current_slice_sd }} from
+      SST {{ current_slice_sst }} for {{ ue_item }}.
+
+- name: Resolve the modem access string for the selected slice
+  ansible.builtin.set_fact:
+    mbim_access_string: >-
+      {{ current_dnn ~ '_EMBB' ~ current_slice_sd
+         if ue_mode == 'mbim'
+            and current_slice_sd not in ['EMPTY', 'FFFFFF']
+            and (current_slice_sst | int) == 1
+         else current_dnn }}
+
 - name: Report selected UE attachment identity
   ansible.builtin.debug:
     msg: >-
       UE {{ ue_item }} -> {{ current_ue_slice }} SST={{ current_slice_sst }}
       SD={{ current_slice_sd }} DNN={{ current_dnn }} mode={{ ue_mode }}
-      interface={{ ue_interface }} UPF={{ upf_ip }}
+      MBIM-access={{ mbim_access_string }} interface={{ ue_interface }} UPF={{ upf_ip }}
 
 - name: Check selected UE user-plane reachability before mutating attachment
   ansible.builtin.shell: >-
@@ -50,10 +76,10 @@
   ansible.builtin.set_fact:
     wwan0_up: "{{ (synthran_wwan_precheck.stdout | default('down') | trim) == 'up' }}"
 
-- name: Attach the selected MBIM DNN with the installed R2Lab helpers
+- name: Attach the selected MBIM context with the installed R2Lab helpers
   ansible.builtin.shell: >-
     ssh -o ConnectTimeout=5 -o BatchMode=yes root@{{ ue_item }}
-    'stop.sh; start.sh -F {{ current_dnn }}'
+    'stop.sh; start.sh -F {{ mbim_access_string }}'
   args:
     executable: /bin/bash
   register: synthran_mbim_attach
@@ -87,12 +113,13 @@
       sst={{ current_slice_sst }}
       sd={{ current_slice_sd }}
       dnn={{ current_dnn }}
+      mbim_access_string={{ mbim_access_string }}
       interface={{ ue_interface }}
       mode={{ ue_mode }}
       mbim_session={{ synthran_r2lab_ue.tunnel.mbim_session | default('') }}
       precheck_command=ping -I {{ ue_interface }} -c 1 -W 3 {{ upf_ip }}
       precheck_result={{ synthran_wwan_precheck.stdout | default('') | trim }}
-      helper_command=stop.sh; start.sh -F {{ current_dnn }}
+      helper_command=stop.sh; start.sh -F {{ mbim_access_string }}
       helper_rc={{ synthran_mbim_attach.rc | default('not-run') }}
       helper_stdout={{ synthran_mbim_attach.stdout | default('') }}
       helper_stderr={{ synthran_mbim_attach.stderr | default('') }}
@@ -110,16 +137,18 @@
     that:
       - wwan0_up or (synthran_mbim_attach.rc | default(1)) == 0
     fail_msg: >-
-      MBIM attachment failed for {{ ue_item }} on DNN {{ current_dnn }}. See
-      r2lab-ue-{{ ue_item }}-attach.log. No retry or alternate-session recovery
-      is performed by the lifecycle authority.
+      MBIM attachment failed for {{ ue_item }} on DNN {{ current_dnn }} using
+      access context {{ mbim_access_string }}. See r2lab-ue-{{ ue_item }}-attach.log.
+      No retry or alternate-session recovery is performed by the lifecycle authority.
   when: ue_mode == 'mbim'
 
-- name: Attach the selected QMI DNN with the upstream-style procedure
+# Run the QMI invariant check even when the interface is already reachable. A
+# stale quectel-CM serving another DNN must never be accepted merely because a
+# previous session can still ping the selected endpoint. qmi.yml mutates only
+# when wwan0_up is false.
+- name: Validate or attach the selected QMI DNN with the upstream-style procedure
   ansible.builtin.include_tasks: qmi.yml
-  when:
-    - ue_mode == 'qmi'
-    - not wwan0_up
+  when: ue_mode == 'qmi'
 
 - name: Wait for the selected UE IPv4 session on its modem interface
   ansible.builtin.shell: >-
