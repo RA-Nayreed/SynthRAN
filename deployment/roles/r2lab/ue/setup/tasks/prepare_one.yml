@@ -13,9 +13,14 @@
       - synthran_r2lab_ue.dnn | length > 0
       - synthran_r2lab_ue.sst | string | length > 0
       - synthran_r2lab_ue.sd | string | length > 0
+      - >-
+        synthran_r2lab_ue.tunnel.mode != 'mbim' or
+        (synthran_r2lab_ue.sd | string | upper) in ['EMPTY', 'FFFFFF'] or
+        (synthran_r2lab_ue.sst | int) == 1
     fail_msg: >-
       The R2Lab preparation phase only supports the selected qhat/qfit contract
-      on wwan0, using MBIM session 0 or the QMI transport.
+      on wwan0, using MBIM session 0 or the QMI transport. Slice-qualified MBIM
+      preparation is only proven for the RM500Q SST=1 context convention.
 
 - name: Resolve selected UE preparation identity
   ansible.builtin.set_fact:
@@ -25,7 +30,7 @@
     synthran_prepare_sd: "{{ synthran_r2lab_ue.sd | string | upper }}"
     synthran_prepare_nssai: >-
       {{ ('%02d' | format(synthran_r2lab_ue.sst | int))
-         if (synthran_r2lab_ue.sd | string | upper) == 'EMPTY'
+         if (synthran_r2lab_ue.sd | string | upper) in ['EMPTY', 'FFFFFF']
          else (('%02d' | format(synthran_r2lab_ue.sst | int)) ~ '.' ~
                (synthran_r2lab_ue.sd | string | upper)) }}
 
