@@ -212,6 +212,9 @@ def check_free5gc_amf_config(rendered: str, profile: dict) -> None:
 
     support = configuration["plmnSupportList"]
     require(len(support) == 1, "Free5GC AMF must render one selected PLMN support entry")
+    selected_plmn = support[0]["plmnId"]
+    require(selected_plmn["mcc"] == profile["plmn"]["mcc"], "Free5GC AMF MCC lost its selected digit string")
+    require(selected_plmn["mnc"] == profile["plmn"]["mnc"], "Free5GC AMF MNC lost its selected digit string")
     snssai = support[0]["snssaiList"]
     actual = {(int(item["sst"]), str(item["sd"]).lower().zfill(6)) for item in snssai}
     expected = {(int(item["sst"]), expected_sd(item["sd"])) for item in profile["slices"]}
