@@ -2,10 +2,6 @@
 - name: Materialize the reviewed srsRAN lifecycle reference
   ansible.builtin.include_tasks: materialize_reference.yml
 
-- name: Patch RFSIM-only Helm assets
-  ansible.builtin.include_tasks: patch_charts.yml
-  when: rru == 'rfsim'
-
 - name: Prepare the selected srsRAN UE pod through the pinned lifecycle
   ansible.builtin.include_tasks: "{{ synthran_srsran_reference_deploy_srsues }}"
   when: rru == 'rfsim'
@@ -13,9 +9,6 @@
 - name: Verify the deployed RFSIM UE runtime contract
   ansible.builtin.include_tasks: verify_rfsim_ue_runtime.yml
   when: rru == 'rfsim'
-
-- name: Harden the final srsRAN runtime before Helm deployment
-  ansible.builtin.include_tasks: "{{ role_path }}/../config/tasks/harden_runtime.yml"
 
 - name: Deploy srsRAN gNB
   ansible.builtin.include_tasks: deploy_gnb.yml
