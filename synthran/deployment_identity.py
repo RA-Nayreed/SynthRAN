@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _EXECUTION_MANIFEST_SCHEMA = 1
 _REFERENCE_REPO_PATH = "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
+_PRIVATE_INPUT_FILES = (
+    "inventory.yml",
+    "deployment-vars.yml",
+    "network-profile.yml",
+    "ssh-known-hosts",
+)
 
 
 def _json_object(path: str | Path, label: str) -> dict[str, Any]:
@@ -70,7 +76,7 @@ def _selected_staged_entries(deployment: dict[str, Any], staged_root: Path) -> l
     entries = [
         staged_root / "ansible.cfg",
         staged_root / "playbooks",
-        staged_root / "group_vars/all/all.yml",
+        staged_root / "group_vars/all",
         staged_root / "roles/setup",
         staged_root / "roles/5g" / core,
         staged_root / "roles/5g" / ran_path,
@@ -183,6 +189,17 @@ def _private_path(staged_root: Path, relative: str) -> Path:
     return path
 
 
+def _private_input_identity(private_dir: str | Path) -> dict[str, Any]:
+    root = Path(private_dir).resolve()
+    records = []
+    for relative in _PRIVATE_INPUT_FILES:
+        path = root / relative
+        if not path.is_file():
+            raise ValueError(f"private execution input is missing: {path}")
+        records.append({"path": relative, "sha256": _sha256_file(path)})
+    return {"sha256": content_hash(records), "files": records}
+
+
 def execution_reference() -> dict[str, str]:
     value = _json_object(ROOT / _REFERENCE_REPO_PATH, "reviewed execution reference")
     repository = str(value.get("repository", ""))
@@ -263,9 +280,11 @@ def _accepted_manifest(identity: dict[str, Any], run_dir: str | Path) -> tuple[d
 def validate_retained_execution_context(
     identity: dict[str, Any], run_dir: str | Path, private_dir: str | Path
 ) -> None:
-    _, manifest = _accepted_manifest(identity, run_dir)
+    implementation, manifest = _accepted_manifest(identity, run_dir)
     staged_root = Path(private_dir).resolve() / "ansible"
     _validate_records(manifest, lambda relative: _private_path(staged_root, relative))
+    if _private_input_identity(private_dir) != implementation.get("private_inputs"):
+        raise ValueError("retained private execution inputs differ from accepted-testbed state")
 
 
 def selected_cluster_runtime_identity(
@@ -283,7 +302,7 @@ def validate_current_cluster_runtime(
 
 
 def build_implementation_identity(
-    candidate: dict[str, Any], run_dir: str | Path
+    candidate: dict[str, Any], run_dir: str | Path, private_dir: str | Path
 ) -> dict[str, Any]:
     deployment = candidate.get("deployment")
     if not isinstance(deployment, dict):
@@ -292,11 +311,12 @@ def build_implementation_identity(
     execution = _execution_manifest(run_dir)
     _validate_records(execution, _current_path)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "execution_context": {
             "sha256": execution["sha256"],
             "file_count": execution["file_count"],
         },
+        "private_inputs": _private_input_identity(private_dir),
         "reviewed_sources": selected_source_pins(deployment, run_dir),
         "cluster_runtime": selected_cluster_runtime_identity(deployment, run_dir),
     }
