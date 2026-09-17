@@ -51,6 +51,33 @@ def pod(name: str, labels: dict[str, str], container: str, digest: str) -> dict:
     }
 
 
+def check_oai_split_ran_ownership() -> None:
+    deployment = {"core": "oai", "ran": "oai", "topology": {"namespace": "oai"}}
+    releases = ["oai-5g-basic", "oai-cu", "oai-du", "oai-cu-cp", "oai-cu-up"]
+    digest = "sha256:" + "a" * 64
+    snapshot = {
+        "namespace": "oai",
+        "pods": [
+            pod(name + "-pod", {"app.kubernetes.io/instance": name}, name, digest)
+            for name in releases
+        ],
+        "helm_releases": [
+            {
+                "name": name,
+                "status": "deployed",
+                "chart": name + "-1.0.0",
+                "app_version": "ci",
+                "values_sha256": "1" * 64,
+            }
+            for name in releases
+        ],
+    }
+    runtime = selected_cluster_runtime(deployment, snapshot)
+    expected = {f"helm:{name}" for name in releases}
+    assert {item["owner"] for item in runtime["workloads"]} == expected
+    assert {item["name"] for item in runtime["helm_releases"]} == set(releases)
+
+
 def deployment_fixture() -> dict:
     return {
         "core": "open5gs",
@@ -147,6 +174,7 @@ def stage_execution(private: Path, deployment: dict, result: Path) -> None:
 
 
 def main() -> None:
+    check_oai_split_ran_ownership()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         private = root / "private"
