@@ -1,6 +1,6 @@
 # Pinned 5g-Ansible execution contract
 
-SynthRAN's rework uses `RA-Nayreed/5g-Ansible` commit `6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3` as the deployment-behavior reference. This pin is an execution/comparison contract, not a replacement for the historical derivation record in `third_party/sopnode-5g-ansible/SOURCE.json`.
+SynthRAN's rework uses `nayreed/5g-Ansible` commit `6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3` as the deployment-behavior reference. This pin is an execution/comparison contract, not a replacement for the historical derivation record in `third_party/sopnode-5g-ansible/SOURCE.json`.
 
 The machine entrypoint is `bin/fiveg`. Before any migration step relies on it, run:
 

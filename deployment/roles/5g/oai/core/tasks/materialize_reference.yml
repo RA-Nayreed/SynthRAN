@@ -12,7 +12,7 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_oai_core_reference.repository == 'https://github.com/RA-Nayreed/5g-Ansible'
+      - synthran_oai_core_reference.repository == 'https://github.com/nayreed/5g-Ansible'
       - synthran_oai_core_reference.commit is match('^[0-9a-f]{40}$')
     fail_msg: >-
       Sub 08 requires the reviewed 5g-Ansible execution reference rather than

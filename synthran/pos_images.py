@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 
 
-# Provider artifact pinned from RA-Nayreed/5g-Ansible@
+# Provider artifact pinned from nayreed/5g-Ansible@
 # 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3 roles/pos/defaults/main.yml.
 # Keep the short SynthRAN alias stable for users, but never pass it directly to POS.
 POS_IMAGE_ALIASES = {

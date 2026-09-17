@@ -2,7 +2,7 @@
 
 Issue #54 makes `deployment/topology.yml` the static authority for SynthRAN's N2/N3/N4 transport. The selected `rans.<ran>.<core>` entry is copied into `synthran_topology`, included in the deployment fingerprint, and consumed by host transport roles and chart adapters. A transport change therefore changes deployment identity and cannot be silently reused.
 
-The pinned behavioral reference for this rework remains `RA-Nayreed/5g-Ansible@6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3`. The reference is followed where its packet path matches the selected charts. It is not copied blindly where its generic GRE addresses conflict with the pinned chart contracts.
+The pinned behavioral reference for this rework remains `nayreed/5g-Ansible@6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3`. The reference is followed where its packet path matches the selected charts. It is not copied blindly where its generic GRE addresses conflict with the pinned chart contracts.
 
 `bridge_enabled` is now a placement-derived compatibility value, not an independent topology knob: it is `true` exactly when the selected core and RAN hosts differ and `false` when they are colocated, matching the pinned machine-interface contract. A scenario may state the matching value for compatibility, but it cannot override the derived transport mode. The authoritative transport reconciler itself always runs; placement determines whether its selected contract contains GRE links.
 
