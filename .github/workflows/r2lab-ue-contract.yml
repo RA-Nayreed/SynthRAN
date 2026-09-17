@@ -44,6 +44,7 @@ jobs:
         run: >-
           python -m compileall -q
           tools/check_r2lab_ue_lifecycle_contract.py
+          tools/check_r2lab_experiment_reuse_contract.py
           deployment/scripts/probe_r2lab_ue.py
           synthran/deployment_state.py
           synthran/profile_validation.py
@@ -72,6 +73,9 @@ jobs:
         run: >-
           python tools/check_r2lab_ue_lifecycle_contract.py
           --reference "$SYNTHRAN_REFERENCE_ROOT"
+
+      - name: Validate read-only experiment reuse of accepted R2Lab UEs
+        run: python tools/check_r2lab_experiment_reuse_contract.py
 
       - name: Syntax-check R2Lab UE lifecycle playbooks
         env:
