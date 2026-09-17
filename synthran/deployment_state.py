@@ -201,7 +201,11 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
                 return False
             if network is None:
                 return False
-            expected_target = str(network.network_address + 1)
+            # UPF ownership follows the literal configured three-octet prefix.
+            # This matters for the retained Open5GS /16 adapter: 12.1.1.1/16 is
+            # intentional even though ipaddress normalizes the network to 12.1.0.0/16.
+            cidr_address = str(cidr).split("/", 1)[0]
+            expected_target = cidr_address.rsplit(".", 1)[0] + ".1"
             if user_plane.get("target_address") != expected_target:
                 return False
             if not isinstance(user_plane.get("observed_at"), str) or not user_plane.get("observed_at"):
