@@ -57,5 +57,12 @@ jobs:
           print(f"parsed {len(paths)} selected teardown task files")
           PY
 
+      - name: Validate teardown secret boundary
+        run: |
+          set -euo pipefail
+          grep -q 'SYNTHRAN_R2LAB_PASSWORD_FD' teardown.sh
+          ! grep -q 'set -a' teardown.sh
+          grep -q 'os.environ.pop("SYNTHRAN_R2LAB_PASSWORD_FD"' synthran/reservation_release.py
+
       - name: Validate selected-resource teardown and release contract
         run: python tools/check_selected_cleanup_contract.py

@@ -111,6 +111,33 @@ def _read_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def _read_r2lab_password() -> str:
+    """Consume the teardown password without leaving it in child-process environment."""
+
+    descriptor = os.environ.pop("SYNTHRAN_R2LAB_PASSWORD_FD", "").strip()
+    if descriptor:
+        try:
+            fd = int(descriptor)
+            with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as stream:
+                password = stream.readline().rstrip("\r\n")
+        except (OSError, ValueError) as exc:
+            raise ReservationReleaseError(
+                "R2Lab teardown password descriptor is invalid or unreadable"
+            ) from exc
+        if not password:
+            raise ReservationReleaseError("R2Lab teardown password descriptor was empty")
+        return password
+
+    # Compatibility for direct/library callers. Pop before spawning ssh so even
+    # this fallback is not inherited by the provider child process.
+    password = os.environ.pop("R2LAB_PASSWORD", "")
+    if password:
+        return password
+    raise ReservationReleaseError(
+        "R2Lab password is required to release a booked lease; use teardown.sh or provide R2LAB_PASSWORD to a direct library call"
+    )
+
+
 def _clear_matching_global_pos_state(record: Mapping[str, Any]) -> None:
     """Remove only the compatibility state file that names this exact event."""
 
@@ -339,11 +366,9 @@ def release_r2lab_lease(
         raise ReservationReleaseError(f"R2Lab identity file is missing: {identity_file}")
 
     email = os.environ.get("R2LAB_EMAIL", "").strip()
-    password = os.environ.get("R2LAB_PASSWORD", "")
-    if not email or not password:
-        raise ReservationReleaseError(
-            "R2LAB_EMAIL and R2LAB_PASSWORD are required to release a booked R2Lab lease"
-        )
+    if not email:
+        raise ReservationReleaseError("R2LAB_EMAIL is required to release a booked R2Lab lease")
+    password = _read_r2lab_password()
     known_hosts = Path(
         os.environ.get(
             "R2LAB_FARADAY_KNOWN_HOSTS",
