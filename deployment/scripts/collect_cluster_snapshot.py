@@ -58,38 +58,6 @@ def _containers(pod: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def _flat_images(
-    namespace: str,
-    pod_name: str,
-    labels: dict[str, str],
-    pod_ready: bool,
-    containers: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Compatibility/stable identity shape consumed by deployment identity sealing.
-
-    Ephemeral containers are deliberately omitted: they are experiment/debug helpers,
-    not part of the accepted testbed implementation identity.
-    """
-
-    records = []
-    for container in containers:
-        if container.get("kind") == "ephemeral":
-            continue
-        records.append(
-            {
-                "namespace": namespace,
-                "pod": pod_name,
-                "pod_labels": labels,
-                "pod_ready": pod_ready,
-                "kind": container.get("kind"),
-                "container": container.get("name"),
-                "image": container.get("configured_image"),
-                "imageID": container.get("runtime_image_id"),
-            }
-        )
-    return records
-
-
 def _cluster_attestation(namespace: str) -> dict[str, Any]:
     raw = json.loads(
         _output(
@@ -105,8 +73,7 @@ def _cluster_attestation(namespace: str) -> dict[str, Any]:
             ]
         )
     )
-    manifest_raw = raw.get("data", {}).get("manifest.json", "")
-    manifest = json.loads(manifest_raw)
+    manifest = json.loads(raw.get("data", {}).get("manifest.json", ""))
     configuration_hash = manifest.get("configuration_hash", manifest.get("deployment_hash"))
     if not isinstance(configuration_hash, str) or not configuration_hash:
         raise RuntimeError("live deployment ConfigMap has no configuration identity")
@@ -118,30 +85,26 @@ def _cluster_attestation(namespace: str) -> dict[str, Any]:
 
 
 def collect(namespace: str) -> dict[str, Any]:
-    pods_raw = json.loads(_output(["kubectl", "get", "pods", "-n", namespace, "-o", "json"]))
+    pods_raw = json.loads(
+        _output(["kubectl", "get", "pods", "-n", namespace, "-o", "json"])
+    )
     pods = []
-    images = []
     for pod in pods_raw.get("items", []):
         if not isinstance(pod, dict):
             continue
         metadata = pod.get("metadata", {}) or {}
-        name = str(metadata.get("name", ""))
-        labels = {
-            str(key): str(value)
-            for key, value in (metadata.get("labels", {}) or {}).items()
-        }
-        ready = _pod_ready(pod)
-        containers = _containers(pod)
         pods.append(
             {
-                "name": name,
-                "labels": labels,
+                "name": str(metadata.get("name", "")),
+                "labels": {
+                    str(key): str(value)
+                    for key, value in (metadata.get("labels", {}) or {}).items()
+                },
                 "phase": pod.get("status", {}).get("phase"),
-                "ready": ready,
-                "containers": containers,
+                "ready": _pod_ready(pod),
+                "containers": _containers(pod),
             }
         )
-        images.extend(_flat_images(namespace, name, labels, ready, containers))
 
     releases = json.loads(_output(["helm", "list", "-n", namespace, "-o", "json"]))
     helm_releases = []
@@ -149,7 +112,9 @@ def collect(namespace: str) -> dict[str, Any]:
         if not isinstance(release, dict):
             continue
         name = str(release.get("name", ""))
-        rendered = _output(["helm", "get", "values", name, "-n", namespace, "-a", "-o", "yaml"])
+        rendered = _output(
+            ["helm", "get", "values", name, "-n", namespace, "-a", "-o", "yaml"]
+        )
         helm_releases.append(
             {
                 "name": name,
@@ -186,14 +151,6 @@ def collect(namespace: str) -> dict[str, Any]:
         "kubernetes": json.loads(_output(["kubectl", "version", "-o", "json"])),
         "nodes": sorted(nodes, key=lambda item: str(item["name"])),
         "helm_releases": sorted(helm_releases, key=lambda item: str(item["name"])),
-        "images": sorted(
-            images,
-            key=lambda item: (
-                str(item["pod"]),
-                str(item["kind"]),
-                str(item["container"]),
-            ),
-        ),
         "pods": sorted(pods, key=lambda item: str(item["name"])),
     }
 
