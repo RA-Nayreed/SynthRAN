@@ -5,10 +5,11 @@
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
 <p>
-  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&color=3776AB&style=flat-square&logo=python&logoColor=white" alt="Python requirement"></a>
-  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=7C3AED&style=flat-square" alt="Project version"></a>
-  <a href="https://github.com/nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nayreed/SynthRAN/ci.yml?branch=main&label=CI&style=flat-square" alt="CI status"></a>
-  <a href="https://github.com/nayreed/SynthRAN/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2F855A?style=flat-square" alt="Apache-2.0 license"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&color=3776AB&style=flat&logo=python&logoColor=white" alt="Python requirement"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=7C3AED&style=flat" alt="Project version"></a>
+  <a href="https://github.com/nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nayreed/SynthRAN/ci.yml?branch=main&label=CI&style=flat" alt="CI status"></a>
+  <a href="https://github.com/nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/nayreed/SynthRAN?branch=main&label=last%20commit&style=flat&logo=git&logoColor=white" alt="Last commit"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2F855A?style=flat" alt="Apache-2.0 license"></a>
 </p>
 
 </div>
