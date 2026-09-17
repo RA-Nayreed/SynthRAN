@@ -132,8 +132,14 @@
     fail_msg: >-
       The gNB workload disappeared or changed identity during log verification.
 
-- name: Resolve live gNB and log-sidecar statuses
+- name: Resolve configured and live gNB/log-sidecar identity
   ansible.builtin.set_fact:
+    synthran_gnb_configured_images: >-
+      {{ synthran_gnb_logging_state.resources[0].spec.containers | default([]) |
+         selectattr('name', 'equalto', 'gnb') | map(attribute='image') | list }}
+    synthran_gnb_log_sidecar_configured_images: >-
+      {{ synthran_gnb_logging_state.resources[0].spec.containers | default([]) |
+         selectattr('name', 'equalto', 'gnb-logs') | map(attribute='image') | list }}
     synthran_gnb_live_statuses: >-
       {{ synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
          selectattr('name', 'equalto', 'gnb') | list }}
@@ -141,41 +147,56 @@
       {{ synthran_gnb_logging_state.resources[0].status.containerStatuses | default([]) |
          selectattr('name', 'equalto', 'gnb-logs') | list }}
 
-- name: Require an unambiguous live gNB container status
+- name: Require unambiguous configured and live gNB containers
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_gnb_configured_images | length == 1
       - synthran_gnb_live_statuses | length == 1
       - >-
         (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
-        (synthran_gnb_log_sidecar_statuses | length == 1)
+        ((synthran_gnb_log_sidecar_configured_images | length == 1) and
+         (synthran_gnb_log_sidecar_statuses | length == 1))
     fail_msg: >-
-      The verified srsRAN pod does not expose the expected gNB/log containers.
+      The verified srsRAN pod does not expose the expected configured/live
+      gNB/log containers.
 
-- name: Resolve configured and live gNB image digests
+- name: Resolve configured and live gNB image identity
   ansible.builtin.set_fact:
     synthran_gnb_expected_image_digest: >-
       {{ synthran_srsran_image_reference |
          regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
     synthran_gnb_live_image_id: >-
       {{ synthran_gnb_live_statuses[0].imageID | default('') }}
+    synthran_gnb_log_sidecar_live_image_id: >-
+      {{ synthran_gnb_log_sidecar_statuses[0].imageID | default('')
+         if (synthran_gnb_log_sidecar_statuses | length == 1) else '' }}
 
-- name: Extract the live gNB image digest
+- name: Extract live gNB and log-sidecar image digests
   ansible.builtin.set_fact:
     synthran_gnb_live_image_digest: >-
       {{ synthran_gnb_live_image_id |
          regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
+    synthran_gnb_log_sidecar_live_image_digest: >-
+      {{ synthran_gnb_log_sidecar_live_image_id |
+         regex_search('sha256:[0-9a-f]{64}') | default('', true) }}
 
-- name: Require the gNB and configured log sidecar to be running
+- name: Require the gNB and configured log sidecar to be running immutably
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_gnb_configured_images[0] == synthran_srsran_image_reference
       - synthran_gnb_live_statuses[0].ready | default(false) | bool
+      - synthran_gnb_expected_image_digest | length > 0
+      - synthran_gnb_live_image_digest | length > 0
       - >-
         (not (synthran_srsran_runtime_policy.logs_enabled | bool)) or
-        (synthran_gnb_log_sidecar_statuses[0].ready | default(false) | bool)
-      - synthran_gnb_expected_image_digest | length > 0
-      - synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest
+        ((synthran_gnb_log_sidecar_configured_images[0] == synthran_log_sidecar_image) and
+         (synthran_gnb_log_sidecar_statuses[0].ready | default(false) | bool) and
+         (synthran_gnb_log_sidecar_live_image_digest | length > 0))
     fail_msg: >-
       srsRAN started without a single stable digest-qualified gNB workload and
-      healthy authoritative /var/log/gnb.log producer/collector path.
+      healthy authoritative /var/log/gnb.log producer/collector path. The pod
+      spec must retain the exact immutable configured image references; runtime
+      imageID values must themselves be digest-qualified, but may identify a
+      platform-specific child manifest of an immutable OCI index.
