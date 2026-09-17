@@ -10,13 +10,6 @@
     name: "{{ core_ns }}"
     state: present
 
-- name: Require the centrally prepared yq runtime
-  ansible.builtin.command:
-    argv:
-      - "{{ yq_bin_path }}"
-      - --version
-  changed_when: false
-
 # ============================================================
 # Step 1: Clean up any existing Helm release (including stuck)
 # ============================================================
