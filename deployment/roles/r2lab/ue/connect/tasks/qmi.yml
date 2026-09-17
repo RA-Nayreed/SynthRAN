@@ -23,7 +23,7 @@
         )
       }}
 
-- name: Start the selected QMI DNN when no manager exists
+- name: Start the selected QMI DNN when attachment is needed and no manager exists
   ansible.builtin.shell: >-
     ssh -o ConnectTimeout=5 -o BatchMode=yes root@{{ ue_item }}
     'setsid /usr/local/bin/quectel-CM -s {{ current_dnn }} -4
@@ -35,10 +35,11 @@
   changed_when: true
   failed_when: false
   when:
+    - not wwan0_up
     - synthran_qmi_manager_acceptable | bool
     - synthran_qmi_existing.rc == 1
 
-- name: Detect the QMI AT control port
+- name: Detect the QMI AT control port when attachment is needed
   ansible.builtin.shell: |
     ssh -o ConnectTimeout=5 -o BatchMode=yes root@{{ ue_item }} 'python3 -' <<'PYEOF'
     import glob
@@ -63,15 +64,18 @@
   changed_when: false
   failed_when: false
   when:
+    - not wwan0_up
     - synthran_qmi_manager_acceptable | bool
     - hostvars[ue_item].at_port is not defined
 
-- name: Resolve the QMI AT control port
+- name: Resolve the QMI AT control port when attachment is needed
   ansible.builtin.set_fact:
     qmi_at_port: >-
       {{ hostvars[ue_item].at_port |
          default(synthran_qmi_at_detect.stdout | default('') | trim, true) }}
-  when: synthran_qmi_manager_acceptable | bool
+  when:
+    - not wwan0_up
+    - synthran_qmi_manager_acceptable | bool
 
 - name: Detach the selected QMI UE before wake-up
   ansible.builtin.shell: >-
@@ -83,6 +87,7 @@
   changed_when: true
   failed_when: false
   when:
+    - not wwan0_up
     - synthran_qmi_manager_acceptable | bool
     - qmi_at_port | default('') | length > 0
 
@@ -96,10 +101,11 @@
   changed_when: true
   failed_when: false
   when:
+    - not wwan0_up
     - synthran_qmi_manager_acceptable | bool
     - qmi_at_port | default('') | length > 0
 
-- name: Read QMI UE diagnostics after the attach attempt
+- name: Read QMI UE diagnostics after validation or the attach attempt
   ansible.builtin.shell: >-
     ssh -o ConnectTimeout=5 -o BatchMode=yes root@{{ ue_item }}
     'qhat-check'
@@ -121,6 +127,7 @@
       dnn={{ current_dnn }}
       interface={{ ue_interface }}
       mode={{ ue_mode }}
+      preexisting_user_plane={{ wwan0_up | bool }}
       quectel_cm_probe_command=pgrep -a -x quectel-CM
       quectel_cm_probe_rc={{ synthran_qmi_existing.rc | default('unavailable') }}
       quectel_cm_probe_stdout={{ synthran_qmi_existing.stdout | default('') }}
@@ -155,6 +162,9 @@
     that:
       - synthran_qmi_manager_acceptable | bool
       - >-
+        not wwan0_up or synthran_qmi_existing.rc == 0
+      - >-
+        wwan0_up or
         synthran_qmi_existing.rc == 0 or
         (
           (synthran_qmi_manager_start.rc | default(1)) == 0 and
@@ -162,10 +172,14 @@
             '(?:^|\\s)-s\\s+' ~ (current_dnn | regex_escape) ~ '(?:\\s|$)'
           )) is not none
         )
-      - qmi_at_port | default('') | length > 0
-      - (synthran_qmi_detach.rc | default(1)) == 0
-      - (synthran_qmi_wakeup.rc | default(1)) == 0
+      - >-
+        wwan0_up or (qmi_at_port | default('') | length > 0)
+      - >-
+        wwan0_up or (synthran_qmi_detach.rc | default(1)) == 0
+      - >-
+        wwan0_up or (synthran_qmi_wakeup.rc | default(1)) == 0
     fail_msg: >-
-      QMI attachment failed for {{ ue_item }} or an existing quectel-CM process
-      belongs to another DNN. See r2lab-ue-{{ ue_item }}-attach.log; SynthRAN
-      will not reuse or repair an ambiguous modem session.
+      QMI attachment validation failed for {{ ue_item }} or an existing
+      quectel-CM process belongs to another DNN. See
+      r2lab-ue-{{ ue_item }}-attach.log; SynthRAN will not reuse, replace, or
+      reattach an ambiguous live modem session.
