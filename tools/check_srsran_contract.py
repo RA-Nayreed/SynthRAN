@@ -157,9 +157,18 @@ def check_chart(chart: Path) -> None:
     )
 
     n320 = yaml.safe_load(text(chart / "charts/srsran-gnb/values-n320-n78-20MHz.yaml"))
+    n320_log = n320["gnbConfig"]["log"]
     require(
-        n320["gnbConfig"]["log"]["filename"] == "/tmp/gnb.log",
+        n320_log["filename"] == "/tmp/gnb.log",
         "N320 upstream log default changed; re-audit local log adapter",
+    )
+    require(
+        n320_log["all_level"] == "warning",
+        "N320 upstream common log threshold changed; re-audit evidence levels",
+    )
+    require(
+        n320_log.get("ngap_level") != "info",
+        "N320 upstream now exposes NGAP INFO by default; re-audit local evidence adapter",
     )
     require(
         n320["gnbConfig"]["remote_control"]["enabled"] is True,
@@ -182,6 +191,17 @@ def check_chart(chart: Path) -> None:
     require(
         "addr=192.168.235.103" in n300["gnbConfig"]["ru_sdr"]["device_args"],
         "N300 upstream endpoint changed",
+    )
+
+    rfsim = yaml.safe_load(text(chart / "charts/srsran-gnb/values-rfsim.yaml"))
+    rfsim_log = rfsim["gnbConfig"]["log"]
+    require(
+        rfsim_log["all_level"] == "warning",
+        "RFSIM upstream common log threshold changed; re-audit evidence levels",
+    )
+    require(
+        rfsim_log.get("ngap_level") != "info" and rfsim_log.get("mac_level") != "info",
+        "RFSIM upstream now exposes required INFO evidence by default; re-audit local adapter",
     )
 
     once = harden_chart_template(deployment)
@@ -289,6 +309,10 @@ def check_local() -> None:
     )
     for needle in (
         "/var/log/gnb.log",
+        '.gnbConfig.log.ngap_level = "info"',
+        '.gnbConfig.log.mac_level = "info"',
+        "ngap_log_level",
+        "mac_log_level",
         "helm template",
         "lifecycle_reference_commit",
         "chart_revision",
@@ -298,6 +322,10 @@ def check_local() -> None:
             needle in harden,
             f"runtime hardening/provenance lost contract surface: {needle}",
         )
+    require(
+        "when: rru == 'rfsim'" in harden,
+        "MAC INFO evidence must remain RFSIM-scoped rather than broad physical logging",
+    )
 
     health = text(HEALTH)
     for marker in REFERENCE_FATAL_MARKERS + TIMING_FAILURE_MARKERS:
@@ -307,7 +335,9 @@ def check_local() -> None:
         )
     for needle in (
         "/proc/[0-9]*/comm",
-        "N2: Connection to AMF",
+        "NGSetupResponse",
+        "synthran_srsran_live_n2_initial",
+        "synthran_srsran_ng_setup_signal",
         "synthran_srsran_persistent_rf_failures",
         "srsran-ran-health.json",
     ):
@@ -315,6 +345,14 @@ def check_local() -> None:
             needle in health,
             f"RAN-local health gate lost evidence surface: {needle}",
         )
+    require(
+        health.count("ss -H -n -A sctp state established") == 2,
+        "physical acceptance must prove live N2 SCTP both before and after RF-health observation",
+    )
+    require(
+        "synthran_srsran_n2_signal" not in health and "N2: Connection to AMF" not in health,
+        "warning-suppressed CU text must not return as a mandatory physical N2 gate",
+    )
     require(
         health.count("seconds: 10") == 2,
         "RF-health persistence must be measured across two post-stability windows",
@@ -326,11 +364,17 @@ def check_local() -> None:
         "Require the GNU Radio broker to start",
         "Require the gNB to establish NGAP with the AMF",
         "Require every configured UE to establish a PDU-session tunnel",
+        "Cell was activated",
+        "NGSetupResponse",
     ):
         require(
             needle in broker,
             f"RFSIM startup regressed to warning-only behavior: {needle}",
         )
+    require(
+        "N2: Connection to AMF" not in broker and "Connected to AMF" not in broker,
+        "RFSIM NGAP acceptance must consume explicit NGSetupResponse evidence",
+    )
 
 
 def prepare_render_fixture(chart: Path) -> Path:
@@ -344,10 +388,15 @@ def prepare_render_fixture(chart: Path) -> Path:
 
     values_path = chart / "charts/srsran-gnb/values-n320-n78-20MHz.yaml"
     values = yaml.safe_load(values_path.read_text(encoding="utf-8"))
+    require(
+        values["gnbConfig"]["log"]["all_level"] == "warning",
+        "render fixture no longer reproduces the pinned warning-level N320 baseline",
+    )
     values["image"]["repository"] = "r2labuser/srsran-gnb-uhd@sha256:" + "a" * 64
     values["image"]["tag"] = ""
     values["logSidecarImage"] = "busybox@sha256:" + "b" * 64
     values["gnbConfig"]["log"]["filename"] = "/var/log/gnb.log"
+    values["gnbConfig"]["log"]["ngap_level"] = "info"
     values["gnbConfig"]["remote_control"]["enabled"] = False
     values["gnbConfig"]["remote_control"]["bind_addr"] = "127.0.0.1"
     fixture = chart / "synthran-values-n320.yaml"

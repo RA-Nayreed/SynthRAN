@@ -86,7 +86,7 @@
 - name: Wait for the gNB NGAP association with the AMF
   ansible.builtin.command: >
     {{ kubectl_bin }} -n {{ ran_ns }} exec {{ synthran_gnb_logging_pod }} -c gnb -- /bin/sh -lc
-    "grep -Eq 'N2: Connection to AMF .* (completed|was established)|AMF connection established|Connected to AMF' /var/log/gnb.log"
+    "grep -Fq 'NGSetupResponse' /var/log/gnb.log"
   register: gnb_amf_wait
   changed_when: false
   failed_when: false
