@@ -113,7 +113,7 @@ free5gc-amf:
             snssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
-                sd: {{ resolve_sd(slice.sd) }}
+                sd: "{{ resolve_sd(slice.sd) }}"
 {% endfor %}
         supportDnnList:
 {% for slice in profile.slices %}
@@ -139,7 +139,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
           - sNssai:
               sst: {{ slice.sst | int }}
-              sd: {{ resolve_sd(slice.sd) }}
+              sd: "{{ resolve_sd(slice.sd) }}"
             dnnInfos:
               - dnn: {{ slice.dnn }}
                 dns:
@@ -170,7 +170,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
 {% if slice.sd == "EMPTY" %}
@@ -203,7 +203,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
                       pools:
@@ -233,7 +233,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
                       pools:
@@ -306,7 +306,7 @@ free5gc-nssf:
             supportedSnssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
-                sd: {{ resolve_sd(slice.sd) }}
+                sd: "{{ resolve_sd(slice.sd) }}"
 {% if slice.sd == "EMPTY" %}
               - sst: {{ slice.sst | int }}
                 sd: ""
@@ -323,7 +323,7 @@ free5gc-nssf:
             supportedSnssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
-                sd: {{ resolve_sd(slice.sd) }}
+                sd: "{{ resolve_sd(slice.sd) }}"
 {% if slice.sd == "EMPTY" %}
               - sst: {{ slice.sst | int }}
                 sd: ""
