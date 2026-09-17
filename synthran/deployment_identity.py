@@ -67,11 +67,13 @@ def _selected_staged_entries(deployment: dict[str, Any], staged_root: Path) -> l
     platform = str(deployment.get("platform", "")).lower()
     ran_path = "srsRAN" if ran == "srsran" else ran
     entries = [
+        staged_root / "ansible.cfg",
         staged_root / "playbooks",
         staged_root / "group_vars/all/all.yml",
         staged_root / "roles/setup",
         staged_root / "roles/5g" / core,
         staged_root / "roles/5g" / ran_path,
+        staged_root / "scripts/run_deployment.sh",
         staged_root / "scripts/collect_cluster_snapshot.py",
         staged_root / "reference/EXECUTION_REFERENCE.json",
     ]
