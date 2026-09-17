@@ -8,26 +8,12 @@ from typing import Any, Iterable
 
 import yaml
 
+from .cluster_identity import selected_cluster_runtime, validate_current_cluster
 from .deployment_state import content_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-
-_OPEN5GS_NFS = {
-    "nrf",
-    "scp",
-    "amf",
-    "udr",
-    "bsf",
-    "ausf",
-    "nssf",
-    "pcf",
-    "udm",
-    "smf",
-    "upf",
-    "webui",
-}
 
 
 def _json_object(path: str | Path, label: str) -> dict[str, Any]:
@@ -74,6 +60,8 @@ def _iter_files(entries: Iterable[Path]) -> list[Path]:
 
 
 def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
+    """Hash only executable files that can change the selected deployment/acceptance path."""
+
     core = str(deployment.get("core", "")).lower()
     ran = str(deployment.get("ran", "")).lower()
     platform = str(deployment.get("platform", "")).lower()
@@ -85,7 +73,9 @@ def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
         ROOT / "deployment/ansible.cfg",
         ROOT / "deployment/collections/requirements.yml",
         ROOT / "deployment/scripts/run_deployment.sh",
+        ROOT / "deployment/scripts/collect_cluster_snapshot.py",
         ROOT / "deployment/playbooks/site.yml",
+        ROOT / "deployment/playbooks/acceptance.yml",
         ROOT / "deployment/playbooks/provision_nodes.yml",
         ROOT / "deployment/playbooks/provision_r2lab.yml",
         ROOT / "deployment/playbooks/bootstrap_nodes.yml",
@@ -103,6 +93,7 @@ def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
         ROOT / "synthran/profile_validation.py",
         ROOT / "synthran/inventory.py",
         ROOT / "synthran/deployment_state.py",
+        ROOT / "synthran/cluster_identity.py",
         ROOT / "synthran/deployment_identity.py",
         ROOT / "synthran/acceptance.py",
     ]
@@ -125,10 +116,7 @@ def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
         {"path": str(path.relative_to(ROOT)), "sha256": _sha256_file(path)}
         for path in files
     ]
-    return {
-        "sha256": content_hash(records),
-        "file_count": len(records),
-    }
+    return {"sha256": content_hash(records), "file_count": len(records)}
 
 
 def execution_reference() -> dict[str, str]:
@@ -213,170 +201,18 @@ def controller_source_provenance(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _workload_key(deployment: dict[str, Any], image: dict[str, Any]) -> str | None:
-    core = str(deployment.get("core", "")).lower()
-    ran = str(deployment.get("ran", "")).lower()
-    pod = str(image.get("pod", ""))
-    labels = image.get("pod_labels", {})
-    if not isinstance(labels, dict):
-        labels = {}
-    container = str(image.get("container", ""))
-
-    if core == "open5gs":
-        nf = labels.get("nf")
-        if nf in _OPEN5GS_NFS:
-            return f"open5gs:nf:{nf}"
-        if labels.get("app.kubernetes.io/name") == "mongodb":
-            return "open5gs:mongodb"
-    elif core == "free5gc" and (
-        labels.get("app.kubernetes.io/instance") == "free5gc" or pod.startswith("free5gc-")
-    ):
-        name = labels.get("app.kubernetes.io/name") or labels.get("app") or container
-        return f"free5gc:{name}"
-    elif core == "oai" and pod.startswith("oai-"):
-        name = labels.get("app.kubernetes.io/name") or container
-        return f"oai:{name}"
-
-    if ran == "srsran" and labels.get("app") == "srsran":
-        component = labels.get("component") or container
-        return f"srsran:{component}"
-    if ran == "ueransim" and (
-        labels.get("app") == "ueransim" or pod.startswith("ueransim-")
-    ):
-        component = labels.get("component") or "workload"
-        name = labels.get("name") or container
-        return f"ueransim:{component}:{name}"
-    if ran == "oai" and pod.startswith("oai-"):
-        name = labels.get("app.kubernetes.io/name") or container
-        return f"oai:{name}"
-    return None
-
-
-def _selected_release(deployment: dict[str, Any], release: dict[str, Any]) -> bool:
-    core = str(deployment.get("core", "")).lower()
-    ran = str(deployment.get("ran", "")).lower()
-    name = str(release.get("name", ""))
-
-    if core == "free5gc" and name == "free5gc":
-        return True
-    if core == "oai" and name.startswith("oai-"):
-        return True
-    if ran == "srsran" and name in {"srsran-gnb", "srsran-ue"}:
-        return True
-    if ran == "ueransim" and name.startswith("ueransim-"):
-        return True
-    if ran == "oai" and name.startswith("oai-"):
-        return True
-    return False
-
-
-def selected_cluster_runtime_from_document(
-    deployment: dict[str, Any], value: dict[str, Any]
-) -> dict[str, Any]:
-    topology = deployment.get("topology", {})
-    namespace = str(topology.get("namespace", "")) if isinstance(topology, dict) else ""
-    if not namespace:
-        raise ValueError("deployment identity has no selected Kubernetes namespace")
-
-    images = value.get("images", [])
-    if not isinstance(images, list):
-        raise ValueError("cluster runtime provenance images must be a list")
-    selected: list[tuple[str, dict[str, Any]]] = []
-    for item in images:
-        if not isinstance(item, dict) or str(item.get("namespace", "")) != namespace:
-            continue
-        key = _workload_key(deployment, item)
-        if key is not None:
-            selected.append((key, item))
-    if not selected:
-        raise ValueError("cluster provenance contains no images for the selected core/RAN workloads")
-
-    image_identity: set[tuple[str, str, str, str, str]] = set()
-    workloads: set[str] = set()
-    incomplete: list[str] = []
-    unready: set[str] = set()
-    for key, item in selected:
-        workloads.add(key)
-        if item.get("pod_ready") is not True:
-            unready.add(key)
-        configured = str(item.get("image", ""))
-        image_id = str(item.get("imageID", ""))
-        digest = _DIGEST_RE.search(image_id)
-        if not configured or digest is None:
-            incomplete.append(f"{key}/{item.get('container', '')}")
-            continue
-        image_identity.add(
-            (
-                key,
-                str(item.get("kind", "container")),
-                str(item.get("container", "")),
-                configured,
-                image_id,
-            )
-        )
-    if unready:
-        raise ValueError(
-            "selected workloads are not Ready: " + ", ".join(sorted(unready))
-        )
-    if incomplete:
-        raise ValueError(
-            "selected workload image provenance is incomplete for: " + ", ".join(sorted(incomplete))
-        )
-
-    releases = value.get("helm_releases", [])
-    selected_releases: list[dict[str, Any]] = []
-    if isinstance(releases, list):
-        for item in releases:
-            if isinstance(item, dict) and _selected_release(deployment, item):
-                selected_releases.append(
-                    {
-                        key: item.get(key)
-                        for key in ("name", "chart", "app_version", "values_sha256")
-                    }
-                )
-    selected_releases.sort(key=lambda item: str(item.get("name", "")))
-
-    return {
-        "namespace": namespace,
-        "workloads": sorted(workloads),
-        "configured_and_runtime_images": [
-            {
-                "workload": workload,
-                "kind": kind,
-                "container": container,
-                "configured_image": configured,
-                "runtime_image_id": image_id,
-            }
-            for workload, kind, container, configured, image_id in sorted(image_identity)
-        ],
-        "helm_releases": selected_releases,
-    }
-
-
 def selected_cluster_runtime_identity(
     deployment: dict[str, Any], run_dir: Path
 ) -> dict[str, Any]:
-    value = _json_object(run_dir / "provenance/cluster.json", "cluster runtime provenance")
-    return selected_cluster_runtime_from_document(deployment, value)
+    snapshot = _json_object(run_dir / "provenance/cluster.json", "cluster runtime provenance")
+    return selected_cluster_runtime(deployment, snapshot)
 
 
 def validate_current_cluster_runtime(
     identity: dict[str, Any], provenance_path: str | Path
 ) -> dict[str, Any]:
-    deployment = identity.get("deployment")
-    implementation = identity.get("implementation")
-    if not isinstance(deployment, dict) or not isinstance(implementation, dict):
-        raise ValueError("accepted identity is missing deployment implementation data")
-    expected = implementation.get("cluster_runtime")
-    if not isinstance(expected, dict):
-        raise ValueError("accepted identity has no sealed cluster runtime identity")
-    current_document = _json_object(provenance_path, "fresh cluster runtime provenance")
-    current = selected_cluster_runtime_from_document(deployment, current_document)
-    if current != expected:
-        raise ValueError(
-            "fresh cluster runtime identity differs from the accepted deployment"
-        )
-    return current
+    snapshot = _json_object(provenance_path, "fresh cluster runtime provenance")
+    return validate_current_cluster(identity, snapshot)
 
 
 def selected_runtime_refs(deployment: dict[str, Any], run_dir: Path) -> dict[str, Any]:
