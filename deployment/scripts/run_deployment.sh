@@ -251,6 +251,7 @@ run_step "$SYNTHRAN_PYTHON" -m synthran.acceptance accept \
   --candidate "$RUN_DIR/deployment-fingerprint.json" \
   --active "$ACTIVE_DEPLOYMENT_STATE" \
   --evidence "$RUN_DIR/live-deployment-evidence.json" \
+  --cluster-snapshot "$RUN_DIR/acceptance-cluster.json" \
   --endpoint "$ACTIVE_DEPLOYMENT_ENDPOINT" \
   --private-dir "$SYNTHRAN_PRIVATE_DIR" || ACCEPT_RC=$?
 if (( ACCEPT_RC != 0 )); then
