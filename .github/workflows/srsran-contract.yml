@@ -23,8 +23,8 @@ jobs:
       - name: Check out pinned 5g-Ansible reference
         uses: actions/checkout@v7
         with:
-          repository: nayreed/5g-Ansible
-          ref: 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+          repository: sopnode/5g_ansible
+          ref: b73fccf87f55060484b3759e9cb347222253534b
           path: reference
 
       - name: Check out pinned srsRAN chart source
