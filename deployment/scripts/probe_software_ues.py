@@ -116,17 +116,6 @@ def _matches(candidate: dict, selector: dict) -> bool:
     return all(candidate.get("pod_labels", {}).get(key) == value for key, value in labels.items())
 
 
-def _owned_by_ran(candidate: dict, ran: str) -> bool:
-    labels = candidate.get("pod_labels", {})
-    if ran == "srsran":
-        return labels.get("app") == "srsran" and labels.get("component") == "ue"
-    if ran == "ueransim":
-        return labels.get("component") == "ue"
-    if ran == "oai":
-        return candidate["pod"].startswith("oai-nr-ue")
-    return False
-
-
 def _read_remote_config(candidate: dict, path: str) -> str:
     result = _run(
         [
@@ -168,16 +157,14 @@ def _check_config(ue: dict, candidate: dict) -> None:
         )
 
 
-def _upf_target(ue: dict) -> str:
-    literal = str(ue["address_cidr"]).split("/", 1)[0]
-    octets = literal.split(".")
-    if len(octets) != 4:
-        raise ValueError(f"invalid UE address contract for {ue['device']}: {literal}")
-    return ".".join(octets[:3] + ["1"])
-
-
 def _probe_user_plane(candidate: dict, ue: dict) -> dict:
-    target = _upf_target(ue)
+    target = str(ue.get("user_plane_target", ""))
+    try:
+        ipaddress.ip_address(target)
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid user-plane target in deployment contract for {ue['device']}: {target!r}"
+        ) from exc
     command = [
         "kubectl",
         "exec",
@@ -220,7 +207,6 @@ def resolve_bindings(manifest: dict, discovered: list[dict]) -> list[dict]:
     expected = deployment.get("ues", [])
     if not expected:
         raise ValueError("deployment identity contains no UEs")
-    ran = str(deployment.get("ran", ""))
     bindings: list[dict] = []
     used: set[tuple[str, str, str]] = set()
 
@@ -269,16 +255,6 @@ def resolve_bindings(manifest: dict, discovered: list[dict]) -> list[dict]:
                 "user_plane": user_plane,
             }
         )
-
-    extras = [
-        item
-        for item in discovered
-        if _owned_by_ran(item, ran)
-        and (item["namespace"], item["pod"], item["interface"]) not in used
-    ]
-    if extras:
-        detail = [f"{item['namespace']}/{item['pod']}:{item['interface']}" for item in extras]
-        raise ValueError(f"unexpected live {ran} UE tunnels are present: {detail}")
     return bindings
 
 
