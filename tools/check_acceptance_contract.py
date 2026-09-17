@@ -313,6 +313,21 @@ def main() -> None:
         fresh_cluster = root / "experiment-eligibility-cluster.json"
         write_json(fresh_evidence, accepted_evidence)
         write_json(fresh_cluster, unrelated_changed)
+
+        original = private_vars.read_text(encoding="utf-8")
+        private_vars.write_text("tampered-after-attach: true\n", encoding="utf-8")
+        require_failure(
+            lambda: prove_experiment_eligible(
+                fresh_evidence,
+                requirements,
+                attachment=attached,
+                cluster_snapshot_path=fresh_cluster,
+                max_age_seconds=120,
+            ),
+            "eligibility accepted private-input drift after attachment",
+        )
+        private_vars.write_text(original, encoding="utf-8")
+
         eligible = prove_experiment_eligible(
             fresh_evidence,
             requirements,
