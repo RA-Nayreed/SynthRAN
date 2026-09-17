@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _EXECUTION_MANIFEST_SCHEMA = 1
+_REFERENCE_REPO_PATH = "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
 
 
 def _json_object(path: str | Path, label: str) -> dict[str, Any]:
@@ -91,8 +92,19 @@ def _selected_staged_entries(deployment: dict[str, Any], staged_root: Path) -> l
 def _repository_path(staged_root: Path, path: Path) -> str:
     relative = path.relative_to(staged_root)
     if relative.parts[0] == "reference":
-        return "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
+        return _REFERENCE_REPO_PATH
     return str(Path("deployment") / relative)
+
+
+def _staged_path(staged_root: Path, repository_path: str) -> Path:
+    if repository_path == _REFERENCE_REPO_PATH:
+        return staged_root / "reference/EXECUTION_REFERENCE.json"
+    prefix = "deployment/"
+    if not repository_path.startswith(prefix):
+        raise ValueError(
+            f"staged execution manifest contains unsupported repository path {repository_path!r}"
+        )
+    return staged_root / repository_path[len(prefix) :]
 
 
 def build_execution_manifest(
@@ -135,28 +147,58 @@ def _execution_manifest(run_dir: Path) -> dict[str, Any]:
     return value
 
 
-def validate_current_execution_inputs(manifest: dict[str, Any]) -> None:
-    """Reject reuse when any file that was actually staged for the run changed."""
-
+def _validate_records(manifest: dict[str, Any], resolve_path) -> None:
     for record in manifest["files"]:
         if not isinstance(record, dict):
             raise ValueError("staged execution manifest contains a malformed file record")
         relative = str(record.get("path", ""))
         expected = str(record.get("sha256", ""))
+        path = resolve_path(relative)
+        if not path.is_file() or _sha256_file(path) != expected:
+            raise ValueError(
+                f"deployment input {relative!r} differs from the accepted staged execution context"
+            )
+
+
+def validate_current_execution_inputs(manifest: dict[str, Any]) -> None:
+    """Reject reuse when a repository file actually staged for the run changed."""
+
+    def current_path(relative: str) -> Path:
         path = (ROOT / relative).resolve()
         try:
             path.relative_to(ROOT)
         except ValueError as exc:
-            raise ValueError("staged execution manifest contains a path outside the repository") from exc
-        if not path.is_file() or _sha256_file(path) != expected:
             raise ValueError(
-                f"current deployment input {relative!r} differs from the accepted staged execution context"
-            )
+                "staged execution manifest contains a path outside the repository"
+            ) from exc
+        return path
+
+    _validate_records(manifest, current_path)
+
+
+def validate_staged_execution_inputs(
+    manifest: dict[str, Any], staged_root: str | Path
+) -> None:
+    """Reject reuse when the retained private execution context was altered."""
+
+    staged_root = Path(staged_root).resolve()
+
+    def staged_path(relative: str) -> Path:
+        path = _staged_path(staged_root, relative).resolve()
+        try:
+            path.relative_to(staged_root)
+        except ValueError as exc:
+            raise ValueError(
+                "staged execution manifest resolves outside the private execution context"
+            ) from exc
+        return path
+
+    _validate_records(manifest, staged_path)
 
 
 def execution_reference() -> dict[str, str]:
     value = _json_object(
-        ROOT / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json",
+        ROOT / _REFERENCE_REPO_PATH,
         "reviewed execution reference",
     )
     repository = str(value.get("repository", ""))
@@ -252,6 +294,18 @@ def validate_current_implementation_inputs(
         raise ValueError(
             "current immutable deployment source pins differ from the accepted-testbed identity; redeploy before reuse"
         )
+
+
+def validate_retained_execution_context(
+    identity: dict[str, Any], run_dir: str | Path, private_dir: str | Path
+) -> None:
+    implementation = identity.get("implementation")
+    if not isinstance(implementation, dict):
+        raise ValueError("accepted deployment identity is missing implementation inputs")
+    manifest = _execution_manifest(Path(run_dir).resolve())
+    if manifest.get("sha256") != implementation.get("execution_context", {}).get("sha256"):
+        raise ValueError("accepted execution manifest differs from the sealed implementation identity")
+    validate_staged_execution_inputs(manifest, Path(private_dir).resolve() / "ansible")
 
 
 def selected_cluster_runtime_identity(
