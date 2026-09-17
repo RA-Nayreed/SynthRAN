@@ -112,6 +112,8 @@ def verify_observations(
         "index": contract["index"],
         "imsi": identities[0],
         "slice": contract["slice"],
+        "sst": str(contract["sst"]),
+        "sd": str(contract["sd"]),
         "dnn": contract["dnn"],
         "host": tunnel["host"],
         "interface": links[0]["ifname"],
