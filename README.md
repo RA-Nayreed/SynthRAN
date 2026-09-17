@@ -369,10 +369,20 @@ SynthRAN is pre-1.0 research software under active development. The package is c
 
 ## Citation
 
-If SynthRAN contributes to published work, cite the exact software release or Git commit used for the experiment and retain the campaign's scientific manifest and evidence identity. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
+If SynthRAN contributes to published work, cite the exact software version or Git commit used for the experiment. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
+
+A DOI will be added only when an actual archival release exists; the repository does not use placeholder citation identifiers.
+
+---
+
+## Contributing
+
+Contribution and validation expectations are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md). Bug reports and research proposals use structured GitHub issue forms so implementation defects, testbed evidence, and scientific claims are not mixed together.
 
 ---
 
 ## License
 
-SynthRAN-original material is licensed under the [Apache License 2.0](LICENSE). Third-party components retain their own licenses and provenance under [`third_party/`](third_party/).
+**Copyright © 2026 Rezwan Ahmad Nayreed.**
+
+SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text. Upstream-derived components retain their own provenance and licensing records under [`third_party/`](third_party/).
