@@ -180,22 +180,20 @@
   changed_when: true
   no_log: true
 
-- name: Remove stale records for the selected Open5GS subscribers
+- name: Remove every existing Open5GS subscriber before reconciliation
   ansible.builtin.command:
-    argv: >-
-      {{ [repo_dest ~ '/venv/bin/python',
-          repo_dest ~ '/mongo-tools/delete-subscribers.py']
-         + (fiveg.ues | list) }}
+    argv:
+      - "{{ repo_dest }}/venv/bin/python"
+      - "{{ repo_dest }}/mongo-tools/delete-subscribers.py"
     chdir: "{{ repo_dest }}"
   changed_when: true
   no_log: true
 
-- name: Insert selected Open5GS subscribers from the effective profile
+- name: Insert the complete selected Open5GS subscriber set
   ansible.builtin.command:
-    argv: >-
-      {{ [repo_dest ~ '/venv/bin/python',
-          repo_dest ~ '/mongo-tools/add-subscribers.py']
-         + (fiveg.ues | list) }}
+    argv:
+      - "{{ repo_dest }}/venv/bin/python"
+      - "{{ repo_dest }}/mongo-tools/add-subscribers.py"
     chdir: "{{ repo_dest }}"
   changed_when: true
   no_log: true
@@ -220,6 +218,16 @@
   loop: "{{ fiveg.ues | list }}"
   loop_control:
     label: selected-subscriber
+  no_log: true
+
+- name: Reject any Open5GS subscriber outside the generated effective profile
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "'Subscriber not found for IMSI' not in ((open5gs_subscriber_listing.stdout | default('')) ~ (open5gs_subscriber_listing.stderr | default('')) )"
+    fail_msg: >-
+      Open5GS MongoDB contains a subscriber that is not represented by the
+      generated effective profile.
   no_log: true
 
 - name: Provision the optional Open5GS WebUI and administrator account
