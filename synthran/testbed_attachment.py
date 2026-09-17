@@ -18,10 +18,12 @@ from synthran.acceptance import (
     ACCEPTED_ENDPOINT_SCHEMA_VERSION,
     accepted_deployment_hash,
     validate_live_evidence,
+    validate_prerequisite_evidence,
 )
 from synthran.deployment_identity import (
     validate_current_cluster_runtime,
     validate_current_implementation_inputs,
+    validate_retained_execution_context,
 )
 from synthran.deployment_state import SCHEMA_VERSION, content_hash
 
@@ -75,6 +77,7 @@ def _ue_matches(binding: dict[str, Any], requirement: dict[str, Any]) -> bool:
         "sd",
         "dnn",
         "address_cidr",
+        "user_plane_target",
     }
     transport = {"host", "namespace", "interface", "mode", "mbim_session"}
     for key, expected in requirement.items():
@@ -240,13 +243,7 @@ def attach_active_deployment(
     endpoint_path: str | Path = ACTIVE_DEPLOYMENT_ENDPOINT,
     evidence_max_age_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Attach read-only to historical accepted-testbed state.
-
-    Historical acceptance may outlive its observation timestamp, but reuse is
-    permitted only while the current checkout still has the same deployment-
-    affecting implementation/source inputs that were sealed at acceptance.
-    Fresh live liveness still belongs to :func:`prove_experiment_eligible`.
-    """
+    """Attach read-only to historical accepted-testbed state."""
 
     endpoint_path = Path(endpoint_path).resolve()
     endpoint = _read_object(endpoint_path, "accepted deployment endpoint")
@@ -284,7 +281,11 @@ def attach_active_deployment(
     if endpoint.get("configuration_hash") != configuration_hash:
         raise AttachmentError("accepted deployment endpoint and configuration hashes differ")
 
-    required_private = (private_dir / "inventory.yml", private_dir / "deployment-vars.yml")
+    required_private = (
+        private_dir / "inventory.yml",
+        private_dir / "deployment-vars.yml",
+        private_dir / "ansible/playbooks/verify_live_testbed.yml",
+    )
     missing = [str(path) for path in required_private if not path.is_file()]
     if missing:
         raise AttachmentError(
@@ -295,6 +296,8 @@ def attach_active_deployment(
 
     try:
         validate_current_implementation_inputs(identity, result_dir)
+        validate_retained_execution_context(identity, result_dir, private_dir)
+        validate_prerequisite_evidence(identity, result_dir)
         evidence = validate_live_evidence(
             identity_path,
             evidence_path,
@@ -337,9 +340,9 @@ def attach_active_deployment(
             )
         },
         "claim_boundary": (
-            "Historical attachment proves a previously accepted-testbed identity and "
-            "unchanged deployment-affecting implementation inputs; it does not prove "
-            "current RF, UE, session, or user-plane liveness."
+            "Historical attachment proves a previously accepted-testbed identity, "
+            "unchanged staged/current implementation inputs, and intact prerequisite "
+            "evidence; it does not prove current RF, UE, session, or user-plane liveness."
         ),
     }
 
@@ -350,15 +353,33 @@ def prove_experiment_eligible(
     *,
     endpoint_path: str | Path = ACTIVE_DEPLOYMENT_ENDPOINT,
     max_age_seconds: int = 120,
+    attachment: dict[str, Any] | None = None,
+    cluster_snapshot_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Require fresh read-only cluster and UE evidence for an accepted deployment."""
+    """Require one fresh read-only observation of an already accepted deployment."""
 
-    attachment = attach_active_deployment(requirements, endpoint_path=endpoint_path)
+    if attachment is None:
+        attachment = attach_active_deployment(requirements, endpoint_path=endpoint_path)
+    else:
+        if attachment.get("status") != "accepted-testbed-attached":
+            raise AttachmentError("provided deployment attachment is not an accepted-testbed attachment")
+        deployment = attachment.get("deployment")
+        if not isinstance(deployment, dict):
+            raise AttachmentError("provided deployment attachment has no deployment mapping")
+        validate_requirements(
+            deployment,
+            requirements,
+            deployment_hash=str(attachment.get("deployment_hash", "")),
+        )
+
     evidence_path = Path(eligibility_evidence_path).resolve()
-    cluster_snapshot_path = evidence_path.with_name("experiment-eligibility-cluster.json")
+    if cluster_snapshot_path is None:
+        cluster_path = evidence_path.with_name("experiment-eligibility-cluster.json")
+    else:
+        cluster_path = Path(cluster_snapshot_path).resolve()
     identity = _read_object(Path(attachment["identity_file"]), "accepted deployment identity")
     try:
-        validate_current_cluster_runtime(identity, cluster_snapshot_path)
+        validate_current_cluster_runtime(identity, cluster_path)
         evidence = validate_live_evidence(
             attachment["identity_file"],
             evidence_path,
@@ -371,11 +392,11 @@ def prove_experiment_eligible(
     result["status"] = "experiment-eligible"
     result["experiment_eligible"] = True
     result["eligibility_evidence_file"] = str(evidence_path)
-    result["eligibility_cluster_snapshot_file"] = str(cluster_snapshot_path)
+    result["eligibility_cluster_snapshot_file"] = str(cluster_path)
     result["eligibility_observed_at"] = evidence.get("observed_at")
     result["claim_boundary"] = (
-        "Experiment eligibility proves fresh selected workload/image/Helm identity, "
-        "UE/session identity, and source-bound user-plane liveness for this accepted "
+        "Experiment eligibility proves one fresh selected workload/image/Helm identity, "
+        "UE/session identity, and source-bound user-plane observation for this accepted "
         "deployment only."
     )
     return result
