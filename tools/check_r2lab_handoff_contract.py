@@ -114,11 +114,27 @@ def main() -> int:
         ROOT / "deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml"
     ).read_text(encoding="utf-8")
 
+    # Sub 11 replaces the historical best-effort stop implementation. The
+    # reservation handoff contract now validates the selected deployment map,
+    # not the deleted ue_item/nested-ssh implementation details.
     require("all-off" not in cleanup, "cleanup still contains global all-off mutation")
-    require("r2lab/ue/stop" in cleanup, "cleanup no longer stops only selected UEs")
+    require("r2lab/ue/stop" in cleanup, "cleanup no longer invokes the selected UE stop owner")
+    require(
+        'r2lab_selected_ues: "{{ synthran_ue_map | map(attribute=\'device\') | list }}"' in cleanup,
+        "cleanup no longer derives UE authority from the deployment contract",
+    )
     require(
         "groups['qhats']" in cleanup and "groups['qfits']" in cleanup,
-        "cleanup no longer derives the selected physical UE groups",
+        "cleanup no longer verifies selected physical UEs against inventory",
+    )
+    require(
+        'loop: "{{ synthran_ue_map }}"' in cleanup
+        and 'synthran_r2lab_ue: "{{ synthran_cleanup_ue }}"' in cleanup,
+        "cleanup no longer stops each selected contract UE exactly once",
+    )
+    require(
+        "r2lab_inventory_ues | difference(r2lab_selected_ues)" not in cleanup,
+        "cleanup rejects unrelated inventory UEs instead of preserving them",
     )
     require(
         'rhubarbe-pdu off "{{ rru }}"' in cleanup,
@@ -129,9 +145,10 @@ def main() -> int:
         "obsolete pinned-reference N3xx RRU power-off command returned",
     )
     require(
-        "seconds: 20" in cleanup,
-        "N3xx power-off settle interval was removed",
+        "synthran_cleanup_power_settle_seconds | default(20)" in cleanup,
+        "N3xx power-off settle default was removed",
     )
+    require("ignore_errors" not in cleanup, "selected cleanup can silently ignore failure")
     require(
         'rhubarbe-pdu on "{{ rru }}"' in rru,
         "selected N3xx RRU power-on no longer uses the maintained SophiaNode helper",
@@ -146,18 +163,32 @@ def main() -> int:
     )
 
     require(
-        "r2lab_stop_target: \"{{ ue_item if ue_item is defined else ue }}\"" in stop,
-        "UE stop role no longer resolves each include-loop item deterministically",
+        "synthran_r2lab_ue is mapping" in stop
+        and 'synthran_stop_device: "{{ synthran_r2lab_ue.device }}"' in stop
+        and 'synthran_stop_mode: "{{ synthran_r2lab_ue.tunnel.mode }}"' in stop,
+        "UE stop role no longer consumes one exact selected contract entry",
     )
     require(
-        'ue: "{{ ue | default(ue_item) }}"' not in stop,
-        "sticky UE fact can cause a second selected UE to reuse the first UE identity",
+        "ansible.builtin.command: stop.sh" in stop
+        and 'delegate_to: "{{ synthran_stop_device }}"' in stop,
+        "selected MBIM UE stop is no longer direct and contract-selected",
     )
     require(
-        "root@{{ r2lab_stop_target }} 'stop.sh'" in stop,
-        "selected MBIM UE stop behavior is missing",
+        "/usr/local/bin/ci_ctl_qtel.py" in stop
+        and "synthran_stop_mode == 'qmi'" in stop,
+        "selected QMI UE detach behavior is missing",
     )
-    require("ue_mode == 'qmi'" in stop, "selected QMI UE detach behavior is missing")
+    require(
+        "Retain selected UE stop evidence before enforcing success" in stop
+        and "Require the selected UE stop operation to complete" in stop,
+        "selected UE stop no longer retains evidence and fails closed",
+    )
+    require("ignore_errors" not in stop, "selected UE stop can silently ignore lifecycle failure")
+    require(
+        'ue: "{{ ue | default(ue_item) }}"' not in stop
+        and "r2lab_stop_target" not in stop,
+        "historical sticky include-loop UE state returned",
+    )
 
     # Sub 09 makes the selected deployment contract the sole attachment input.
     # The handoff must fail closed at the mutating owner; the later verifier is
