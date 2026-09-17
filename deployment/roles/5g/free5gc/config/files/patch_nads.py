@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """Patch Free5GC NAD templates so an empty gateway does not create a default route."""
 
+from __future__ import annotations
+
 import glob
 import os
 import re
 import sys
 
 
-def patch_nad_file(path):
+def patch_nad_file(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
 
-    if '{{- else }}' in content and 'gatewayIP' in content:
-        print(f"already patched: {path}")
-        return "already"
-
-    match = re.search(r'\.Values\.global\.(\w+network)\.gatewayIP', content)
+    match = re.search(r"\.Values\.global\.(\w+network)\.gatewayIP", content)
     if not match:
         return "not-applicable"
 
@@ -44,6 +42,9 @@ def patch_nad_file(path):
         '{{- end }}'
     )
 
+    if new in content:
+        print(f"already patched: {path}")
+        return "already"
     if old not in content:
         raise RuntimeError(f"expected gateway route pattern not found: {path}")
 
@@ -53,7 +54,7 @@ def patch_nad_file(path):
     return "patched"
 
 
-def main():
+def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: patch_nads.py <chart_dest>", file=sys.stderr)
         return 2
@@ -83,7 +84,10 @@ def main():
         print("ERROR: no gateway-bearing NAD template matched the pinned source", file=sys.stderr)
         return 1
 
-    print(f"Done: {patched} patched, {applicable} applicable, {len(nad_files)} NAD files inspected.")
+    print(
+        f"Done: {patched} patched, {applicable} applicable, "
+        f"{len(nad_files)} NAD files inspected."
+    )
     return 0
 
 
