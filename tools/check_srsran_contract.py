@@ -90,35 +90,57 @@ def hardened_template_valid(source: str) -> bool:
 
 def check_reference(reference: Path) -> None:
     contract = json.loads(EXECUTION_REFERENCE.read_text(encoding="utf-8"))
+    require(
+        contract.get("repository") == "https://github.com/sopnode/5g_ansible",
+        "srsRAN lifecycle authority is not original sopnode/5g_ansible",
+    )
     expected = contract["commit"]
     require(
         git_head(reference) == expected,
         "5g-Ansible checkout does not match EXECUTION_REFERENCE.json",
     )
 
+    allowed = set(contract.get("delegation_policy", {}).get("allowed_reference_task_files", []))
+    for relative in (
+        "roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml",
+        "roles/5g/srsRAN/deploy/tasks/deploy_srsues.yml",
+    ):
+        require(relative in allowed, f"srsRAN delegated task is not declared by execution policy: {relative}")
+
     physical = text(reference / "roles/5g/srsRAN/deploy/tasks/deploy_with_check.yml")
+    require("Stability window" in physical and "seconds: 45" in physical, "original-upstream physical stability window changed")
     require(
-        "Read gNB logs after the stability window" in physical,
-        "pinned physical lifecycle lost its post-stability radio-log read",
+        "restartCount" in physical and "pod_initial" in physical and "pod_final" in physical,
+        "original-upstream physical lifecycle lost restart-stability comparison",
     )
     require(
-        "register: gnb_runtime_log" in physical and "--tail=400" in physical,
-        "pinned physical lifecycle no longer classifies a bounded post-stability gNB log",
+        "rru in ['n300', 'n320']" in physical,
+        "original-upstream physical retry scope changed",
+    )
+    for address in (
+        "192.168.235.103",
+        "192.168.235.104",
+        "192.168.235.105",
+        "192.168.235.106",
+    ):
+        require(address in physical, f"original-upstream alternate-address contract changed: {address}")
+    require(
+        "Remove failed Helm release" in physical,
+        "original-upstream retry lifecycle lost failed-release cleanup",
+    )
+
+    # Pure upstream intentionally does not perform the fork-added post-stability
+    # radio-log classification. SynthRAN's verify_ran_health.yml owns that
+    # acceptance layer after the delegated startup task completes.
+    require(
+        "Read gNB logs after the stability window" not in physical,
+        "original upstream unexpectedly gained fork-derived radio-log classification; re-audit ownership",
     )
     for marker in REFERENCE_FATAL_MARKERS:
-        require(marker in physical, f"pinned physical lifecycle lost fatal marker: {marker}")
-    require(
-        "rru == 'n320'" in physical,
-        "pinned alternate-address recovery is no longer N320-scoped",
-    )
-    require(
-        "192.168.235.105" in physical and "192.168.235.106" in physical,
-        "pinned N320 alternate-address pair changed",
-    )
-    require(
-        "192.168.235.103" not in physical and "192.168.235.104" not in physical,
-        "pinned lifecycle unexpectedly gained N300 address swapping",
-    )
+        require(
+            marker not in physical,
+            f"original upstream unexpectedly gained SynthRAN acceptance marker: {marker}",
+        )
 
     rfsim_ues = text(reference / "roles/5g/srsRAN/deploy/tasks/deploy_srsues.yml")
     require(
@@ -238,6 +260,7 @@ def check_local() -> None:
         "rev-parse",
         "synthran_srsran_reference_deploy_with_check",
         "synthran_srsran_reference_deploy_srsues",
+        "https://github.com/sopnode/5g_ansible",
     ):
         require(
             needle in materialize,
@@ -317,6 +340,7 @@ def check_local() -> None:
         "lifecycle_reference_commit",
         "chart_revision",
         "@sha256:",
+        "https://github.com/sopnode/5g_ansible",
     ):
         require(
             needle in harden,
