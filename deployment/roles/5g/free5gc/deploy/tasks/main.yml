@@ -15,10 +15,14 @@
 # ============================================================
 
 - name: Check if free5gc Helm release exists (including pending/failed states)
-  ansible.builtin.shell: helm list -n "{{ core_ns }}" -a -q | grep -w "^free5gc$" | wc -l
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm list -n "{{ core_ns }}" -a -q | \
+      awk '$0 == "free5gc" { count++ } END { print count + 0 }'
+  args:
+    executable: /bin/bash
   register: helm_release_exists
   changed_when: false
-  failed_when: false
 
 - name: Uninstall existing free5gc Helm release (handles pending-install/upgrade/failed)
   ansible.builtin.shell: helm uninstall free5gc -n "{{ core_ns }}" --no-hooks --timeout 120s
@@ -27,13 +31,17 @@
   register: helm_uninstall_result
 
 - name: Wait for Helm release to be fully removed
-  ansible.builtin.shell: helm list -n "{{ core_ns }}" -a -q | grep -w "^free5gc$" | wc -l
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm list -n "{{ core_ns }}" -a -q | \
+      awk '$0 == "free5gc" { count++ } END { print count + 0 }'
+  args:
+    executable: /bin/bash
   register: helm_gone
   until: helm_gone.stdout | trim | int == 0
   retries: 24
   delay: 5
   changed_when: false
-  failed_when: false
   when: helm_release_exists.stdout | trim | int > 0
 
 - name: Require the previous Free5GC Helm release to be absent
@@ -64,19 +72,26 @@
   failed_when: false
 
 - name: Wait for cert-pv to be fully deleted
-  ansible.builtin.shell: kubectl get pv cert-pv --no-headers 2>/dev/null | wc -l
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pv
+      - cert-pv
+      - --ignore-not-found
+      - -o
+      - name
   register: pv_static_check
-  until: pv_static_check.stdout | trim | int == 0
+  until: pv_static_check.stdout | trim | length == 0
   retries: 20
   delay: 5
   changed_when: false
-  failed_when: false
 
 - name: Require the previous static cert-pv to be absent
   ansible.builtin.assert:
     quiet: true
     that:
-      - pv_static_check.stdout | trim | int == 0
+      - pv_static_check.stdout | trim | length == 0
     fail_msg: "The previous Free5GC cert-pv could not be removed."
 
 # ============================================================
@@ -90,7 +105,6 @@
     name: cert-pvc
     namespace: "{{ core_ns }}"
   register: cert_pvc_info
-  failed_when: false
 
 - name: Patch cert-pvc finalizers to unblock deletion
   ansible.builtin.shell: >
@@ -119,7 +133,6 @@
   until: pvc_check.resources | length == 0
   retries: 30
   delay: 5
-  failed_when: false
   when: cert_pvc_info.resources | length > 0
 
 - name: Require the previous cert-pvc to be absent
@@ -131,10 +144,14 @@
   when: cert_pvc_info.resources | length > 0
 
 - name: Find any remaining PV bound to cert-pvc
-  ansible.builtin.shell: kubectl get pv --no-headers | grep "{{ core_ns }}/cert-pvc" | awk '{print $1}'
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pv --no-headers | \
+      awk '$0 ~ /{{ core_ns }}\/cert-pvc/ { print $1 }'
+  args:
+    executable: /bin/bash
   register: cert_pv_dynamic
   changed_when: false
-  failed_when: false
 
 - name: Patch dynamic PV finalizers to unblock deletion
   ansible.builtin.shell: >
@@ -149,13 +166,17 @@
   failed_when: false
 
 - name: Wait for dynamic PV to be fully deleted
-  ansible.builtin.shell: kubectl get pv --no-headers | grep "{{ core_ns }}/cert-pvc" | wc -l
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pv --no-headers | \
+      awk '$0 ~ /{{ core_ns }}\/cert-pvc/ { count++ } END { print count + 0 }'
+  args:
+    executable: /bin/bash
   register: pv_dynamic_check
   until: pv_dynamic_check.stdout | trim | int == 0
   retries: 30
   delay: 5
   changed_when: false
-  failed_when: false
   when: cert_pv_dynamic.stdout | trim | length > 0
 
 - name: Require dynamic cert PV cleanup to complete
@@ -207,7 +228,14 @@
                       - "{{ core_node_name }}"
 
 - name: Wait for cert-pv to be Available
-  ansible.builtin.shell: kubectl get pv cert-pv --no-headers | awk '{print $5}'
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pv
+      - cert-pv
+      - -o
+      - jsonpath={.status.phase}
   register: pv_status
   until: pv_status.stdout | trim == "Available"
   retries: 20
@@ -220,13 +248,20 @@
 
 - name: Remove orphan NGAP service if not owned by Helm
   ansible.builtin.shell: |
-    if kubectl get svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }} \
-        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null | grep -q "Helm"; then
+    set -euo pipefail
+    managed_by="$(
+      kubectl get svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }} \
+        --ignore-not-found \
+        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}'
+    )"
+    if [ "$managed_by" = "Helm" ]; then
       echo "owned by Helm, skipping"
     else
       kubectl delete svc free5gc-free5gc-amf-amf-n2 -n {{ core_ns }} --ignore-not-found
       echo "deleted orphan service"
     fi
+  args:
+    executable: /bin/bash
   register: cleanup_ngap_svc
   changed_when: "'deleted' in cleanup_ngap_svc.stdout"
 
