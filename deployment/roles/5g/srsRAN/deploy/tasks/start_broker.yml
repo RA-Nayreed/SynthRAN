@@ -103,9 +103,10 @@
       - exec
       - "{{ ue_pod_name }}"
       - --
-      - /bin/sh
+      - /bin/bash
       - -lc
       - |
+        set -euo pipefail
         for i in {{ ue_list | map(attribute='index') | map('int') | join(' ') }}; do
           tmux kill-window -t "ran:ue${i}" 2>/dev/null || true
           tmux new-window -t ran -n "ue${i}" \
@@ -174,7 +175,7 @@
   register: all_ue_tunnels_wait
   changed_when: false
   failed_when: false
-  retries: 30
+  retries: 60
   delay: 2
   until: all_ue_tunnels_wait.rc == 0
 
