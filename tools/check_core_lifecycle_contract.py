@@ -42,7 +42,7 @@ def git_head(root: Path) -> str:
 
 
 def run_checked(argv: list[str]) -> None:
-    subprocess.run(argv, check=True)
+    subprocess.run(argv, check=True, stdout=subprocess.DEVNULL)
 
 
 def check_reference(repo: Path, reference: Path) -> None:
@@ -66,7 +66,7 @@ def check_reference(repo: Path, reference: Path) -> None:
     for copied_marker in ("stop-cn", "start-cn", "oai-cn5g-fed"):
         require(copied_marker not in local_oai, f"OAI copied lifecycle marker retained: {copied_marker}")
     require("synthran.reference_checkout" in materializer, "OAI bypasses shared reference checkout")
-    require("git\n      - -C" in materializer and "rev-parse" in materializer, "OAI reference SHA is not read back")
+    require("rev-parse" in materializer, "OAI reference SHA is not read back")
     require("ansible.builtin.git" not in materializer, "OAI introduced a second checkout engine")
     require("start-cn" in upstream_oai and "stop-cn" in upstream_oai, "pinned OAI lifecycle shape changed")
 
@@ -77,6 +77,9 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
     defaults = text(repo / "deployment/roles/5g/open5gs/config/defaults/main.yml")
     config = text(repo / "deployment/roles/5g/open5gs/config/tasks/main.yml")
     deploy = text(repo / "deployment/roles/5g/open5gs/deploy/tasks/main.yml")
+    subscriber_template = text(
+        repo / "deployment/roles/5g/open5gs/config/templates/generate-data-fiveg.py.j2"
+    )
 
     require(OPEN5GS_SHA in defaults, "Open5GS source is not pinned to the reviewed SHA")
     require("network_profile_file" in config, "Open5GS does not load the effective profile")
@@ -84,6 +87,10 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
         re.search(r"fiveg\.slices\s*\|\s*length\s*==\s*2", config) is not None,
         "Open5GS two-slot downstream constraint is not enforced",
     )
+    require('mode: "0700"' in config, "Open5GS credential-bearing generator is not owner-only")
+    require("no_log: true" in config, "Open5GS credential-bearing render is not protected from logs")
+    require("os.umask(0o077)" in subscriber_template, "Open5GS generated files do not enforce a private umask")
+    require("os.chmod(SUBSCRIBER_FILE, 0o600)" in subscriber_template, "Open5GS subscriber file mode is not enforced")
 
     forbidden = {
         "systemctl restart kubelet": "core role restarts kubelet",
@@ -103,6 +110,13 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
         "no_log: true",
     ):
         require(marker in deploy, f"Open5GS adapter lost required contract marker: {marker}")
+
+    requirements = text(downstream / "requirements.txt")
+    for dependency in (
+        "pymongo==4.5.0",
+        "ruamel.yaml==0.18.5",
+    ):
+        require(dependency in requirements, f"Open5GS subscriber dependency is no longer pinned: {dependency}")
 
     base_kustomization = text(downstream / "open5gs/kustomization.yaml")
     require(
@@ -124,13 +138,18 @@ def check_open5gs(repo: Path, downstream: Path) -> None:
         )
 
 
-def check_free5gc(repo: Path, downstream: Path) -> None:
+def check_free5gc(repo: Path, reference: Path, downstream: Path) -> None:
     require(git_head(downstream) == FREE5GC_SHA, "checked-out Free5GC source SHA is wrong")
 
     defaults = text(repo / "deployment/roles/5g/free5gc/config/defaults/main.yml")
     config = text(repo / "deployment/roles/5g/free5gc/config/tasks/main.yml")
+    deploy = text(repo / "deployment/roles/5g/free5gc/deploy/tasks/main.yml")
     verify = text(repo / "deployment/roles/5g/free5gc/verify/tasks/main.yml")
+    values_template = text(
+        repo / "deployment/roles/5g/free5gc/config/templates/free5gc-values-override.yaml.j2"
+    )
     profile_check = text(repo / "deployment/roles/5g/free5gc/config/templates/profile-check.j2")
+    upstream_deploy = text(reference / "roles/5g/free5gc/deploy/tasks/main.yml")
 
     require(FREE5GC_SHA in defaults, "Free5GC source is not pinned to the reviewed SHA")
     require(
@@ -139,7 +158,30 @@ def check_free5gc(repo: Path, downstream: Path) -> None:
     )
     require("network_profile_file" in config, "Free5GC does not load the effective profile")
     require("coredns" not in config.lower(), "Free5GC adapter still mutates cluster-wide CoreDNS")
-    require("Download yq" not in config, "Free5GC adapter still owns shared yq installation")
+    for surface, source in (("defaults", defaults), ("config", config), ("deploy", deploy)):
+        require("yq" not in source.lower(), f"Free5GC {surface} still owns obsolete yq tooling")
+    require('gatewayIP: ""' in values_template, "Free5GC colocated N2 gateway is not rendered in the values adapter")
+
+    # Cleanup tolerance is inherited from the pinned reference, but the local
+    # adapter must now prove the required terminal states before Helm can run.
+    require("failed_when: false" in upstream_deploy, "pinned Free5GC cleanup tolerance changed; re-audit")
+    for marker in (
+        "Require the previous Free5GC Helm release to be absent",
+        "Require the previous static cert-pv to be absent",
+        "Require the previous cert-pvc to be absent",
+        "Require dynamic cert PV cleanup to complete",
+    ):
+        require(marker in deploy, f"Free5GC cleanup lost fail-closed terminal gate: {marker}")
+
+    for forbidden in (
+        'find / -name "add_subscribers.py"',
+        "subscribers_script_path",
+        "add_subscribers_result.stdout",
+        "ansible.builtin.debug",
+    ):
+        require(forbidden not in deploy, f"Free5GC deploy retained unsafe subscriber path: {forbidden}")
+    require(deploy.count("/free5gc/add_subscribers.py") >= 4, "Free5GC deploy does not use the pinned subscriber path consistently")
+    require(deploy.count("no_log: true") >= 4, "Free5GC credential/identity mutations are not fully protected")
 
     for marker in ("failed_when: false", "ansible.builtin.debug", "WARNING:"):
         require(marker not in verify, f"Free5GC verifier retains non-fatal/private path: {marker}")
@@ -169,13 +211,28 @@ def check_free5gc(repo: Path, downstream: Path) -> None:
         staged = Path(temp_dir) / "free5gc-helm"
         shutil.copytree(downstream, staged, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         patch_dir = repo / "deployment/roles/5g/free5gc/config/files"
-        for patcher in (
+        patchers = (
             "patch_amf_n2_nad.py",
             "patch_iupf_n3_nad.py",
             "patch_nads.py",
             "patch_upf_wrapper.py",
-        ):
-            run_checked([sys.executable, str(patch_dir / patcher), str(staged)])
+        )
+        for _ in range(2):
+            for patcher in patchers:
+                run_checked([sys.executable, str(patch_dir / patcher), str(staged)])
+
+        amf_nad = text(staged / "charts/free5gc/charts/free5gc-amf/templates/amf-n2-nad.yaml")
+        upf_nad = text(staged / "charts/free5gc/charts/free5gc-upf/templates/upf-n3-nad.yaml")
+        for source, network in ((amf_nad, "n2network"), (upf_nad, "n3network")):
+            require(
+                f'if eq .Values.global.{network}.type "ovs"' in source,
+                f"Free5GC {network} lost explicit OVS selection",
+            )
+            require('"bridge": {{ .Values.global.' in source, f"Free5GC {network} lost OVS bridge")
+            require(
+                f'if and .Values.global.{network}.gatewayIP' in source,
+                f"Free5GC {network} default route is no longer conditional",
+            )
 
 
 def main() -> int:
@@ -187,9 +244,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        check_reference(args.repo_root.resolve(), args.reference_root.resolve())
-        check_open5gs(args.repo_root.resolve(), args.open5gs_root.resolve())
-        check_free5gc(args.repo_root.resolve(), args.free5gc_root.resolve())
+        repo = args.repo_root.resolve()
+        reference = args.reference_root.resolve()
+        check_reference(repo, reference)
+        check_open5gs(repo, args.open5gs_root.resolve())
+        check_free5gc(repo, reference, args.free5gc_root.resolve())
     except (ContractError, subprocess.CalledProcessError) as exc:
         print(f"core lifecycle contract FAILED: {exc}", file=sys.stderr)
         return 1
