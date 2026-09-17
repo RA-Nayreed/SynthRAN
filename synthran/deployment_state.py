@@ -80,6 +80,32 @@ def _user_plane_target(selected_slice: dict) -> str:
     return target
 
 
+def expected_user_plane_target(contract: dict) -> str | None:
+    """Return the resolved UPF target, with legacy-contract compatibility.
+
+    New manifests carry ``user_plane_target`` explicitly. Older validation
+    fixtures predate that field, so derive it once here from the literal
+    three-octet session prefix rather than duplicating that rule in probes.
+    """
+
+    target = contract.get("user_plane_target")
+    if target:
+        try:
+            return str(ipaddress.ip_address(str(target)))
+        except ValueError:
+            return None
+    cidr = str(contract.get("address_cidr", ""))
+    literal = cidr.split("/", 1)[0]
+    octets = literal.split(".")
+    if len(octets) != 4:
+        return None
+    try:
+        ipaddress.ip_address(literal)
+        return str(ipaddress.ip_address(".".join(octets[:3] + ["1"])))
+    except ValueError:
+        return None
+
+
 def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     if ran == "srsran":
         return {
@@ -159,12 +185,12 @@ def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
     if user_plane.get("method") != "icmp_echo":
         return False
     address = live.get("address")
-    expected_target = contract.get("user_plane_target")
+    expected_target = expected_user_plane_target(contract)
     if user_plane.get("source_interface") != _transport_value(contract, "interface"):
         return False
     if user_plane.get("source_address") != address:
         return False
-    if not expected_target or user_plane.get("target_address") != expected_target:
+    if expected_target is None or user_plane.get("target_address") != expected_target:
         return False
     return True
 
