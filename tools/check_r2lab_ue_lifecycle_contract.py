@@ -9,7 +9,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from synthran.deployment_state import binding_identity, build_ue_map
+from synthran.deployment_state import binding_identity, bindings_match_deployment, build_ue_map
 
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTION_REFERENCE = ROOT / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
@@ -218,7 +218,18 @@ def check_local_structure() -> None:
         "quectel-CM -s",
     ):
         require(forbidden not in verifier, f"read-only UE verifier contains mutation: {forbidden}")
-    require("probe_r2lab_ue.py" in verifier, "read-only UE verifier no longer uses the modem probe")
+    for needle in (
+        "probe_r2lab_ue.py",
+        "ping",
+        "-I",
+        "r2lab-ue-{{ inventory_hostname }}-n6.log",
+        "'user_plane':",
+        "'verified': true",
+        "'source_interface': synthran_r2lab_interface",
+        "'source_address': synthran_r2lab_binding.address",
+        "'target_address': synthran_r2lab_upf_address",
+    ):
+        require(needle in verifier, f"read-only UE verifier lost retained source-bound N6 proof: {needle}")
 
     probe = text(PROBE)
     for needle in (
@@ -230,8 +241,16 @@ def check_local_structure() -> None:
         require(needle in probe, f"live UE evidence lost identity field or SD normalization: {needle}")
 
     state = text(DEPLOYMENT_STATE)
-    require('str(item.get("sst"))' in state, "binding identity does not compare SST")
-    require('str(item.get("sd"))' in state, "binding identity does not compare SD")
+    for needle in (
+        'str(item.get("sst"))',
+        'str(item.get("sd"))',
+        'prefix_lengths = {"oai": 24, "free5gc": 24, "open5gs": 16}',
+        'user_plane.get("verified") is not True',
+        'user_plane.get("source_interface") != _transport_value(contract, "interface")',
+        'user_plane.get("source_address") != address',
+        'user_plane.get("target_address") != expected_target',
+    ):
+        require(needle in state, f"deployment/live-binding identity contract lost: {needle}")
 
     validation = text(PROFILE_VALIDATION)
     for needle in (
@@ -298,6 +317,18 @@ def check_identity_fixtures() -> None:
     require(mapping[0]["sd"] == "EMPTY" and mapping[0]["tunnel"]["mbim_session"] == 0, "empty-SD MBIM identity changed")
     require(mapping[1]["sd"] == "100000" and mapping[1]["dnn"] == "streaming", "non-empty-SD MBIM identity changed")
     require(mapping[2]["tunnel"]["mode"] == "qmi" and mapping[2]["tunnel"]["mbim_session"] is None, "QMI identity changed")
+    require(mapping[0]["address_cidr"] == "12.1.1.0/24", "OAI UE pool must preserve all three configured prefix octets")
+    require(mapping[1]["address_cidr"] == "14.1.1.0/24", "OAI slice2 UE pool width changed")
+
+    open5gs_scenario = copy.deepcopy(scenario)
+    open5gs_scenario["deployment"]["core"] = "open5gs"
+    open5gs_mapping = build_ue_map(open5gs_scenario, profile)
+    require(open5gs_mapping[0]["address_cidr"] == "12.1.1.0/16", "Open5GS retained /16 session pool changed")
+
+    free5gc_scenario = copy.deepcopy(scenario)
+    free5gc_scenario["deployment"]["core"] = "free5gc"
+    free5gc_mapping = build_ue_map(free5gc_scenario, profile)
+    require(free5gc_mapping[0]["address_cidr"] == "12.1.1.0/24", "Free5GC retained /24 UE pool changed")
 
     altered = copy.deepcopy(mapping[1])
     altered["sd"] = "200000"
@@ -306,7 +337,7 @@ def check_identity_fixtures() -> None:
     probe = load_probe_module()
     empty = fixture_contract(
         device="qhat01", index=1, imsi="001010000000006", slice_name="slice1",
-        sst="1", sd="EMPTY", dnn="internet", cidr="12.1.1.0/16", mode="mbim",
+        sst="1", sd="EMPTY", dnn="internet", cidr="12.1.1.0/24", mode="mbim",
     )
     empty_binding = probe.verify_observations(
         empty,
@@ -335,7 +366,7 @@ def check_identity_fixtures() -> None:
 
     sliced = fixture_contract(
         device="qhat03", index=2, imsi="001010000000008", slice_name="slice2",
-        sst="1", sd="100000", dnn="streaming", cidr="14.1.1.0/16", mode="mbim",
+        sst="1", sd="100000", dnn="streaming", cidr="14.1.1.0/24", mode="mbim",
     )
     sliced_modem = (
         '+CGDCONT: 1,"IP","streaming","0.0.0.0",0,0\n'
@@ -369,7 +400,7 @@ def check_identity_fixtures() -> None:
 
     qmi = fixture_contract(
         device="qhat20", index=3, imsi="001010000000009", slice_name="slice1",
-        sst="1", sd="EMPTY", dnn="internet", cidr="12.1.1.0/16", mode="qmi",
+        sst="1", sd="EMPTY", dnn="internet", cidr="12.1.1.0/24", mode="qmi",
     )
     qmi_binding = probe.verify_observations(
         qmi,
@@ -379,6 +410,38 @@ def check_identity_fixtures() -> None:
     )
     require(qmi_binding["mode"] == "qmi" and qmi_binding["mbim_session"] is None, "QMI proof changed session semantics")
     require(qmi_binding["sst"] == "1" and qmi_binding["sd"] == "EMPTY", "QMI proof omitted S-NSSAI")
+
+    proved = copy.deepcopy(empty_binding)
+    proved["user_plane"] = {
+        "verified": True,
+        "method": "icmp_echo",
+        "source_interface": "wwan0",
+        "source_address": "12.1.1.11",
+        "target_address": "12.1.1.1",
+        "observed_at": "2026-09-17T12:00:00Z",
+    }
+    require(
+        bindings_match_deployment({"platform": "r2lab", "ues": [empty]}, [proved]),
+        "matching R2Lab binding plus source-bound N6 proof was rejected",
+    )
+    missing_n6 = copy.deepcopy(proved)
+    missing_n6.pop("user_plane")
+    require(
+        not bindings_match_deployment({"platform": "r2lab", "ues": [empty]}, [missing_n6]),
+        "R2Lab binding without retained N6 proof was accepted",
+    )
+    wrong_source = copy.deepcopy(proved)
+    wrong_source["user_plane"]["source_interface"] = "eth0"
+    require(
+        not bindings_match_deployment({"platform": "r2lab", "ues": [empty]}, [wrong_source]),
+        "R2Lab binding accepted a user-plane proof from the management interface",
+    )
+    wrong_target = copy.deepcopy(proved)
+    wrong_target["user_plane"]["target_address"] = "12.1.1.2"
+    require(
+        not bindings_match_deployment({"platform": "r2lab", "ues": [empty]}, [wrong_target]),
+        "R2Lab binding accepted a user-plane proof to a non-selected UPF target",
+    )
 
 
 def main() -> None:
