@@ -15,7 +15,9 @@ import yaml
 from jinja2 import Environment, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_CHARTS = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/patch_charts.yml"
+PREPARE_RFSIM_CHART = (
+    ROOT / "deployment/roles/5g/srsRAN/config/tasks/prepare_rfsim_chart.yml"
+)
 CONFIGMAP_TEMPLATE = (
     ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
 )
@@ -37,11 +39,11 @@ def _task(tasks: list[dict], name: str) -> dict:
     for task in tasks:
         if task.get("name") == name:
             return task
-    fail(f"production patch task not found: {name}")
+    fail(f"production config task not found: {name}")
 
 
 def _render_production_templates(chart: Path, ue_count: int) -> None:
-    tasks = yaml.safe_load(PATCH_CHARTS.read_text(encoding="utf-8"))
+    tasks = yaml.safe_load(PREPARE_RFSIM_CHART.read_text(encoding="utf-8"))
     environment = Environment(undefined=StrictUndefined, autoescape=False)
     context = {
         "srsran_network": {
@@ -53,7 +55,7 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
         "ue_count": ue_count,
     }
 
-    deployment_source = _task(tasks, "Rewrite srsue deployment.yaml")[
+    deployment_source = _task(tasks, "Write immutable-image srsue Deployment template")[
         "ansible.builtin.copy"
     ]["content"]
     deployment = environment.from_string(deployment_source).render(**context)
