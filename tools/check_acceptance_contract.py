@@ -155,6 +155,8 @@ def main() -> None:
         result.mkdir()
         (private / "inventory.yml").write_text("all: {}\n", encoding="utf-8")
         (private / "deployment-vars.yml").write_text("{}\n", encoding="utf-8")
+        (private / "network-profile.yml").write_text("plmn: {mcc: '001', mnc: '01'}\n", encoding="utf-8")
+        (private / "ssh-known-hosts").write_text("ci-host ssh-ed25519 test-key\n", encoding="utf-8")
 
         deployment = deployment_fixture()
         configuration_hash = content_hash(deployment)
@@ -171,7 +173,7 @@ def main() -> None:
             {"schema_version": 1, "deployment_hash": configuration_hash},
         )
 
-        implementation = build_implementation_identity({"deployment": deployment}, result)
+        implementation = build_implementation_identity({"deployment": deployment}, result, private)
         assert implementation["cluster_runtime"] == cluster_runtime
         prerequisites = bind_prerequisite_evidence(result, configuration_hash)
         deployment_hash = content_hash(
@@ -283,6 +285,15 @@ def main() -> None:
             "tampered retained execution context was accepted",
         )
         staged_cfg.write_text(original, encoding="utf-8")
+
+        private_vars = private / "deployment-vars.yml"
+        original = private_vars.read_text(encoding="utf-8")
+        private_vars.write_text("tampered: true\n", encoding="utf-8")
+        require_failure(
+            lambda: attach_active_deployment(endpoint_path=endpoint),
+            "tampered private deployment variables were accepted",
+        )
+        private_vars.write_text(original, encoding="utf-8")
 
         bootstrap = result / "bootstrap-evidence.json"
         original = bootstrap.read_text(encoding="utf-8")
