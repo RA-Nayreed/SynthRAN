@@ -4,28 +4,42 @@
   gather_facts: false
   become: true
   any_errors_fatal: true
-  vars:
-    ansible_python_interpreter: /opt/ansible-venv/bin/python
   tasks:
-    - name: Read the accepted deployment ConfigMap
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: ConfigMap
-        name: synthran-deployment-identity
-        namespace: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
-      register: synthran_eligibility_identity
+    - name: Collect a fresh read-only Kubernetes and Helm snapshot
+      ansible.builtin.script:
+        cmd: >-
+          {{ synthran_root }}/deployment/scripts/collect_cluster_snapshot.py
+          --namespace {{ synthran_deployment_contract.deployment.topology.namespace | quote }}
+        executable: /usr/bin/python3
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: synthran_eligibility_cluster_snapshot
+      changed_when: false
+
+    - name: Decode fresh cluster identity evidence
+      ansible.builtin.set_fact:
+        synthran_eligibility_cluster_document: >-
+          {{ synthran_eligibility_cluster_snapshot.stdout | from_json }}
 
     - name: Require the live cluster to retain the accepted configuration identity
       ansible.builtin.assert:
         quiet: true
         that:
-          - synthran_eligibility_identity.resources | length == 1
           - >-
-            (synthran_eligibility_identity.resources[0].data['manifest.json'] | from_json).deployment_hash
+            synthran_eligibility_cluster_document.cluster_attestation.configuration_hash
             == synthran_accepted_configuration_hash
         fail_msg: >-
-          The live cluster no longer exposes the configuration identity that was
-          sealed into the accepted deployment. Experiment execution is blocked.
+          The live cluster no longer exposes the configuration identity sealed
+          into the accepted deployment. Experiment execution is blocked.
+
+    - name: Retain fresh selected-namespace runtime identity for the eligibility gate
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: >-
+          {{ synthran_eligibility_evidence_file | dirname }}/experiment-eligibility-cluster.json
+        content: "{{ synthran_eligibility_cluster_document | to_nice_json }}"
 
 - name: Recheck physical UE identity and source-bound user plane
   hosts: physical_ues
@@ -80,6 +94,11 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
+    - name: Read the accepted executable identity
+      ansible.builtin.set_fact:
+        synthran_accepted_identity_document: >-
+          {{ lookup('ansible.builtin.file', synthran_accepted_identity_file) | from_json }}
+
     - name: Initialize fresh accepted UE bindings
       ansible.builtin.set_fact:
         synthran_eligibility_bindings: []
@@ -135,6 +154,7 @@
                'schema_version': 1,
                'deployment_hash': synthran_accepted_deployment_hash,
                'configuration_hash': synthran_accepted_configuration_hash,
+               'implementation_identity_sha256': synthran_accepted_identity_document.acceptance_evidence.implementation_identity_sha256,
                'cluster_identity_verified': true,
                'bindings': synthran_eligibility_bindings,
                'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
