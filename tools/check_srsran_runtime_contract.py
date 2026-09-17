@@ -9,10 +9,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_MAIN = ROOT / "deployment/roles/5g/srsRAN/config/tasks/main.yml"
 DEPLOY_MAIN = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/main.yml"
-PATCH_CHARTS = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/patch_charts.yml"
+PREPARE_RFSIM_CHART = ROOT / "deployment/roles/5g/srsRAN/config/tasks/prepare_rfsim_chart.yml"
+LEGACY_DEPLOY_PATCH = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/patch_charts.yml"
 RFSIM_VERIFY = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_rfsim_ue_runtime.yml"
 RFSIM_HARDEN = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/harden_rfsim_ue_runtime.yml"
-RFSIM_CONFIGMAP = ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
+RFSIM_CONFIGMAP = ROOT / "deployment/roles/5g/srsRAN/config/templates/srsue_configmap.yaml.j2"
+LEGACY_DEPLOY_CONFIGMAP = ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
 START_BROKER = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/start_broker.yml"
 VERIFY_LOGGING = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_logging.yml"
 HEALTH = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/verify_ran_health.yml"
@@ -33,6 +35,8 @@ def text(path: Path) -> str:
 
 def main() -> None:
     require(not RFSIM_HARDEN.exists(), "duplicate deploy-stage RFSIM hardening owner returned")
+    require(not LEGACY_DEPLOY_PATCH.exists(), "deploy-stage RFSIM chart mutation owner returned")
+    require(not LEGACY_DEPLOY_CONFIGMAP.exists(), "deploy-owned RFSIM chart template returned")
 
     config = text(CONFIG_MAIN)
     for needle in (
@@ -42,8 +46,10 @@ def main() -> None:
         "synthran.image_digest",
         'repository: "{{ synthran_srsue_image_reference }}"',
         'tag: ""',
+        "prepare_rfsim_chart.yml",
+        "harden_runtime.yml",
     ):
-        require(needle in config, f"RFSIM config ownership lost: {needle}")
+        require(needle in config, f"RFSIM/config ownership lost: {needle}")
     for forbidden in ("ue_indices:", "synthran_srsue_image_repository_override"):
         require(forbidden not in config, f"obsolete RFSIM parallel state returned: {forbidden}")
 
@@ -56,10 +62,12 @@ def main() -> None:
         deploy.index(reference_marker) < deploy.index(verify_marker),
         "RFSIM live verification must follow reference-owned UE deployment",
     )
+    for forbidden in ("patch_charts.yml", "harden_runtime.yml", "prepare_rfsim_chart.yml"):
+        require(forbidden not in deploy, f"deploy role regained chart mutation ownership: {forbidden}")
 
-    patch = text(PATCH_CHARTS)
+    prepared = text(PREPARE_RFSIM_CHART)
     require(
-        ".Values.image.repository" in patch and ".Values.image.tag" not in patch,
+        ".Values.image.repository" in prepared and ".Values.image.tag" not in prepared,
         "RFSIM deployment template must consume the digest-qualified repository directly",
     )
     for forbidden in (
@@ -68,18 +76,18 @@ def main() -> None:
         "python3-venv",
         "CAP_NET_ADMIN",
     ):
-        require(forbidden not in patch, f"obsolete/buggy RFSIM chart code returned: {forbidden}")
+        require(forbidden not in prepared, f"obsolete/buggy RFSIM chart code returned: {forbidden}")
     require(
-        patch.count("LOG=/var/log/gnu_multi_ue.log") == 1,
+        prepared.count("LOG=/var/log/gnu_multi_ue.log") == 1,
         "GNU Radio startup must declare exactly one authoritative log path",
     )
     require(
         'exec python3 /srsran/config/multi_ue_scenario.py --nof-ues "$UE_COUNT" >> "$LOG" 2>&1'
-        in patch,
+        in prepared,
         "GNU Radio broker must write through the script-owned log exactly once",
     )
-    require('tee "$LOG"' not in patch, "GNU Radio script must not add a second log writer")
-    require("GNU Radio broker ready" in patch, "RFSIM broker lost explicit readiness marker")
+    require('tee "$LOG"' not in prepared, "GNU Radio script must not add a second log writer")
+    require("GNU Radio broker ready" in prepared, "RFSIM broker lost explicit readiness marker")
 
     configmap = text(RFSIM_CONFIGMAP)
     for forbidden in (
@@ -201,7 +209,7 @@ def main() -> None:
 
     render = text(RFSIM_RENDER)
     for needle in (
-        "PATCH_CHARTS",
+        "PREPARE_RFSIM_CHART",
         "CONFIGMAP_TEMPLATE",
         '"helm"',
         '"template"',
