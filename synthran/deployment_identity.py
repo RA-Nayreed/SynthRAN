@@ -260,20 +260,6 @@ def _accepted_manifest(identity: dict[str, Any], run_dir: str | Path) -> tuple[d
     return implementation, manifest
 
 
-def validate_current_implementation_inputs(
-    identity: dict[str, Any], run_dir: str | Path
-) -> None:
-    deployment = identity.get("deployment")
-    if not isinstance(deployment, dict):
-        raise ValueError("accepted deployment identity has no deployment mapping")
-    implementation, manifest = _accepted_manifest(identity, run_dir)
-    _validate_records(manifest, _current_path)
-    if selected_source_pins(deployment, Path(run_dir).resolve()) != implementation.get("reviewed_sources"):
-        raise ValueError(
-            "current immutable deployment source pins differ from the accepted-testbed identity; redeploy before reuse"
-        )
-
-
 def validate_retained_execution_context(
     identity: dict[str, Any], run_dir: str | Path, private_dir: str | Path
 ) -> None:
