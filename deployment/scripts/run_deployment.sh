@@ -92,6 +92,15 @@ run_step() {
   return "$status"
 }
 
+mark_failed() {
+  local phase=$1 status=$2 reason=$3
+  "$SYNTHRAN_PYTHON" -m synthran.acceptance fail \
+    --candidate "$RUN_DIR/deployment-fingerprint.json" \
+    --phase "$phase" \
+    --exit-code "$status" \
+    --reason "$reason" >/dev/null 2>&1 || true
+}
+
 collect_failure_diagnostics() {
   local reason=$1
   local diagnostics_rc=0
@@ -107,8 +116,6 @@ collect_failure_diagnostics() {
     return 0
   fi
 
-  # Resume selectors are valid for the deployment playbook but not for the
-  # independent diagnostics playbook. Strip them before replacing the playbook.
   for arg in "${diagnostics_command[@]}"; do
     if [[ "$skip_next" == true ]]; then
       skip_next=false
@@ -158,6 +165,7 @@ CONTROLLER_PROVENANCE_RC=0
 run_step "$SYNTHRAN_PYTHON" -m synthran.provenance --run-dir "$RUN_DIR" || CONTROLLER_PROVENANCE_RC=$?
 if (( CONTROLLER_PROVENANCE_RC != 0 )); then
   echo "Controller dependency provenance failed with status $CONTROLLER_PROVENANCE_RC; provisioning was not started." >&2
+  mark_failed "controller-provenance" "$CONTROLLER_PROVENANCE_RC" "controller dependency provenance failed"
   exit "$CONTROLLER_PROVENANCE_RC"
 fi
 echo "Controller dependency provenance recorded."
@@ -166,26 +174,40 @@ ANSIBLE_RC=0
 run_step "${DEPLOYMENT_COMMAND[@]}" </dev/null >"$RUN_DIR/ansible.log" 2>&1 || ANSIBLE_RC=$?
 if (( ANSIBLE_RC != 0 )); then
   echo "Deployment provisioning failed with status $ANSIBLE_RC; complete Ansible output: $RUN_DIR/ansible.log" >&2
+  mark_failed "provisioning" "$ANSIBLE_RC" "Ansible provisioning or path-specific verification failed"
   collect_failure_diagnostics "provisioning failure"
   exit "$ANSIBLE_RC"
 fi
 
-echo "Provisioning, UE verification, and runtime provenance completed; validating fresh live deployment evidence."
+echo "Provisioning owners completed; sealing executable deployment identity."
+PROVISIONED_RC=0
+run_step "$SYNTHRAN_PYTHON" -m synthran.acceptance provisioning-complete \
+  --candidate "$RUN_DIR/deployment-fingerprint.json" \
+  --evidence "$RUN_DIR/live-deployment-evidence.json" \
+  --run-dir "$RUN_DIR" || PROVISIONED_RC=$?
+if (( PROVISIONED_RC != 0 )); then
+  echo "Provisioning-complete identity sealing failed with status $PROVISIONED_RC; deployment was not accepted." >&2
+  mark_failed "provisioning-complete" "$PROVISIONED_RC" "executable deployment identity could not be sealed"
+  collect_failure_diagnostics "provisioning-complete rejection"
+  exit "$PROVISIONED_RC"
+fi
+echo "State: provisioning-complete."
 
 ACTIVE_DEPLOYMENT_ENDPOINT="$PWD/.synthran/active-deployment.json"
-STATE_RC=0
-run_step "$SYNTHRAN_PYTHON" -m synthran.deployment_state activate \
+ACCEPT_RC=0
+run_step "$SYNTHRAN_PYTHON" -m synthran.acceptance accept \
   --candidate "$RUN_DIR/deployment-fingerprint.json" \
   --active "$ACTIVE_DEPLOYMENT_STATE" \
   --evidence "$RUN_DIR/live-deployment-evidence.json" \
   --endpoint "$ACTIVE_DEPLOYMENT_ENDPOINT" \
-  --private-dir "$SYNTHRAN_PRIVATE_DIR" || STATE_RC=$?
-if (( STATE_RC != 0 )); then
-  echo "Live deployment evidence was rejected with status $STATE_RC; deployment was not accepted." >&2
-  collect_failure_diagnostics "live-evidence rejection"
-  exit "$STATE_RC"
+  --private-dir "$SYNTHRAN_PRIVATE_DIR" || ACCEPT_RC=$?
+if (( ACCEPT_RC != 0 )); then
+  echo "Accepted-testbed validation failed with status $ACCEPT_RC; deployment was not published for reuse." >&2
+  mark_failed "accepted-testbed" "$ACCEPT_RC" "fresh selected workload/UE/user-plane acceptance failed"
+  collect_failure_diagnostics "accepted-testbed rejection"
+  exit "$ACCEPT_RC"
 fi
 
-echo "Live deployment evidence accepted."
-echo "Active deployment endpoint: $ACTIVE_DEPLOYMENT_ENDPOINT"
-echo "Testbed deployment completed and marked active."
+echo "State: accepted-testbed."
+echo "Accepted deployment endpoint: $ACTIVE_DEPLOYMENT_ENDPOINT"
+echo "Experiments must still pass a fresh read-only experiment-eligibility probe before workload execution."
