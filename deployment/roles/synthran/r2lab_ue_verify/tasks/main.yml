@@ -22,8 +22,7 @@
 - name: Resolve the R2Lab transport from the deployment contract
   ansible.builtin.set_fact:
     synthran_r2lab_interface: "{{ synthran_r2lab_contract_ue.tunnel.interface }}"
-    synthran_r2lab_upf_address: >-
-      {{ synthran_r2lab_contract_ue.address_cidr | regex_replace('\.0/[0-9]+$', '.1') }}
+    synthran_r2lab_upf_address: "{{ synthran_r2lab_contract_ue.user_plane_target }}"
 
 - name: Require the supported upstream R2Lab transport
   ansible.builtin.assert:
@@ -33,7 +32,8 @@
       - synthran_r2lab_interface == 'wwan0'
       - synthran_r2lab_contract_ue.tunnel.mode == (mode | default('mbim'))
       - (mode | default('mbim')) != 'mbim' or synthran_r2lab_contract_ue.tunnel.mbim_session | int == 0
-    fail_msg: The R2Lab contract must use the upstream wwan0 modem transport.
+      - synthran_r2lab_upf_address | length > 0
+    fail_msg: The R2Lab contract must use the upstream wwan0 modem transport and an explicit user-plane target.
 
 - name: Read the live R2Lab SIM, DNN configuration, and modem session
   ansible.builtin.script:
