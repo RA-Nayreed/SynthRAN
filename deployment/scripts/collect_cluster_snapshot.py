@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import subprocess
@@ -20,6 +21,15 @@ def _status_by_name(pod: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
         for item in (pod.get("status", {}).get(key, []) or [])
         if isinstance(item, dict)
     }
+
+
+def _pod_ready(pod: dict[str, Any]) -> bool:
+    return any(
+        isinstance(item, dict)
+        and item.get("type") == "Ready"
+        and item.get("status") == "True"
+        for item in (pod.get("status", {}).get("conditions", []) or [])
+    )
 
 
 def _containers(pod: dict[str, Any]) -> list[dict[str, Any]]:
@@ -45,6 +55,38 @@ def _containers(pod: dict[str, Any]) -> list[dict[str, Any]]:
                     "ready": status.get("ready") is True,
                 }
             )
+    return records
+
+
+def _flat_images(
+    namespace: str,
+    pod_name: str,
+    labels: dict[str, str],
+    pod_ready: bool,
+    containers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compatibility/stable identity shape consumed by deployment identity sealing.
+
+    Ephemeral containers are deliberately omitted: they are experiment/debug helpers,
+    not part of the accepted testbed implementation identity.
+    """
+
+    records = []
+    for container in containers:
+        if container.get("kind") == "ephemeral":
+            continue
+        records.append(
+            {
+                "namespace": namespace,
+                "pod": pod_name,
+                "pod_labels": labels,
+                "pod_ready": pod_ready,
+                "kind": container.get("kind"),
+                "container": container.get("name"),
+                "image": container.get("configured_image"),
+                "imageID": container.get("runtime_image_id"),
+            }
+        )
     return records
 
 
@@ -78,21 +120,28 @@ def _cluster_attestation(namespace: str) -> dict[str, Any]:
 def collect(namespace: str) -> dict[str, Any]:
     pods_raw = json.loads(_output(["kubectl", "get", "pods", "-n", namespace, "-o", "json"]))
     pods = []
+    images = []
     for pod in pods_raw.get("items", []):
         if not isinstance(pod, dict):
             continue
         metadata = pod.get("metadata", {}) or {}
+        name = str(metadata.get("name", ""))
+        labels = {
+            str(key): str(value)
+            for key, value in (metadata.get("labels", {}) or {}).items()
+        }
+        ready = _pod_ready(pod)
+        containers = _containers(pod)
         pods.append(
             {
-                "name": str(metadata.get("name", "")),
-                "labels": {
-                    str(key): str(value)
-                    for key, value in (metadata.get("labels", {}) or {}).items()
-                },
+                "name": name,
+                "labels": labels,
                 "phase": pod.get("status", {}).get("phase"),
-                "containers": _containers(pod),
+                "ready": ready,
+                "containers": containers,
             }
         )
+        images.extend(_flat_images(namespace, name, labels, ready, containers))
 
     releases = json.loads(_output(["helm", "list", "-n", namespace, "-o", "json"]))
     helm_releases = []
@@ -131,11 +180,20 @@ def collect(namespace: str) -> dict[str, Any]:
 
     return {
         "schema_version": 3,
+        "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "namespace": namespace,
         "cluster_attestation": _cluster_attestation(namespace),
         "kubernetes": json.loads(_output(["kubectl", "version", "-o", "json"])),
         "nodes": sorted(nodes, key=lambda item: str(item["name"])),
         "helm_releases": sorted(helm_releases, key=lambda item: str(item["name"])),
+        "images": sorted(
+            images,
+            key=lambda item: (
+                str(item["pod"]),
+                str(item["kind"]),
+                str(item["container"]),
+            ),
+        ),
         "pods": sorted(pods, key=lambda item: str(item["name"])),
     }
 
