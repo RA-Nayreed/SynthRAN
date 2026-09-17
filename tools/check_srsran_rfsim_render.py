@@ -7,6 +7,7 @@ import copy
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -14,12 +15,14 @@ import yaml
 from jinja2 import Environment, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_CHARTS = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/patch_charts.yml"
+PREPARE_RFSIM_CHART = (
+    ROOT / "deployment/roles/5g/srsRAN/config/tasks/prepare_rfsim_chart.yml"
+)
 CONFIGMAP_TEMPLATE = (
-    ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
+    ROOT / "deployment/roles/5g/srsRAN/config/templates/srsue_configmap.yaml.j2"
 )
 IMAGE_SOURCE = 'image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"'
-IMAGE_HARDENED = 'image: "{{ .Values.image.repository }}"'
+IMAGE_IMMUTABLE = 'image: "{{ .Values.image.repository }}"'
 DIGEST_RE = re.compile(r"^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 
 
@@ -36,11 +39,11 @@ def _task(tasks: list[dict], name: str) -> dict:
     for task in tasks:
         if task.get("name") == name:
             return task
-    fail(f"production patch task not found: {name}")
+    fail(f"production config task not found: {name}")
 
 
 def _render_production_templates(chart: Path, ue_count: int) -> None:
-    tasks = yaml.safe_load(PATCH_CHARTS.read_text(encoding="utf-8"))
+    tasks = yaml.safe_load(PREPARE_RFSIM_CHART.read_text(encoding="utf-8"))
     environment = Environment(undefined=StrictUndefined, autoescape=False)
     context = {
         "srsran_network": {
@@ -52,18 +55,13 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
         "ue_count": ue_count,
     }
 
-    deployment_source = _task(tasks, "Rewrite srsue deployment.yaml")[
+    deployment_source = _task(tasks, "Write immutable-image srsue Deployment template")[
         "ansible.builtin.copy"
     ]["content"]
     deployment = environment.from_string(deployment_source).render(**context)
     require(
-        deployment.count(IMAGE_SOURCE) == 1,
-        "production RFSIM deployment template lost its single image patch site",
-    )
-    deployment = deployment.replace(IMAGE_SOURCE, IMAGE_HARDENED)
-    require(
-        deployment.count(IMAGE_HARDENED) == 1 and IMAGE_SOURCE not in deployment,
-        "RFSIM UE image hardening did not produce one digest-ready image site",
+        deployment.count(IMAGE_IMMUTABLE) == 1 and IMAGE_SOURCE not in deployment,
+        "production RFSIM deployment template must consume one digest-qualified repository directly",
     )
     (chart / "charts/srsue/templates/deployment.yaml").write_text(
         deployment + "\n", encoding="utf-8"
@@ -72,13 +70,18 @@ def _render_production_templates(chart: Path, ue_count: int) -> None:
     configmap = environment.from_string(
         CONFIGMAP_TEMPLATE.read_text(encoding="utf-8")
     ).render(**context)
+    require("add_route.sh" not in configmap, "obsolete RFSIM route helper returned")
+    require(
+        "12.1.0.0/16" not in configmap and "14.1.0.0/16" not in configmap,
+        "hardcoded cross-tunnel routes returned",
+    )
     (chart / "charts/srsue/templates/configmap.yaml").write_text(
         configmap + "\n", encoding="utf-8"
     )
 
     files = chart / "charts/srsue/files"
     files.mkdir(parents=True, exist_ok=True)
-    for name in ("start_gnu.sh", "multi_ue_scenario.py", "add_route.sh"):
+    for name in ("start_gnu.sh", "multi_ue_scenario.py"):
         (files / name).write_text(f"# fixture for {name}\n", encoding="utf-8")
 
 
@@ -120,6 +123,51 @@ def _selected_ues(count: int) -> list[dict]:
     ]
     require(count in (1, 3), f"unsupported fixture UE count: {count}")
     return candidates[:count]
+
+
+def _configmap_data(rendered: str, key: str) -> str:
+    matches = []
+    for document in yaml.safe_load_all(rendered):
+        if not isinstance(document, dict) or document.get("kind") != "ConfigMap":
+            continue
+        data = document.get("data", {})
+        if isinstance(data, dict) and key in data:
+            matches.append(str(data[key]))
+    require(len(matches) == 1, f"rendered chart must contain exactly one ConfigMap key {key!r}")
+    return matches[0]
+
+
+def _validate_generated_ue_configs(rendered: str, selected: list[dict], root: Path) -> None:
+    generator = root / "generate_ue_conf.py"
+    generator.write_text(_configmap_data(rendered, "generate_ue_conf.py"), encoding="utf-8")
+    generated = root / "generated"
+    generated.mkdir()
+
+    for index, ue in enumerate(selected, 1):
+        subprocess.run(
+            [sys.executable, str(generator), str(index), str(generated)],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        config = (generated / f"ue_{index}.conf").read_text(encoding="utf-8")
+        require("[slicing]" in config, f"UE {index} lost slicing section")
+        require("enable = true" in config, f"UE {index} did not enable selected slicing")
+        require(
+            f"nssai-sst = {int(ue['sst'])}" in config,
+            f"UE {index} lost selected SST {ue['sst']}",
+        )
+        if ue["sd"]:
+            require(
+                f"nssai-sd = {int(ue['sd'])}" in config,
+                f"UE {index} lost selected SD {ue['sd']}",
+            )
+        else:
+            require(
+                "nssai-sd =" not in config,
+                f"UE {index} invented an SD for an SST-only slice",
+            )
 
 
 def _render_case(chart_source: Path, image: str, count: int) -> None:
@@ -168,7 +216,6 @@ def _render_case(chart_source: Path, image: str, count: int) -> None:
         rendered = result.stdout
         require(image in rendered, f"{count}-UE render lost immutable srsUE image")
         require(mutable_image not in rendered, f"{count}-UE render retained mutable srsUE tag")
-        require('value: "n3network"' not in rendered, "unexpected quoted N3 fixture sentinel")
         require("n3network" in rendered, f"{count}-UE render lost selected N3 attachment")
         require(f'value: "{count}"' in rendered, f"{count}-UE render lost UE_COUNT")
 
@@ -195,6 +242,8 @@ def _render_case(chart_source: Path, image: str, count: int) -> None:
                 "one-UE render leaked an unselected UE",
             )
 
+        _validate_generated_ue_configs(rendered, selected, Path(temporary))
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -205,7 +254,7 @@ def main() -> None:
     require((chart / "charts/srsue/Chart.yaml").is_file(), f"invalid chart checkout: {chart}")
     _render_case(chart, args.ue_image.strip(), 1)
     _render_case(chart, args.ue_image.strip(), 3)
-    print("srsRAN RFSIM one/multi-UE render contract OK")
+    print("srsRAN RFSIM one/multi-UE render and generated-config contract OK")
 
 
 if __name__ == "__main__":

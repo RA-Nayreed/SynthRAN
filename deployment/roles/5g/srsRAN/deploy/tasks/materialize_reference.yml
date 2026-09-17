@@ -6,6 +6,7 @@
            'ansible.builtin.file',
            synthran_root ~ '/third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json'
          ) | from_json }}
+  when: synthran_srsran_reference is not defined
 
 - name: Require an immutable srsRAN lifecycle reference
   ansible.builtin.assert:
