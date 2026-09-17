@@ -20,13 +20,6 @@ jobs:
       - name: Check out SynthRAN
         uses: actions/checkout@v7
 
-      - name: Check out pinned 5g-Ansible reference
-        uses: actions/checkout@v7
-        with:
-          repository: nayreed/5g-Ansible
-          ref: 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
-          path: reference
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v7
         with:
@@ -35,8 +28,15 @@ jobs:
       - name: Install parser dependency
         run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
 
+      - name: Materialize exact upstream execution reference
+        run: |
+          set -euo pipefail
+          reference_root="$(python -m synthran.reference_checkout)"
+          echo "SYNTHRAN_REFERENCE_ROOT=$reference_root" >>"$GITHUB_ENV"
+          git -C "$reference_root" rev-parse HEAD
+
       - name: Check Python syntax
         run: python -m compileall -q tools/check_transport_contract.py
 
       - name: Check N2 N3 N4 transport ownership
-        run: python tools/check_transport_contract.py --reference reference
+        run: python tools/check_transport_contract.py --reference "$SYNTHRAN_REFERENCE_ROOT"
