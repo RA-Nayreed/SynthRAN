@@ -50,6 +50,16 @@ DEPLOYMENT_COMMAND=("$@")
 CHILD_PID=""
 printf '%s\n' "$$" >"$RUN_DIR/controller.pid"
 
+if [[ -n "${SYNTHRAN_PRIVATE_DIR:-}" ]]; then
+  export ANSIBLE_ROLES_PATH="$SYNTHRAN_PRIVATE_DIR/ansible/roles"
+  export ANSIBLE_CONFIG="$SYNTHRAN_PRIVATE_DIR/ansible/ansible.cfg"
+  for ((i = 0; i < ${#DEPLOYMENT_COMMAND[@]}; i++)); do
+    if [[ "${DEPLOYMENT_COMMAND[$i]}" == "@deployment/group_vars/all/all.yml" ]]; then
+      DEPLOYMENT_COMMAND[$i]="@$SYNTHRAN_PRIVATE_DIR/ansible/group_vars/all/all.yml"
+    fi
+  done
+fi
+
 record_exit() {
   local original_status=$?
   local safety_status=0
