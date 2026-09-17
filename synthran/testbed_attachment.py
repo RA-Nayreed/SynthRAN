@@ -279,17 +279,6 @@ def attach_active_deployment(
         raise AttachmentError("accepted deployment endpoint and identity hashes differ")
     if endpoint.get("configuration_hash") != configuration_hash:
         raise AttachmentError("accepted deployment endpoint and configuration hashes differ")
-
-    required_private = (
-        private_dir / "inventory.yml",
-        private_dir / "deployment-vars.yml",
-        private_dir / "ansible/playbooks/verify_live_testbed.yml",
-    )
-    missing = [str(path) for path in required_private if not path.is_file()]
-    if missing:
-        raise AttachmentError(
-            "accepted deployment execution context is incomplete: " + ", ".join(missing)
-        )
     if not result_dir.is_dir():
         raise AttachmentError(f"accepted deployment result directory is missing: {result_dir}")
 
@@ -377,6 +366,12 @@ def prove_experiment_eligible(
         cluster_path = Path(cluster_snapshot_path).resolve()
     identity = _read_object(Path(attachment["identity_file"]), "accepted deployment identity")
     try:
+        validate_retained_execution_context(
+            identity,
+            attachment["result_dir"],
+            attachment["private_execution_dir"],
+        )
+        validate_prerequisite_evidence(identity, attachment["result_dir"])
         validate_current_cluster_runtime(identity, cluster_path)
         evidence = validate_live_evidence(
             attachment["identity_file"],
