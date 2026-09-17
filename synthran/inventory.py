@@ -13,6 +13,7 @@ import socket
 
 import yaml
 
+from .deployment_identity import write_execution_manifest
 from .deployment_state import build_manifest, build_ue_map, content_hash
 from .profile_validation import validate_network_profile, validate_ue_catalog
 from .r2lab import access, ssh_options
@@ -246,9 +247,28 @@ def main(argv=None):
     manifest_path = Path(args.run_dir, "deployment-fingerprint.json")
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
+    context = private_dir / "ansible"
+    shutil.copytree("deployment/playbooks", context / "playbooks", dirs_exist_ok=True)
+    shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
+    shutil.copytree("deployment/roles", context / "roles", dirs_exist_ok=True)
+    shutil.copytree("deployment/scripts", context / "scripts", dirs_exist_ok=True)
+    (context / "reference").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json",
+        context / "reference/EXECUTION_REFERENCE.json",
+    )
+    shutil.copyfile(
+        effective_profile_path, context / "group_vars/all/network_profile_resolved.yaml"
+    )
+    write_execution_manifest(selected, context, args.run_dir / "execution-manifest.json")
+
     variables = {
         **d.get("ansible_vars", {}),
         "synthran_root": str(Path.cwd()),
+        "synthran_execution_root": str(context.resolve()),
+        "synthran_execution_reference_file": str(
+            (context / "reference/EXECUTION_REFERENCE.json").resolve()
+        ),
         "core": d["core"],
         "ran": "srsRAN" if d["ran"].lower() == "srsran" else d["ran"],
         "rru": "rfsim" if d["platform"] == "rfsim" else d.get("ru", d["platform"]),
@@ -275,17 +295,6 @@ def main(argv=None):
     Path(args.run_dir, "deployment-vars.yml").write_text(
         yaml.safe_dump(redacted(variables), sort_keys=False)
     )
-
-    context = private_dir / "ansible"
-    shutil.copytree("deployment/playbooks", context / "playbooks", dirs_exist_ok=True)
-    shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
-    shutil.copyfile(
-        effective_profile_path, context / "group_vars/all/network_profile_resolved.yaml"
-    )
-    if not (context / "roles").exists():
-        (context / "roles").symlink_to(
-            Path("deployment/roles").resolve(), target_is_directory=True
-        )
 
 
 if __name__ == "__main__":
