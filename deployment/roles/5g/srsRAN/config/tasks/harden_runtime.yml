@@ -159,13 +159,15 @@
       - synthran_srsran_runtime_policy.image_tag == ''
       - synthran_srsran_runtime_policy.log_sidecar_image == synthran_log_sidecar_image
       - synthran_srsran_runtime_policy.log_filename == '/var/log/gnb.log'
+      - synthran_srsran_runtime_policy.all_log_level == 'warning'
       - synthran_srsran_runtime_policy.ngap_log_level == 'info'
       - rru != 'rfsim' or synthran_srsran_runtime_policy.mac_log_level == 'info'
       - not (synthran_srsran_runtime_policy.remote_control.enabled | bool)
       - synthran_srsran_runtime_policy.remote_control.bind_addr == '127.0.0.1'
     fail_msg: >-
-      Refusing to render srsRAN because image immutability, log-path/evidence
-      consistency, or remote-control hardening was lost after configuration.
+      Refusing to render srsRAN because image immutability, narrow log/evidence
+      levels, log-path consistency, or remote-control hardening was lost after
+      configuration.
 
 - name: Render the hardened srsRAN chart as the final adapter contract
   ansible.builtin.shell: |
@@ -176,7 +178,12 @@
       -f "{{ values_file }}")"
     printf '%s\n' "$rendered" | grep -F -- "$SYNTHRAN_GNB_IMAGE_REFERENCE" >/dev/null
     printf '%s\n' "$rendered" | grep -F -- 'filename: /var/log/gnb.log' >/dev/null
+    printf '%s\n' "$rendered" | grep -F -- 'all_level: warning' >/dev/null
     printf '%s\n' "$rendered" | grep -F -- 'ngap_level: info' >/dev/null
+    if printf '%s\n' "$rendered" | grep -F -- 'all_level: info' >/dev/null; then
+      echo 'Rendered chart unexpectedly enabled broad INFO logging.' >&2
+      exit 1
+    fi
     if printf '%s\n' "$rendered" | grep -F -- 'filename: /tmp/gnb.log' >/dev/null; then
       echo 'Rendered chart still contains the obsolete /tmp/gnb.log path.' >&2
       exit 1
