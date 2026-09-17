@@ -268,6 +268,10 @@ jobs:
           from pathlib import Path
 
           from synthran.cluster_identity import selected_cluster_runtime
+          from synthran.deployment_identity import (
+              selected_adapter_identity,
+              selected_source_pins,
+          )
           from synthran.deployment_state import content_hash
           from synthran.testbed_attachment import (
               AttachmentError,
@@ -392,8 +396,8 @@ jobs:
               cluster_runtime = selected_cluster_runtime(deployment, snapshot)
               implementation = {
                   "schema_version": 1,
-                  "reviewed_sources": {"lifecycle": {"commit": "0" * 40}},
-                  "selected_adapter": {"sha256": digest_d, "file_count": 1},
+                  "reviewed_sources": selected_source_pins(deployment, result),
+                  "selected_adapter": selected_adapter_identity(deployment),
                   "selected_runtime": {},
                   "cluster_runtime": cluster_runtime,
               }
