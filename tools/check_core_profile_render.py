@@ -84,6 +84,11 @@ def expected_imsi(profile: dict, ue: dict) -> str:
     return f"{profile['plmn']['mcc']}{profile['plmn']['mnc']}{ue['imsi_suffix']}"
 
 
+def expected_sd(value: object) -> str:
+    text = str(value)
+    return "ffffff" if text == "EMPTY" else text.lower().zfill(6)
+
+
 def check_open5gs(repo: Path, profile: dict) -> None:
     template_root = repo / "deployment/roles/5g/open5gs/config/templates"
     topology = topology_fixture()
@@ -102,8 +107,8 @@ def check_open5gs(repo: Path, profile: dict) -> None:
     require("10.100.50.234" in amf["data"]["wrapper.sh"], "Open5GS AMF lost selected NGAP endpoint")
     for entry in profile["slices"]:
         require(str(entry["sst"]) in amf_cfg, "Open5GS AMF lost selected SST")
-        expected_sd = "FFFFFF" if entry["sd"] == "EMPTY" else entry["sd"]
-        require(expected_sd in amf_cfg, "Open5GS AMF lost selected SD")
+        rendered_sd = "FFFFFF" if entry["sd"] == "EMPTY" else entry["sd"]
+        require(rendered_sd in amf_cfg, "Open5GS AMF lost selected SD")
 
     for index, entry in enumerate(profile["slices"], start=1):
         smf = yaml.safe_load(
@@ -186,6 +191,40 @@ def check_ovs_nads(rendered: str) -> None:
         require("routes" not in ipam, f"Free5GC OVS NAD {name} retained an empty-gateway default route")
 
 
+def check_free5gc_amf_config(rendered: str, profile: dict) -> None:
+    matches: list[dict] = []
+    for document in yaml.safe_load_all(rendered):
+        if not isinstance(document, dict) or document.get("kind") != "ConfigMap":
+            continue
+        name = str(document.get("metadata", {}).get("name", ""))
+        data = document.get("data", {})
+        if "amfcfg.yaml" in data and "amf" in name.lower():
+            matches.append(document)
+
+    require(len(matches) == 1, f"expected exactly one rendered Free5GC AMF ConfigMap, got {len(matches)}")
+    payload = yaml.safe_load(matches[0]["data"]["amfcfg.yaml"])
+    configuration = payload["configuration"]
+
+    require("s_nssai" not in configuration, "Free5GC AMF retained an Open5GS s_nssai field")
+    require("network_name" not in configuration, "Free5GC AMF retained an Open5GS network_name field")
+    require("amf_name" not in configuration, "Free5GC AMF retained an Open5GS amf_name field")
+    require("t3512" not in configuration, "Free5GC AMF retained an Open5GS-style t3512 mapping")
+
+    support = configuration["plmnSupportList"]
+    require(len(support) == 1, "Free5GC AMF must render one selected PLMN support entry")
+    snssai = support[0]["snssaiList"]
+    actual = {(int(item["sst"]), str(item["sd"]).lower().zfill(6)) for item in snssai}
+    expected = {(int(item["sst"]), expected_sd(item["sd"])) for item in profile["slices"]}
+    require(actual == expected, "Free5GC AMF snssaiList does not match the selected slices")
+
+    expected_dnns = [item["dnn"] for item in profile["slices"]]
+    require(configuration["supportDnnList"] == expected_dnns, "Free5GC AMF supportDnnList does not match selected DNNs")
+    require(configuration["security"]["integrityOrder"] == ["NIA2", "NIA1", "NIA0"], "Free5GC AMF integrityOrder schema drifted")
+    require(configuration["security"]["cipheringOrder"] == ["NEA0", "NEA1", "NEA2"], "Free5GC AMF cipheringOrder schema drifted")
+    require(configuration["networkName"]["full"] == "free5GC", "Free5GC AMF networkName schema drifted")
+    require(configuration["t3512Value"] == 540, "Free5GC AMF t3512Value was not preserved")
+
+
 def check_free5gc(repo: Path, downstream: Path, profile: dict) -> None:
     template_root = repo / "deployment/roles/5g/free5gc/config/templates"
     topology = topology_fixture()
@@ -209,8 +248,7 @@ def check_free5gc(repo: Path, downstream: Path, profile: dict) -> None:
     for entry in profile["slices"]:
         require(entry["dnn"] in serialized, "Free5GC values lost selected DNN")
         require(entry["ip_prefix"] in serialized, "Free5GC values lost selected UE pool")
-        expected_sd = "ffffff" if entry["sd"] == "EMPTY" else entry["sd"].lower()
-        require(expected_sd in serialized.lower(), "Free5GC values lost selected SD")
+        require(expected_sd(entry["sd"]) in serialized.lower(), "Free5GC values lost selected SD")
     for ue in profile["ues"].values():
         require(expected_imsi(profile, ue) in serialized, "Free5GC values lost selected IMSI")
     require("unselected-sentinel" not in serialized, "Free5GC values rendered an unselected UE")
@@ -246,6 +284,7 @@ def check_free5gc(repo: Path, downstream: Path, profile: dict) -> None:
             text=True,
         )
         check_ovs_nads(result.stdout)
+        check_free5gc_amf_config(result.stdout, profile)
 
 
 def check_colocated_free5gc(repo: Path, profile: dict) -> None:
