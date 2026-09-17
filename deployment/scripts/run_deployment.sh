@@ -194,7 +194,8 @@ PROVISIONED_RC=0
 run_step "$SYNTHRAN_PYTHON" -m synthran.acceptance provisioning-complete \
   --candidate "$RUN_DIR/deployment-fingerprint.json" \
   --evidence "$RUN_DIR/live-deployment-evidence.json" \
-  --run-dir "$RUN_DIR" || PROVISIONED_RC=$?
+  --run-dir "$RUN_DIR" \
+  --private-dir "$SYNTHRAN_PRIVATE_DIR" || PROVISIONED_RC=$?
 if (( PROVISIONED_RC != 0 )); then
   echo "Provisioning-complete identity sealing failed with status $PROVISIONED_RC; deployment was not accepted." >&2
   mark_failed "provisioning-complete" "$PROVISIONED_RC" "executable deployment identity could not be sealed"
