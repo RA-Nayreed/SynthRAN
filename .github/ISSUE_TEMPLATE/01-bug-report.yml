@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a reproducible SynthRAN defect or deployment failure
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Remove credentials, private keys, tokens, subscriber secrets, reservation credentials, and sensitive host data before submitting logs.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the failure and where in the SynthRAN lifecycle it occurred.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - deploy.sh / controller
+        - Scenario or configuration resolution
+        - Reservation / resource authority
+        - Host preparation / Kubernetes
+        - Core network
+        - RAN / gNB
+        - RFSIM
+        - R2Lab / N300 / N320
+        - UE activation / PDU session
+        - Evidence / results
+        - Experiment layer (under construction)
+        - Documentation / other
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Git revision
+      description: Commit SHA or branch used for the failing run.
+      placeholder: e.g. abc1234 or main
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Scenario / command
+      description: Include the command and relevant non-secret scenario settings.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Minimal evidence
+      description: Paste the smallest useful redacted error/log excerpt and identify the run ID if safe to share.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Local / dry-run only
+        - RFSIM / virtual testbed
+        - R2Lab physical testbed
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, private keys, subscriber secrets, and sensitive infrastructure data from this report.
+          required: true
+        - label: I am not presenting an unverified physical result as a generally validated capability.
+          required: true
