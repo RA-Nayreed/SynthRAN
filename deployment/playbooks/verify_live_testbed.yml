@@ -162,9 +162,7 @@
                'schema_version': 2,
                'deployment_hash': synthran_live_contract.deployment_hash,
                'configuration_hash': synthran_live_contract.configuration_hash,
-               'implementation_identity_sha256': synthran_live_contract.acceptance_evidence.implementation_identity_sha256
-                 if synthran_live_contract.status == 'accepted-testbed'
-                 else (synthran_live_contract.implementation | to_json | hash('sha256') | regex_replace('^', 'sha256:')),
+               'implementation_identity_sha256': synthran_live_contract.implementation_identity_sha256,
                'cluster_identity_verified': true,
                'bindings': synthran_live_bindings,
                'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
