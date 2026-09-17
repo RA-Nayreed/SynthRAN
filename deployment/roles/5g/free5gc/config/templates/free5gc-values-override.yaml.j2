@@ -98,18 +98,18 @@ free5gc-amf:
           - namf-oam
         servedGuamiList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             amfId: cafe00
         supportTaiList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             tac: {{ "%06d" | format(profile.plmn.tac | int) }}
         plmnSupportList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             snssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
@@ -157,8 +157,8 @@ free5gc-smf:
 {% endif %}
 {% endfor %}
         plmnList:
-          - mcc: {{ profile.plmn.mcc }}
-            mnc: {{ profile.plmn.mnc }}
+          - mcc: "{{ profile.plmn.mcc }}"
+            mnc: "{{ profile.plmn.mnc }}"
         userplaneInformation:
           upNodes:
             gNB1:
@@ -297,12 +297,12 @@ free5gc-nssf:
       configuration: |-
         nssfName: NSSF
         supportedPlmnList:
-          - mcc: {{ profile.plmn.mcc }}
-            mnc: {{ profile.plmn.mnc }}
+          - mcc: "{{ profile.plmn.mcc }}"
+            mnc: "{{ profile.plmn.mnc }}"
         supportedNssaiInPlmnList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             supportedSnssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
@@ -316,8 +316,8 @@ free5gc-nssf:
         taList:
           - tai:
               plmnId:
-                mcc: {{ profile.plmn.mcc }}
-                mnc: {{ profile.plmn.mnc }}
+                mcc: "{{ profile.plmn.mcc }}"
+                mnc: "{{ profile.plmn.mnc }}"
               tac: {{ profile.plmn.tac | int }}
             accessType: 3GPP_ACCESS
             supportedSnssaiList:
