@@ -73,6 +73,13 @@ def _address_cidr(core: str, selected_slice: dict) -> str:
     return f"{prefix}.0/{prefix_length}"
 
 
+def _user_plane_target(selected_slice: dict) -> str:
+    prefix = str(selected_slice["ip_prefix"])
+    target = prefix + ".1"
+    ipaddress.ip_address(target)
+    return target
+
+
 def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     if ran == "srsran":
         return {
@@ -145,19 +152,6 @@ def binding_identity(item: dict) -> tuple:
     )
 
 
-def _expected_upf_target(contract: dict) -> str | None:
-    cidr = str(contract.get("address_cidr", ""))
-    literal = cidr.split("/", 1)[0]
-    octets = literal.split(".")
-    if len(octets) != 4:
-        return None
-    try:
-        ipaddress.ip_address(literal)
-    except ValueError:
-        return None
-    return ".".join(octets[:3] + ["1"])
-
-
 def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
     user_plane = live.get("user_plane")
     if not isinstance(user_plane, dict) or user_plane.get("verified") is not True:
@@ -165,12 +159,12 @@ def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
     if user_plane.get("method") != "icmp_echo":
         return False
     address = live.get("address")
-    expected_target = _expected_upf_target(contract)
+    expected_target = contract.get("user_plane_target")
     if user_plane.get("source_interface") != _transport_value(contract, "interface"):
         return False
     if user_plane.get("source_address") != address:
         return False
-    if expected_target is None or user_plane.get("target_address") != expected_target:
+    if not expected_target or user_plane.get("target_address") != expected_target:
         return False
     return True
 
@@ -230,6 +224,7 @@ def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
             "sd": str(selected_slice["sd"]),
             "dnn": selected_slice["dnn"],
             "address_cidr": _address_cidr(core, selected_slice),
+            "user_plane_target": _user_plane_target(selected_slice),
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
