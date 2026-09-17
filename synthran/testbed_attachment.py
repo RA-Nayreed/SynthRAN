@@ -22,7 +22,6 @@ from synthran.acceptance import (
 )
 from synthran.deployment_identity import (
     validate_current_cluster_runtime,
-    validate_current_implementation_inputs,
     validate_retained_execution_context,
 )
 from synthran.deployment_state import SCHEMA_VERSION, content_hash
@@ -295,7 +294,6 @@ def attach_active_deployment(
         raise AttachmentError(f"accepted deployment result directory is missing: {result_dir}")
 
     try:
-        validate_current_implementation_inputs(identity, result_dir)
         validate_retained_execution_context(identity, result_dir, private_dir)
         validate_prerequisite_evidence(identity, result_dir)
         evidence = validate_live_evidence(
@@ -341,8 +339,8 @@ def attach_active_deployment(
         },
         "claim_boundary": (
             "Historical attachment proves a previously accepted-testbed identity, "
-            "unchanged staged/current implementation inputs, and intact prerequisite "
-            "evidence; it does not prove current RF, UE, session, or user-plane liveness."
+            "an intact retained execution context, and intact prerequisite evidence; "
+            "it does not prove current RF, UE, session, or user-plane liveness."
         ),
     }
 
