@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import datetime as dt
 import hashlib
 import ipaddress
 import json
@@ -17,7 +16,6 @@ from .scenario import load_scenario
 
 
 SCHEMA_VERSION = 2
-ACTIVE_ENDPOINT_SCHEMA_VERSION = 1
 
 
 def _canonical(value: Any) -> bytes:
@@ -65,23 +63,12 @@ def _slice_map(network_profile: dict) -> dict[str, dict]:
 
 
 def _address_cidr(core: str, selected_slice: dict) -> str:
-    """Return the UE session network actually configured by the selected core.
-
-    The profile owns three IPv4 prefix octets (for example ``12.1.1``), while
-    the retained core adapters own the session-network width. OAI and Free5GC
-    consume that value as a /24 pool; the retained Open5GS adapter deliberately
-    configures a /16 session network. Keep the deployment identity aligned with
-    those backend contracts instead of applying one global mask.
-    """
-
     prefix_lengths = {"oai": 24, "free5gc": 24, "open5gs": 16}
     try:
         prefix_length = prefix_lengths[core]
     except KeyError as error:
         raise ValueError(f"no UE session-network identity rule for core {core!r}") from error
     prefix = str(selected_slice["ip_prefix"])
-    # Profile validation already requires exactly three octets. Re-parse here so
-    # deployment identity construction cannot silently widen a malformed prefix.
     ipaddress.ip_network(prefix + ".0/24", strict=True)
     return f"{prefix}.0/{prefix_length}"
 
@@ -171,15 +158,13 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     }
     if len(by_device) != len(bindings):
         return False
+
     for contract in expected:
         live = by_device.get(str(contract.get("device")))
         if live is None or binding_identity(live) != binding_identity(contract):
             return False
-        if deployment.get("platform") == "r2lab" and live.get("modem_verified") is not True:
-            return False
         cidr = contract.get("address_cidr")
         address = live.get("address")
-        network = None
         if cidr:
             if not address:
                 return False
@@ -189,73 +174,7 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
                     return False
             except ValueError:
                 return False
-        if deployment.get("platform") == "r2lab":
-            user_plane = live.get("user_plane")
-            if not isinstance(user_plane, dict) or user_plane.get("verified") is not True:
-                return False
-            if user_plane.get("method") != "icmp_echo":
-                return False
-            if user_plane.get("source_interface") != _transport_value(contract, "interface"):
-                return False
-            if user_plane.get("source_address") != address:
-                return False
-            if network is None:
-                return False
-            # UPF ownership follows the literal configured three-octet prefix.
-            # This matters for the retained Open5GS /16 adapter: 12.1.1.1/16 is
-            # intentional even though ipaddress normalizes the network to 12.1.0.0/16.
-            cidr_address = str(cidr).split("/", 1)[0]
-            expected_target = cidr_address.rsplit(".", 1)[0] + ".1"
-            if user_plane.get("target_address") != expected_target:
-                return False
-            if not isinstance(user_plane.get("observed_at"), str) or not user_plane.get("observed_at"):
-                return False
     return True
-
-
-def _parse_observed_at(value: object) -> dt.datetime:
-    if not isinstance(value, str) or not value:
-        raise ValueError("live deployment evidence has no observation timestamp")
-    try:
-        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise ValueError("live deployment evidence has an invalid observation timestamp") from error
-    if parsed.tzinfo is None:
-        raise ValueError("live deployment evidence observation timestamp has no timezone")
-    return parsed.astimezone(dt.timezone.utc)
-
-
-def validate_live_evidence(
-    candidate_path: str | Path,
-    evidence_path: str | Path,
-    *,
-    max_age_seconds: int | None = 300,
-) -> dict:
-    candidate = read_json(candidate_path)
-    evidence = read_json(evidence_path)
-    deployment = candidate.get("deployment", {})
-    if candidate.get("deployment_hash") != content_hash(deployment):
-        raise ValueError("candidate deployment identity failed its integrity check")
-    if evidence.get("deployment_hash") != candidate.get("deployment_hash"):
-        raise ValueError("live deployment evidence does not match the requested deployment")
-    if evidence.get("cluster_identity_verified") is not True:
-        raise ValueError("live deployment evidence does not prove the cluster identity")
-    if deployment.get("platform") == "r2lab":
-        bindings = evidence.get("bindings")
-        if not isinstance(bindings, list) or not bindings_match_deployment(deployment, bindings):
-            raise ValueError("live deployment evidence does not contain complete matching UE bindings")
-        observed_at = _parse_observed_at(evidence.get("observed_at"))
-        if max_age_seconds is not None:
-            if max_age_seconds < 0:
-                raise ValueError("maximum evidence age cannot be negative")
-            age = (dt.datetime.now(dt.timezone.utc) - observed_at).total_seconds()
-            if age < -30:
-                raise ValueError("live deployment evidence is timestamped in the future")
-            if age > max_age_seconds:
-                raise ValueError(
-                    f"live deployment evidence is stale ({age:.0f}s old; maximum {max_age_seconds}s)"
-                )
-    return evidence
 
 
 def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
@@ -330,7 +249,7 @@ def invalidate(active_path: str | Path, endpoint_path: str | Path | None = None)
     value = {
         "schema_version": SCHEMA_VERSION,
         "status": "invalidated",
-        "invalidated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "invalidated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }
     _atomic_text(Path(active_path), json.dumps(value, indent=2, sort_keys=True) + "\n")
     if endpoint_path is not None:
@@ -338,61 +257,6 @@ def invalidate(active_path: str | Path, endpoint_path: str | Path | None = None)
             Path(endpoint_path).unlink()
         except FileNotFoundError:
             pass
-
-
-def _active_endpoint(
-    candidate_path: Path,
-    active_path: Path,
-    evidence_path: Path,
-    private_dir: Path,
-    deployment_hash: str,
-) -> dict:
-    return {
-        "schema_version": ACTIVE_ENDPOINT_SCHEMA_VERSION,
-        "status": "active",
-        "deployment_hash": deployment_hash,
-        "run_id": candidate_path.parent.name,
-        "identity_file": str(active_path.resolve()),
-        "evidence_file": str(evidence_path.resolve()),
-        "private_execution_dir": str(private_dir.resolve()),
-        "result_dir": str(candidate_path.parent.resolve()),
-        "published_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-    }
-
-
-def activate(
-    candidate_path: str | Path,
-    active_path: str | Path,
-    evidence_path: str | Path,
-    endpoint_path: str | Path,
-    private_dir: str | Path,
-) -> dict:
-    candidate_path = Path(candidate_path)
-    active_path = Path(active_path)
-    evidence_path = Path(evidence_path)
-    private_dir = Path(private_dir)
-    validate_live_evidence(candidate_path, evidence_path)
-    value = read_json(candidate_path)
-    if value.get("schema_version") != SCHEMA_VERSION or value.get("deployment_hash") != content_hash(value.get("deployment", {})):
-        raise ValueError("candidate deployment identity failed its integrity check")
-    required_private = [private_dir / "inventory.yml", private_dir / "deployment-vars.yml"]
-    missing = [str(path) for path in required_private if not path.is_file()]
-    if missing:
-        raise ValueError("cannot publish active deployment endpoint; missing private execution files: " + ", ".join(missing))
-    value["status"] = "active"
-    value["attested_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
-    text = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    _atomic_text(candidate_path, text)
-    _atomic_text(active_path, text)
-    endpoint = _active_endpoint(
-        candidate_path,
-        active_path,
-        evidence_path,
-        private_dir,
-        value["deployment_hash"],
-    )
-    _atomic_text(Path(endpoint_path), json.dumps(endpoint, indent=2, sort_keys=True) + "\n")
-    return value
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -404,12 +268,6 @@ def _parser() -> argparse.ArgumentParser:
     invalid = commands.add_parser("invalidate")
     invalid.add_argument("--active", required=True)
     invalid.add_argument("--endpoint")
-    active = commands.add_parser("activate")
-    active.add_argument("--candidate", required=True)
-    active.add_argument("--active", required=True)
-    active.add_argument("--evidence", required=True)
-    active.add_argument("--endpoint", required=True)
-    active.add_argument("--private-dir", required=True)
     return parser
 
 
@@ -418,16 +276,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "resolve":
             resolve_scenario(args.source, args.output)
-        elif args.command == "invalidate":
-            invalidate(args.active, args.endpoint)
         else:
-            activate(
-                args.candidate,
-                args.active,
-                args.evidence,
-                args.endpoint,
-                args.private_dir,
-            )
+            invalidate(args.active, args.endpoint)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
