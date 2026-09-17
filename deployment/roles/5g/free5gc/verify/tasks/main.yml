@@ -37,84 +37,174 @@
   loop_control:
     label: "{{ item.item.key }}"
 
-- name: Verify Free5GC AMF PLMN and TAC
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - fiveg.plmn.mcc in free5gc_profile_cm.amf.data['amfcfg.yaml']
-      - fiveg.plmn.mnc in free5gc_profile_cm.amf.data['amfcfg.yaml']
-      - (fiveg.plmn.tac | string) in free5gc_profile_cm.amf.data['amfcfg.yaml']
-    fail_msg: "Free5GC AMF does not match the effective PLMN/TAC profile."
+- name: Parse live Free5GC profile-bearing configuration
+  ansible.builtin.set_fact:
+    free5gc_live_amf_cfg: "{{ free5gc_profile_cm.amf.data['amfcfg.yaml'] | from_yaml }}"
+    free5gc_live_smf_cfg: "{{ free5gc_profile_cm.smf.data['smfcfg.yaml'] | from_yaml }}"
+    free5gc_live_nssf_cfg: "{{ free5gc_profile_cm.nssf.data['nssfcfg.yaml'] | from_yaml }}"
+    free5gc_live_iupf1_cfg: "{{ free5gc_profile_cm.iupf1.data['upfcfg.yaml'] | from_yaml }}"
+    free5gc_live_psaupf1_cfg: "{{ free5gc_profile_cm.psaupf1.data['upfcfg.yaml'] | from_yaml }}"
+    free5gc_live_psaupf2_cfg: "{{ free5gc_profile_cm.psaupf2.data['upfcfg.yaml'] | from_yaml }}"
 
-- name: Verify every effective Free5GC slice in AMF
+- name: Require the exact Free5GC AMF profile schema and PLMN
   ansible.builtin.assert:
     quiet: true
     that:
-      - (item.sst | string) in free5gc_profile_cm.amf.data['amfcfg.yaml']
-      - item.dnn in free5gc_profile_cm.amf.data['amfcfg.yaml']
-      - >-
-        item.sd == 'EMPTY' or
-        ('%06x' | format(item.sd | int(base=16))) in free5gc_profile_cm.amf.data['amfcfg.yaml']
-    fail_msg: "Free5GC AMF is missing an effective slice."
-  loop: "{{ fiveg.slices }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-- name: Verify Free5GC SMF PLMN
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - fiveg.plmn.mcc in free5gc_profile_cm.smf.data['smfcfg.yaml']
-      - fiveg.plmn.mnc in free5gc_profile_cm.smf.data['smfcfg.yaml']
-    fail_msg: "Free5GC SMF does not match the effective PLMN."
-
-- name: Verify every effective Free5GC slice in SMF
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - (item.sst | string) in free5gc_profile_cm.smf.data['smfcfg.yaml']
-      - item.dnn in free5gc_profile_cm.smf.data['smfcfg.yaml']
-      - item.ip_prefix in free5gc_profile_cm.smf.data['smfcfg.yaml']
-      - >-
-        item.sd == 'EMPTY' or
-        ('%06x' | format(item.sd | int(base=16))) in free5gc_profile_cm.smf.data['smfcfg.yaml']
-    fail_msg: "Free5GC SMF is missing an effective slice or UE pool."
-  loop: "{{ fiveg.slices }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-- name: Verify Free5GC NSSF PLMN
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - fiveg.plmn.mcc in free5gc_profile_cm.nssf.data['nssfcfg.yaml']
-      - fiveg.plmn.mnc in free5gc_profile_cm.nssf.data['nssfcfg.yaml']
-    fail_msg: "Free5GC NSSF does not match the effective PLMN."
-
-- name: Verify every effective Free5GC slice in NSSF
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - (item.sst | string) in free5gc_profile_cm.nssf.data['nssfcfg.yaml']
-      - >-
-        item.sd == 'EMPTY' or
-        ('%06x' | format(item.sd | int(base=16))) in free5gc_profile_cm.nssf.data['nssfcfg.yaml']
-    fail_msg: "Free5GC NSSF is missing an effective slice."
-  loop: "{{ fiveg.slices }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-- name: Verify every effective Free5GC slice in each UPF profile
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - item.1.dnn in free5gc_profile_cm[item.0].data['upfcfg.yaml']
-      - item.1.ip_prefix in free5gc_profile_cm[item.0].data['upfcfg.yaml']
+      - free5gc_live_amf_cfg.configuration.servedGuamiList | length == 1
+      - free5gc_live_amf_cfg.configuration.servedGuamiList[0].plmnId.mcc == fiveg.plmn.mcc
+      - free5gc_live_amf_cfg.configuration.servedGuamiList[0].plmnId.mnc == fiveg.plmn.mnc
+      - free5gc_live_amf_cfg.configuration.supportTaiList | length == 1
+      - free5gc_live_amf_cfg.configuration.supportTaiList[0].plmnId.mcc == fiveg.plmn.mcc
+      - free5gc_live_amf_cfg.configuration.supportTaiList[0].plmnId.mnc == fiveg.plmn.mnc
+      - free5gc_live_amf_cfg.configuration.supportTaiList[0].tac | int == fiveg.plmn.tac | int
+      - free5gc_live_amf_cfg.configuration.plmnSupportList | length == 1
+      - free5gc_live_amf_cfg.configuration.plmnSupportList[0].plmnId.mcc == fiveg.plmn.mcc
+      - free5gc_live_amf_cfg.configuration.plmnSupportList[0].plmnId.mnc == fiveg.plmn.mnc
+      - free5gc_live_amf_cfg.configuration.supportDnnList == fiveg.slices | map(attribute='dnn') | list
+      - free5gc_live_amf_cfg.configuration.security.integrityOrder == ['NIA2', 'NIA1', 'NIA0']
+      - free5gc_live_amf_cfg.configuration.security.cipheringOrder == ['NEA0', 'NEA1', 'NEA2']
+      - free5gc_live_amf_cfg.configuration.networkName.full == 'free5GC'
+      - free5gc_live_amf_cfg.configuration.t3512Value | int == 540
+      - "'s_nssai' not in free5gc_live_amf_cfg.configuration"
+      - "'network_name' not in free5gc_live_amf_cfg.configuration"
+      - "'amf_name' not in free5gc_live_amf_cfg.configuration"
+      - "'t3512' not in free5gc_live_amf_cfg.configuration"
     fail_msg: >-
-      Free5GC {{ item.0 }} is missing an effective DNN or UE pool.
-  loop: "{{ ['iupf1', 'psaupf1', 'psaupf2'] | product(fiveg.slices) | list }}"
+      Live Free5GC AMF configuration does not match the selected effective
+      PLMN or the reviewed v4.2 AMF schema.
+
+- name: Build live Free5GC AMF S-NSSAI identities
+  ansible.builtin.set_fact:
+    free5gc_live_amf_snssai: >-
+      {{ (free5gc_live_amf_snssai | default([])) +
+         [((item.sst | int | string) ~ ':' ~ (item.sd | string | lower | zfill(6)))] }}
+  loop: "{{ free5gc_live_amf_cfg.configuration.plmnSupportList[0].snssaiList }}"
   loop_control:
-    label: "{{ item.0 }}:{{ item.1.name }}"
+    label: "{{ item.sst }}:{{ item.sd }}"
+
+- name: Require every effective slice and DNN in live Free5GC AMF
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        ((item.sst | int | string) ~ ':' ~
+         ('ffffff' if item.sd == 'EMPTY' else ('%06x' | format(item.sd | int(base=16)))))
+        in free5gc_live_amf_snssai
+      - item.dnn in free5gc_live_amf_cfg.configuration.supportDnnList
+    fail_msg: "Live Free5GC AMF is missing an effective slice or DNN."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require exact Free5GC SMF PLMN
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - free5gc_live_smf_cfg.configuration.plmnList | length == 1
+      - free5gc_live_smf_cfg.configuration.plmnList[0].mcc == fiveg.plmn.mcc
+      - free5gc_live_smf_cfg.configuration.plmnList[0].mnc == fiveg.plmn.mnc
+    fail_msg: "Live Free5GC SMF does not match the selected effective PLMN."
+
+- name: Build live Free5GC SMF S-NSSAI identities
+  ansible.builtin.set_fact:
+    free5gc_live_smf_snssai: >-
+      {{ (free5gc_live_smf_snssai | default([])) +
+         [((item.sNssai.sst | int | string) ~ ':' ~
+           (item.sNssai.sd | string | lower | zfill(6)))] }}
+  loop: "{{ free5gc_live_smf_cfg.configuration.snssaiInfos }}"
+  loop_control:
+    label: "{{ item.sNssai.sst }}:{{ item.sNssai.sd }}"
+
+- name: Build live Free5GC SMF DNN inventory
+  ansible.builtin.set_fact:
+    free5gc_live_smf_dnns: >-
+      {{ (free5gc_live_smf_dnns | default([])) +
+         (item.dnnInfos | map(attribute='dnn') | list) }}
+  loop: "{{ free5gc_live_smf_cfg.configuration.snssaiInfos }}"
+  loop_control:
+    label: "{{ item.sNssai.sst }}:{{ item.sNssai.sd }}"
+
+- name: Require every effective slice and DNN in live Free5GC SMF
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        ((item.sst | int | string) ~ ':' ~
+         ('ffffff' if item.sd == 'EMPTY' else ('%06x' | format(item.sd | int(base=16)))))
+        in free5gc_live_smf_snssai
+      - item.dnn in free5gc_live_smf_dnns
+    fail_msg: "Live Free5GC SMF is missing an effective slice or DNN."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require exact Free5GC NSSF PLMN
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - free5gc_live_nssf_cfg.configuration.supportedPlmnList | length == 1
+      - free5gc_live_nssf_cfg.configuration.supportedPlmnList[0].mcc == fiveg.plmn.mcc
+      - free5gc_live_nssf_cfg.configuration.supportedPlmnList[0].mnc == fiveg.plmn.mnc
+      - free5gc_live_nssf_cfg.configuration.supportedNssaiInPlmnList | length == 1
+      - free5gc_live_nssf_cfg.configuration.supportedNssaiInPlmnList[0].plmnId.mcc == fiveg.plmn.mcc
+      - free5gc_live_nssf_cfg.configuration.supportedNssaiInPlmnList[0].plmnId.mnc == fiveg.plmn.mnc
+      - free5gc_live_nssf_cfg.configuration.taList | length == 1
+      - free5gc_live_nssf_cfg.configuration.taList[0].tai.plmnId.mcc == fiveg.plmn.mcc
+      - free5gc_live_nssf_cfg.configuration.taList[0].tai.plmnId.mnc == fiveg.plmn.mnc
+      - free5gc_live_nssf_cfg.configuration.taList[0].tai.tac | int == fiveg.plmn.tac | int
+    fail_msg: "Live Free5GC NSSF does not match the selected effective PLMN/TAC."
+
+- name: Build live Free5GC NSSF S-NSSAI identities
+  ansible.builtin.set_fact:
+    free5gc_live_nssf_snssai: >-
+      {{ (free5gc_live_nssf_snssai | default([])) +
+         [((item.sst | int | string) ~ ':' ~ (item.sd | string | lower | zfill(6)))] }}
+  loop: "{{ free5gc_live_nssf_cfg.configuration.supportedNssaiInPlmnList[0].supportedSnssaiList }}"
+  loop_control:
+    label: "{{ item.sst }}:{{ item.sd }}"
+
+- name: Require every effective slice in live Free5GC NSSF
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        ((item.sst | int | string) ~ ':' ~
+         ('ffffff' if item.sd == 'EMPTY' else ('%06x' | format(item.sd | int(base=16)))))
+        in free5gc_live_nssf_snssai
+    fail_msg: "Live Free5GC NSSF is missing an effective slice."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require every effective DNN and UE pool in live Free5GC iUPF1
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "{'dnn': item.dnn, 'cidr': item.ip_prefix ~ '.0/24'} in free5gc_live_iupf1_cfg.dnnList"
+    fail_msg: "Live Free5GC iUPF1 is missing an effective DNN or UE pool."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require every effective DNN and UE pool in live Free5GC PSA-UPF1
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "{'dnn': item.dnn, 'cidr': item.ip_prefix ~ '.0/25'} in free5gc_live_psaupf1_cfg.dnnList"
+    fail_msg: "Live Free5GC PSA-UPF1 is missing an effective DNN or UE pool."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require every effective DNN and UE pool in live Free5GC PSA-UPF2
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "{'dnn': item.dnn, 'cidr': item.ip_prefix ~ '.128/25'} in free5gc_live_psaupf2_cfg.dnnList"
+    fail_msg: "Live Free5GC PSA-UPF2 is missing an effective DNN or UE pool."
+  loop: "{{ fiveg.slices }}"
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: Fetch all Free5GC namespace pods
   kubernetes.core.k8s_info:
@@ -189,6 +279,7 @@
     executable: /bin/bash
   register: free5gc_subscriber_count
   changed_when: false
+  no_log: true
 
 - name: Require exact Free5GC subscriber cardinality
   ansible.builtin.assert:
