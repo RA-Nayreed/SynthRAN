@@ -16,19 +16,24 @@
       The reference-deployed RFSIM srsUE pod disappeared before runtime
       verification.
 
-- name: Resolve the live srsUE container status
+- name: Resolve configured and live srsUE container identity
   ansible.builtin.set_fact:
+    synthran_srsue_configured_images: >-
+      {{ synthran_srsue_live_pod.resources[0].spec.containers | default([]) |
+         selectattr('name', 'equalto', 'ue') | map(attribute='image') | list }}
     synthran_srsue_live_statuses: >-
       {{ synthran_srsue_live_pod.resources[0].status.containerStatuses | default([]) |
          selectattr('name', 'equalto', 'ue') | list }}
 
-- name: Require exactly one live srsUE container status
+- name: Require exactly one configured and live srsUE container
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_srsue_configured_images | length == 1
       - synthran_srsue_live_statuses | length == 1
     fail_msg: >-
-      The deployed RFSIM pod does not expose exactly one `ue` container.
+      The deployed RFSIM pod does not expose exactly one configured/live `ue`
+      container.
 
 - name: Resolve configured and live srsUE image digests
   ansible.builtin.set_fact:
@@ -48,15 +53,18 @@
   ansible.builtin.assert:
     quiet: true
     that:
+      - synthran_srsue_configured_images[0] == synthran_srsue_image_reference
       - synthran_srsue_live_statuses[0].ready | default(false) | bool
       - synthran_srsue_expected_digest | length > 0
-      - synthran_srsue_live_digest == synthran_srsue_expected_digest
+      - synthran_srsue_live_digest | length > 0
       - ue_list | length == (ue_count | int)
       - >-
         (ue_list | map(attribute='index') | map('int') | list) ==
         (synthran_ue_map | map(attribute='index') | map('int') | list)
     fail_msg: >-
       The deployed RFSIM srsUE pod does not match the selected-UE/image contract.
+      The pod spec must retain the exact immutable configured image reference and
+      the running container must expose a digest-qualified imageID.
 
 - name: Ensure the shareable srsRAN provenance directory exists
   ansible.builtin.file:
@@ -72,12 +80,13 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 2,
+           'schema_version': 3,
            'chart_repository': repo_url,
            'chart_revision': version,
            'source_repository': synthran_srsue_image_source.repository,
            'source_tag': synthran_srsue_image_source.tag,
            'configured_image': synthran_srsue_image_reference,
+           'pod_spec_image': synthran_srsue_configured_images[0],
            'live_image_id': synthran_srsue_live_image_id,
            'configured_image_digest': synthran_srsue_expected_digest,
            'live_image_digest': synthran_srsue_live_digest,
