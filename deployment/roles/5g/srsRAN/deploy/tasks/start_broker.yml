@@ -1,11 +1,39 @@
 ---
 
-- name: Stop existing RFSIM UE and broker processes
-  ansible.builtin.command: >
-    {{ kubectl_bin }} -n {{ ran_ns }} exec {{ ue_pod_name }} --
-    /bin/sh -lc "pkill -TERM srsue 2>/dev/null || true; pkill -f '[m]ulti_ue_scenario.py' 2>/dev/null || true"
+- name: Stop stale RFSIM UE and broker processes before a new baseline
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ ue_pod_name }}"
+      - --
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        pkill -TERM -x srsue 2>/dev/null || true
+        pkill -TERM -f '[m]ulti_ue_scenario.py' 2>/dev/null || true
+        for _ in $(seq 1 10); do
+          if ! pgrep -x srsue >/dev/null 2>&1 &&
+             ! pgrep -f '[m]ulti_ue_scenario.py' >/dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 1
+        done
+        pkill -KILL -x srsue 2>/dev/null || true
+        pkill -KILL -f '[m]ulti_ue_scenario.py' 2>/dev/null || true
+        for _ in $(seq 1 5); do
+          if ! pgrep -x srsue >/dev/null 2>&1 &&
+             ! pgrep -f '[m]ulti_ue_scenario.py' >/dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 1
+        done
+        echo 'stale RFSIM UE or GNU Radio process survived targeted cleanup' >&2
+        exit 1
   changed_when: true
-  failed_when: false
 
 - name: Start GNU Radio broker in tmux window 'gnu'
   ansible.builtin.command: >
