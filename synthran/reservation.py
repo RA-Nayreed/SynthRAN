@@ -25,7 +25,7 @@ PROVIDER_MODES = {"create", "require-existing", "disabled"}
 R2LAB_MODES = {"book", "require-existing", "disabled"}
 _SAFE_CONTEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
-# Pinned from nayreed/5g-Ansible@6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+# Pinned from sopnode/5g_ansible@b73fccf87f55060484b3759e9cb347222253534b
 # roles/pos/defaults/main.yml. SynthRAN deliberately keeps its configured image,
 # but adopts the reference boot-parameter mechanics for the supported SOP/N3xx path.
 REFERENCE_BOOT_PARAMETERS = (
