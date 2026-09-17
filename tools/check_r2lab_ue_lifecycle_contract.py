@@ -142,6 +142,8 @@ def check_local_structure() -> None:
     for needle in (
         "synthran_r2lab_ue.tunnel.host",
         "synthran_r2lab_ue.tunnel.interface == 'wwan0'",
+        "in ['EMPTY', 'FFFFFF']",
+        "(synthran_r2lab_ue.sst | int) == 1",
         "qhat-init --mode={{ synthran_prepare_mode }}",
         "--dnn={{ synthran_prepare_dnn }} --nssai={{ synthran_prepare_nssai }}",
         "stop.sh",
@@ -165,8 +167,6 @@ def check_local_structure() -> None:
         "fiveg.",
         "groups['phones']",
         "is_phone",
-        "mbim_access_string",
-        "_EMBB",
         "ignore_errors",
         "ignore_task_errors",
     ):
@@ -174,8 +174,12 @@ def check_local_structure() -> None:
     for needle in (
         "synthran_r2lab_ue.tunnel.host",
         "current_dnn: \"{{ synthran_r2lab_ue.dnn }}\"",
-        "stop.sh; start.sh -F {{ current_dnn }}",
-        "include_tasks: qmi.yml",
+        "current_slice_sd in ['EMPTY', 'FFFFFF']",
+        "mbim_access_string",
+        "_EMBB",
+        "stop.sh; start.sh -F {{ mbim_access_string }}",
+        "Validate or attach the selected QMI DNN with the upstream-style procedure",
+        "when: ue_mode == 'qmi'",
         "r2lab-ue-{{ ue_item }}-attach.log",
         "ip route replace {{ upf_ip }} dev {{ ue_interface }}",
     ):
@@ -191,12 +195,18 @@ def check_local_structure() -> None:
         "synthran_qmi_manager_acceptable",
         "regex_escape",
         "current_dnn",
+        "preexisting_user_plane={{ wwan0_up | bool }}",
+        "not wwan0_up",
         "QMI AT control port",
         "ci_ctl_qtel.py",
         "Require the selected QMI attachment procedure to complete",
     ):
         require(needle in qmi, f"QMI fail-closed contract lost: {needle}")
     require("retries:" not in qmi, "QMI attachment added a retry/recovery loop")
+    require(
+        "not wwan0_up or synthran_qmi_existing.rc == 0" in qmi,
+        "live QMI reuse no longer requires an existing selected-DNN manager",
+    )
 
     verifier = text(VERIFY_MAIN)
     for forbidden in (
@@ -211,8 +221,13 @@ def check_local_structure() -> None:
     require("probe_r2lab_ue.py" in verifier, "read-only UE verifier no longer uses the modem probe")
 
     probe = text(PROBE)
-    for needle in ('"sst": str(contract["sst"])', '"sd": str(contract["sd"])', '"modem_verified": True'):
-        require(needle in probe, f"live UE evidence lost identity field: {needle}")
+    for needle in (
+        '"sst": str(contract["sst"])',
+        '"sd": str(contract["sd"])',
+        'contract_sd not in {"EMPTY", "FFFFFF"}',
+        '"modem_verified": True',
+    ):
+        require(needle in probe, f"live UE evidence lost identity field or SD normalization: {needle}")
 
     state = text(DEPLOYMENT_STATE)
     require('str(item.get("sst"))' in state, "binding identity does not compare SST")
@@ -302,6 +317,21 @@ def check_identity_fixtures() -> None:
         "IP [0]: '12.1.1.11/24'\n",
     )
     require(empty_binding["sst"] == "1" and empty_binding["sd"] == "EMPTY", "empty-SD proof omitted S-NSSAI")
+
+    ffffff = copy.deepcopy(empty)
+    ffffff["sd"] = "FFFFFF"
+    ffffff_binding = probe.verify_observations(
+        ffffff,
+        link("12.1.1.11"),
+        '+CGDCONT: 1,"IP","internet","0.0.0.0",0,0\n',
+        "Subscriber ID: '001010000000006'\n",
+        "Session ID: '0'\nActivation state: 'activated'\n",
+        "IP [0]: '12.1.1.11/24'\n",
+    )
+    require(
+        ffffff_binding["sd"] == "FFFFFF",
+        "FFFFFF default-SD sentinel was incorrectly treated as a real slice SD",
+    )
 
     sliced = fixture_contract(
         device="qhat03", index=2, imsi="001010000000008", slice_name="slice2",
