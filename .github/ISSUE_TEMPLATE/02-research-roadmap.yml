@@ -18,7 +18,7 @@ body:
       value: |
         ### Meeting sketch
 
-        ![Meeting sketch](https://raw.githubusercontent.com/nayreed/SynthRAN/main/.github/ISSUE_TEMPLATE/assets/research-roadmap-meeting-sketch.jpg)
+        ![Meeting sketch](https://raw.githubusercontent.com/nayreed/SynthRAN/main/.github/ISSUE_TEMPLATE/assets/research-roadmap-meeting-sketch.jpeg)
 
   - type: textarea
     id: roadmap
