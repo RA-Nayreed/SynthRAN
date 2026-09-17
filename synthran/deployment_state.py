@@ -146,17 +146,14 @@ def binding_identity(item: dict) -> tuple:
 
 
 def _expected_upf_target(contract: dict) -> str | None:
-    cidr = contract.get("address_cidr")
-    if not cidr:
+    cidr = str(contract.get("address_cidr", ""))
+    literal = cidr.split("/", 1)[0]
+    octets = literal.split(".")
+    if len(octets) != 4:
         return None
     try:
-        network = ipaddress.ip_network(str(cidr), strict=False)
+        ipaddress.ip_address(literal)
     except ValueError:
-        return None
-    if network.version != 4:
-        return None
-    octets = str(network.network_address).split(".")
-    if len(octets) != 4:
         return None
     return ".".join(octets[:3] + ["1"])
 
