@@ -1,11 +1,4 @@
 ---
-- name: Require the centrally prepared yq runtime
-  ansible.builtin.command:
-    argv:
-      - "{{ yq_bin_path }}"
-      - --version
-  changed_when: false
-
 - name: Remove the previous Free5GC source checkout
   ansible.builtin.file:
     path: "{{ free5gc_repo_dest }}"
@@ -154,17 +147,6 @@
   loop_control:
     loop_var: ue
     label: "{{ ue.key }}"
-
-- name: Remove the N2 default gateway for a colocated core and RAN
-  ansible.builtin.command:
-    argv:
-      - "{{ yq_bin_path }}"
-      - eval
-      - -i
-      - '.global.n2network.gatewayIP = ""'
-      - "{{ free5gc_repo_dest }}/charts/free5gc/values.yaml"
-  when: core_node_name == ran_node_name
-  changed_when: true
 
 - name: Render Free5GC values from the effective profile
   ansible.builtin.template:
