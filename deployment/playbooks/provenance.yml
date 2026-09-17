@@ -104,7 +104,7 @@
   become: true
   any_errors_fatal: true
   tasks:
-    - name: Build selected-deployment cluster provenance
+    - name: Build selected-namespace cluster provenance
       ansible.builtin.shell: |
         set -euo pipefail
         python3 - <<'PY'
@@ -121,7 +121,9 @@
         pods = json.loads(output(['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json']))
         images = []
         for pod in pods.get('items', []):
-            pod_name = pod.get('metadata', {}).get('name', '')
+            metadata = pod.get('metadata', {})
+            pod_name = metadata.get('name', '')
+            pod_labels = metadata.get('labels', {}) or {}
             for status_key, kind in (
                 ('initContainerStatuses', 'init'),
                 ('containerStatuses', 'container'),
@@ -131,6 +133,7 @@
                     images.append({
                         'namespace': namespace,
                         'pod': pod_name,
+                        'pod_labels': pod_labels,
                         'kind': kind,
                         'container': status.get('name', ''),
                         'image': status.get('image', ''),
@@ -170,7 +173,7 @@
             for item in images
         )
         document = {
-            'schema_version': 2,
+            'schema_version': 3,
             'scope': {'namespace': namespace},
             'kubernetes': version,
             'nodes': sorted(nodes, key=lambda item: item['name']),
@@ -188,21 +191,21 @@
       register: synthran_cluster_provenance
       changed_when: false
 
-    - name: Decode selected cluster provenance for acceptance checks
+    - name: Decode selected cluster provenance
       ansible.builtin.set_fact:
         synthran_cluster_provenance_document: "{{ synthran_cluster_provenance.stdout | from_json }}"
 
-    - name: Require selected workload image digests before accepting deployment
+    - name: Require a readable selected namespace before acceptance
       ansible.builtin.assert:
         quiet: true
         that:
-          - synthran_cluster_provenance_document.image_provenance_complete | bool
           - synthran_cluster_provenance_document.nodes | length > 0
+          - synthran_cluster_provenance_document.images | length > 0
         fail_msg: >-
-          Runtime provenance is incomplete for the selected deployment namespace:
-          every selected workload container must expose an immutable sha256
-          imageID before this deployment can be accepted. Unrelated namespaces
-          are intentionally outside this acceptance gate.
+          Runtime provenance could not observe the selected deployment namespace.
+          Image completeness is evaluated later only for workloads selected by
+          the deployment contract; unrelated pods are retained as provenance but
+          do not redefine acceptance.
 
     - name: Retain sanitized selected cluster provenance
       delegate_to: localhost
