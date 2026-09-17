@@ -102,14 +102,13 @@ data:
         if ue_number not in UE_CONFIGS:
             raise SystemExit("No generated configuration for UE {}".format(ue_number))
         cfg = UE_CONFIGS[ue_number]
-        slicing = ""
+        slicing = (
+            "[slicing]\n"
+            "enable = true\n"
+            "nssai-sst = {sst}\n"
+        ).format(sst=int(cfg["sst"]))
         if cfg["sd"]:
-            slicing = (
-                "[slicing]\n"
-                "enable = true\n"
-                "nssai-sst = {sst}\n"
-                "nssai-sd = {sd}\n"
-            ).format(sst=int(cfg["sst"]), sd=int(cfg["sd"]))
+            slicing += "nssai-sd = {}\n".format(int(cfg["sd"]))
         content = UE_TEMPLATE.format(
             tx_port="tcp://{}:{}".format(cfg['ue_ip'], cfg['tx_port']),
             rx_port="tcp://{}:{}".format(cfg['ue_ip'], cfg['rx_port']),
