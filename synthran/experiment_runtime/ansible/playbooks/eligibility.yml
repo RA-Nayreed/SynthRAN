@@ -1,0 +1,141 @@
+---
+- name: Recheck accepted cluster identity without mutation
+  hosts: core_node
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars:
+    ansible_python_interpreter: /opt/ansible-venv/bin/python
+  tasks:
+    - name: Read the accepted deployment ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: synthran-deployment-identity
+        namespace: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
+      register: synthran_eligibility_identity
+
+    - name: Require the live cluster to retain the accepted configuration identity
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_eligibility_identity.resources | length == 1
+          - >-
+            (synthran_eligibility_identity.resources[0].data['manifest.json'] | from_json).deployment_hash
+            == synthran_accepted_configuration_hash
+        fail_msg: >-
+          The live cluster no longer exposes the configuration identity that was
+          sealed into the accepted deployment. Experiment execution is blocked.
+
+- name: Recheck physical UE identity and source-bound user plane
+  hosts: physical_ues
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Probe the accepted R2Lab UE without repair or reattachment
+      ansible.builtin.include_role:
+        name: synthran/r2lab_ue_verify
+      when: platform == 'r2lab'
+
+- name: Recheck software UE identity and source-bound user plane
+  hosts: ran_node
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Install the shared read-only software UE probe
+      ansible.builtin.copy:
+        src: "{{ synthran_root }}/deployment/scripts/probe_software_ues.py"
+        dest: /tmp/synthran-probe-software-ues.py
+        mode: '0755'
+      when: platform == 'rfsim'
+
+    - name: Stage the accepted deployment identity for the read-only probe
+      ansible.builtin.copy:
+        src: "{{ synthran_accepted_identity_file }}"
+        dest: /tmp/synthran-accepted-deployment.json
+        mode: '0600'
+      when: platform == 'rfsim'
+
+    - name: Probe every accepted software UE without changing testbed state
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /tmp/synthran-probe-software-ues.py
+          - --expected
+          - /tmp/synthran-accepted-deployment.json
+      register: synthran_eligibility_software_probe
+      changed_when: false
+      when: platform == 'rfsim'
+
+    - name: Decode fresh software UE bindings
+      ansible.builtin.set_fact:
+        synthran_eligibility_software_bindings: >-
+          {{ synthran_eligibility_software_probe.stdout | from_json }}
+      when: platform == 'rfsim'
+
+- name: Publish fresh experiment eligibility evidence
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Initialize fresh accepted UE bindings
+      ansible.builtin.set_fact:
+        synthran_eligibility_bindings: []
+
+    - name: Require every accepted physical UE to expose a fresh binding
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - hostvars[item.device] is defined
+          - hostvars[item.device].synthran_r2lab_binding is defined
+        fail_msg: >-
+          Accepted physical UE {{ item.device }} has no fresh read-only binding;
+          the deployment is not experiment-eligible.
+      loop: "{{ synthran_deployment_contract.deployment.ues }}"
+      loop_control:
+        label: "{{ item.device }}"
+      when: platform == 'r2lab'
+
+    - name: Collect fresh physical UE bindings in accepted order
+      ansible.builtin.set_fact:
+        synthran_eligibility_bindings: >-
+          {{ synthran_eligibility_bindings + [hostvars[item.device].synthran_r2lab_binding] }}
+      loop: "{{ synthran_deployment_contract.deployment.ues }}"
+      loop_control:
+        label: "{{ item.device }}"
+      when: platform == 'r2lab'
+
+    - name: Require complete fresh software UE bindings
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - hostvars[ran_node_name].synthran_eligibility_software_bindings is defined
+          - >-
+            hostvars[ran_node_name].synthran_eligibility_software_bindings | length
+            == synthran_deployment_contract.deployment.ues | length
+        fail_msg: >-
+          Accepted software UEs do not expose a complete fresh read-only binding
+          set; the deployment is not experiment-eligible.
+      when: platform == 'rfsim'
+
+    - name: Collect fresh software UE bindings
+      ansible.builtin.set_fact:
+        synthran_eligibility_bindings: >-
+          {{ hostvars[ran_node_name].synthran_eligibility_software_bindings }}
+      when: platform == 'rfsim'
+
+    - name: Retain fresh experiment eligibility evidence
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ synthran_eligibility_evidence_file }}"
+        content: >-
+          {{ {
+               'schema_version': 1,
+               'deployment_hash': synthran_accepted_deployment_hash,
+               'configuration_hash': synthran_accepted_configuration_hash,
+               'cluster_identity_verified': true,
+               'bindings': synthran_eligibility_bindings,
+               'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+             } | to_nice_json }}
