@@ -1,8 +1,8 @@
 """Read-only attachment to an accepted SynthRAN testbed deployment.
 
 Historical acceptance and current experiment eligibility are deliberately
-separate.  Attachment proves that a deployment reached the accepted-testbed
-state with internally consistent identity/evidence.  Experiment eligibility
+separate. Attachment proves that a deployment reached the accepted-testbed
+state with internally consistent identity/evidence. Experiment eligibility
 requires a fresh read-only observation of the same accepted deployment.
 """
 
@@ -19,6 +19,7 @@ from synthran.acceptance import (
     accepted_deployment_hash,
     validate_live_evidence,
 )
+from synthran.deployment_identity import validate_current_cluster_runtime
 from synthran.deployment_state import SCHEMA_VERSION, content_hash
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -238,9 +239,9 @@ def attach_active_deployment(
 ) -> dict[str, Any]:
     """Attach read-only to historical accepted-testbed state.
 
-    The default intentionally accepts historical evidence.  This proves prior
+    The default intentionally accepts historical evidence. This proves prior
     acceptance only; call :func:`prove_experiment_eligible` with freshly
-    collected read-only evidence before executing a physical/software experiment.
+    collected read-only evidence before executing an experiment.
     """
 
     endpoint_path = Path(endpoint_path).resolve()
@@ -344,24 +345,31 @@ def prove_experiment_eligible(
     endpoint_path: str | Path = ACTIVE_DEPLOYMENT_ENDPOINT,
     max_age_seconds: int = 120,
 ) -> dict[str, Any]:
-    """Require fresh read-only evidence for the already accepted deployment."""
+    """Require fresh read-only cluster and UE evidence for an accepted deployment."""
 
     attachment = attach_active_deployment(requirements, endpoint_path=endpoint_path)
+    evidence_path = Path(eligibility_evidence_path).resolve()
+    cluster_snapshot_path = evidence_path.with_name("experiment-eligibility-cluster.json")
+    identity = _read_object(Path(attachment["identity_file"]), "accepted deployment identity")
     try:
+        validate_current_cluster_runtime(identity, cluster_snapshot_path)
         evidence = validate_live_evidence(
             attachment["identity_file"],
-            eligibility_evidence_path,
+            evidence_path,
             max_age_seconds=max_age_seconds,
         )
     except ValueError as exc:
         raise AttachmentError(str(exc)) from exc
+
     result = copy.deepcopy(attachment)
     result["status"] = "experiment-eligible"
     result["experiment_eligible"] = True
-    result["eligibility_evidence_file"] = str(Path(eligibility_evidence_path).resolve())
+    result["eligibility_evidence_file"] = str(evidence_path)
+    result["eligibility_cluster_snapshot_file"] = str(cluster_snapshot_path)
     result["eligibility_observed_at"] = evidence.get("observed_at")
     result["claim_boundary"] = (
-        "Experiment eligibility proves fresh read-only identity, UE/session, and "
-        "source-bound user-plane liveness for this accepted deployment only."
+        "Experiment eligibility proves fresh selected workload/image/Helm identity, "
+        "UE/session identity, and source-bound user-plane liveness for this accepted "
+        "deployment only."
     )
     return result
