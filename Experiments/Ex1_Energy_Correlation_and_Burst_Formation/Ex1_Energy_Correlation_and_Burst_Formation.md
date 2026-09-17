@@ -1,78 +1,106 @@
-# Experiment 1: energy correlation, activation and burst formation
+# Experiment 1: energy correlation, activation, and burst formation
 
-## Objective and publication role
+## Objective
 
-Determine whether spatial correlation in harvested energy synchronizes sensor activity and changes the decoded Ambient-IoT traffic process when each sensor's energy statistics and the RF/MAC configuration are controlled. Establish calibrated energy and contention operating points for later 5G replay.
+Determine whether cross-sensor correlation in harvested energy synchronizes sensor activity and changes the decoded Ambient-IoT traffic process when each sensor's marginal energy statistics and the RF/MAC configuration are controlled.
 
-This is feasible after correcting the source, controller, capacitor and receiver semantics. It is a strong mechanism component of the flagship. Correlated harvesting and random access already appear in [Abad et al.](https://arxiv.org/abs/1902.04890), and availability-aware access appears in [Wu et al.](https://arxiv.org/abs/2501.15020). The added value is a validated capacitor-to-decoded-traffic mechanism with reusable workloads and a subsequent physical-transport consequence. Simulation curves alone should not be presented as proof of real tag behavior.
+The study establishes calibrated energy and contention operating points for later transport experiments. Its contribution is a validated mechanism from harvested-energy dependence through capacitor/controller behavior to decoded event structure. It does not claim that simulated harvesting or backscatter behavior is a physical device measurement.
 
-## Context for a fresh ChatGPT session
+Correlated harvesting and random access have prior research foundations, including [Abad et al.](https://arxiv.org/abs/1902.04890); availability-aware access is also studied by [Wu et al.](https://arxiv.org/abs/2501.15020). SynthRAN's contribution is therefore the reproducible mechanism/evidence chain and its use as a controlled source process for downstream 5G experiments, not the existence of correlated energy itself.
 
-Use this file as a standalone experiment brief for **RA-Nayreed/SynthRAN**. Read the current relevant source before changing or running anything. The review baseline was `main` at `ccaa385174fa695bdaa669e6046b61e80283a0be`, inspected on **8 September 2026**. The physical N320 candidate was draft PR [#7](https://github.com/RA-Nayreed/SynthRAN/pull/7), head `21d0dddb2792a004e529afc3144ab7aaa1eea941`. Its prose mentioned an older hash; the API head was authoritative. Recheck the current revision and retain improvements already present.
+## Scope and claim boundary
 
-SynthRAN executes an Amber-derived SimPy model of energy harvesting, capacitor/controller operation and backscatter access. It freezes decoded events into JSONL, then replays them over MQTT through an actual 5G UE interface to an N6-side application. The Ambient-IoT radio and harvesting are **modeled**. The N320 carries the **5G gateway transport**; it does not make the upstream Ambient-IoT link a physical implementation.
+Experiment 1 is a **modeled Ambient-IoT study**. Harvested energy, capacitor dynamics, sensing, access, propagation, collision, decoding, and SIC are simulated. Any later physical N300/N320 replay carries the **5G gateway transport** for a frozen decoded event trace; it does not convert the upstream Ambient-IoT process into a physical implementation.
 
-The revised campaign uses **one fixed OAI core + srsRAN gNB + N320 physical-radio configuration**, after a clean acceptance run. This choice follows the repository's active physical reference. It replaces the attachment's Open5GS/RFSIM choice once, before data collection; it introduces no core comparison. RFSIM with the same core is useful for qualification. Its different UE software, band, numerology and image mean its measurements must be analyzed separately. If an already accepted Open5GS/N320 deployment is used instead, freeze that choice before the pilot and revise the manifest consistently; do not mix cores in a result series.
+Model results, physical transport results, and combined end-to-end interpretations must therefore be reported separately.
 
-Use a homogeneous slice/DNN/QoS assignment except in the explicit isolation study. The shipped default profile assigns `uesim01` and `uesim02` to different slices, so it is not an appropriate neutral baseline. Begin with two proven physical UE roles: gateway A and competing-traffic UE B. Use only the N320 for physical-radio studies. Node availability and runtime capability require live evidence; scenario examples are not proof.
+## Research questions and hypotheses
 
-Complete the necessary model and instrumentation corrections, produce runnable scenario/analysis/campaign files, run qualification and then the declared experiment where resources are available. If physical access is absent, complete all local work and give the exact remaining live commands with their acceptance criteria. Report preparation, simulated results and physical measurements separately. At the end of every working session, retain a concise checkpoint with the actual commit, completed gates, artifact paths/hashes, failures and the next executable step. This file does not require any other handoff file to be understood.
+- **E1:** Near an activation threshold, common harvesting produces more correlated sensor activation and more clustered decoded arrivals than independent harvesting with the same marginal source law.
+- **E2:** The effect depends on energy storage and source timescale and is not explained entirely by aligned startup or periodic MAC timing.
+- **E3:** Increased harvested energy can improve availability while also increasing contention/collision exposure; the net reader-side freshness effect is empirical rather than assumed monotonic.
 
-## Questions and hypotheses
+Use one modeled reader and fixed RF geometry in the primary design. The primary energy intervention is **environmental harvesting dependence**, while backscatter illumination/link power is held constant across paired energy arms so the treatment does not silently improve the communication channel.
 
-- **E1:** Near an activation threshold, common harvesting produces more correlated activation and more clustered decoded arrivals than independent harvesting with the same marginal source law.
-- **E2:** The effect depends on capacitor storage and energy timescale; it is not explained entirely by aligned startup or periodic MAC frames.
-- **E3:** More harvested energy may improve availability while increasing collision exposure. Whether reader-side freshness improves is an empirical question.
+## Model qualification prerequisites
 
-Use one modeled reader and static RF geometry initially. Main energy variation is **environmental harvesting**, with constant RF illumination and identical link powers across paired energy arms. This prevents an energy-power intervention from silently improving the backscatter channel too.
+Before generating a scientific energy sweep, retained qualification evidence must cover:
 
-## Readiness specific to this study
+- sensing interval and phase semantics;
+- timestamp-preserving irregular energy traces;
+- known-period always-powered behavior;
+- analytical capacitor charging, leakage, zero-load, and voltage-limit checks;
+- numerical timestep convergence on a prespecified subset;
+- powered/off command handling;
+- complete transmission-energy accounting;
+- stable sample/event lineage across sensing, retransmission, and decoding;
+- singleton sensitivity/SINR behavior;
+- collision and SIC fixtures;
+- explicit shared-subcarrier assignments for contention studies.
 
-Read `Experiment/ambient_iot/{config,runner,protocols,bridge,evidence,outcomes}.py` and `Experiment/model/{capacitor,controller,propagation,backscatter,bsengine,packet_analysis}.py`.
+For each sensing opportunity, distinguish unavailable energy, busy operation, successful generation, pending sample state, transmission attempt, and completed decode. A command that receives no response is not automatically equivalent to a lost generated sample.
 
-The reviewed code ignored sensing intervals and CSV timestamps; `wpt_power_w` had no effect; one energy actor served all sensors; capacitor branches accounted for charging differently; generation/completed-decode timestamps were absent. Missing subcarrier assignments gave nodes separate subcarriers. The receiver also accepted singleton packets without applying the same SINR threshold used for collisions. Resolve these before generating a scientific energy sweep.
+The primary model uses at most one pending sample per sensor and no catch-up generation unless an alternative buffering rule is explicitly declared as a separate treatment.
 
-Acceptance evidence must include a known-period always-powered source, an irregular timestamp trace, analytical charging/leakage/zero-load tests, timestep convergence, powered/off command handling, completed-transmission energy accounting, true sample identity and SIC fixtures. Use explicit shared-subcarrier assignments for contention.
+## Controlled energy source
 
-For each sensing opportunity, log unavailable energy, busy operation, successful generation, pending sample state, transmission attempt and completed decode as separate events. A polling command that received no response is not automatically a lost generated sample. Keep one pending sample per sensor and no catch-up generation in the primary model; declare any alternative buffering rule separately.
+Use a positive stochastic power process with a specified marginal distribution, mean, variance, temporal correlation time, and units. Include a constant-power arm for calibration, but do not interpret a constant source as a meaningful common-versus-independent correlation comparison.
 
-## Controlled energy sources
-
-Use a positive stochastic power process with a specified marginal distribution, mean, variance and temporal correlation time. Freeze its construction and its units. Include a constant-power arm for calibration; a constant source cannot have a meaningful common-versus-independent correlation comparison.
-
-A reproducible option for dynamic traces is a Gaussian-copula construction:
+A reproducible dynamic construction is a Gaussian copula:
 
 \[
 Z_j(t)=\sqrt{c}\,Z_0(t)+\sqrt{1-c}\,Z_j^{ind}(t),
-\qquad P_j(t)=F_P^{-1}(\Phi(Z_j(t))).
+\qquad
+P_j(t)=F_P^{-1}(\Phi(Z_j(t))).
 \]
 
-The Gaussian processes have identical temporal autocorrelation and unit variance. This preserves each source's marginal law while changing shared dependence. `c=0` gives independent latent processes and `c=1` a common process. `c` is not generally the Pearson correlation of the transformed power; measure and report the realized correlation. Do not use a simple weighted average of positive traces and assume its variance stays unchanged.
+The latent Gaussian processes have equal temporal autocorrelation and unit variance. `c=0` produces independent latent processes and `c=1` a common latent process. Because the marginal transform can change Pearson correlation, report the **realized** power correlation rather than equating it directly with `c`.
 
-Use common and independent realizations of the same source law, with paired geometry and sensing phases. Report finite-window power integrals and distributions; random draws need not have exactly equal realized energy. A sensitivity analysis can use equal-energy-duration traces, clearly distinguishing that conditioning from the original stochastic source law.
+Use paired geometry and sensing phases across common/independent arms. Report finite-window source-energy integrals and distributions; independent stochastic realizations are not required to contain exactly equal realized energy.
 
-An independently phase-shifted copy of a single periodic trace is a **phase-offset control**, not a genuinely independent energy source. Use it as a separate robustness test if useful.
-
-Choose the primary power-correlation timescale from a plausible harvesting scenario and its source evidence. A pilot can inspect 1, 5 and 20 seconds, but these are synthetic sensitivity settings, not measured environmental values. If measured traces become available, retain their original time axis and provenance and reserve some for validation. Do not label model parameters as a standardized device class without an energy-budget justification.
+A phase-shifted copy of one periodic trace is a **phase-offset control**, not an independent energy process. Measured traces, when available, retain their original time axis and provenance.
 
 ## Calibration procedure
 
-1. **Cost and physics pilot.** Try 8, 16 and 32 modeled sensors and 60-second runs. Record wall time, peak memory, initialization transient and logging volume. Increase population/duration only after estimating the campaign cost. Current millisecond histories are not evidence that large populations are cheap.
-2. **Geometry.** Choose a valid channel domain with useful reception powers. With the existing UMa model, exclude the invalid below-10-m region. Hold locations and radio parameters identical across the energy arms. Record received power separately from harvested DC power.
-3. **Energy sweep.** At a moderate population, sweep mean available power logarithmically over a range that actually contains inactive and predominantly active operation. Measure effective energy delivered to the capacitor, not just the YAML value. Refine around the steepest activation response.
-4. **Freeze three energy points.** Choose `E-low` in a mostly energy-limited region, `E-knee` near the steep response, and `E-high` where energy rarely prevents operation. Active fractions around 10–30% and above 90% are useful descriptive targets, not guarantees. Retain the response curve if these states cannot be separated.
-5. **Population sweep.** At `E-knee`, increase population with a fixed frame/slot configuration to identify low-contention, transition and heavily contended states. Start with 8/16/32/64/128 only while runtime and the source model remain credible. Freeze `N*` near a transition using an explicit decode/attempt or collision criterion from the pilot.
-6. **Observation window.** Select a warm-up from voltage/activation convergence and a measurement duration covering at least several dozen relevant energy cycles where affordable. Verify sensitivity to doubled duration and finer numerical timestep on a small prespecified subset. Do not choose a window solely because its plotted burst looks striking.
+### 1. Cost and numerical pilot
 
-Keep pilot seeds `1–5` separate from confirmation seeds. A suggested confirmation set is `1001–1030`; store separate streams for geometry, sensing phases, energy, MAC choices and surrogate generation so protocol changes do not accidentally alter every subsequent random draw.
+Evaluate small sensor populations and short runs first, recording wall time, peak memory, initialization transient, and evidence volume. Increase population/duration only after establishing campaign feasibility.
 
-## Main design
+### 2. Geometry and channel validity
 
-At fixed `N*`, fixed sensing periods/phases, one shared contention subcarrier and broadcast SIC with qualified residual cancellation:
+Choose a geometry inside the declared propagation model's valid domain. Hold locations and radio parameters fixed across paired energy arms. Record received RF power separately from harvested environmental/DC power.
+
+### 3. Energy sweep
+
+Sweep mean available power across a range that contains energy-limited and predominantly active operation. Measure the effective energy delivered to the capacitor, not only the configured source parameter. Refine around the steepest activation-response region.
+
+### 4. Freeze energy operating points
+
+Select:
+
+- `E-low` — predominantly energy-limited;
+- `E-knee` — near the steep activation transition;
+- `E-high` — energy rarely prevents operation.
+
+Illustrative active-fraction targets may guide calibration but are not hardcoded scientific truths. Retain the complete response curve and actual selection rule.
+
+### 5. Population sweep
+
+At `E-knee`, increase population under fixed frame/slot settings to identify low-contention, transition, and heavily contended operation. Freeze `N*` near a transition using a prespecified decode/attempt, collision, or related contention criterion.
+
+### 6. Observation window
+
+Choose warm-up from voltage/activation convergence and choose measurement duration to cover multiple relevant source timescales. Verify duration and numerical-step sensitivity on a prespecified subset. Do not select a horizon because one visual trace appears especially bursty.
+
+Pilot seeds and confirmation seeds must be disjoint. Use separate deterministic random streams for geometry, sensing phase, energy, MAC choice, and any surrogate construction so a protocol change does not unintentionally alter every exogenous input.
+
+## Confirmation design
+
+At fixed `N*`, fixed sensing schedules, a shared contention resource, and qualified receiver/SIC behavior, use the following primary arms:
 
 | Arm | Power regime | Cross-sensor dependence |
 | --- | --- | --- |
-| AP | Always powered | No starvation; same schedules/channel |
+| AP | Always powered | No energy starvation |
 | H-I | E-high | Independent |
 | H-C | E-high | Common |
 | K-I | E-knee | Independent |
@@ -80,71 +108,90 @@ At fixed `N*`, fixed sensing periods/phases, one shared contention subcarrier an
 | L-I | E-low | Independent |
 | L-C | E-low | Common |
 
-Thirty source seeds per arm gives **210 model runs** before calibration and sensitivity cases. This is a planning size; determine feasibility from the cost pilot and statistical precision. Run isolated processes when parallelizing simulations, because the current runner resets global random generators.
+A planning design of 30 independent source seeds per arm gives 210 confirmation runs. Final confirmation size must be frozen from runtime and precision requirements before confirmation begins.
 
-Prespecify a small secondary subset at `E-knee`: intermediate dependence `c=0.5`; randomized versus deliberately aligned sensing phases; an orthogonal/no-collision access control; and one smaller/larger storage value with all energy-accounting parameters reported. Change one secondary question at a time. Do not multiply all sensitivities into the primary factorial.
+Prespecified secondary controls may include:
+
+- intermediate dependence such as `c=0.5`;
+- randomized versus deliberately aligned sensing phases;
+- an orthogonal/no-collision access control;
+- a limited storage-capacitance sensitivity.
+
+Secondary controls should answer one mechanism question at a time rather than becoming an unconstrained factorial expansion.
 
 ## Required measurements
 
 | Layer | Measurements |
 | --- | --- |
-| Energy | Input-power integral, capacitor-energy change, operating/leakage/series/PMIC losses, voltage distribution, active fraction, threshold crossings, outage durations |
-| Generation | Opportunities, true generated samples, energy/busy suppressions, generation times, pending/overwritten samples if the selected policy allows them |
-| MAC | Attempts and airtime, command overhead, capture/actual SIC-stage decodes, collisions, sensitivity/SINR failures, per-source success probability |
-| Structure | Event rate, inter-event-gap CV, count-window Fano curve, count autocorrelation, peak count/window, burst-duration/run-length under a frozen threshold |
-| Correlation | Pairwise harvested-power correlation, activation correlation and wake-up lag distribution |
-| Utility | Reader-side AoI, AoI violations, equal-weight per-sensor successful-update rate and fairness |
+| Energy | Input-energy integral, capacitor-energy change, operating/leakage/series/PMIC losses, voltage distribution, active fraction, threshold crossings, outage intervals |
+| Generation | Opportunities, generated samples, energy/busy suppressions, generation time, pending/overwritten state when applicable |
+| MAC | Attempts, airtime, command overhead, collision/capture/SIC outcomes, sensitivity/SINR failures, per-source success probability |
+| Traffic structure | Event rate, inter-event-gap CV, count-window Fano factor, count autocorrelation, peak count/window, frozen burst/run-length descriptors |
+| Dependence | Pairwise harvested-power correlation, activation correlation, wake-up-lag distribution |
+| Utility | Reader-side AoI/freshness, equal-weight per-sensor successful-update rate, fairness, starvation |
 
-Define `F(w)=Var[N_w]/E[N_w]` using fixed count-window widths. Fano factor and the count index of dispersion are the same quantity under this definition; do not count them as independent evidence. Use windows such as 10/50/100 ms and 0.5/1/5 seconds when resolvable by the model and useful for the observed energy/MAC timescales. Record window origin, overlap policy and zero-mean handling. Do not divide by zero for a silent trace.
-
-Use voltage/energy state intervals for active fraction. Count energy per successfully decoded update across all nodes, including expenditure on unsuccessful attempts. Do not estimate consumed energy from voltage drop alone while harvesting is active.
-
-## Analysis, falsification and figures
-
-Primary contrast: common minus independent harvesting at `E-knee`, paired by source seed. Primary mechanism outcomes are activation correlation and Fano factor at one preregistered scientifically relevant window. Report the full Fano curve as supporting evidence, with simultaneous uncertainty or a clear exploratory label for unplanned windows.
-
-Use confidence intervals for paired effects and an energy-regime-by-dependence interaction where the sample size supports it. Report rate differences; common versus independent energy can legitimately change event volume, so this model comparison alone does not establish a rate-independent downstream effect. Export all traces for later within-trace timing controls.
-
-E1 is unsupported if the effect is too small, inconsistent or explained by the startup/frame-phase controls. A confidence interval inside a prespecified negligible-effect band supports a practical null; a wide interval is inconclusive. E3 need not be monotonic: either outcome should be retained.
-
-Produce: (1) energy-response curves with the chosen points, (2) input/voltage/activation/decoded-event panels for prespecified illustrative seeds, (3) common/independent Fano curves, and (4) energy–collision–reader-freshness operating maps. Do not use illustrative seeds as the statistical sample.
-
-## Handoff to physical replay
-
-Export all generated and decoded events, including modeled warm-up history and sensors with no output. Freeze the chosen AP, K-I and K-C confirmation seeds in a source manifest. The 5G flagship may use a prespecified subset chosen by seed ID, never by whether its result supports the hypothesis. The physical workload begins at **completed reader decode availability**, preserving the original generation timestamp for native AoI.
-
-## Measurement and inference contract
-
-For each event retain a stable `event_id`, `sensor_id`, generation sequence, modeled generation time `g`, completed reader-decode time `d`, gateway assignment and payload hash. Preserve the modeled generation time across retransmission and forwarding. Record planned replay release `s`, the timestamp immediately before calling MQTT publish `p`, PUBACK callback `a`, and receiving-application callback entry `r`. Record monotonic times and the UTC/monotonic anchor; use UTC only for verified cross-host comparisons. An optional packet capture or broker hook supplies an explicitly named wire/broker-ingress time.
-
-- `p - s`: publisher release error, including any intentional gateway hold when applicable.
-- `r - p`: application delivery latency, including client queuing, transport, broker and subscriber delivery. It is not isolated radio latency.
-- `r - s`: scheduled-release-to-application delay. Report this as well, so delayed publication cannot conceal degradation.
-- Deadline failure: fraction of expected events not received by `s + D`, including missing events; freeze `D` from an application requirement or an independent pilot.
-- Report p50/p95 and deadline failures as primary practical outcomes. Treat p99 as secondary until the run has enough observations. A target of 10,000 delivered events gives about 100 observations in the upper 1%, but dependence can still make its interval wide.
-
-The expected transport cohort comprises events whose planned releases fall in the fixed measurement window. Warm-up events establish state and remain traceable but are excluded from that cohort's delivery denominator. Keep the receiver, established connections and declared competing traffic active through a fixed drain at least as long as `D`; introduce no new post-window victim releases. Compute AoI only over the declared measurement window. Label delay quantiles as conditional on receipts observed by the drain and report unresolved/censored events beside them. With no receipts, a delay quantile is undefined, not zero. The all-input deadline-failure outcome prevents selective survival from hiding overload.
-
-QoS 1 uses PUBACK for its client-to-broker delivery exchange. A PUBACK does not prove the subscriber callback occurred. Count unique application receipts, duplicates, publication failures, late receipts, and still outstanding messages at the fixed drain deadline separately. Do not label an absent callback a physical packet loss. See the [MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html).
-
-True per-sensor AoI at observation time `t` is
+Define the count-window Fano factor as:
 
 \[
-\Delta_j(t)=t-\max\{g_{j,k}^{wall}:r_{j,k}\le t\}.
+F(w)=\frac{\mathrm{Var}[N_w]}{\mathrm{E}[N_w]}.
 \]
 
-Use the freshest received generation timestamp, so a duplicate or an older out-of-order update never resets AoI backward to older information. Integrate the sawtooth over a fixed observation window for time-average AoI; calculate time-weighted AoI quantiles, time above the AoI limit, and age immediately before each freshness-improving receipt for peak-AoI statistics. `r-g` for an individual delivered packet is its age at delivery, not the time-average or peak AoI. This distinction follows [Yates et al., Age of Information: An Introduction and Survey](https://arxiv.org/abs/2007.08564).
+Window width, origin, overlap policy, and zero-mean handling are frozen. Fano factor and count index of dispersion are the same statistic under this definition and must not be treated as independent evidence.
 
-For native replay at real-time scale, map `g_wall = replay_epoch + g_model_seconds` using the same origin for decode and generation times. Replay the retained warm-up history before the measurement window. If a sensor has no received history, report its uninitialized interval and count it as violating the freshness requirement; do not remove it from the population. Report equal-weight per-sensor outcomes as well as aggregate traffic-weighted outcomes.
+Energy per successful decoded update includes expenditure on unsuccessful attempts. Do not infer consumed energy from capacitor-voltage drop alone while harvesting remains active.
 
-Never initialize unknown age to zero or backdate the first receipt. A full-window mean AoI is not identifiable during unknown initial history, or is infinite under an explicitly chosen infinite-age convention. Report any mean over initialized intervals as conditional, alongside the uninitialized-time fraction. The all-sensor freshness-violation metric includes those intervals. For surrogates that move release before generation, physical generation-based AoI is not a valid outcome.
+## Primary analysis
 
-Clock uncertainty must be small relative to the claimed effect. Record synchronization evidence before and after each block and throughout long blocks. Use a combined endpoint error budget `epsilon`; target `epsilon` below one fifth of the smallest claimed latency difference. A shared UTC start or an installed PTP role is insufficient evidence. If synchronization is inadequate, repair it or limit claims to same-clock ACK timing and count metrics. Never clip negative cross-host latencies into valid data.
+The principal comparison is **common minus independent harvesting at `E-knee`**, paired by source seed.
 
-Qualify the publisher and collector with the same workload over a fast local/wired path. Their processing capacity must exceed the tested application event rate, and their queues, CPU load and scheduling errors must be measured. Timestamp callback entry before parsing/writing. Use append-only records, a subscription-ready barrier, fixed warm-up and drain rules, unique run identity, and queue cleanup between independent replays.
+Primary mechanism outcomes are:
 
-The independent scientific unit is a source realization/seed, with session/day as a block. Packets, two permutations of one trace, and repeated replays are not independent source replicates. Use paired run-level differences and confidence intervals; average repeated surrogate outcomes within source/load before source-level inference. Resample independent source blocks with session structure preserved, or fit a justified repeated-measures model. Freeze primary contrasts, practically meaningful effect size, sample size and exclusions after the independent pilot. Never select visually representative seeds or extend only promising conditions. Missing data due to an invalid measurement system and real overload failures require different labels.
+- activation dependence/correlation;
+- one preregistered traffic-burst statistic such as the Fano factor at a scientifically relevant window.
 
-## Required session outputs
+Report the full Fano/window sensitivity as supporting evidence and label unplanned window selection as exploratory.
 
-Deliver the resolved experiment manifest, runnable campaign and analysis commands, qualified scenario files, immutable input traces with checksums, an outcome table, figures with uncertainty, and a short findings document that answers the hypotheses. Retain per-run publication/receipt evidence and all prespecified exclusions. Include actual software/image versions, mapping, hardware state, clock evidence, timing policies and observation/drain windows in the manifest. Proposed capabilities must be implemented and checked before being described as available commands. Finish with a checkpoint another ChatGPT session can continue without reconstructing the previous conversation.
+Use paired effect estimates with confidence intervals and, where supported by sample size, an energy-regime × dependence interaction. Report event-rate differences explicitly: common and independent harvesting may legitimately produce different decoded volumes, so this comparison alone does not establish a rate-independent transport effect.
+
+## Falsification and interpretation
+
+E1 is unsupported when the dependence effect is negligible, inconsistent, or explained by startup/frame-phase controls. A confidence interval inside a prospectively defined negligible-effect region can support a practical null; a wide interval is inconclusive.
+
+E3 may be non-monotonic. Both improved availability and increased collision exposure are admissible outcomes.
+
+Illustrative traces are selected prospectively or by fixed seed identity and are not treated as the statistical sample.
+
+Recommended figures include:
+
+1. energy-response curves with frozen operating points;
+2. source/voltage/activation/decoded-event panels for prespecified seeds;
+3. common-versus-independent traffic-structure curves;
+4. energy–contention–reader-utility operating maps.
+
+## Handoff to downstream transport experiments
+
+Export generated and decoded events with stable event identity, modeled generation time, completed reader-decode time, sensor identity, gateway assignment, and payload hash. Retain warm-up history and sensors that produce no output.
+
+Downstream experiments select source bundles by frozen seed/campaign identity, never by whether an individual trace supports the desired hypothesis. Native physical replay begins from completed modeled reader-decode availability while preserving the original generation timestamp for valid AoI calculations.
+
+Timing transformations that move release before modeled generation must explicitly mark generation-based AoI as invalid for that transformed arm.
+
+## Reproducibility and evidence
+
+Retain the versioned scientific design, calibration evidence, frozen confirmation contract, source/dependency fingerprint, complete run bundles, run dispositions, exclusions, and analysis outputs. Existing immutable run bundles are validated and reused rather than overwritten.
+
+Historical Experiment-1 results are documented separately in [`RESULTS.md`](RESULTS.md). Historical aggregates remain evidence about the historical campaign; they do not replace calibration under a newer implementation.
+
+Shared event-timing, AoI, experimental-unit, and failure-taxonomy conventions used by downstream transport studies are summarized in [`../MEASUREMENT_AND_INFERENCE.md`](../MEASUREMENT_AND_INFERENCE.md).
+
+## Completion criteria
+
+Experiment 1 is complete for a declared campaign when:
+
+1. model qualification gates pass under the exact implementation used;
+2. energy and contention operating points are selected from independent calibration evidence;
+3. the confirmation treatment matrix and seeds are frozen prospectively;
+4. every assigned run has an explicit retained disposition;
+5. primary contrasts are analyzed with uncertainty at the source-seed level;
+6. model claims remain separated from any later physical 5G transport claims;
+7. the retained evidence is sufficient to reproduce each reported statistic from the frozen source bundles.
