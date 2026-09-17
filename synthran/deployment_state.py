@@ -145,6 +145,39 @@ def binding_identity(item: dict) -> tuple:
     )
 
 
+def _expected_upf_target(contract: dict) -> str | None:
+    cidr = contract.get("address_cidr")
+    if not cidr:
+        return None
+    try:
+        network = ipaddress.ip_network(str(cidr), strict=False)
+    except ValueError:
+        return None
+    if network.version != 4:
+        return None
+    octets = str(network.network_address).split(".")
+    if len(octets) != 4:
+        return None
+    return ".".join(octets[:3] + ["1"])
+
+
+def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
+    user_plane = live.get("user_plane")
+    if not isinstance(user_plane, dict) or user_plane.get("verified") is not True:
+        return False
+    if user_plane.get("method") != "icmp_echo":
+        return False
+    address = live.get("address")
+    expected_target = _expected_upf_target(contract)
+    if user_plane.get("source_interface") != _transport_value(contract, "interface"):
+        return False
+    if user_plane.get("source_address") != address:
+        return False
+    if expected_target is None or user_plane.get("target_address") != expected_target:
+        return False
+    return True
+
+
 def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
     if deployment.get("platform") not in {"rfsim", "r2lab"}:
         return False
@@ -174,6 +207,8 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
                     return False
             except ValueError:
                 return False
+        if not _user_plane_matches_contract(contract, live):
+            return False
     return True
 
 
