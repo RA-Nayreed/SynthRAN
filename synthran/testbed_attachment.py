@@ -19,7 +19,10 @@ from synthran.acceptance import (
     accepted_deployment_hash,
     validate_live_evidence,
 )
-from synthran.deployment_identity import validate_current_cluster_runtime
+from synthran.deployment_identity import (
+    validate_current_cluster_runtime,
+    validate_current_implementation_inputs,
+)
 from synthran.deployment_state import SCHEMA_VERSION, content_hash
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -239,9 +242,10 @@ def attach_active_deployment(
 ) -> dict[str, Any]:
     """Attach read-only to historical accepted-testbed state.
 
-    The default intentionally accepts historical evidence. This proves prior
-    acceptance only; call :func:`prove_experiment_eligible` with freshly
-    collected read-only evidence before executing an experiment.
+    Historical acceptance may outlive its observation timestamp, but reuse is
+    permitted only while the current checkout still has the same deployment-
+    affecting implementation/source inputs that were sealed at acceptance.
+    Fresh live liveness still belongs to :func:`prove_experiment_eligible`.
     """
 
     endpoint_path = Path(endpoint_path).resolve()
@@ -280,15 +284,6 @@ def attach_active_deployment(
     if endpoint.get("configuration_hash") != configuration_hash:
         raise AttachmentError("accepted deployment endpoint and configuration hashes differ")
 
-    try:
-        evidence = validate_live_evidence(
-            identity_path,
-            evidence_path,
-            max_age_seconds=evidence_max_age_seconds,
-        )
-    except ValueError as exc:
-        raise AttachmentError(str(exc)) from exc
-
     required_private = (private_dir / "inventory.yml", private_dir / "deployment-vars.yml")
     missing = [str(path) for path in required_private if not path.is_file()]
     if missing:
@@ -297,6 +292,16 @@ def attach_active_deployment(
         )
     if not result_dir.is_dir():
         raise AttachmentError(f"accepted deployment result directory is missing: {result_dir}")
+
+    try:
+        validate_current_implementation_inputs(identity, result_dir)
+        evidence = validate_live_evidence(
+            identity_path,
+            evidence_path,
+            max_age_seconds=evidence_max_age_seconds,
+        )
+    except ValueError as exc:
+        raise AttachmentError(str(exc)) from exc
 
     validate_requirements(deployment, requirements, deployment_hash=observed_hash)
 
@@ -332,8 +337,9 @@ def attach_active_deployment(
             )
         },
         "claim_boundary": (
-            "Historical attachment proves a previously accepted-testbed identity; "
-            "it does not prove current RF, UE, session, or user-plane liveness."
+            "Historical attachment proves a previously accepted-testbed identity and "
+            "unchanged deployment-affecting implementation inputs; it does not prove "
+            "current RF, UE, session, or user-plane liveness."
         ),
     }
 
