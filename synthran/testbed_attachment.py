@@ -14,9 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from synthran.acceptance import (
-    ACCEPTANCE_SCHEMA_VERSION,
     ACCEPTED_ENDPOINT_SCHEMA_VERSION,
-    accepted_deployment_hash,
     validate_live_evidence,
     validate_prerequisite_evidence,
 )
@@ -24,7 +22,7 @@ from synthran.deployment_identity import (
     validate_current_cluster_runtime,
     validate_retained_execution_context,
 )
-from synthran.deployment_state import SCHEMA_VERSION, content_hash
+from synthran.deployment_state import SCHEMA_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_DEPLOYMENT_ENDPOINT = ROOT / ".synthran/active-deployment.json"
@@ -244,8 +242,7 @@ def attach_active_deployment(
 ) -> dict[str, Any]:
     """Attach read-only to historical accepted-testbed state."""
 
-    endpoint_path = Path(endpoint_path).resolve()
-    endpoint = _read_object(endpoint_path, "accepted deployment endpoint")
+    endpoint = _read_object(Path(endpoint_path).resolve(), "accepted deployment endpoint")
     if endpoint.get("schema_version") != ACCEPTED_ENDPOINT_SCHEMA_VERSION:
         raise AttachmentError("accepted deployment endpoint schema is unsupported")
     if endpoint.get("status") != "accepted-testbed":
@@ -256,44 +253,32 @@ def attach_active_deployment(
     private_dir = Path(str(endpoint.get("private_execution_dir", ""))).resolve()
     result_dir = Path(str(endpoint.get("result_dir", ""))).resolve()
     identity = _read_object(identity_path, "accepted deployment identity")
-
     if identity.get("schema_version") != SCHEMA_VERSION:
         raise AttachmentError("accepted deployment identity schema is unsupported")
-    if identity.get("acceptance_schema_version") != ACCEPTANCE_SCHEMA_VERSION:
-        raise AttachmentError("accepted deployment acceptance schema is unsupported")
     if identity.get("status") != "accepted-testbed":
         raise AttachmentError("accepted deployment identity is not accepted-testbed")
-    deployment = identity.get("deployment")
-    if not isinstance(deployment, dict):
-        raise AttachmentError("accepted deployment identity has no deployment mapping")
-    configuration_hash = content_hash(deployment)
-    if identity.get("configuration_hash") != configuration_hash:
-        raise AttachmentError("accepted deployment configuration identity failed its integrity check")
-    try:
-        observed_hash = accepted_deployment_hash(identity)
-    except ValueError as exc:
-        raise AttachmentError(str(exc)) from exc
-    if identity.get("deployment_hash") != observed_hash:
-        raise AttachmentError("accepted deployment executable identity failed its integrity check")
-    if endpoint.get("deployment_hash") != observed_hash:
-        raise AttachmentError("accepted deployment endpoint and identity hashes differ")
-    if endpoint.get("configuration_hash") != configuration_hash:
-        raise AttachmentError("accepted deployment endpoint and configuration hashes differ")
     if not result_dir.is_dir():
         raise AttachmentError(f"accepted deployment result directory is missing: {result_dir}")
 
     try:
-        validate_retained_execution_context(identity, result_dir, private_dir)
-        validate_prerequisite_evidence(identity, result_dir)
         evidence = validate_live_evidence(
             identity_path,
             evidence_path,
             max_age_seconds=evidence_max_age_seconds,
         )
+        validate_retained_execution_context(identity, result_dir, private_dir)
+        validate_prerequisite_evidence(identity, result_dir)
     except ValueError as exc:
         raise AttachmentError(str(exc)) from exc
 
-    validate_requirements(deployment, requirements, deployment_hash=observed_hash)
+    deployment = identity["deployment"]
+    configuration_hash = identity["configuration_hash"]
+    deployment_hash = identity["deployment_hash"]
+    if endpoint.get("deployment_hash") != deployment_hash:
+        raise AttachmentError("accepted deployment endpoint and identity hashes differ")
+    if endpoint.get("configuration_hash") != configuration_hash:
+        raise AttachmentError("accepted deployment endpoint and configuration hashes differ")
+    validate_requirements(deployment, requirements, deployment_hash=deployment_hash)
 
     return {
         "schema_version": 2,
@@ -302,7 +287,7 @@ def attach_active_deployment(
         "experiment_eligible": False,
         "mode": "read_only",
         "configuration_hash": configuration_hash,
-        "deployment_hash": observed_hash,
+        "deployment_hash": deployment_hash,
         "deployment_run_id": endpoint.get("run_id"),
         "endpoint_published_at": endpoint.get("published_at"),
         "deployment_accepted_at": identity.get("accepted_at"),
