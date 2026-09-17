@@ -18,6 +18,7 @@ _OPEN5GS_NFS = {
     "upf",
     "webui",
 }
+_OAI_RAN_PREFIXES = ("oai-gnb", "oai-nr-ue")
 
 
 def _namespace(deployment: dict[str, Any]) -> str:
@@ -30,12 +31,18 @@ def _namespace(deployment: dict[str, Any]) -> str:
     return namespace
 
 
+def _is_oai_ran_name(name: str) -> bool:
+    return name.startswith(_OAI_RAN_PREFIXES)
+
+
 def _release_selected(deployment: dict[str, Any], name: str) -> bool:
     core = str(deployment.get("core", "")).lower()
     ran = str(deployment.get("ran", "")).lower()
     if core == "free5gc" and name == "free5gc":
         return True
-    if (core == "oai" or ran == "oai") and name.startswith("oai-"):
+    if core == "oai" and name.startswith("oai-") and not _is_oai_ran_name(name):
+        return True
+    if ran == "oai" and _is_oai_ran_name(name):
         return True
     if ran == "srsran" and name in {"srsran-gnb", "srsran-ue"}:
         return True
@@ -71,10 +78,9 @@ def _pod_owner(deployment: dict[str, Any], pod: dict[str, Any]) -> str | None:
 
     if core == "oai":
         app_name = labels.get("app.kubernetes.io/name", "")
-        if app_name.startswith("oai-"):
-            return f"oai:{app_name}"
-        if name.startswith("oai-"):
-            return f"oai:{name}"
+        candidate = app_name or name
+        if candidate.startswith("oai-") and not _is_oai_ran_name(candidate):
+            return f"oai-core:{candidate}"
 
     if ran == "srsran":
         if labels.get("app") == "srsran" and labels.get("component") in {"gnb", "ue"}:
@@ -88,10 +94,9 @@ def _pod_owner(deployment: dict[str, Any], pod: dict[str, Any]) -> str | None:
 
     if ran == "oai":
         app_name = labels.get("app.kubernetes.io/name", "")
-        if app_name.startswith("oai-"):
-            return f"oai:{app_name}"
-        if name.startswith("oai-gnb") or name.startswith("oai-nr-ue"):
-            return f"oai:{name}"
+        candidate = app_name or name
+        if _is_oai_ran_name(candidate):
+            return f"oai-ran:{candidate}"
 
     return None
 
