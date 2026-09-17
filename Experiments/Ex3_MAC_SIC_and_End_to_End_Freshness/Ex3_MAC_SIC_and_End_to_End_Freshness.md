@@ -1,132 +1,136 @@
 # Experiment 3: MAC/SIC improvements versus delivered freshness
 
-## Objective and publication role
+## Objective
 
-Determine whether a MAC or receiver that increases decoded Ambient-IoT traffic also improves freshness at the final application, or whether the additional traffic/burst structure creates a downstream penalty near a 5G transport limit.
+Determine whether a MAC or receiver configuration that increases decoded Ambient-IoT traffic also improves freshness at the final application, or whether the additional traffic and burst structure can create a downstream penalty near a 5G transport limit.
 
-The study is technically feasible after receiver, controller and protocol corrections. Its ambitious version tests **whether a locally better MAC has a different end-to-end ranking**. A plot showing that ideal SIC decodes more packets is a qualification result, not sufficient novelty. Availability-aware access already has close prior work in [Wu et al.](https://arxiv.org/abs/2501.15020), and energy-neutral/delay-oriented MAC design in [HENO-MAC](https://arxiv.org/abs/2401.00717).
+The central contribution is not simply that SIC can decode more packets. The study asks whether a locally improved reader-side outcome changes the end-to-end application ranking once energy cost, contention, transport load, and information freshness are considered together. Availability-aware access and energy-neutral/delay-oriented MAC design already have relevant prior work; see [Wu et al.](https://arxiv.org/abs/2501.15020) and [HENO-MAC](https://arxiv.org/abs/2401.00717).
 
-## Context for a fresh ChatGPT session
+## Scope and claim boundary
 
-Use this file as a standalone experiment brief for **RA-Nayreed/SynthRAN**. Read the current relevant source before changing or running anything. The review baseline was `main` at `ccaa385174fa695bdaa669e6046b61e80283a0be`, inspected on **8 September 2026**. The physical N320 candidate was draft PR [#7](https://github.com/RA-Nayreed/SynthRAN/pull/7), head `21d0dddb2792a004e529afc3144ab7aaa1eea941`. Its prose mentioned an older hash; the API head was authoritative. Recheck the current revision and retain improvements already present.
+Ambient-IoT harvesting, capacitor behavior, access, propagation, collision, and decoding are modeled. Physical replay, when used, evaluates the resulting decoded workload over an accepted 5G gateway transport path. A physical N320 transport does not make the upstream Ambient-IoT radio process physical.
 
-SynthRAN executes an Amber-derived SimPy model of energy harvesting, capacitor/controller operation and backscatter access. It freezes decoded events into JSONL, then replays them over MQTT through an actual 5G UE interface to an N6-side application. The Ambient-IoT radio and harvesting are **modeled**. The N320 carries the **5G gateway transport**; it does not make the upstream Ambient-IoT link a physical implementation.
+Reader-side improvements and application-level improvements are therefore distinct outcomes. A higher decode count is not sufficient evidence of improved application freshness, and an end-to-end latency change does not by itself identify the radio scheduler as the cause.
 
-The revised campaign uses **one fixed OAI core + srsRAN gNB + N320 physical-radio configuration**, after a clean acceptance run. This choice follows the repository's active physical reference. It replaces the attachment's Open5GS/RFSIM choice once, before data collection; it introduces no core comparison. RFSIM with the same core is useful for qualification. Its different UE software, band, numerology and image mean its measurements must be analyzed separately. If an already accepted Open5GS/N320 deployment is used instead, freeze that choice before the pilot and revise the manifest consistently; do not mix cores in a result series.
+## Research questions and hypotheses
 
-Use a homogeneous slice/DNN/QoS assignment except in the explicit isolation study. The shipped default profile assigns `uesim01` and `uesim02` to different slices, so it is not an appropriate neutral baseline. Begin with two proven physical UE roles: gateway A and competing-traffic UE B. Use only the N320 for physical-radio studies. Node availability and runtime capability require live evidence; scenario examples are not proof.
+- **M1:** Qualified SIC increases unique decoded-update rate under shared-subcarrier contention for some power-disparity and population regimes.
+- **M2:** Increased reader-side success does not necessarily produce a proportional improvement in final-application freshness near a transport service limit.
+- **M3:** An availability-aware or adaptive access policy can trade command, airtime, and energy overhead against collision reduction and freshness.
 
-Complete the necessary model and instrumentation corrections, produce runnable scenario/analysis/campaign files, run qualification and then the declared experiment where resources are available. If physical access is absent, complete all local work and give the exact remaining live commands with their acceptance criteria. Report preparation, simulated results and physical measurements separately. At the end of every working session, retain a concise checkpoint with the actual commit, completed gates, artifact paths/hashes, failures and the next executable step. This file does not require any other handoff file to be understood.
+M2 explicitly permits a null or monotonic benefit. The design must not require a paradoxical ranking reversal in order to be considered informative.
 
-## Questions and hypotheses
+## Methodological prerequisites
 
-- **M1:** Qualified SIC increases unique decoded update rate under shared-subcarrier contention for some power-disparity/population regimes.
-- **M2:** Increased reader-side success does not necessarily yield proportional improvement in final-application freshness near transport saturation.
-- **M3:** An availability-aware/adaptive access policy can trade command/airtime/energy overhead against collision reduction and freshness.
+Before scientific confirmation, the receiver/controller/protocol implementation must satisfy retained qualification checks covering:
 
-M2 permits a null or monotonic benefit. Do not design the experiment to require a paradoxical ranking reversal.
+- analytical two- and three-packet SIC fixtures;
+- zero, intermediate, and perfect cancellation behavior;
+- equal-power failure/capture cases;
+- singleton sensitivity/SINR cases;
+- packet/slot-edge overlap semantics;
+- complete transmission-energy accounting;
+- power-gated control-message handling;
+- frame-local collision/occupancy observations for adaptive policies;
+- stable sample identity across retransmission and decoding stages.
 
-## Code and acceptance requirements
+A MAC retransmission must not become a new sensed update. Packet airtime must fit the declared slot model, and the primary contention study uses one reader with an explicit shared subcarrier.
 
-Read `Experiment/model/{packet_analysis,bsengine,backscatter,controller,capacitor}.py`, `Experiment/ambient_iot/{protocols,runner,bridge,evidence,outcomes}.py`, the protocol examples, and the replay/reconciliation path.
+## Fair-comparison design
 
-The reviewed `apply_sic()` removed a decoded signal from the set contributing interference, making `cancellation_factor` ineffective. `adaptive_aloha()` compared cumulative historical collision counts with current-frame decodes. Decoding labels were reconstructed from packet records rather than retained per cancellation stage. Transmission was delivered before its later energy-draw phase was complete, and control-message handling was not gated by actual power state. Resolve these problems before calling a scheme energy-aware or SIC-qualified.
+Freeze sensor positions, input-energy realizations, sensing opportunities, numerical timestep, observation horizon, payload/sample semantics, channel parameters, and receiver noise within matched comparisons. Use separate seeded streams for exogenous energy/geometry/sensing and for policy randomness so a protocol change does not implicitly change all upstream random inputs.
 
-Use analytical two- and three-packet SIC fixtures, zero/intermediate/perfect cancellation, equal-power failure/capture cases, singleton sensitivity/SINR cases and packet/slot-edge overlap fixtures. Distinguish radio reception, decoding success and sample identity. A MAC retransmission must not become a new sensed update.
-
-The primary model should have an explicit packet airtime no longer than its allowed slot, consistent energy consumption, sensing-period/phase semantics and a valid channel domain. Use one reader and an explicit common subcarrier. Retain complete frame-local attempts, empty/collision/success observations and receiver decision stages.
-
-## Fair comparison design
-
-Freeze sensor positions, input energy realizations, sensing opportunities, numerical timestep, observation horizon, payload/sample semantics, channel and receiver noise. Use separate seeded streams for exogenous energy/geometry/sensing and policy randomness. Merely passing the same global seed to protocols that consume random numbers differently does not hold exogenous conditions fixed.
-
-Start with these schemes:
+The initial scheme set is:
 
 | Scheme | Access/receiver | Role |
 | --- | --- | --- |
 | B0 | Fixed framed broadcast; no SIC, capture only | Primary baseline |
 | B1 | Identical framed broadcast; qualified imperfect SIC | Primary comparison |
-| B2 | Identical broadcast; perfect cancellation | Idealized receiver upper-bound reference |
+| B2 | Identical broadcast; perfect cancellation | Idealized upper-bound reference |
 | A1 | Frame-local adaptive framed ALOHA with the same imperfect SIC model | Practical protocol alternative |
 | U1 | Unicast polling with exclusive response slots | Orthogonal scheduled-access control |
 
-For B0/B1/B2, keep the same attempts/slot choices when receiver feedback does not affect behavior. If the corrected protocol adds success feedback/retries, preserve the same exogenous realizations and describe the policy-mediated differences. Do not force physically different closed-loop protocols to produce identical attempts.
+For B0/B1/B2, preserve the same attempts and slot choices when receiver feedback does not alter behavior. For closed-loop policies, preserve the same exogenous realizations and record policy-mediated attempt differences rather than forcing physically different protocols into identical trajectories.
 
-A1 must adapt using observations a reader could actually obtain. A simulator knows every colliding node; a practical reader may know only an undecodable/occupied slot. State whether the policy uses observable slot outcomes, an estimated backlog or an ideal oracle. Use observable slot outcomes for the main practical claim. Record adaptation lag, false occupancy decisions and frame-size limits where modeled.
+A1 should use observations a real reader could obtain, such as occupied/idle/undecodable slot outcomes or an explicitly modeled estimator. An oracle that reads simulator-only collision identities is an upper-bound policy and must be labeled as such.
 
-U1 and A1 can have different frame lengths and control overhead. Compare over equal elapsed time and with complete command/receive/transmit energy and airtime accounting. A throughput gain achieved by giving one scheme more airtime or neglecting its listening cost is not a fair efficiency gain.
+Compare schemes over equal elapsed time with complete command, receive, transmit, and listening energy accounting. Differences in frame length or control overhead are part of the intervention and remain visible.
 
 ## Model campaign
 
-First locate `N-low`, `N*` and `N-high` on a contention curve using independent pilot seeds. Keep a stable PHY power-disparity profile; a secondary homogeneous versus near-far profile can identify where SIC benefits originate. Do not vary geometry, density, SIC quality and energy in one unexplained sweep.
+Use independent pilot seeds to locate low-contention, transition, and high-contention populations (`N-low`, `N*`, `N-high`) under a stable PHY power-disparity profile.
 
-At each of the three populations, use E-knee independent and common harvesting. Suggested primary confirmation: 20 independent seeds × 3 populations × 2 energy-dependence arms × 2 primary schemes = **240 model runs**.
+At each population, compare E-knee independent and common harvesting. A planning confirmation design is:
 
-At `N*` only, evaluate B2/A1/U1 for the same 20 seeds and two energy arms = **120 additional model runs**. This totals 360 model runs before pilots. Benchmark model time/memory first and freeze a feasible number using precision targets, not effect-driven expansion.
+```text
+20 source seeds
+× 3 population levels
+× 2 energy-dependence regimes
+× 2 primary schemes (B0, B1)
+= 240 model runs
+```
 
-A limited cancellation-quality sensitivity at `N*` may use 0, 0.5, 0.9 and 1 with the semantics “fraction of power removed.” The values are illustrative model settings, not measurements of a hardware SIC receiver. Estimate realistic residuals from external measurements/literature if making quantitative hardware predictions.
+At `N*`, evaluate B2/A1/U1 for the same source seeds and both energy regimes, adding 120 model runs. The final confirmation size must be frozen from measured runtime and precision requirements rather than expanded in response to observed effects.
 
-## End-to-end subset
+A cancellation-quality sensitivity may use a small prespecified set such as 0, 0.5, 0.9, and 1 under the explicit semantics “fraction of interference power removed.” These are model settings, not measured hardware residuals.
 
-Use a prespecified subset of ten source seeds for B0/B1 at `N*`, common and independent E-knee harvesting, and low/near-knee competing 5G load. This gives `10 × 2 × 2 × 2 = 80` physical replays. Use the fixed N320 gateway path, real-time native release, identical background workload per matched block, neutral slice and a qualified publisher/collector. These are separate source traces because the MAC changes which updates decode.
+## End-to-end replay subset
 
-Compare each scheme's **natural decoded output** first. Different event counts are part of the MAC's total system effect. Do not describe this comparison as equal offered load. Do not restrict evaluation to the intersection of decoded packets: that preferentially selects easy successes and discards the very improvement under study.
+Use a prespecified source subset for B0/B1 at `N*`, both E-knee dependence regimes, and low/near-limit competing 5G load. A planning matrix with ten source seeds is:
 
-For mechanism diagnosis, construct native-versus-periodic timing controls separately within each scheme's event set. This equal-event comparison estimates that scheme's timing penalty. A transport-rate-normalized sensitivity can additionally be useful, but it changes the intervention and must be named separately from the total MAC effect.
+```text
+10 source seeds
+× 2 MAC/receiver schemes
+× 2 energy-dependence regimes
+× 2 competing-load levels
+= 80 physical replays
+```
 
-## Metrics and analysis
+Each scheme's **natural decoded output** is the primary system-level treatment. Different decoded event counts are therefore part of the MAC effect and must not be mislabeled as equal offered load. Do not restrict analysis to the intersection of packets decoded by both schemes, because that preferentially removes the very successes produced by the intervention.
 
-Record:
+For mechanism diagnosis, construct native-versus-periodic timing controls separately inside each scheme's event set. A transport-rate-normalized sensitivity may also be useful, but it is a different intervention from the total MAC effect.
 
-- Generated updates and energy/busy suppressions; attempted transmissions and retries.
-- Unique decodes, receiver failure causes and actual cancellation stages.
-- Energy per generated/decoded update, command overhead, occupied/idle slots and useful updates per airtime.
-- Per-sensor decode probability, starvation intervals and fairness; include never-decoded sensors.
-- Reader-side and final-application AoI, freshness-violation time and deadline utility per sensor.
-- Natural decoded rate/burst structure, publisher release error, delivery by deadline/drain, and network/resource usage.
+## Outcomes
 
-Compare paired run-level outcomes with source seed as the independent block. Primary contrasts are B1−B0 for unique reader decode rate and final-application time-average AoI/violation time. Use confidence intervals and report both layers together. A descriptive trade-off plot should show all schemes' freshness versus consumed energy and transport bytes.
+Retain, at minimum:
 
-Call a ranking reversal only when the data support a better upstream metric and a worse downstream utility at the same declared operating point with meaningful uncertainty. A higher conditional latency among delivered packets alone is insufficient: more successful delivery can legitimately add previously difficult packets to the sample. AoI across the full fixed population and deadline utility address this selection issue.
+- generated updates and energy/busy suppressions;
+- transmission attempts, retries, airtime, and command overhead;
+- unique decodes, receiver failure causes, and SIC cancellation stages;
+- energy per generated and decoded update;
+- per-sensor decode probability, starvation intervals, and fairness including never-decoded sensors;
+- reader-side and application-side AoI/freshness-violation outcomes;
+- decoded rate and burst structure;
+- publisher release error, delivery by deadline/drain, and relevant network/resource evidence.
 
-If improved SIC simply improves both reader and application outcomes, quantify the benefit and operating range. If only the idealized receiver helps, delimit the practical claim. If A1 uses oracle collision counts, classify it as an upper-bound simulation policy until an observable policy is evaluated.
+Primary paired contrasts are B1−B0 for unique reader decode rate and for a prespecified application-freshness outcome. Report both layers together with uncertainty.
 
-## Figures and completion
+A ranking reversal is supported only when the same operating point shows a credible reader-side improvement and a credible downstream deterioration under the frozen outcome definitions. Higher conditional latency among delivered packets alone is insufficient because a better receiver can admit packets that were previously absent from the sample.
 
-Produce paired decode/freshness comparisons; cancellation-stage examples for prespecified fixtures; contention-response curves; a reader-versus-application utility plot; and energy/airtime/transport-cost trade-offs. Retain the complete source bundles and exact protocol policies so a new session can reproduce both the local MAC result and its downstream effect.
+## Analysis and falsification
 
-## Measurement and inference contract
+Treat source realization/seed as the independent scientific unit and retain session/configuration blocking for physical replay. Report paired run-level effects with confidence intervals.
 
-For each event retain a stable `event_id`, `sensor_id`, generation sequence, modeled generation time `g`, completed reader-decode time `d`, gateway assignment and payload hash. Preserve the modeled generation time across retransmission and forwarding. Record planned replay release `s`, the timestamp immediately before calling MQTT publish `p`, PUBACK callback `a`, and receiving-application callback entry `r`. Record monotonic times and the UTC/monotonic anchor; use UTC only for verified cross-host comparisons. An optional packet capture or broker hook supplies an explicitly named wire/broker-ingress time.
+- If B1 improves both reader and application outcomes, quantify the benefit and operating region.
+- If B1 improves reader decoding but not application freshness, quantify the decoupling rather than forcing a reversal claim.
+- If only the idealized B2 receiver helps, constrain practical conclusions accordingly.
+- If A1 requires oracle information, keep its result as an upper bound until an observable policy is evaluated.
 
-- `p - s`: publisher release error, including any intentional gateway hold when applicable.
-- `r - p`: application delivery latency, including client queuing, transport, broker and subscriber delivery. It is not isolated radio latency.
-- `r - s`: scheduled-release-to-application delay. Report this as well, so delayed publication cannot conceal degradation.
-- Deadline failure: fraction of expected events not received by `s + D`, including missing events; freeze `D` from an application requirement or an independent pilot.
-- Report p50/p95 and deadline failures as primary practical outcomes. Treat p99 as secondary until the run has enough observations. A target of 10,000 delivered events gives about 100 observations in the upper 1%, but dependence can still make its interval wide.
+The experiment does not establish that SIC, MAC adaptation, or any transport mechanism is universally beneficial. Claims remain conditional on the modeled energy/channel process, tested population/receiver parameters, accepted transport deployment, and observation horizon.
 
-The expected transport cohort comprises events whose planned releases fall in the fixed measurement window. Warm-up events establish state and remain traceable but are excluded from that cohort's delivery denominator. Keep the receiver, established connections and declared competing traffic active through a fixed drain at least as long as `D`; introduce no new post-window victim releases. Compute AoI only over the declared measurement window. Label delay quantiles as conditional on receipts observed by the drain and report unresolved/censored events beside them. With no receipts, a delay quantile is undefined, not zero. The all-input deadline-failure outcome prevents selective survival from hiding overload.
+## Reproducibility and evidence
 
-QoS 1 uses PUBACK for its client-to-broker delivery exchange. A PUBACK does not prove the subscriber callback occurred. Count unique application receipts, duplicates, publication failures, late receipts, and still outstanding messages at the fixed drain deadline separately. Do not label an absent callback a physical packet loss. See the [MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html).
+Retain the frozen scientific design, source bundles, protocol/receiver configuration, implementation/dependency fingerprint, per-run evidence, exclusions, and analysis outputs. Physical runs also retain accepted deployment identity, UE binding, clock evidence, background-load realization, and experiment-time transport observations.
 
-True per-sensor AoI at observation time `t` is
+Shared timestamp, receipt, AoI, clock, experimental-unit, and failure-taxonomy conventions are defined in [`../MEASUREMENT_AND_INFERENCE.md`](../MEASUREMENT_AND_INFERENCE.md).
 
-\[
-\Delta_j(t)=t-\max\{g_{j,k}^{wall}:r_{j,k}\le t\}.
-\]
+## Completion criteria
 
-Use the freshest received generation timestamp, so a duplicate or an older out-of-order update never resets AoI backward to older information. Integrate the sawtooth over a fixed observation window for time-average AoI; calculate time-weighted AoI quantiles, time above the AoI limit, and age immediately before each freshness-improving receipt for peak-AoI statistics. `r-g` for an individual delivered packet is its age at delivery, not the time-average or peak AoI. This distinction follows [Yates et al., Age of Information: An Introduction and Survey](https://arxiv.org/abs/2007.08564).
+The study is complete only when:
 
-For native replay at real-time scale, map `g_wall = replay_epoch + g_model_seconds` using the same origin for decode and generation times. Replay the retained warm-up history before the measurement window. If a sensor has no received history, report its uninitialized interval and count it as violating the freshness requirement; do not remove it from the population. Report equal-weight per-sensor outcomes as well as aggregate traffic-weighted outcomes.
-
-Never initialize unknown age to zero or backdate the first receipt. A full-window mean AoI is not identifiable during unknown initial history, or is infinite under an explicitly chosen infinite-age convention. Report any mean over initialized intervals as conditional, alongside the uninitialized-time fraction. The all-sensor freshness-violation metric includes those intervals. For surrogates that move release before generation, physical generation-based AoI is not a valid outcome.
-
-Clock uncertainty must be small relative to the claimed effect. Record synchronization evidence before and after each block and throughout long blocks. Use a combined endpoint error budget `epsilon`; target `epsilon` below one fifth of the smallest claimed latency difference. A shared UTC start or an installed PTP role is insufficient evidence. If synchronization is inadequate, repair it or limit claims to same-clock ACK timing and count metrics. Never clip negative cross-host latencies into valid data.
-
-Qualify the publisher and collector with the same workload over a fast local/wired path. Their processing capacity must exceed the tested application event rate, and their queues, CPU load and scheduling errors must be measured. Timestamp callback entry before parsing/writing. Use append-only records, a subscription-ready barrier, fixed warm-up and drain rules, unique run identity, and queue cleanup between independent replays.
-
-The independent scientific unit is a source realization/seed, with session/day as a block. Packets, two permutations of one trace, and repeated replays are not independent source replicates. Use paired run-level differences and confidence intervals; average repeated surrogate outcomes within source/load before source-level inference. Resample independent source blocks with session structure preserved, or fit a justified repeated-measures model. Freeze primary contrasts, practically meaningful effect size, sample size and exclusions after the independent pilot. Never select visually representative seeds or extend only promising conditions. Missing data due to an invalid measurement system and real overload failures require different labels.
-
-## Required session outputs
-
-Deliver the resolved experiment manifest, runnable campaign and analysis commands, qualified scenario files, immutable input traces with checksums, an outcome table, figures with uncertainty, and a short findings document that answers the hypotheses. Retain per-run publication/receipt evidence and all prespecified exclusions. Include actual software/image versions, mapping, hardware state, clock evidence, timing policies and observation/drain windows in the manifest. Proposed capabilities must be implemented and checked before being described as available commands. Finish with a checkpoint another ChatGPT session can continue without reconstructing the previous conversation.
+1. receiver/MAC qualification fixtures pass under the exact implementation used for confirmation;
+2. pilot-selected operating points and confirmation seeds are frozen prospectively;
+3. every assigned confirmation run has an explicit disposition;
+4. reader-side and application-side outcomes are analyzed together with uncertainty;
+5. source, protocol, deployment, and measurement provenance are sufficient to reproduce every reported contrast;
+6. limitations and unresolved mechanism attribution are reported rather than filled from assumptions.
