@@ -332,4 +332,4 @@ jobs:
       - name: Verify issue 53 ownership contract
         run: >-
           python tools/check_host_bootstrap_contract.py
-          --reference .synthran/reference/sopnode-5g-ansible/6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+          --reference .synthran/reference/sopnode-5g-ansible/b73fccf87f55060484b3759e9cb347222253534b
