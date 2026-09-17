@@ -166,10 +166,7 @@ def validate_live_evidence(
         raise ValueError("live deployment evidence does not match the executable deployment identity")
     if evidence.get("configuration_hash") != configuration_hash:
         raise ValueError("live deployment evidence does not match the configuration identity")
-    if evidence.get("implementation_identity_sha256") not in {
-        None,
-        content_hash(identity["implementation"]),
-    }:
+    if evidence.get("implementation_identity_sha256") != content_hash(identity["implementation"]):
         raise ValueError("live deployment evidence does not match the implementation identity")
     if evidence.get("cluster_identity_verified") is not True:
         raise ValueError("live deployment evidence does not prove the cluster identity")
