@@ -21,13 +21,7 @@ from .scenario import redacted
 
 
 def resolve_network_profile(d: dict) -> tuple[dict, str]:
-    """Build the effective network profile for only the selected UEs.
-
-    Network policy (PLMN/DNN/slices/QoS/security) is independent of UE identity.
-    Stable UE identity/transport metadata comes from the UE catalog, while the
-    scenario explicitly assigns one slice from the selected network profile to
-    every selected UE.
-    """
+    """Build the effective network profile for only the selected UEs."""
     profile_name = d["network_profile"]
     profile_source = Path(
         d.get("network_profile_file")
@@ -252,6 +246,7 @@ def main(argv=None):
     shutil.copytree("deployment/group_vars", context / "group_vars", dirs_exist_ok=True)
     shutil.copytree("deployment/roles", context / "roles", dirs_exist_ok=True)
     shutil.copytree("deployment/scripts", context / "scripts", dirs_exist_ok=True)
+    shutil.copyfile("deployment/ansible.cfg", context / "ansible.cfg")
     (context / "reference").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(
         "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json",
