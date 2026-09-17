@@ -62,7 +62,7 @@
   register: synthran_srsran_gnb_process
   changed_when: false
 
-- name: Require logical N2 establishment in the authoritative gNB log
+- name: Wait for live N2 SCTP association before RF-health observation
   ansible.builtin.command:
     argv:
       - "{{ kubectl_bin }}"
@@ -76,13 +76,34 @@
       - /bin/sh
       - -lc
       - >-
-        grep -Em1 'N2: Connection to AMF .* (completed|was established)|Connected to AMF'
-        /var/log/gnb.log
-  register: synthran_srsran_n2_signal
+        ss -H -n -A sctp state established |
+        grep -F -- '{{ srsran_network.n2.amf_ip }}:{{ srsran_network.n2.amf_port }}'
+  register: synthran_srsran_live_n2_initial
   changed_when: false
-  retries: 15
+  retries: 60
   delay: 2
-  until: synthran_srsran_n2_signal.rc == 0
+  until: synthran_srsran_live_n2_initial.rc == 0
+
+- name: Require completed NG Setup in the authoritative gNB log
+  ansible.builtin.command:
+    argv:
+      - "{{ kubectl_bin }}"
+      - -n
+      - "{{ ran_ns }}"
+      - exec
+      - "{{ synthran_srsran_health_pod }}"
+      - -c
+      - gnb
+      - --
+      - /bin/sh
+      - -lc
+      - >-
+        grep -Fm1 'NGSetupResponse' /var/log/gnb.log
+  register: synthran_srsran_ng_setup_signal
+  changed_when: false
+  retries: 30
+  delay: 2
+  until: synthran_srsran_ng_setup_signal.rc == 0
 
 - name: Capture the authoritative log position before RF-health windows
   ansible.builtin.command:
@@ -337,7 +358,8 @@
       - (synthran_srsran_health_final_statuses[0].restartCount | int) == (synthran_srsran_health_restart_initial | int)
       - synthran_srsran_health_final_statuses[0].ready | default(false) | bool
       - synthran_srsran_gnb_process.rc == 0
-      - synthran_srsran_n2_signal.rc == 0
+      - synthran_srsran_live_n2_initial.rc == 0
+      - synthran_srsran_ng_setup_signal.rc == 0
       - synthran_srsran_live_n2.rc == 0
       - synthran_srsran_expected_image_digest | length > 0
       - synthran_srsran_live_image_digest | length > 0
@@ -347,9 +369,10 @@
     fail_msg: >-
       Physical srsRAN failed its RAN-local acceptance window. The workload must
       keep the same UID/restart state and exact immutable pod-spec image, expose
-      a digest-qualified runtime imageID, keep the gNB process and live N2 SCTP
-      association present, contain no reference-fatal radio errors, and avoid
-      persistent RF/PHY timing failures across consecutive post-stability windows.
+      a digest-qualified runtime imageID, complete NG Setup, keep the gNB process
+      and live N2 SCTP association present before and after RF-health observation,
+      contain no reference-fatal radio errors, and avoid persistent RF/PHY timing
+      failures across consecutive post-stability windows.
 
 - name: Retain physical srsRAN RAN-local health evidence
   ansible.builtin.copy:
@@ -357,7 +380,7 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 4,
+           'schema_version': 5,
            'radio': rru,
            'namespace': ran_ns,
            'pod': synthran_srsran_health_pod,
@@ -371,8 +394,9 @@
            'log_line_start': synthran_srsran_health_line_start.stdout | int,
            'log_line_mid': synthran_srsran_health_line_mid.stdout | int,
            'log_line_end': synthran_srsran_health_line_end.stdout | int,
-           'n2_signal': synthran_srsran_n2_signal.stdout | trim,
-           'live_n2_sctp': synthran_srsran_live_n2.stdout | trim,
+           'ng_setup_signal': synthran_srsran_ng_setup_signal.stdout | trim,
+           'live_n2_sctp_before': synthran_srsran_live_n2_initial.stdout | trim,
+           'live_n2_sctp_after': synthran_srsran_live_n2.stdout | trim,
            'n2_endpoint': {
              'amf_ip': srsran_network.n2.amf_ip,
              'amf_port': srsran_network.n2.amf_port
