@@ -12,11 +12,11 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_srsran_reference.repository == 'https://github.com/nayreed/5g-Ansible'
+      - synthran_srsran_reference.repository == 'https://github.com/sopnode/5g_ansible'
       - synthran_srsran_reference.commit is match('^[0-9a-f]{40}$')
     fail_msg: >-
-      srsRAN runtime configuration requires the reviewed immutable 5g-Ansible
-      lifecycle reference metadata.
+      srsRAN runtime configuration requires the reviewed immutable original
+      sopnode/5g_ansible lifecycle reference metadata.
 
 - name: Read selected srsRAN image repository
   ansible.builtin.command:

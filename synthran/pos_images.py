@@ -6,8 +6,8 @@ from typing import Any
 import yaml
 
 
-# Provider artifact pinned from nayreed/5g-Ansible@
-# 6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3 roles/pos/defaults/main.yml.
+# Provider artifact pinned from sopnode/5g_ansible@
+# b73fccf87f55060484b3759e9cb347222253534b roles/pos/defaults/main.yml.
 # Keep the short SynthRAN alias stable for users, but never pass it directly to POS.
 POS_IMAGE_ALIASES = {
     "ubuntu-jammy": "ubuntu-jammy-slices@2025-04-02T01:33:28+00:00",

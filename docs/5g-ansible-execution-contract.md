@@ -1,74 +1,149 @@
-# Pinned 5g-Ansible execution contract
+# Pinned 5G-Ansible execution contract
 
-SynthRAN's rework uses `nayreed/5g-Ansible` commit `6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3` as the deployment-behavior reference. This pin is an execution/comparison contract, not a replacement for the historical derivation record in `third_party/sopnode-5g-ansible/SOURCE.json`.
+SynthRAN uses the **original upstream** repository `sopnode/5g_ansible` at commit
+`b73fccf87f55060484b3759e9cb347222253534b` as its immutable deployment-behavior
+reference.
 
-The machine entrypoint is `bin/fiveg`. Before any migration step relies on it, run:
+This execution/comparison pin is deliberately separate from historical derivation
+provenance in `third_party/sopnode-5g-ansible/SOURCE.json`. `SOURCE.json` records
+where the retained deployment code originally came from; it is not the live
+execution authority.
 
-```bash
-python3 tools/check_5g_ansible_contract.py --reference /path/to/5g-Ansible
-python3 tools/check_resource_authority_contract.py --reference /path/to/5g-Ansible
+The machine-readable execution contract is
+`third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json`.
+
+## Why this is selective delegation
+
+Pure `sopnode/5g_ansible` does **not** contain the fork-added `bin/fiveg` /
+`tools/fiveg_machine.py` interface. SynthRAN therefore validates and delegates
+reviewed upstream task files directly rather than depending on a fork-specific
+controller API.
+
+The complete upstream playbooks are not safe to call after SynthRAN has acquired
+resources:
+
+- `playbooks/deploy_r2lab.yml` owns R2Lab cleanup, RRU power and UE preparation;
+- `playbooks/deploy.yml` invokes POS preparation for the selected SOP nodes;
+- the upstream POS role performs `pos allocations free` and
+  `pos allocations allocate` before the `no_boot`-guarded image/reset section.
+
+There is no upstream equivalent of the fork-only `pos_manage_allocation=false`
+suppression surface. Therefore these complete upstream entrypoints are forbidden
+across SynthRAN's resource-authority boundary:
+
+```text
+playbooks/deploy_r2lab.yml
+playbooks/deploy.yml
+playbooks/run_pos.yml
 ```
 
-The first checker verifies the exact commit, capabilities, generated inventory assumptions, the `plan` playbook sequence, physical-UE attachment remaining outside `up`, unsupported `host_vars` behavior, qhat23 capability mismatch, named-profile enforcement, the pinned resume-spec-integrity behavior, and the co-located/split validation matrix. The second checker proves that a downstream plan preserves SynthRAN's external resource authority and that the pinned POS role still honors the suppression surfaces used by that boundary. A failed check means the reference changed or an assumption is no longer true; re-audit instead of adding a fallback.
+SynthRAN instead delegates only task files that have been explicitly reviewed by
+the dependent sub-issue.
 
 ## Ownership rule
 
-There must be one owner for each responsibility. Issue #52 makes the resource boundary authoritative: **SynthRAN alone owns SLICES provider context, POS calendar coverage, POS allocation/image/boot/reset/readiness, and R2Lab lease acquisition/evidence.** The pinned 5g-Ansible implementation remains the preferred downstream provisioning owner wherever later migration issues prove its contract is sufficient.
+There must be one mutation owner for every responsibility.
 
-Every future reference invocation after SynthRAN resource preparation must normalize to all of these values:
+**SynthRAN owns:**
 
-```yaml
-provider:
-  manage: false
-reservation:
-  enabled: false
-  r2lab_mode: none
-deployment:
-  pos_manage_allocation: false
-  extra_vars:
-    no_boot: true
+- SLICES project/experiment context;
+- POS calendar, allocation, image, boot-parameter, reset and post-reset readiness;
+- R2Lab lease acquisition/extension/require-existing evidence;
+- SSH identity-file handling;
+- source/scenario translation and validation;
+- scientific deployment identity and evidence;
+- final physical acceptance and experiment eligibility.
+
+**Original upstream may own, only where explicitly reviewed:**
+
+- selected host/Kubernetes lifecycle task files;
+- selected OAI core lifecycle task files;
+- selected srsRAN startup/RFSIM task files;
+- other downstream task files only after the relevant sub-issue proves the
+  boundary.
+
+A delegated upstream task completing successfully is **not** equivalent to a
+SynthRAN deployment being accepted or experiment-eligible.
+
+## Current source-to-reference mapping
+
+| SynthRAN source | Original-upstream surface | Contract |
+| --- | --- | --- |
+| `deployment.core` | `core` / core role selection | Direct after validation. |
+| `deployment.ran` | `ran` / RAN role selection | `srsran` adapts to upstream `srsRAN`; OAI/UERANSIM retain upstream names. |
+| `deployment.platform` | platform/R2Lab role selection | Direct conceptually; SynthRAN does not delegate the full R2Lab preparation playbook. |
+| `deployment.ru` | `rru` | Direct for reviewed physical paths. |
+| core/RAN node selection | inventory groups + `*_node_name` | SynthRAN renders the selected inventory explicitly. |
+| physical UE selection | `qhats` / `qfits` inventory groups | Adapted; resource selection, subscriber identity and modem attachment remain distinct. |
+| effective network profile | upstream `fiveg_profile` / role `include_vars` | Backend-specific adapter required; rendered parity is validated rather than assumed. |
+| `R2LAB_IDENTITY_FILE` | no direct upstream equivalent | SynthRAN-owned. |
+| accepted deployment | no upstream equivalent | SynthRAN-owned evidence decision. |
+
+## Reviewed delegated task files
+
+The current exact allow-list lives in `EXECUTION_REFERENCE.json`. It includes the
+reviewed host/Kubernetes forwarding tasks plus selected OAI-core and srsRAN task
+files. Runtime code must not resolve or launch the forbidden complete upstream
+entrypoints through the pinned checkout.
+
+The shared materializer is:
+
+```bash
+python -m synthran.reference_checkout
 ```
 
-These controls are complementary. `provider.manage=false` prevents SLICES project/experiment mutation. `reservation.enabled=false` prevents a second POS calendar reservation. `reservation.r2lab_mode=none` prevents reference R2Lab authority. `pos_manage_allocation=false` suppresses the pinned POS role's allocation free/allocate commands, while `no_boot=true` suppresses image, boot-parameter, reset and readiness work in that role. Removing any one of them reopens a dual-owner path and is a contract failure.
+It reads the repository and SHA from `EXECUTION_REFERENCE.json`, fetches that
+exact revision, verifies `HEAD`, rejects local modifications and returns the
+immutable checkout path.
 
-SynthRAN's `reservation-authority.json` is evidence of its own resource decisions. It is not a reference `ready` manifest and does not make a deployment experiment-eligible; acceptance remains a separate SynthRAN responsibility.
+For contract validation use:
 
-## Source-to-reference mapping
+```bash
+python tools/check_5g_ansible_contract.py --reference /path/to/sopnode-5g_ansible
+python tools/check_resource_authority_contract.py --reference /path/to/sopnode-5g_ansible
+python tools/check_host_bootstrap_contract.py --reference /path/to/sopnode-5g_ansible
+```
 
-| SynthRAN source | Pinned machine field | Contract |
-| --- | --- | --- |
-| `deployment.core` | `core.type` | Direct. |
-| `deployment.ran` | `ran.type` | `srsran` maps to `srsRAN`; `oai` and `ueransim` are unchanged. |
-| `deployment.platform` | `platform.type` | Direct. |
-| `deployment.ru` | `platform.ru` | Direct for R2Lab; reference derives `rfsim` for RFSIM. |
-| `deployment.nodes.core` / `.ran` | `core.node` / `ran.node` | Direct only for supported reference node names. Resource acquisition never remaps them. |
-| `deployment.ues` | `ues.qhats/qfits` and `deployment.selected_ues` | Two concerns: physical inventory selection versus subscriber/profile selection. Physical attachment is not part of `fiveg up`. |
-| `deployment.network_profile` | `profile` | Conditional. The machine accepts a repository-named profile. Effective/custom profile parity must be proven before delegation. |
-| `deployment.ansible_vars` | `deployment.extra_vars` | Conditional. Only variables already owned by the pinned reference may pass through; dependent issues must prove their rendered effect. Resource-authority suppression variables are mandatory. |
-| `deployment.r2lab_username` | `r2lab.username` | Direct. |
-| `deployment.host_vars` | none | Blocking until reconciled. The pinned machine derives node IP/storage/NIC from `NODE_FACTS`. |
-| `R2LAB_IDENTITY_FILE` / `r2lab_ssh.identity_file` | none | Blocking when an explicit identity file is required. |
-| SynthRAN `active`/accepted state | reference `ready` | Not equivalent. SynthRAN acceptance requires its own fresh evidence. |
+A failure means the pinned upstream source or a SynthRAN ownership assumption no
+longer matches the reviewed contract. Re-audit the boundary instead of adding a
+fallback implementation.
 
-The machine-readable form is `third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json`. Its `external_resource_authority` object is the authoritative machine-readable boundary, and its validation matrix records the no-hardware combinations the reference checker must normalize, render and plan successfully at the pinned SHA.
+## Important differences from the superseded fork-based contract
 
-## Resource acquisition retained by SynthRAN
+The former reference `nayreed/5g-Ansible@6c9cb3...` was a fork-derived merge tree
+that was ahead of pure upstream and introduced behavior not present in
+`sopnode/5g_ansible`, including the declarative `fiveg` machine interface and a
+POS-allocation suppression surface. Those fork-only behaviors are not part of the
+current authority contract.
 
-The retained code is intentional integration policy rather than a second downstream deployment engine. It provides semantics that the pinned machine interface does not provide as one contract: exact selected-resource immutability, calendar/allocation ownership separation, explicit create/require-existing/disabled acquisition, explicit fresh/preserve preparation, credential-safe R2Lab mutation over stdin, explicit SSH identity-file support, exact single-lease verification, provider-backed evidence, and fail-closed ambiguous-ownership handling.
+This changes several earlier assumptions:
 
-For fresh POS preparation SynthRAN keeps the configured image choice, but adopts the pinned reference's supported SOP/N3xx mechanics: prove allocation authority, select the image, apply the reference boot parameters, reset, then prove post-reset SSH readiness. Preserve mode performs none of those mutations.
+- node/UE/profile behavior is now checked directly against upstream inventory,
+  profiles, roles and playbooks rather than a machine normalizer;
+- full-playbook delegation is disallowed instead of relying on a synthetic
+  resource-suppression overlay;
+- srsRAN's pure-upstream physical retry task is used as the startup owner, while
+  SynthRAN's separate RAN-health verifier remains the acceptance owner;
+- physical revalidation is required where the pure-upstream task differs from
+  the former fork-derived task.
 
-## Confirmed gaps and owners
+## Current dependent gaps
 
-- **Host facts/bootstrap — #53.** The machine interface reconstructs its supported schema and does not map SynthRAN `host_vars`; its inventory uses fixed `NODE_FACTS` for node IP, storage and NIC.
-- **OAI N320 — #55.** SynthRAN's current N320-specific OAI adaptation is not represented by the generic machine contract and must be justified or migrated independently.
-- **Physical UE lifecycle — #56.** `deploy_r2lab.yml` powers/prepares selected UEs, but `fiveg up` does not invoke `test-ue-connect.yml`. The pinned `test-ue-connect.yml` also ignores individual connection errors. `qhat23` is present in the default profile but absent from machine `QHATS` capabilities.
-- **srsRAN — #60.** Chart/profile/log adaptations need rendered comparison before lifecycle delegation.
-- **Core/effective profiles — #61.** The machine validates a named `5g_profile_<name>.yaml`. `deployment.extra_vars` is a possible adapter surface because it has Ansible extra-var precedence, but effective SynthRAN profile parity must be proven from rendered configuration rather than assumed.
-- **Acceptance/resume — #57.** Reference `ready` means its provisioning playbooks completed. It is not SynthRAN experiment eligibility. The pinned `up --resume` also rewrites runtime files from the newly supplied spec without first rejecting digest drift, so a future SynthRAN caller must compare normalized identity before resume.
+- **Sub 06 / #55 — OAI + N320:** implementation remains path-specific and still
+  needs physical OAI/N320 acceptance evidence.
+- **Sub 07 / #60 — srsRAN:** pure-upstream `deploy_with_check.yml` differs from
+  the former fork-derived task. Local RF/PHY/N2 acceptance remains authoritative;
+  a fresh physical srsRAN/N320 run is required.
+- **Sub 09 / #56 — physical UE lifecycle:** upstream `test-ue-connect.yml` is a
+  separate playbook and ignores individual connection failures. SynthRAN must
+  retain explicit selected-UE identity, fail-closed mutation and read-only
+  verification.
+- **Sub 10 / #57 — acceptance:** delegated provisioning completion must never
+  promote stale or incomplete state to experiment eligibility.
 
-Reservation/provider/POS ownership is no longer an unresolved migration gap: the owner is SynthRAN, and the reference is downstream-only for this responsibility.
+## Deletion rule
 
-## What later issues may delete
-
-Once the corresponding dependent issue proves reference parity or a minimal required adaptation, remove the parallel SynthRAN deployment implementation for that downstream responsibility. Do not delete `synthran.reservation` as generic duplication: it is the authoritative resource boundary established by #52. Do not keep local and reference downstream roles as long-term selectable engines, and do not add fallback chains that silently return to local provisioning.
+When a reviewed original-upstream task file owns a responsibility completely,
+remove the parallel local implementation. Keep only the adapter/evidence logic
+that SynthRAN genuinely requires. Do not maintain a fork engine, an original-
+upstream engine and a local engine as selectable fallbacks.

@@ -45,7 +45,7 @@ synthran_host_preparation: >-
     | default('fresh')
   }}
 
-# #51 pins the reference commit. synthran.runtime verifies/materializes this
-# checkout before Ansible starts; delegated wrappers include tasks only here.
+# #51 pins the original sopnode/5g_ansible reference commit. The shared
+# materializer verifies this checkout before any delegated upstream task runs.
 synthran_reference_root: >-
-  {{ synthran_root }}/.synthran/reference/sopnode-5g-ansible/6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3
+  {{ synthran_root }}/.synthran/reference/sopnode-5g-ansible/b73fccf87f55060484b3759e9cb347222253534b

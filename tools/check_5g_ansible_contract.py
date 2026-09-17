@@ -1,419 +1,169 @@
 #!/usr/bin/env python3
-"""Verify the pinned 5g-Ansible machine-interface assumptions used by SynthRAN."""
+"""Verify the pinned original sopnode/5g_ansible source/task contract."""
 
 from __future__ import annotations
 
 import argparse
-import copy
-import importlib.util
 import json
 import subprocess
-import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
+EXPECTED_REPOSITORY = "https://github.com/sopnode/5g_ansible"
 
 
 class ContractError(RuntimeError):
     pass
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ContractError(message)
+
+
+def text(path: Path) -> str:
+    require(path.is_file(), f"missing required upstream path: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ContractError(f"expected JSON object: {path}")
+    require(isinstance(value, dict), f"expected JSON object: {path}")
     return value
 
 
-def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
-    if result.returncode:
-        raise ContractError(
-            f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}{result.stderr}"
-        )
-    return result
+def git_head(reference: Path) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(reference), "rev-parse", "HEAD"], text=True
+    ).strip()
 
 
-def _run_json(command: list[str], *, cwd: Path) -> dict[str, Any]:
-    result = _run(command, cwd=cwd)
-    try:
-        value = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise ContractError(f"command did not return JSON: {' '.join(command)}") from exc
-    if not isinstance(value, dict):
-        raise ContractError("machine interface returned a non-object JSON value")
-    return value
+def verify_profiles(reference: Path, contract: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for profile in contract["required_capabilities"]["profiles"]:
+        path = reference / "group_vars/all" / f"5g_profile_{profile}.yaml"
+        document = yaml.safe_load(text(path))
+        require(isinstance(document, dict), f"invalid upstream profile: {profile}")
+        require(isinstance(document.get("plmn"), dict), f"{profile}: PLMN missing")
+        require(isinstance(document.get("slices"), list) and document["slices"], f"{profile}: slices missing")
+        require(isinstance(document.get("ues"), dict) and document["ues"], f"{profile}: UEs missing")
+        summary[profile] = {
+            "slice_names": [item.get("name") for item in document["slices"]],
+            "ue_count": len(document["ues"]),
+        }
+
+    default = yaml.safe_load(text(reference / "group_vars/all/5g_profile_default.yaml"))
+    for ue in contract["required_capabilities"]["r2lab_probe_ues"]["qhats"]:
+        require(ue in default["ues"], f"default upstream profile lost probe QHAT {ue}")
+    for ue in contract["required_capabilities"]["r2lab_probe_ues"]["qfits"]:
+        require(ue in default["ues"], f"default upstream profile lost probe QFIT {ue}")
+    return summary
 
 
-def _import_machine(reference: Path):
-    path = reference / "tools/fiveg_machine.py"
-    spec = importlib.util.spec_from_file_location("synthran_pinned_fiveg_machine", path)
-    if spec is None or spec.loader is None:
-        raise ContractError(f"cannot import {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def verify_upstream_call_graph(reference: Path) -> dict[str, Any]:
+    deploy_r2lab = text(reference / "playbooks/deploy_r2lab.yml")
+    for role in ("r2lab/cleanup", "r2lab/rru", "r2lab/ue/setup"):
+        require(role in deploy_r2lab, f"upstream R2Lab preparation lost role {role}")
 
+    deploy = text(reference / "playbooks/deploy.yml")
+    require("playbooks/run_pos.yml" in deploy, "upstream deploy no longer invokes POS preparation")
+    for marker in (
+        "5g/open5gs/config",
+        "5g/open5gs/deploy",
+        "5g/free5gc/config",
+        "5g/free5gc/deploy",
+        "5g/oai/core",
+        "5g/oai/ran",
+        "5g/srsRAN/config",
+        "5g/srsRAN/deploy",
+        "5g/ueransim/config",
+        "5g/ueransim/deploy",
+    ):
+        require(marker in deploy, f"upstream deploy lost downstream role marker {marker}")
 
-def _base_spec(*, physical: bool) -> dict[str, Any]:
+    connect = text(reference / "playbooks/test-ue-connect.yml")
+    require("r2lab/ue/connect" in connect, "upstream UE-connect playbook lost connect role")
+    for group in ("groups['qhats']", "groups['qfits']", "groups['phones']"):
+        require(group in connect, f"upstream UE-connect playbook lost {group}")
+    require("ignore_errors: true" in connect, "upstream UE-connect failure policy changed; re-audit")
+
     return {
-        "schema": "fiveg/deployment/v1",
-        "id": "synthran-contract-probe",
-        "provider": {"manage": False},
-        "core": {"type": "open5gs", "node": "sopnode-f2"},
-        "ran": {"type": "srsRAN", "node": "sopnode-f3"},
-        "platform": {
-            "type": "r2lab" if physical else "rfsim",
-            "ru": "n320" if physical else "rfsim",
-        },
-        "ues": {
-            "qhats": ["qhat01"] if physical else [],
-            "qfits": ["qfit07"] if physical else [],
-            "phones": [],
-        },
-        "monitoring": {"enabled": False},
-        "profile": "default",
-        "reservation": {
-            "enabled": False,
-            "duration_minutes": 120,
-            "r2lab_mode": "none",
-        },
-        "deployment": {
-            "prepare_only": False,
-            "allow_live_installs": True,
-            "manage_os_dependencies": True,
-            "manage_python_dependencies": True,
-            "disruptive_cluster_ops_enabled": True,
-            "k8s_env_enabled": True,
-            "python_interpreter": "",
-            "selected_slices": [],
-            "selected_ues": [],
-            "open5gs_webui_enabled": False,
-            "open5gs_admin_account_enabled": False,
-            "pos_manage_allocation": False,
-            "cleanup_namespaces": [],
-            "extra_vars": {},
-        },
-        "scenario": {"type": "none"},
-        "r2lab": {
-            "username": "contract-check" if physical else "",
-            "known_hosts_file": "",
-            "strict_host_key_checking": True,
-        },
+        "deploy_r2lab_owns": ["cleanup", "rru", "ue_setup"],
+        "deploy_invokes_pos": True,
+        "ue_connect_separate": True,
+        "ue_connect_ignores_individual_errors": True,
     }
 
 
-def _matrix_specs() -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
-    cases: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+def verify_resource_boundary(reference: Path, contract: dict[str, Any]) -> dict[str, Any]:
+    policy = contract.get("delegation_policy", {})
+    require(policy.get("mode") == "explicit-reviewed-task-files-only", "delegation mode changed")
+    require(policy.get("full_upstream_playbooks_allowed") is False, "full upstream playbooks were re-enabled")
 
-    colocated_oai = _base_spec(physical=False)
-    colocated_oai["id"] = "matrix-colocated-oai-rfsim"
-    colocated_oai["core"] = {"type": "oai", "node": "sopnode-f2"}
-    colocated_oai["ran"] = {"type": "oai", "node": "sopnode-f2"}
-    colocated_oai["profile"] = "scenario1"
-    colocated_oai["deployment"]["selected_ues"] = ["uesim01"]
-    cases["colocated-oai-rfsim"] = (
-        colocated_oai,
-        {
-            "core": "oai",
-            "ran": "oai",
-            "profile": "scenario1",
-            "platform": "rfsim",
-            "bridge_enabled": False,
-            "qhats": [],
-            "qfits": [],
-        },
-    )
+    pos = text(reference / "roles/pos/tasks/main.yml")
+    require("pos allocations free" in pos, "upstream POS free behavior changed; re-audit")
+    require("pos allocations allocate" in pos, "upstream POS allocation behavior changed; re-audit")
+    require('should_boot: "{{ not (no_boot | default(false) | bool) }}"' in pos, "upstream no_boot contract changed")
+    require("pos_manage_allocation" not in pos, "upstream gained an allocation suppression surface; re-audit boundary")
 
-    split_srsran_qhat = _base_spec(physical=True)
-    split_srsran_qhat["id"] = "matrix-split-srsran-qhat"
-    split_srsran_qhat["ues"]["qfits"] = []
-    cases["split-srsran-r2lab-qhat"] = (
-        split_srsran_qhat,
-        {
-            "core": "open5gs",
-            "ran": "srsRAN",
-            "profile": "default",
-            "platform": "r2lab",
-            "bridge_enabled": True,
-            "qhats": ["qhat01"],
-            "qfits": [],
-        },
-    )
+    for relative in policy.get("allowed_reference_task_files", []):
+        require((reference / relative).is_file(), f"allowed delegated upstream task missing: {relative}")
 
-    split_srsran_qfit = _base_spec(physical=True)
-    split_srsran_qfit["id"] = "matrix-split-srsran-qfit"
-    split_srsran_qfit["ues"]["qhats"] = []
-    split_srsran_qfit["profile"] = "scenario1"
-    cases["split-srsran-r2lab-qfit"] = (
-        split_srsran_qfit,
-        {
-            "core": "open5gs",
-            "ran": "srsRAN",
-            "profile": "scenario1",
-            "platform": "r2lab",
-            "bridge_enabled": True,
-            "qhats": [],
-            "qfits": ["qfit07"],
-        },
-    )
-
-    split_oai = _base_spec(physical=True)
-    split_oai["id"] = "matrix-split-oai-r2lab"
-    split_oai["core"] = {"type": "oai", "node": "sopnode-f2"}
-    split_oai["ran"] = {"type": "oai", "node": "sopnode-f3"}
-    split_oai["ues"]["qfits"] = []
-    cases["split-oai-r2lab-qhat"] = (
-        split_oai,
-        {
-            "core": "oai",
-            "ran": "oai",
-            "profile": "default",
-            "platform": "r2lab",
-            "bridge_enabled": True,
-            "qhats": ["qhat01"],
-            "qfits": [],
-        },
-    )
-
-    split_ueransim = _base_spec(physical=False)
-    split_ueransim["id"] = "matrix-split-ueransim-rfsim"
-    split_ueransim["core"] = {"type": "free5gc", "node": "sopnode-f2"}
-    split_ueransim["ran"] = {"type": "ueransim", "node": "sopnode-f3"}
-    split_ueransim["deployment"]["selected_ues"] = ["uesim01"]
-    cases["split-ueransim-rfsim"] = (
-        split_ueransim,
-        {
-            "core": "free5gc",
-            "ran": "ueransim",
-            "profile": "default",
-            "platform": "rfsim",
-            "bridge_enabled": True,
-            "qhats": [],
-            "qfits": [],
-        },
-    )
-
-    return cases
-
-
-def _expect_error(module, raw: dict[str, Any], needle: str) -> None:
-    try:
-        module.normalize(raw)
-    except module.FiveGError as exc:
-        if needle not in str(exc):
-            raise ContractError(f"unexpected normalize error: {exc}") from exc
-    else:
-        raise ContractError(f"expected normalize failure containing {needle!r}")
-
-
-def _verify_matrix(machine, entrypoint: Path, reference: Path) -> dict[str, Any]:
-    results: dict[str, Any] = {}
-    with tempfile.TemporaryDirectory(prefix="synthran-fiveg-matrix-") as tmp:
-        temporary = Path(tmp)
-        state_root = temporary / "state"
-        for name, (raw, expected) in _matrix_specs().items():
-            normalized = machine.normalize(raw)
-            inventory = machine.inventory(normalized)
-
-            if normalized["core"]["type"] != expected["core"]:
-                raise ContractError(f"{name}: normalized core changed")
-            if normalized["ran"]["type"] != expected["ran"]:
-                raise ContractError(f"{name}: normalized RAN changed")
-            if normalized["profile"] != expected["profile"]:
-                raise ContractError(f"{name}: normalized profile changed")
-            if normalized["platform"]["type"] != expected["platform"]:
-                raise ContractError(f"{name}: normalized platform changed")
-
-            bridge = "true" if expected["bridge_enabled"] else "false"
-            if f"bridge_enabled={bridge}" not in inventory:
-                raise ContractError(f"{name}: bridge topology rendering changed")
-            for ue in expected["qhats"] + expected["qfits"]:
-                if ue not in inventory:
-                    raise ContractError(f"{name}: expected UE {ue} missing from inventory")
-
-            spec_path = temporary / f"{name}.json"
-            spec_path.write_text(json.dumps(raw), encoding="utf-8")
-            plan = _run_json(
-                [
-                    str(entrypoint),
-                    "plan",
-                    "--spec",
-                    str(spec_path),
-                    "--state-root",
-                    str(state_root),
-                    "--json",
-                ],
-                cwd=reference,
-            )
-            if plan.get("spec") != normalized:
-                raise ContractError(f"{name}: CLI plan normalization differs from imported contract")
-
-            commands = [" ".join(map(str, item)) for item in plan.get("commands", [])]
-            joined = "\n".join(commands)
-            if "playbooks/deploy.yml" not in joined:
-                raise ContractError(f"{name}: deploy.yml disappeared from plan")
-            has_r2lab = "playbooks/deploy_r2lab.yml" in joined
-            if has_r2lab != (expected["platform"] == "r2lab"):
-                raise ContractError(f"{name}: R2Lab plan selection changed")
-            if "test-ue-connect.yml" in joined:
-                raise ContractError(f"{name}: UE attachment moved into reference plan")
-
-            results[name] = {
-                "core": normalized["core"],
-                "ran": normalized["ran"],
-                "platform": normalized["platform"],
-                "profile": normalized["profile"],
-                "bridge_enabled": expected["bridge_enabled"],
-                "qhats": normalized["ues"]["qhats"],
-                "qfits": normalized["ues"]["qfits"],
-                "plan": "passed",
-            }
-    return results
-
-
-def _verify_behavior(reference: Path, contract: dict[str, Any]) -> dict[str, Any]:
-    machine = _import_machine(reference)
-    physical = _base_spec(physical=True)
-    normalized = machine.normalize(physical)
-    inventory = machine.inventory(normalized)
-    if "qhat01" not in inventory or "qfit07" not in inventory:
-        raise ContractError("physical probe UEs are missing from generated inventory")
-    if "sopnode-f2 ansible_user=root" not in inventory or "ip=172.28.2.77" not in inventory:
-        raise ContractError("pinned sopnode-f2 NODE_FACTS behavior changed")
-    if "sopnode-f3 ansible_user=root" not in inventory or "ip=172.28.2.95" not in inventory:
-        raise ContractError("pinned sopnode-f3 NODE_FACTS behavior changed")
-
-    with_host_vars = copy.deepcopy(physical)
-    with_host_vars["host_vars"] = {"sopnode-f2": {"ip": "127.0.0.2"}}
-    if machine.normalize(with_host_vars) != normalized:
-        raise ContractError("host_vars behavior changed; re-audit mapping before migration")
-
-    missing_profile = copy.deepcopy(physical)
-    missing_profile["profile"] = "synthran_contract_missing"
-    _expect_error(machine, missing_profile, "unknown 5G profile")
-
-    qhat23 = copy.deepcopy(physical)
-    qhat23["ues"]["qhats"] = ["qhat23"]
-    _expect_error(machine, qhat23, "unsupported values: qhat23")
-
-    entrypoint = reference / str(contract["entrypoint"])
-    matrix = _verify_matrix(machine, entrypoint, reference)
-
-    with tempfile.TemporaryDirectory(prefix="synthran-fiveg-contract-") as tmp:
-        temporary = Path(tmp)
-        spec_path = temporary / "physical.json"
-        spec_path.write_text(json.dumps(physical), encoding="utf-8")
-        plan = _run_json(
-            [
-                str(entrypoint),
-                "plan",
-                "--spec",
-                str(spec_path),
-                "--state-root",
-                str(temporary / "state"),
-                "--json",
-            ],
-            cwd=reference,
-        )
-        commands = [" ".join(map(str, item)) for item in plan.get("commands", [])]
-        joined = "\n".join(commands)
-        if "playbooks/deploy_r2lab.yml" not in joined or "playbooks/deploy.yml" not in joined:
-            raise ContractError("reference plan no longer contains the expected deployment playbooks")
-        if "test-ue-connect.yml" in joined:
-            raise ContractError("UE attachment moved into reference plan; re-audit acceptance semantics")
-
-        runtime = temporary / "resume"
-        initial = _base_spec(physical=False)
-        initial_path = temporary / "initial.json"
-        initial_path.write_text(json.dumps(initial), encoding="utf-8")
-        machine.run = lambda command, log=None, check=True: subprocess.CompletedProcess(
-            command, 0, "", ""
-        )
-        machine.emit = lambda value, as_json: None
-        args = SimpleNamespace(
-            spec=str(initial_path), state_root=str(runtime), resume=False, json=True
-        )
-        machine.up(args)
-
-        changed = copy.deepcopy(initial)
-        changed["ran"]["type"] = "oai"
-        changed_path = temporary / "changed.json"
-        changed_path.write_text(json.dumps(changed), encoding="utf-8")
-        args.spec = str(changed_path)
-        args.resume = True
-        machine.up(args)
-
-        directory = runtime / initial["id"]
-        state = _load_json(directory / "state.json")
-        saved_spec = _load_json(directory / "spec.json")
-        if state.get("spec_sha256") == machine.digest(saved_spec):
-            raise ContractError("resume spec-integrity behavior changed; re-audit caller guard")
+    forbidden = contract.get("external_resource_authority", {}).get("forbidden_full_upstream_entrypoints", [])
+    require(set(forbidden) == {"playbooks/deploy_r2lab.yml", "playbooks/deploy.yml", "playbooks/run_pos.yml"}, "forbidden entrypoint set changed")
 
     return {
-        "inventory_probe": "passed",
-        "matrix": matrix,
-        "host_vars_unmapped": True,
-        "unknown_profile_rejected": True,
-        "qhat23_rejected": True,
-        "ue_attachment_outside_up": True,
-        "resume_spec_drift_not_rejected": True,
+        "owner": "synthran",
+        "upstream_pos_reacquires": True,
+        "full_playbooks_allowed": False,
+        "delegated_task_count": len(policy.get("allowed_reference_task_files", [])),
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--reference",
-        required=True,
-        type=Path,
-        help="checkout of the pinned nayreed/5g-Ansible repository",
-    )
+    parser.add_argument("--reference", required=True, type=Path)
     args = parser.parse_args()
     reference = args.reference.expanduser().resolve()
-    contract = _load_json(CONTRACT)
 
-    expected = str(contract["commit"])
-    actual = _run(["git", "rev-parse", "HEAD"], cwd=reference).stdout.strip()
-    if actual != expected:
-        raise ContractError(f"reference commit mismatch: expected {expected}, got {actual}")
+    contract = load_json(CONTRACT)
+    require(contract.get("schema") == "synthran/5g-ansible-execution-reference/v2", "unexpected execution-reference schema")
+    require(contract.get("repository") == EXPECTED_REPOSITORY, "execution reference is not original sopnode/5g_ansible")
 
-    entrypoint = reference / str(contract["entrypoint"])
-    if not entrypoint.is_file():
-        raise ContractError(f"missing machine entrypoint: {entrypoint}")
+    expected = str(contract.get("commit", ""))
+    require(len(expected) == 40 and all(ch in "0123456789abcdef" for ch in expected.lower()), "invalid execution-reference commit")
+    actual = git_head(reference)
+    require(actual == expected, f"reference checkout mismatch: expected {expected}, found {actual}")
 
-    capabilities = _run_json([str(entrypoint), "capabilities", "--json"], cwd=reference)
-    required = contract["required_capabilities"]
-    for key in ("cores", "rans", "platforms"):
-        missing = sorted(set(required[key]).difference(capabilities.get(key, [])))
-        if missing:
-            raise ContractError(f"reference capabilities missing {key}: {', '.join(missing)}")
-    missing_profiles = sorted(set(required["profiles"]).difference(capabilities.get("profiles", [])))
-    if missing_profiles:
-        raise ContractError(f"reference capabilities missing profiles: {', '.join(missing_profiles)}")
+    for relative in contract.get("required_paths", []):
+        require((reference / relative).is_file(), f"required original-upstream path missing: {relative}")
 
-    behavior = _verify_behavior(reference, contract)
-    print(
-        json.dumps(
-            {
-                "schema": "synthran/5g-ansible-contract-check/v1",
-                "reference_commit": actual,
-                "capabilities_schema": capabilities.get("schema"),
-                "behavior": behavior,
-                "result": "pass",
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    # These were fork-only surfaces that caused the original Sub 02 contract to
+    # point at the wrong authority. Their absence is intentional in pure upstream.
+    require(not (reference / "bin/fiveg").exists(), "pinned upstream unexpectedly contains fork-style bin/fiveg; re-audit")
+    require(not (reference / "tools/fiveg_machine.py").exists(), "pinned upstream unexpectedly contains fork-style fiveg_machine.py; re-audit")
+
+    result = {
+        "schema": "synthran/5g-ansible-contract-check/v2",
+        "repository": contract["repository"],
+        "reference_commit": actual,
+        "execution_model": contract.get("execution_model"),
+        "machine_interface": "absent-by-design",
+        "profiles": verify_profiles(reference, contract),
+        "call_graph": verify_upstream_call_graph(reference),
+        "resource_boundary": verify_resource_boundary(reference, contract),
+        "result": "pass",
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ContractError, OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"reference-contract: {exc}") from exc
+    except (ContractError, OSError, json.JSONDecodeError, subprocess.CalledProcessError, yaml.YAMLError) as exc:
+        raise SystemExit(f"5g-ansible-contract: {exc}") from exc

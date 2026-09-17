@@ -61,8 +61,6 @@ def validate_topology() -> dict:
     if not isinstance(profiles, dict) or set(profiles) != {"open5gs", "free5gc", "oai"}:
         fail("deployment/topology.yml: expected open5gs/free5gc/oai transport profiles")
 
-    # Compatibility views below the transport profiles may reference these
-    # endpoints through YAML aliases, but they must not become second literals.
     for endpoint in ("10.10.3.200", "10.100.50.234", "192.168.3.201"):
         if topology_text.count(endpoint) != 1:
             fail(
@@ -265,6 +263,8 @@ def validate_source_gate() -> None:
 
 def validate_reference(reference: Path) -> None:
     pin = json.loads(PIN.read_text(encoding="utf-8"))
+    if pin.get("repository") != "https://github.com/sopnode/5g_ansible":
+        fail("execution reference is not the original sopnode/5g_ansible repository")
     expected = pin["commit"]
     actual = subprocess.run(
         ["git", "-C", str(reference), "rev-parse", "HEAD"],
@@ -275,35 +275,37 @@ def validate_reference(reference: Path) -> None:
     if actual != expected:
         fail(f"reference checkout mismatch: expected {expected}, found {actual}")
 
+    if (reference / "tools/fiveg_machine.py").exists() or (reference / "bin/fiveg").exists():
+        fail("original upstream unexpectedly contains the fork-only machine interface")
+
     reference_gre = (reference / "roles/setup/gre_tunnel/tasks/gre_loop.yml").read_text(
         encoding="utf-8"
     )
-    require(reference_gre, "type=gre", "pinned reference GRE role")
-    forbid(reference_gre, "options:key", "pinned reference GRE role")
+    require(reference_gre, "type=gre", "pinned original-upstream GRE role")
+    require(reference_gre, "options:remote_ip", "pinned original-upstream GRE role")
+    forbid(reference_gre, "options:key", "pinned original-upstream GRE role")
 
     reference_ovs = (reference / "roles/setup/ovs/tasks/main.yml").read_text(
         encoding="utf-8"
     )
     for bridge in ("n2br", "n3br", "n4br"):
-        require(reference_ovs, bridge, "pinned reference OVS role")
+        require(reference_ovs, bridge, "pinned original-upstream OVS role")
 
-    reference_machine = (reference / "tools/fiveg_machine.py").read_text(encoding="utf-8")
-    require(
-        reference_machine,
-        "bridge_enabled={'true' if ran_node != core_node else 'false'}",
-        "pinned reference machine placement contract",
-    )
+    reference_deploy = (reference / "playbooks/deploy.yml").read_text(encoding="utf-8")
+    require(reference_deploy, "Configure GRE Tunnel From Core Node to RAN Node", "upstream deploy")
+    require(reference_deploy, "Configure GRE Tunnel From RAN Node to Core Node", "upstream deploy")
+    require(reference_deploy, "when: bridge_enabled", "upstream deploy")
 
     reference_free5gc = (
         reference / "roles/5g/free5gc/config/templates/free5gc-values-override.yaml.j2"
     ).read_text(encoding="utf-8")
-    require(reference_free5gc, "'n3br' if multinode", "pinned reference Free5GC adapter")
+    require(reference_free5gc, "'n3br' if multinode", "pinned original-upstream Free5GC adapter")
 
     reference_srsran = (
         reference / "roles/5g/srsRAN/common/defaults/main.yml"
     ).read_text(encoding="utf-8")
     for marker in ("10.10.3.200", "10.10.3.234", "10.100.50.250", "192.168.3.201"):
-        require(reference_srsran, marker, "pinned reference srsRAN network contract")
+        require(reference_srsran, marker, "pinned original-upstream srsRAN network contract")
 
 
 def validate_consumers() -> None:

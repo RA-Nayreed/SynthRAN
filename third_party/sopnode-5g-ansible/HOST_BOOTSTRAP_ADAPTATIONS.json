@@ -1,6 +1,6 @@
 {
   "schema": "synthran/5g-ansible-host-bootstrap-adaptations/v1",
-  "reference_commit": "6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3",
+  "reference_commit": "b73fccf87f55060484b3759e9cb347222253534b",
   "delegated_roles": [
     "setup/containerd",
     "setup/storage",

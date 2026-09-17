@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REFERENCE_SHA = "6c9cb3a90c5cd88e1de3386c7eed76f25aa581d3"
+REFERENCE_SHA = "b73fccf87f55060484b3759e9cb347222253534b"
 OPEN5GS_SHA = "e53601e5209425867413d45d3d01ed9a1b696de7"
 FREE5GC_SHA = "499ad3d6b0c0c8879f49edcc174f306ee72a4ff4"
 
@@ -49,6 +49,10 @@ def check_reference(repo: Path, reference: Path) -> None:
     execution_ref = json.loads(
         text(repo / "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json")
     )
+    require(
+        execution_ref["repository"] == "https://github.com/sopnode/5g_ansible",
+        "execution reference repository drifted from original upstream",
+    )
     require(execution_ref["commit"] == REFERENCE_SHA, "execution reference SHA drifted")
     require(git_head(reference) == REFERENCE_SHA, "checked-out 5g-Ansible SHA is wrong")
 
@@ -68,6 +72,10 @@ def check_reference(repo: Path, reference: Path) -> None:
     require("synthran.reference_checkout" in materializer, "OAI bypasses shared reference checkout")
     require("rev-parse" in materializer, "OAI reference SHA is not read back")
     require("ansible.builtin.git" not in materializer, "OAI introduced a second checkout engine")
+    require(
+        "https://github.com/sopnode/5g_ansible" in materializer,
+        "OAI core materializer is not pinned to original upstream authority",
+    )
     require("start-cn" in upstream_oai and "stop-cn" in upstream_oai, "pinned OAI lifecycle shape changed")
 
 
@@ -165,8 +173,6 @@ def check_free5gc(repo: Path, reference: Path, downstream: Path) -> None:
         require("yq" not in source.lower(), f"Free5GC {surface} still owns obsolete yq tooling")
     require('gatewayIP: ""' in values_template, "Free5GC colocated N2 gateway is not rendered in the values adapter")
 
-    # Cleanup tolerance is inherited from the pinned reference, but the local
-    # adapter must prove the required terminal states before Helm can run.
     require("failed_when: false" in upstream_deploy, "pinned Free5GC cleanup tolerance changed; re-audit")
     for marker in (
         "Require the previous Free5GC Helm release to be absent",
