@@ -5,155 +5,162 @@
 **Ambient-IoT modelling and reproducible 5G experimentation across virtual and physical testbeds.**
 
 <p>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&color=3776AB&style=flat-square&logo=python&logoColor=white" alt="Python requirement"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FRA-Nayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=7C3AED&style=flat-square" alt="Project version"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RA-Nayreed/SynthRAN/ci.yml?branch=main&label=CI&style=flat-square" alt="CI status"></a>
-  <a href="https://github.com/RA-Nayreed/SynthRAN/commits/main"><img src="https://img.shields.io/github/last-commit/RA-Nayreed/SynthRAN?branch=main&label=last%20commit&color=0F766E&style=flat-square" alt="Last commit"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project%5B%22requires-python%22%5D&label=Python&color=3776AB&style=flat-square&logo=python&logoColor=white" alt="Python requirement"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnayreed%2FSynthRAN%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=7C3AED&style=flat-square" alt="Project version"></a>
+  <a href="https://github.com/nayreed/SynthRAN/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nayreed/SynthRAN/ci.yml?branch=main&label=CI&style=flat-square" alt="CI status"></a>
+  <a href="https://github.com/nayreed/SynthRAN/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2F855A?style=flat-square" alt="Apache-2.0 license"></a>
 </p>
 
 </div>
 
-SynthRAN is a research-software platform for studying the path from an **energy-constrained Ambient-IoT device** to an **observable application-level outcome across a programmable 5G network**.
+SynthRAN is a research-software platform for studying how an **energy-constrained Ambient-IoT source process** becomes an **observable application-level outcome across a programmable 5G network**.
 
-The repository deliberately separates two responsibilities that are often mixed together:
+The project keeps two responsibilities deliberately separate:
 
 - **`deploy.sh` owns infrastructure** — reservation, provisioning, core/RAN/radio deployment, UE preparation, verification, attestation, and accepted deployment state.
-- **`experiment.sh` owns science** — experiment selection, qualification, calibration, frozen designs, confirmation campaigns, analysis, and experiment evidence.
+- **`experiment.sh` owns science** — experiment selection, qualification, calibration, frozen designs, confirmation campaigns, analysis, and retained scientific evidence.
 
-That boundary is central to the project: a scientific experiment is not allowed to repair or reconfigure a testbed merely to make a result pass.
+That boundary is a research invariant: an experiment must not silently repair or reconfigure the testbed in order to make a result pass.
+
+> **Claim boundary:** Ambient-IoT harvesting, capacitor behavior, backscatter access, collision, and decoding are modeled. When a physical N300/N320 path is used, it carries the **5G gateway transport** for a frozen decoded workload; it does not turn the upstream Ambient-IoT radio link into a physical implementation.
 
 ---
 
-## What SynthRAN connects
+## System model
 
 ```mermaid
 flowchart LR
-    subgraph SOURCE["Ambient-IoT source model"]
-        ENERGY["Harvested energy"] --> CAP["Capacitor state"]
-        CAP --> CTRL["Energy-aware controller"]
-        CTRL --> SENSE["Sensing opportunities"]
+    subgraph SOURCE["Modeled Ambient-IoT source"]
+        ENERGY["Harvested energy"] --> CAP["Capacitor"]
+        CAP --> CTRL["Controller"]
+        CTRL --> SENSE["Sensing"]
         SENSE --> MAC["Access protocol"]
-        MAC --> TX["Backscatter transmissions"]
+        MAC --> TX["Backscatter attempts"]
         TX --> RX["Receiver / SINR / collision / SIC"]
         RX --> EVENTS["Decoded event trace"]
     end
 
     subgraph SCIENCE["Scientific experiment layer"]
-        EXP["./experiment.sh"]
-        QUAL["Qualify"] --> CAL["Calibrate"] --> FREEZE["Freeze"] --> CONF["Confirm"] --> ANALYZE["Analyze"]
-        EXP --> QUAL
-        EVENTS --> CONF
+        EXP["./experiment.sh"] --> QUAL["Qualify"]
+        QUAL --> CAL["Calibrate"]
+        CAL --> FREEZE["Freeze design"]
+        FREEZE --> CONF["Confirm"]
+        CONF --> ANALYZE["Analyze"]
     end
 
     subgraph TESTBED["5G infrastructure layer"]
-        DEP["./deploy.sh"] --> RES["Resolve + reserve"] --> PREP["Prepare"] --> CORE["5G core"] --> RAN["RAN"] --> UE["Gateway UE(s)"]
+        DEP["./deploy.sh"] --> RES["Reserve / resolve"]
+        RES --> PREP["Prepare"]
+        PREP --> CORE["5G core"]
+        CORE --> RAN["RAN + radio"]
+        RAN --> UE["Gateway UE(s)"]
         UE --> VERIFY["Verify + attest"]
     end
 
     subgraph ATTACH["Read-only experiment attachment"]
         ACCEPTED["Accepted deployment identity"] --> COMPAT["Compatibility gate"]
-        COMPAT --> REPLAY["Experiment workload replay"]
+        COMPAT --> REPLAY["Workload replay"]
     end
 
+    EVENTS --> CONF
     VERIFY --> ACCEPTED
     CONF --> COMPAT
     REPLAY --> UE
     UE --> APP["N6-side application / collector"]
-    APP --> RESULT["Reconciled experiment evidence"]
+    APP --> RESULT["Reconciled evidence"]
     ANALYZE --> RESULT
 ```
 
-The Ambient-IoT radio side is modeled. A physical N300/N320 path, when used, carries the **5G gateway transport**; it does not turn the upstream modeled Ambient-IoT backscatter link into a physical implementation.
-
 ---
 
-## Two public controllers
+## Public interfaces
 
-### Deploy a testbed
+### Deploy infrastructure
 
 ```bash
 ./deploy.sh
 ```
 
-`deploy.sh` owns infrastructure state. It can resolve a deployment, reconcile required resources, prepare hosts, deploy the selected core/RAN/radio/UE path, verify the live system, and publish an accepted deployment identity.
-
-Inspect the available launcher options with:
+`deploy.sh` owns infrastructure state. It resolves and reserves resources, prepares hosts, deploys supported core/RAN/radio/UE combinations, verifies the live system, and publishes an accepted deployment identity.
 
 ```bash
 ./deploy.sh --help
 ```
 
-A caller-supplied deployment file may be used with `--config <file>`. SynthRAN intentionally does not maintain a second duplicated catalog of generic deployment scenarios.
+A caller-supplied deployment file may be used with `--config <file>`. SynthRAN intentionally avoids maintaining a second duplicated catalog of generic deployment scenarios.
 
-### Run a scientific experiment
+### Run scientific experiments
 
 ```bash
 ./experiment.sh
 ```
 
-The experiment controller is a separate public entry point. It does not reserve, provision, repair, power-cycle, or rebuild testbed infrastructure.
-
-For Experiment 1, all work is local. Later physical experiments may consume an already accepted compatible deployment through a read-only attachment gate.
-
-Inspect the frontend with:
+The experiment controller is a separate public entry point. It does not reserve, provision, repair, power-cycle, or rebuild infrastructure.
 
 ```bash
 ./experiment.sh --help
 ```
 
-A non-interactive Experiment 1 plan can be inspected without executing science:
+For example, an Experiment 1 plan can be inspected without executing the campaign:
 
 ```bash
 ./experiment.sh --experiment ex1 --phase all --dry-run --no-input
 ```
 
-Parallelism is automatic. Independent CPU-bound run units use the maximum safe capacity visible through process affinity and cgroup limits, while scientific dependency barriers remain strict.
+Independent CPU-bound local run units use the safe compute capacity visible through process affinity and cgroup limits while preserving scientific dependency barriers.
 
 ---
 
-## Experiment 1 v2
+## Research suite
 
-The first study implemented behind `experiment.sh` is:
+The research protocols live under [`Experiments/`](Experiments/). The suite is organized around explicit research questions, interventions, calibration, confirmation, falsification, reproducibility, and claim boundaries rather than development-session notes.
 
-> **Energy correlation and burst formation**
+| Experiment | Question | Evidence domain |
+| --- | --- | --- |
+| **Ex1 — Energy correlation and burst formation** | Does correlated harvested energy synchronize activation and make decoded traffic burstier? | Modeled Ambient-IoT source mechanism |
+| **Ex2 — Causal 5G transport** | Does event timing change application delivery for an event-identical workload under controlled competing traffic? | Physical/accepted 5G gateway transport |
+| **Ex3 — MAC/SIC and freshness** | Does a reader-side decode improvement translate into application-level freshness improvement? | Modeled MAC/receiver + selected physical replay |
+| **Ex4 — Sensor aggregation and UE scaling** | How do modeled sensor count, gateway UE count, and transport connections affect service capacity? | Model + transport scaling |
+| **Ex5 — Slice/QoS isolation** | Does a verified resource-control policy protect victim freshness under competing traffic? | Physical transport/resource-policy study |
+| **Ex6 — RF robustness and modeled coverage** | How robust is the timing effect across measured 5G RF states, and what can a separate source model say about Ambient-IoT reachability? | Physical 5G RF robustness + separate modeled sensitivity |
+| **Ex7 — Causal gateway freshness mitigation** | Can a causal gateway policy improve freshness while exposing completeness and network-cost trade-offs? | Physical gateway-policy intervention |
 
-Its purpose is to test whether shared energy harvesting can synchronize sensor activation and create burstier decoded traffic when marginal energy statistics are matched.
+Start with the suite index and shared methodology:
 
-The campaign lifecycle is:
+- [`Experiments/README.md`](Experiments/README.md) — research-suite map and claim boundaries.
+- [`Experiments/MEASUREMENT_AND_INFERENCE.md`](Experiments/MEASUREMENT_AND_INFERENCE.md) — shared event timing, receipt, AoI, clock, experimental-unit, and failure-taxonomy conventions.
+
+Study-specific documents remain authoritative for each experiment's hypotheses, treatment definitions, calibration rules, confirmation matrix, exclusions, and completion criteria.
+
+---
+
+## Experiment lifecycle
+
+A scientific campaign follows a prospective lifecycle:
 
 ```text
 qualification
     ↓
-power calibration
+calibration / pilot
     ↓
-population calibration
-    ↓
-freeze confirmation design
+freeze scientific design
     ↓
 confirmation
     ↓
-analysis
+analysis + uncertainty
+    ↓
+retained immutable evidence
 ```
 
-The design is versioned in:
+The design separates exploratory/pilot work from confirmatory evidence. Confirmation must not silently inherit changed code, source bundles, deployment identity, treatment definitions, or statistical rules.
+
+For Experiment 1, the versioned design is stored in:
 
 ```text
 Experiments/Ex1_Energy_Correlation_and_Burst_Formation/experiment.yml
 ```
 
-Important safeguards are built into the workflow:
-
-- the current model must pass retained qualification checks before calibration;
-- low/knee/high harvested-power regimes are recalibrated rather than inherited from historical results;
-- the contention-transition population is recalibrated at the selected knee;
-- calibration seeds and confirmation seeds are disjoint;
-- the confirmation treatment matrix is frozen before the 210-run cohort begins;
-- confirmation refuses implementation or frozen-source drift;
-- existing valid stochastic runs are validated and reused rather than overwritten;
-- source seed is retained as the experimental unit for statistical analysis;
-- S3 archival state is separate from scientific success, so an object-store outage does not trigger scientific regeneration.
-
-The historical Experiment 1 campaign remains reference evidence only. A new v2 campaign must be run before new scientific conclusions are claimed.
+The same principles extend to later experiments: freeze operating points and analysis rules before confirmation, keep source seed as the scientific unit where appropriate, retain invalid/failed run dispositions, and never regenerate successful stochastic evidence merely because archival failed.
 
 ---
 
@@ -166,13 +173,13 @@ It includes:
 - deterministic and stochastic harvested-energy inputs;
 - capacitor charging, leakage, voltage limits, and energy accounting;
 - energy-aware controller state transitions;
-- periodic sensing opportunities and explicit phase semantics;
-- backscatter transmission timing and topology/propagation effects;
-- broadcast, unicast, SIC-assisted, and contention-oriented access behavior;
-- actual airtime overlap, collision handling, SINR-based decoding, and SIC;
+- sensing opportunities and explicit timing/phase semantics;
+- backscatter transmission timing and propagation abstractions;
+- broadcast, unicast, contention-oriented, and SIC-assisted access behavior;
+- airtime overlap, collision handling, SINR-based decoding, and SIC;
 - stable sensor/sample/event lineage;
 - canonical decoded `events.jsonl` traces;
-- immutable workload bundles with implementation/dependency fingerprints.
+- immutable workload bundles with source/dependency fingerprints.
 
 The repository keeps one bundled low-level scientific reference configuration:
 
@@ -180,7 +187,7 @@ The repository keeps one bundled low-level scientific reference configuration:
 synthran/configs/reference.yml
 ```
 
-Study-specific designs belong under `Experiments/` rather than becoming a growing set of generic presets.
+Study-specific treatment definitions belong under `Experiments/` rather than becoming generic deployment presets.
 
 ---
 
@@ -198,22 +205,22 @@ Study-specific designs belong under `Experiments/` rather than becoming a growin
   </thead>
   <tbody>
     <tr><td align="center">Virtual radio path</td><td align="center">RFSIM-based software deployment</td></tr>
-    <tr><td align="center">Physical radio path</td><td align="center">R2Lab with supported networked N300/N320 paths</td></tr>
+    <tr><td align="center">Physical radio path</td><td align="center">R2Lab with supported N300/N320 paths</td></tr>
     <tr><td align="center">5G core integrations</td><td align="center">Open5GS, OAI, free5GC</td></tr>
     <tr><td align="center">RAN integrations</td><td align="center">srsRAN, OAI, UERANSIM where supported by the selected platform</td></tr>
     <tr><td align="center">UE paths</td><td align="center">Software UEs and supported physical modem paths</td></tr>
-    <tr><td align="center">Deployment evidence</td><td align="center">Resolved identity, logs, live evidence, source revision, accepted endpoint</td></tr>
+    <tr><td align="center">Deployment evidence</td><td align="center">Resolved identity, runtime evidence, source revision, and accepted endpoint</td></tr>
   </tbody>
 </table>
 </div>
 
-The existence of code for a combination is not treated as proof that the combination has passed a current physical acceptance run. Physical capability claims remain tied to actual run evidence.
+The existence of implementation code is not treated as proof that a combination has passed current physical acceptance. Physical capability claims remain tied to actual run evidence.
 
 ### Upstream deployment foundation
 
-Substantial portions of SynthRAN's `deployment/` layer derive from [`sopnode/5g_ansible`](https://github.com/sopnode/5g_ansible), developed at **Inria Sophia Antipolis (SophiaNode / R2Lab, SLICES-RI)**. SynthRAN preserves the upstream provenance and records its modifications under [`third_party/sopnode-5g-ansible/`](third_party/sopnode-5g-ansible/). The upstream project is licensed under Apache-2.0.
+Substantial portions of SynthRAN's deployment layer derive from [`sopnode/5g_ansible`](https://github.com/sopnode/5g_ansible), developed at **Inria Sophia Antipolis / SophiaNode / R2Lab / SLICES-RI**. SynthRAN preserves upstream provenance and modifications under [`third_party/sopnode-5g-ansible/`](third_party/sopnode-5g-ansible/). The upstream project is Apache-2.0 licensed.
 
-If the derived deployment layer contributes to research, please also cite:
+If the derived deployment layer contributes to research, also cite:
 
 > Y. Amami, Z. Mabrouk, C. Barakat, T. Turletti, “Toward Real-Time RAN Observability in Open-Source 5G Systems,” 29th Conference on Innovation in Clouds, Internet and Networks (ICIN 2026), Athens, Greece, Mar. 2026. DOI: [10.1109/ICIN69025.2026.11481836](https://doi.org/10.1109/ICIN69025.2026.11481836).
 
@@ -221,22 +228,20 @@ If the derived deployment layer contributes to research, please also cite:
 
 ## Read-only accepted-testbed attachment
 
-Physical experiments do not inherit authority to mutate infrastructure.
+Physical experiments consume accepted infrastructure without inheriting authority to mutate it.
 
 The attachment layer validates:
 
-- active endpoint and identity integrity;
-- accepted deployment hash;
+- accepted endpoint and deployment identity;
 - saved acceptance evidence;
-- core, RAN, platform, radio-unit and network-profile compatibility;
-- required node roles;
-- exact or minimum UE requirements;
-- selected slice requirements;
-- the private execution context needed to invoke already-deployed infrastructure.
+- core/RAN/platform/radio compatibility;
+- required node roles and UE bindings;
+- selected slice/profile requirements;
+- private execution context required to invoke the existing deployment.
 
-The resulting experiment run records an `accepted-testbed.json` snapshot and pins subsequent workload phases to the same deployment hash. If the active deployment changes after experiment preparation, the experiment refuses to continue against the new infrastructure.
+Each physical campaign pins the accepted deployment identity. If infrastructure identity changes, the experiment must requalify or begin a separate campaign rather than silently mixing evidence.
 
-This attachment proves compatibility with a **previously accepted** deployment. It does not prove current RF quality, UE attachment, PDU-session state, or user-plane liveness; those require fresh experiment-time evidence.
+Attachment proves compatibility with a **previously accepted** deployment. Fresh RF state, UE attachment, PDU-session state, user-plane liveness, clock quality, and treatment validity still require experiment-time evidence.
 
 ---
 
@@ -254,7 +259,7 @@ Scientific campaign evidence is written beneath:
 results/experiments/<experiment-id>/<campaign-id>/
 ```
 
-A research result should be traceable through a chain such as:
+A defensible result should be traceable through a chain such as:
 
 ```text
 research question
@@ -269,16 +274,20 @@ model/workload evidence
       ↓
 accepted deployment identity (when physical)
       ↓
-experiment-time transport/application evidence
+experiment-time treatment + measurement evidence
       ↓
 analysis + uncertainty
       ↓
 archived immutable evidence
 ```
 
-For Experiment 1, scientifically valid run evidence is archived to the configured SLICES S3 path after local validation. Each archived unit carries SHA-256 metadata and a completion marker written only after remote verification. Credentials remain external to the repository and are not included in scientific provenance.
+SynthRAN distinguishes three different statements:
 
-A process starting successfully is not, by itself, research evidence. SynthRAN distinguishes between **implemented capability**, **accepted behavior in a specific run**, and **scientifically established results**.
+1. **implemented capability** — code exists and contract checks pass;
+2. **accepted runtime behavior** — a specific deployment/run passed its acceptance gates;
+3. **scientifically established result** — a prespecified experiment produced retained evidence supporting a stated conclusion.
+
+Those categories are never interchangeable.
 
 ---
 
@@ -286,55 +295,48 @@ A process starting successfully is not, by itself, research evidence. SynthRAN d
 
 ```text
 SynthRAN/
-├── deploy.sh                  # public infrastructure controller
-├── experiment.sh              # public scientific experiment controller
-├── deployment/                # testbed provisioning, networking, core/RAN/UE integration
-├── Experiments/               # versioned study designs and study-specific implementations
+├── deploy.sh                  # infrastructure controller
+├── experiment.sh              # scientific experiment controller
+├── deployment/                # provisioning, networking, core/RAN/UE integration
+├── Experiments/               # research protocols, study manifests, study code
+│   ├── README.md
+│   ├── MEASUREMENT_AND_INFERENCE.md
 │   ├── Ex1_Energy_Correlation_and_Burst_Formation/
 │   ├── Ex2_Flagship_Causal_5G_Transport/
 │   └── ...
 ├── synthran/
 │   ├── model/                 # Ambient-IoT scientific primitives
-│   ├── ambient_iot/           # protocols, model integration, evidence
-│   ├── workload/              # immutable workload bundles and replay logic
+│   ├── ambient_iot/           # protocol/model integration and evidence
+│   ├── workload/              # immutable workload and replay logic
 │   ├── experiment_runtime/    # accepted-testbed runtime mechanics
-│   ├── testbed_attachment.py  # read-only accepted-deployment compatibility gate
-│   ├── archive.py             # immutable S3 experiment evidence archival
+│   ├── testbed_attachment.py  # read-only compatibility gate
+│   ├── archive.py             # experiment evidence archival
 │   └── configs/
-│       └── reference.yml      # low-level scientific reference configuration
-├── docs/                      # focused technical/research documentation
+│       └── reference.yml
+├── docs/                      # focused technical documentation
 ├── third_party/               # upstream provenance records
-├── CITATION.cff               # machine-readable software citation
-├── CONTRIBUTING.md            # contribution and validation rules
-├── SECURITY.md                # vulnerability-reporting guidance
-└── LICENSE                    # Apache License 2.0 for SynthRAN-original material
+├── CITATION.cff               # machine-readable citation metadata
+├── CONTRIBUTING.md
+├── SECURITY.md
+└── LICENSE
 ```
 
 ---
 
 ## Validation philosophy
 
-CI checks syntax, package metadata, model qualification, calibration-selection contracts, freeze/confirmation matrix construction, analysis metric contracts, immutable archival behavior, and accepted-testbed attachment behavior.
+CI verifies software and scientific contracts that are meaningful without privileged hardware, including syntax, package metadata, experiment qualification, calibration-selection rules, freeze/confirmation construction, analysis invariants, immutable evidence behavior, and accepted-testbed attachment logic.
 
 CI deliberately does **not** pretend to replace:
 
-- a real 210-run stochastic confirmation campaign;
-- authorized physical N320 acceptance;
+- stochastic confirmation campaigns;
+- authorized physical N300/N320 acceptance;
 - live RF measurements;
 - current UE/PDU-session/user-plane verification;
-- scientific interpretation of generated results.
+- experiment-time treatment validity;
+- scientific interpretation of measured results.
 
 Those remain runtime evidence.
-
----
-
-## Research layer
-
-[`Experiments/`](Experiments/) contains the evolving study designs and study-specific implementations.
-
-The current architecture supports the first publication-oriented Experiment 1 v2 lifecycle. Experiment 2 retains historical/pilot material while its physical campaign is migrated to the standalone experiment controller. Later experiment families remain plans until their implementation and acceptance gates are complete.
-
-Focused background is available in [`docs/ambient-iot.md`](docs/ambient-iot.md). The broader execution and claim boundary is documented in [`docs/experiment-readiness.md`](docs/experiment-readiness.md).
 
 ---
 
@@ -351,13 +353,13 @@ SynthRAN is pre-1.0 research software under active development. The package is c
     </tr>
   </thead>
   <tbody>
-    <tr><td align="center">Ambient-IoT scientific model</td><td align="center">Implemented and qualified by retained contract checks</td></tr>
-    <tr><td align="center">Immutable model/workload evidence</td><td align="center">Implemented</td></tr>
-    <tr><td align="center">Interactive 5G deployment</td><td align="center">Public through <code>./deploy.sh</code></td></tr>
-    <tr><td align="center">Scientific experiment frontend</td><td align="center">Public through <code>./experiment.sh</code></td></tr>
-    <tr><td align="center">Experiment 1 v2 implementation</td><td align="center">Qualification → calibration → freeze → confirmation → analysis implemented; real v2 campaign still runtime work</td></tr>
-    <tr><td align="center">Experiment evidence archival</td><td align="center">Immutable S3 lifecycle implemented for Experiment 1</td></tr>
-    <tr><td align="center">Accepted-testbed attachment</td><td align="center">Read-only compatibility gate implemented for later physical experiments</td></tr>
+    <tr><td align="center">Ambient-IoT scientific model</td><td align="center">Implemented; retained qualification/contract checks cover declared semantics</td></tr>
+    <tr><td align="center">Immutable source/workload evidence</td><td align="center">Implemented</td></tr>
+    <tr><td align="center">5G deployment controller</td><td align="center">Public through <code>./deploy.sh</code></td></tr>
+    <tr><td align="center">Scientific experiment controller</td><td align="center">Public through <code>./experiment.sh</code></td></tr>
+    <tr><td align="center">Experiment 1 lifecycle</td><td align="center">Qualification → calibration → freeze → confirmation → analysis implemented</td></tr>
+    <tr><td align="center">Experiment 2</td><td align="center">Causal transport protocol and executable campaign contract retained; physical confirmation remains run-specific</td></tr>
+    <tr><td align="center">Experiments 3–7</td><td align="center">Research protocols / implementation targets; completion requires study-specific qualification and runtime evidence</td></tr>
     <tr><td align="center">Physical scientific campaigns</td><td align="center">Run-specific; no blanket completion claim</td></tr>
   </tbody>
 </table>
@@ -367,20 +369,10 @@ SynthRAN is pre-1.0 research software under active development. The package is c
 
 ## Citation
 
-If SynthRAN contributes to published work, cite the exact software version or Git commit used for the experiment. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
-
-A DOI will be added only when an actual archival release exists; the repository does not use placeholder citation identifiers.
-
----
-
-## Contributing
-
-Contribution and validation expectations are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md). Bug reports and research proposals use structured GitHub issue forms so implementation defects, testbed evidence, and scientific claims are not mixed together.
+If SynthRAN contributes to published work, cite the exact software release or Git commit used for the experiment and retain the campaign's scientific manifest and evidence identity. Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff).
 
 ---
 
 ## License
 
-**Copyright © 2026 Rezwan Ahmad Nayreed.**
-
-SynthRAN-original material is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for the full license text. Upstream-derived components retain their own provenance and licensing records under [`third_party/`](third_party/).
+SynthRAN-original material is licensed under the [Apache License 2.0](LICENSE). Third-party components retain their own licenses and provenance under [`third_party/`](third_party/).
