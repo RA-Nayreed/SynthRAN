@@ -86,3 +86,31 @@
   retries: 5
   delay: 2
   until: synthran_r2lab_upf_probe.rc == 0
+
+- name: Retain the source-bound R2Lab user-plane probe log
+  ansible.builtin.copy:
+    content: |
+      command: ping -I {{ synthran_r2lab_interface }} -c 1 -W 3 {{ synthran_r2lab_upf_address }}
+      source_address: {{ synthran_r2lab_binding.address }}
+      return_code: {{ synthran_r2lab_upf_probe.rc }}
+      attempts: {{ synthran_r2lab_upf_probe.attempts | default(1) }}
+      stdout:
+      {{ synthran_r2lab_upf_probe.stdout | default('') | indent(2, true) }}
+      stderr:
+      {{ synthran_r2lab_upf_probe.stderr | default('') | indent(2, true) }}
+    dest: "{{ run_dir }}/r2lab-ue-{{ inventory_hostname }}-n6.log"
+  delegate_to: localhost
+  become: false
+
+- name: Add the proved source-bound user plane to the live R2Lab binding
+  ansible.builtin.set_fact:
+    synthran_r2lab_binding: >-
+      {{ synthran_r2lab_binding
+         | combine({'user_plane': {
+             'verified': true,
+             'method': 'icmp_echo',
+             'source_interface': synthran_r2lab_interface,
+             'source_address': synthran_r2lab_binding.address,
+             'target_address': synthran_r2lab_upf_address,
+             'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+           }}, recursive=true) }}
