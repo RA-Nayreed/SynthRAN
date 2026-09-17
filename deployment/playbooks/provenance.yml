@@ -98,27 +98,29 @@
                'uhd': (synthran_prov_uhd.stdout | default(''))
              } | to_nice_json }}
 
-- name: Record cluster, Helm and actual image provenance
+- name: Record selected cluster workload, Helm and image provenance
   hosts: core_node
   gather_facts: false
   become: true
   any_errors_fatal: true
   tasks:
-    - name: Build a sanitized cluster provenance document
+    - name: Build selected-deployment cluster provenance
       ansible.builtin.shell: |
         set -euo pipefail
         python3 - <<'PY'
         import hashlib
         import json
+        import os
         import subprocess
+
+        namespace = os.environ['SYNTHRAN_NAMESPACE']
 
         def output(argv):
             return subprocess.check_output(argv, text=True)
 
-        pods = json.loads(output(['kubectl', 'get', 'pods', '-A', '-o', 'json']))
+        pods = json.loads(output(['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json']))
         images = []
         for pod in pods.get('items', []):
-            namespace = pod.get('metadata', {}).get('namespace', '')
             pod_name = pod.get('metadata', {}).get('name', '')
             for status_key, kind in (
                 ('initContainerStatuses', 'init'),
@@ -148,11 +150,10 @@
                 'kubeletVersion': info.get('kubeletVersion', ''),
             })
 
-        releases = json.loads(output(['helm', 'list', '-A', '-o', 'json']))
+        releases = json.loads(output(['helm', 'list', '-n', namespace, '-o', 'json']))
         helm_releases = []
         for release in releases:
             name = release.get('name', '')
-            namespace = release.get('namespace', '')
             rendered = output(['helm', 'get', 'values', name, '-n', namespace, '-a', '-o', 'yaml'])
             helm_releases.append({
                 'name': name,
@@ -169,11 +170,12 @@
             for item in images
         )
         document = {
-            'schema_version': 1,
+            'schema_version': 2,
+            'scope': {'namespace': namespace},
             'kubernetes': version,
             'nodes': sorted(nodes, key=lambda item: item['name']),
-            'helm_releases': sorted(helm_releases, key=lambda item: (item['namespace'], item['name'])),
-            'images': sorted(images, key=lambda item: (item['namespace'], item['pod'], item['kind'], item['container'])),
+            'helm_releases': sorted(helm_releases, key=lambda item: item['name']),
+            'images': sorted(images, key=lambda item: (item['pod'], item['kind'], item['container'])),
             'image_provenance_complete': image_provenance_complete,
         }
         print(json.dumps(document, sort_keys=True))
@@ -182,24 +184,27 @@
         executable: /bin/bash
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
+        SYNTHRAN_NAMESPACE: "{{ synthran_deployment_contract.deployment.topology.namespace }}"
       register: synthran_cluster_provenance
       changed_when: false
 
-    - name: Decode cluster provenance for acceptance checks
+    - name: Decode selected cluster provenance for acceptance checks
       ansible.builtin.set_fact:
         synthran_cluster_provenance_document: "{{ synthran_cluster_provenance.stdout | from_json }}"
 
-    - name: Require actual container image digests before accepting deployment
+    - name: Require selected workload image digests before accepting deployment
       ansible.builtin.assert:
         quiet: true
         that:
           - synthran_cluster_provenance_document.image_provenance_complete | bool
           - synthran_cluster_provenance_document.nodes | length > 0
         fail_msg: >-
-          Runtime provenance is incomplete: every observed Kubernetes container
-          must expose an immutable sha256 imageID before this deployment can be accepted.
+          Runtime provenance is incomplete for the selected deployment namespace:
+          every selected workload container must expose an immutable sha256
+          imageID before this deployment can be accepted. Unrelated namespaces
+          are intentionally outside this acceptance gate.
 
-    - name: Retain sanitized cluster provenance
+    - name: Retain sanitized selected cluster provenance
       delegate_to: localhost
       become: false
       ansible.builtin.copy:
@@ -207,7 +212,7 @@
         dest: "{{ run_dir }}/provenance/cluster.json"
         content: "{{ synthran_cluster_provenance_document | to_nice_json }}"
 
-    - name: Retain OAI source revisions when resolved in this provisioning invocation
+    - name: Retain observed OAI source revisions when selected
       delegate_to: localhost
       become: false
       ansible.builtin.copy:
@@ -215,14 +220,14 @@
         dest: "{{ run_dir }}/provenance/oai-sources.json"
         content: >-
           {{ {
-               'schema_version': 1,
-               'oai5g_rru_revision': '9d7f2df8e98527c1a3b05c6352b167e8e9ce7c19',
-               'oai_charts_revision': hostvars[ran_node_name].synthran_oai_charts_revision
+               'schema_version': 2,
+               'oai5g_rru_revision': hostvars[ran_node_name].oai_helper_revision.stdout | trim,
+               'oai_charts_revision': hostvars[ran_node_name].oai_charts_revision.stdout | trim
              } | to_nice_json }}
       when:
         - core == 'oai' or ran == 'oai'
-        - hostvars[ran_node_name].synthran_oai_charts_revision is defined
-        - hostvars[ran_node_name].synthran_oai_charts_revision | string | length > 0
+        - hostvars[ran_node_name].oai_helper_revision is defined
+        - hostvars[ran_node_name].oai_charts_revision is defined
 
 - name: Record non-mutating physical UE helper provenance
   hosts: physical_ues
