@@ -1,4 +1,23 @@
 ---
+- name: Load pinned lifecycle reference metadata for runtime provenance
+  ansible.builtin.set_fact:
+    synthran_srsran_reference: >-
+      {{ lookup(
+           'ansible.builtin.file',
+           synthran_root ~ '/third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json'
+         ) | from_json }}
+  when: synthran_srsran_reference is not defined
+
+- name: Require immutable lifecycle metadata before runtime rendering
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_srsran_reference.repository == 'https://github.com/RA-Nayreed/5g-Ansible'
+      - synthran_srsran_reference.commit is match('^[0-9a-f]{40}$')
+    fail_msg: >-
+      srsRAN runtime configuration requires the reviewed immutable 5g-Ansible
+      lifecycle reference metadata.
+
 - name: Read selected srsRAN image repository
   ansible.builtin.command:
     argv:
@@ -36,7 +55,7 @@
     synthran_srsran_image_reference: "{{ synthran_srsran_image_repository.stdout | trim }}"
   when: "'@sha256:' in (synthran_srsran_image_repository.stdout | trim)"
 
-- name: Resolve the selected Docker Hub tag to an immutable digest
+- name: Resolve the selected public image tag to an immutable digest
   ansible.builtin.command:
     argv:
       - "{{ ansible_playbook_python }}"
@@ -169,7 +188,7 @@
     mode: '0644'
     content: >-
       {{ {
-           'schema_version': 2,
+           'schema_version': 3,
            'chart_repository': repo_url,
            'chart_revision': version,
            'source_repository': synthran_srsran_image_repository.stdout | trim,
