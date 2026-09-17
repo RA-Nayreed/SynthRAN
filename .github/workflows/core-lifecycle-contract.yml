@@ -53,10 +53,14 @@ jobs:
       - name: Install pinned Ansible collections
         run: ansible-galaxy collection install -r deployment/collections/requirements.yml
 
+      - name: Verify Helm is available
+        run: helm version --short
+
       - name: Compile Sub 08 Python
         run: >-
           python -m compileall -q
           tools/check_core_lifecycle_contract.py
+          tools/check_core_profile_render.py
           deployment/roles/5g/free5gc/config/files/patch_amf_n2_nad.py
           deployment/roles/5g/free5gc/config/files/patch_iupf_n3_nad.py
           deployment/roles/5g/free5gc/config/files/patch_nads.py
@@ -72,9 +76,12 @@ jobs:
               Path("deployment/roles/5g/oai/core/tasks/main.yml"),
               Path("deployment/roles/5g/oai/core/tasks/materialize_reference.yml"),
               Path("deployment/roles/5g/open5gs/config/tasks/main.yml"),
+              Path("deployment/roles/5g/open5gs/config/tasks/validate_profile.yml"),
               Path("deployment/roles/5g/open5gs/deploy/tasks/main.yml"),
               Path("deployment/roles/5g/free5gc/config/defaults/main.yml"),
               Path("deployment/roles/5g/free5gc/config/tasks/main.yml"),
+              Path("deployment/roles/5g/free5gc/config/tasks/validate_profile.yml"),
+              Path("deployment/roles/5g/free5gc/deploy/tasks/main.yml"),
               Path("deployment/roles/5g/free5gc/verify/tasks/main.yml"),
           ]
           for path in paths:
@@ -82,12 +89,81 @@ jobs:
           print(f"parsed {len(paths)} Sub 08 YAML files")
           PY
 
-      - name: Validate exact core lifecycle and profile contracts
+      - name: Validate exact core lifecycle and source contracts
         run: >-
           python tools/check_core_lifecycle_contract.py
           --reference-root reference
           --open5gs-root open5gs-source
           --free5gc-root free5gc-source
+
+      - name: Render effective Open5GS and Free5GC profiles
+        run: >-
+          python tools/check_core_profile_render.py
+          --free5gc-root free5gc-source
+
+      - name: Exercise production profile validators and negative cases
+        run: |
+          set -euo pipefail
+          valid="$RUNNER_TEMP/core-profile-valid.yml"
+          bad_open5gs="$RUNNER_TEMP/core-profile-bad-open5gs.yml"
+          bad_free5gc="$RUNNER_TEMP/core-profile-bad-free5gc.yml"
+
+          cat >"$valid" <<YAML
+          - hosts: localhost
+            gather_facts: false
+            vars:
+              fiveg:
+                plmn: {mcc: "001", mnc: "01", tac: "1"}
+                slices:
+                  - {name: slice1, sst: "1", sd: EMPTY, dnn: internet, ip_prefix: "12.1.1"}
+                  - {name: slice2, sst: "1", sd: "100000", dnn: streaming, ip_prefix: "14.1.1"}
+                ues:
+                  uesim01: {imsi_suffix: "0000000001", slice: slice1}
+                  uesim02: {imsi_suffix: "0000000002", slice: slice2}
+            tasks:
+              - ansible.builtin.include_tasks: "$GITHUB_WORKSPACE/deployment/roles/5g/open5gs/config/tasks/validate_profile.yml"
+              - ansible.builtin.include_tasks: "$GITHUB_WORKSPACE/deployment/roles/5g/free5gc/config/tasks/validate_profile.yml"
+          YAML
+          ansible-playbook -i localhost, -c local "$valid"
+
+          cat >"$bad_open5gs" <<YAML
+          - hosts: localhost
+            gather_facts: false
+            vars:
+              fiveg:
+                plmn: {mcc: "001", mnc: "01", tac: "1"}
+                slices:
+                  - {name: slice1, sst: "1", sd: EMPTY, dnn: internet, ip_prefix: "12.1.1"}
+                  - {name: slice2, sst: "1", sd: "100000", dnn: streaming, ip_prefix: "14.1.1"}
+                  - {name: slice3, sst: "1", sd: "200000", dnn: extra, ip_prefix: "16.1.1"}
+                ues:
+                  uesim01: {imsi_suffix: "0000000001", slice: slice1}
+            tasks:
+              - ansible.builtin.include_tasks: "$GITHUB_WORKSPACE/deployment/roles/5g/open5gs/config/tasks/validate_profile.yml"
+          YAML
+          if ansible-playbook -i localhost, -c local "$bad_open5gs"; then
+            echo "Open5GS validator accepted an unsupported three-slice profile" >&2
+            exit 1
+          fi
+
+          cat >"$bad_free5gc" <<YAML
+          - hosts: localhost
+            gather_facts: false
+            vars:
+              fiveg:
+                plmn: {mcc: "001", mnc: "01", tac: "1"}
+                slices:
+                  - {name: slice1, sst: "1", sd: EMPTY, dnn: internet, ip_prefix: "12.1.1"}
+                  - {name: slice2, sst: "1", sd: "100000", dnn: streaming, ip_prefix: "14.1.1"}
+                ues:
+                  uesim01: {imsi_suffix: "0000000001", slice: missing-slice}
+            tasks:
+              - ansible.builtin.include_tasks: "$GITHUB_WORKSPACE/deployment/roles/5g/free5gc/config/tasks/validate_profile.yml"
+          YAML
+          if ansible-playbook -i localhost, -c local "$bad_free5gc"; then
+            echo "Free5GC validator accepted an unknown UE slice" >&2
+            exit 1
+          fi
 
       - name: Materialize authoritative execution-reference cache
         run: python -m synthran.reference_checkout
