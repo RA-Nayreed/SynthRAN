@@ -60,7 +60,7 @@ def _iter_files(entries: Iterable[Path]) -> list[Path]:
 
 
 def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
-    """Hash only executable files that can change the selected deployment/acceptance path."""
+    """Hash executable files that can change the selected deployment/acceptance path."""
 
     core = str(deployment.get("core", "")).lower()
     ran = str(deployment.get("ran", "")).lower()
@@ -199,6 +199,26 @@ def controller_source_provenance(run_dir: Path) -> dict[str, Any]:
         "dirty_worktree": bool(source.get("dirty_worktree")),
         "worktree_status_sha256": source.get("worktree_status_sha256"),
     }
+
+
+def validate_current_implementation_inputs(
+    identity: dict[str, Any], run_dir: str | Path
+) -> None:
+    """Reject reuse when current deployment-affecting code/source pins changed."""
+
+    deployment = identity.get("deployment")
+    implementation = identity.get("implementation")
+    if not isinstance(deployment, dict) or not isinstance(implementation, dict):
+        raise ValueError("accepted deployment identity is missing implementation inputs")
+    run_dir = Path(run_dir).resolve()
+    if selected_adapter_identity(deployment) != implementation.get("selected_adapter"):
+        raise ValueError(
+            "current deployment/acceptance implementation differs from the accepted-testbed identity; redeploy before reuse"
+        )
+    if selected_source_pins(deployment, run_dir) != implementation.get("reviewed_sources"):
+        raise ValueError(
+            "current immutable deployment source pins differ from the accepted-testbed identity; redeploy before reuse"
+        )
 
 
 def selected_cluster_runtime_identity(
