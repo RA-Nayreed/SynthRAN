@@ -4,7 +4,7 @@
     synthran_srsran_reference: >-
       {{ lookup(
            'ansible.builtin.file',
-           synthran_root ~ '/third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json'
+           synthran_execution_reference_file
          ) | from_json }}
   when: synthran_srsran_reference is not defined
 
