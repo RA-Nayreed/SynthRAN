@@ -19,7 +19,7 @@ PREPARE_RFSIM_CHART = (
     ROOT / "deployment/roles/5g/srsRAN/config/tasks/prepare_rfsim_chart.yml"
 )
 CONFIGMAP_TEMPLATE = (
-    ROOT / "deployment/roles/5g/srsRAN/deploy/templates/srsue_configmap.yaml.j2"
+    ROOT / "deployment/roles/5g/srsRAN/config/templates/srsue_configmap.yaml.j2"
 )
 IMAGE_SOURCE = 'image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"'
 IMAGE_IMMUTABLE = 'image: "{{ .Values.image.repository }}"'
