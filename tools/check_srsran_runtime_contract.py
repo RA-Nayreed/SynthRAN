@@ -93,8 +93,11 @@ def main() -> None:
         'CONSOLE_LOG="/var/log/ue${UE_NUMBER}.console.log"',
         '>> "$CONSOLE_LOG" 2>&1 &',
         'filename = {log_file}',
+        '"[slicing]\\n"',
+        '"nssai-sst = {sst}\\n"',
+        'slicing += "nssai-sd = {}\\n".format(int(cfg["sd"]))',
     ):
-        require(needle in configmap, f"RFSIM UE log ownership lost: {needle}")
+        require(needle in configmap, f"RFSIM UE log/slice ownership lost: {needle}")
 
     rfsim = text(RFSIM_VERIFY)
     for needle in (
@@ -102,11 +105,16 @@ def main() -> None:
         "imageID",
         "synthran_srsue_live_digest",
         "synthran_srsue_expected_digest",
-        "synthran_srsue_live_digest == synthran_srsue_expected_digest",
+        "synthran_srsue_configured_images[0] == synthran_srsue_image_reference",
+        "synthran_srsue_live_digest | length > 0",
         "srsran-rfsim-ue-runtime.json",
         "selected_ues",
     ):
         require(needle in rfsim, f"RFSIM live-image/evidence contract lost: {needle}")
+    require(
+        "synthran_srsue_live_digest == synthran_srsue_expected_digest" not in rfsim,
+        "RFSIM verifier incorrectly equates an OCI index digest with a platform-manifest imageID",
+    )
 
     broker = text(START_BROKER)
     for forbidden in (
@@ -141,9 +149,15 @@ def main() -> None:
         "/var/log/gnb.log",
         "synthran_gnb_live_image_digest",
         "synthran_gnb_expected_image_digest",
-        "synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest",
+        "synthran_gnb_configured_images[0] == synthran_srsran_image_reference",
+        "synthran_gnb_live_image_digest | length > 0",
+        "synthran_gnb_log_sidecar_configured_images[0] == synthran_log_sidecar_image",
     ):
         require(needle in logging, f"live gNB/log ownership proof lost: {needle}")
+    require(
+        "synthran_gnb_live_image_digest == synthran_gnb_expected_image_digest" not in logging,
+        "generic gNB verifier incorrectly equates an OCI index digest with a platform-manifest imageID",
+    )
 
     health = text(HEALTH)
     for needle in (
@@ -152,16 +166,22 @@ def main() -> None:
         "imageID",
         "synthran_srsran_live_image_digest",
         "synthran_srsran_expected_image_digest",
+        "synthran_srsran_health_final_images[0] == synthran_srsran_image_reference",
+        "synthran_srsran_live_image_digest | length > 0",
         "configured_image_digest",
         "live_image_digest",
+        "pod_spec_image",
         "synthran_gnb_logging_pod",
         "synthran_gnb_logging_config",
         "synthran_gnb_logging_cmdline",
+        "log_line_start",
+        "log_line_mid",
+        "log_line_end",
     ):
         require(needle in health, f"physical live-state evidence lost: {needle}")
     require(
-        "synthran_srsran_live_image_digest == synthran_srsran_expected_image_digest" in health,
-        "physical acceptance no longer compares configured and live image digests",
+        "synthran_srsran_live_image_digest == synthran_srsran_expected_image_digest" not in health,
+        "physical verifier incorrectly equates an OCI index digest with a platform-manifest imageID",
     )
     require(
         "synthran_srsran_live_n2.rc == 0" in health,
@@ -187,6 +207,9 @@ def main() -> None:
         '"template"',
         "_render_case(chart, args.ue_image.strip(), 1)",
         "_render_case(chart, args.ue_image.strip(), 3)",
+        "_validate_generated_ue_configs",
+        "nssai-sst",
+        "nssai-sd",
         "zmqTxPort",
         "zmqRxPort",
         "imsi",
