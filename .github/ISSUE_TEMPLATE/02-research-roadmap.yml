@@ -1,0 +1,110 @@
+name: Research Roadmap
+description: Capture the research direction, experiments, sequencing, infrastructure, milestones, and expected outcomes in one authoritative roadmap.
+title: "Research Roadmap"
+labels:
+  - research
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue as the authoritative working roadmap for the coming months.
+
+        Please write the plan in as much technical and scientific detail as is useful. Bullet points are completely fine. The section structure below is only there to make important details easier to capture; feel free to rename, combine, reorder, remove, or add sections.
+
+        The goal is to preserve enough detail that the work can proceed from this issue without repeatedly reconstructing the decisions, intended experiments, dependencies, infrastructure choices, or expected outcomes from the meeting.
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Meeting sketch
+
+        ![Meeting sketch](https://raw.githubusercontent.com/nayreed/SynthRAN/main/.github/ISSUE_TEMPLATE/assets/research-roadmap-meeting-sketch.jpg)
+
+  - type: textarea
+    id: roadmap
+    attributes:
+      label: Research Roadmap
+      description: Describe the complete plan. Please explain the reasoning behind the sequence and decisions wherever that context matters.
+      value: |
+        ## Overall objective and intended outcome
+        <!-- What should this work achieve over the next six months? What would a strong end-state look like? -->
+
+
+
+
+        ## Architecture and meeting sketch
+
+
+
+
+
+        ## Sequence, phases, and timing
+        <!-- In what order should the work be done, describe phases or approximate timing where useful. Include decision points that determine whether the next phase should proceed or change direction. -->
+
+
+        - [ ]
+
+        - [ ]
+
+        - [ ]
+
+
+
+        ## Implementation and integration work
+        <!-- What needs to be built, modified, integrated, validated, or removed before each research stage can happen? Distinguish implementation work from scientific validation. -->
+
+
+
+
+
+
+
+        ## Milestones and deliverables
+        <!-- What should exist at the end of each major stage: implementation, validated setup, dataset, plots/results, methodology, paper material, thesis material, documentation, or other outputs? -->
+
+
+
+
+
+
+
+
+        ## Success criteria
+        <!-- What would count as a successful six-month outcome? What minimum result would still be scientifically useful? -->
+
+
+
+
+
+
+
+        ## References and technical direction
+        <!-- List papers, standards, repositories, prior experiments, algorithms, protocols, datasets, implementations, or other material that should guide the work. -->
+
+
+
+
+
+
+        ## Priorities if time is limited
+        <!-- If everything cannot be completed in the available period, what should be prioritized first?-->
+
+
+
+
+
+
+
+        ## Longer-term direction
+        <!-- What should this work prepare for after this roadmap period: later experiments, publication, thesis work, larger infrastructure studies, or follow-on research? -->
+
+
+
+
+
+
+
+        ## Anything else
+        <!-- Add any decisions, expectations, caveats, or instructions that are important but do not fit above. -->
+    validations:
+      required: true
