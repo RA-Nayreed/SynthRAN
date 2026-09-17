@@ -290,7 +290,8 @@
     - name: Write shareable bootstrap evidence
       ansible.builtin.copy:
         content: >-
-          {{ {'host_preparation': synthran_host_preparation,
+          {{ {'deployment_hash': synthran_deployment_contract.deployment_hash,
+               'host_preparation': synthran_host_preparation,
                'nodes': synthran_bootstrap_nodes,
                'cluster_nodes': (synthran_bootstrap_cluster_nodes.stdout | from_json)}
              | to_nice_json }}
