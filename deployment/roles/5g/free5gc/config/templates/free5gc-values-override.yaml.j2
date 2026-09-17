@@ -2,8 +2,7 @@
 
 {#
   free5gc-values-override.yaml.j2
-  Generates a Helm values override file from the 5G profile.
-  Inject with: helm upgrade -i free5gc ... -f values-profile-override.yaml
+  Generates a Helm values override file from the effective SynthRAN profile.
 #}
 {# ── helpers ──────────────────────────────────────────────── #}
 {%- set serving_plmn_id = profile.plmn.mcc ~ profile.plmn.mnc -%}
@@ -15,11 +14,6 @@
 {%- macro snssai_key(sst, sd) -%}
   {{- "0%02x%s" | format(sst | int, resolve_sd(sd)) -}}
 {%- endmacro -%}
-
-
-# ============================================================
-# Global: activate NGAP NodePort service (needed when ipvlan/eth0 is DOWN)
-# ============================================================
 
 {% set multinode = (core_node_name is defined and ran_node_name is defined and core_node_name != ran_node_name) %}
 {% set transport = synthran_topology.transport.workload_interfaces.core %}
@@ -37,6 +31,10 @@ global:
 {% if multinode %}
     subnetIP: "{{ chart_networks.n2.subnet_ip }}"
     cidr: "{{ chart_networks.n2.cidr }}"
+    gatewayIP: ""
+{% else %}
+    # The legacy role edited the pinned chart in place for this case. Keep the
+    # same behavior in the one authoritative rendered values adapter instead.
     gatewayIP: ""
 {% endif %}
   n3network:
@@ -112,20 +110,11 @@ free5gc-amf:
           - plmnId:
               mcc: {{ profile.plmn.mcc }}
               mnc: {{ profile.plmn.mnc }}
-          s_nssai:
+            s_nssai:
 {% for slice in profile.slices %}
-            - sst: {{ slice.sst }}
-              sd: {{ "FFFFFF" if slice.sd == "EMPTY" else slice.sd }}
+              - sst: {{ slice.sst | int }}
+                sd: {{ resolve_sd(slice.sd) }}
 {% endfor %}
-        security:
-          integrity_order: [ NIA2, NIA1, NIA0 ]
-          ciphering_order: [ NEA0, NEA1, NEA2 ]
-        network_name:
-          full: Open5GS
-        amf_name: open5gs-amf0
-
-        t3512:
-          value: 540
 
 # ============================================================
 # SMF
