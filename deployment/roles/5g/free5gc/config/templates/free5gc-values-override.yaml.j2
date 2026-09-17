@@ -115,6 +115,15 @@ free5gc-amf:
               - sst: {{ slice.sst | int }}
                 sd: {{ resolve_sd(slice.sd) }}
 {% endfor %}
+        security:
+          integrity_order: [ NIA2, NIA1, NIA0 ]
+          ciphering_order: [ NEA0, NEA1, NEA2 ]
+        network_name:
+          full: Open5GS
+        amf_name: open5gs-amf0
+
+        t3512:
+          value: 540
 
 # ============================================================
 # SMF
