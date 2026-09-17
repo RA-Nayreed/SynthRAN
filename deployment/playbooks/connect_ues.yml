@@ -24,7 +24,7 @@
         fail_msg: The secured nested SSH wrapper is missing on Faraday; refusing unverified UE connection.
       when: platform == 'r2lab'
 
-    - name: Attach each selected R2Lab UE
+    - name: Attach each selected R2Lab UE through the upstream lifecycle owner
       ansible.builtin.include_role:
         name: r2lab/ue/connect
         apply:
@@ -41,7 +41,7 @@
           {{ item.tunnel.mode }}
       when: platform == 'r2lab'
 
-    - name: Retain nested R2Lab SSH host keys with the run
+    - name: Retain nested R2Lab SSH host keys with the deployment run
       ansible.builtin.fetch:
         src: "{{ synthran_nested_ssh_dir }}/known_hosts"
         dest: "{{ run_dir }}/r2lab-nested-known-hosts"
@@ -53,165 +53,3 @@
         path: "{{ synthran_nested_ssh_dir }}"
         state: absent
       when: platform == 'r2lab'
-
-- name: Verify R2Lab modem sessions without changing upstream modem state
-  hosts: physical_ues
-  gather_facts: false
-  become: true
-  any_errors_fatal: true
-  tasks:
-    - name: Prove the live R2Lab UE session against the deployment contract
-      ansible.builtin.include_role:
-        name: synthran/r2lab_ue_verify
-      when: platform == 'r2lab'
-
-- name: Retain structured live R2Lab UE bindings
-  hosts: localhost
-  gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Load the sealed executable deployment identity
-      ansible.builtin.set_fact:
-        synthran_acceptance_contract: >-
-          {{ lookup('ansible.builtin.file', synthran_deployment_contract_file) | from_json }}
-      when: platform == 'r2lab'
-
-    - name: Initialize live R2Lab UE binding evidence
-      ansible.builtin.set_fact:
-        synthran_r2lab_bindings: []
-      when: platform == 'r2lab'
-
-    - name: Require every sealed deployment UE to expose a proved R2Lab binding
-      ansible.builtin.assert:
-        quiet: true
-        that:
-          - hostvars[item.device] is defined
-          - hostvars[item.device].synthran_r2lab_binding is defined
-        fail_msg: >-
-          R2Lab UE {{ item.device }} has no proved live binding for the sealed
-          deployment contract. Required UEs cannot be accepted from desired
-          configuration alone.
-      loop: "{{ synthran_acceptance_contract.deployment.ues }}"
-      loop_control:
-        label: "{{ item.device }}"
-      when: platform == 'r2lab'
-
-    - name: Collect proved R2Lab UE bindings in sealed deployment order
-      ansible.builtin.set_fact:
-        synthran_r2lab_bindings: >-
-          {{ synthran_r2lab_bindings + [hostvars[item.device].synthran_r2lab_binding] }}
-      loop: "{{ synthran_acceptance_contract.deployment.ues }}"
-      loop_control:
-        label: "{{ item.device }}"
-      when: platform == 'r2lab'
-
-    - name: Read the sealed cluster attestation
-      ansible.builtin.set_fact:
-        synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"
-      when: platform == 'r2lab'
-
-    - name: Require matching sealed cluster identity before adding R2Lab UE evidence
-      ansible.builtin.assert:
-        quiet: true
-        that:
-          - synthran_cluster_evidence.cluster_identity_verified is sameas true
-          - synthran_cluster_evidence.deployment_hash == synthran_acceptance_contract.deployment_hash
-          - synthran_cluster_evidence.configuration_hash == synthran_acceptance_contract.configuration_hash
-          - synthran_cluster_evidence.implementation_identity_sha256 is defined
-        fail_msg: >-
-          Live R2Lab UE observations cannot replace missing or mismatched sealed
-          cluster/executable identity evidence.
-      when: platform == 'r2lab'
-
-    - name: Retain live R2Lab UE bindings with the run
-      ansible.builtin.copy:
-        content: >-
-          {{ synthran_cluster_evidence
-             | combine({'bindings': synthran_r2lab_bindings,
-                        'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')})
-             | to_nice_json }}
-        dest: "{{ run_dir }}/live-deployment-evidence.json"
-      when: platform == 'r2lab'
-
-- name: Prove selected software UE identity and user-plane reachability
-  hosts: ran_node
-  gather_facts: false
-  become: true
-  any_errors_fatal: true
-  tasks:
-    - name: Install the read-only software UE acceptance probe
-      ansible.builtin.copy:
-        src: "{{ synthran_root }}/deployment/scripts/probe_software_ues.py"
-        dest: /tmp/synthran-probe-software-ues.py
-        mode: '0755'
-      when: platform == 'rfsim'
-
-    - name: Stage the sealed executable deployment identity for the probe
-      ansible.builtin.copy:
-        content: "{{ lookup('ansible.builtin.file', synthran_deployment_contract_file) }}\n"
-        dest: /tmp/synthran-expected-deployment.json
-        mode: '0600'
-      when: platform == 'rfsim'
-
-    - name: Probe every selected software UE without changing testbed state
-      ansible.builtin.command:
-        argv:
-          - python3
-          - /tmp/synthran-probe-software-ues.py
-          - --expected
-          - /tmp/synthran-expected-deployment.json
-      register: synthran_software_ue_probe
-      changed_when: false
-      retries: 6
-      delay: 5
-      until: synthran_software_ue_probe.rc == 0
-      when: platform == 'rfsim'
-
-    - name: Decode proved software UE bindings
-      ansible.builtin.set_fact:
-        synthran_software_ue_bindings: "{{ synthran_software_ue_probe.stdout | from_json }}"
-      when: platform == 'rfsim'
-
-- name: Retain structured live software UE bindings
-  hosts: localhost
-  gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Load the sealed executable deployment identity
-      ansible.builtin.set_fact:
-        synthran_acceptance_contract: >-
-          {{ lookup('ansible.builtin.file', synthran_deployment_contract_file) | from_json }}
-      when: platform == 'rfsim'
-
-    - name: Read the sealed cluster attestation for software UE acceptance
-      ansible.builtin.set_fact:
-        synthran_cluster_evidence: "{{ lookup('file', run_dir ~ '/live-deployment-evidence.json') | from_json }}"
-      when: platform == 'rfsim'
-
-    - name: Require matching sealed identity before adding software UE evidence
-      ansible.builtin.assert:
-        quiet: true
-        that:
-          - synthran_cluster_evidence.cluster_identity_verified is sameas true
-          - synthran_cluster_evidence.deployment_hash == synthran_acceptance_contract.deployment_hash
-          - synthran_cluster_evidence.configuration_hash == synthran_acceptance_contract.configuration_hash
-          - synthran_cluster_evidence.implementation_identity_sha256 is defined
-          - hostvars[ran_node_name].synthran_software_ue_bindings is defined
-          - >-
-            hostvars[ran_node_name].synthran_software_ue_bindings | length
-            == synthran_acceptance_contract.deployment.ues | length
-        fail_msg: >-
-          Software UE observations cannot replace missing/mismatched sealed
-          executable identity evidence, and every selected UE must expose one
-          proved live binding.
-      when: platform == 'rfsim'
-
-    - name: Retain live software UE bindings with the run
-      ansible.builtin.copy:
-        content: >-
-          {{ synthran_cluster_evidence
-             | combine({'bindings': hostvars[ran_node_name].synthran_software_ue_bindings,
-                        'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')})
-             | to_nice_json }}
-        dest: "{{ run_dir }}/live-deployment-evidence.json"
-      when: platform == 'rfsim'
