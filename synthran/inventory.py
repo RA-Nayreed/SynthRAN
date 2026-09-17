@@ -252,9 +252,6 @@ def main(argv=None):
         "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json",
         context / "reference/EXECUTION_REFERENCE.json",
     )
-    shutil.copyfile(
-        effective_profile_path, context / "group_vars/all/network_profile_resolved.yaml"
-    )
     write_execution_manifest(selected, context, args.run_dir / "execution-manifest.json")
 
     variables = {
