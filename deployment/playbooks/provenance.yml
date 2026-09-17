@@ -99,7 +99,7 @@
     - name: Collect a read-only Kubernetes and Helm snapshot
       ansible.builtin.script:
         cmd: >-
-          {{ synthran_root }}/deployment/scripts/collect_cluster_snapshot.py
+          {{ synthran_execution_root }}/scripts/collect_cluster_snapshot.py
           --namespace {{ synthran_deployment_contract.deployment.topology.namespace | quote }}
         executable: /usr/bin/python3
       environment:
