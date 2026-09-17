@@ -193,6 +193,58 @@ if (( PROVISIONED_RC != 0 )); then
 fi
 echo "State: provisioning-complete."
 
+ACCEPTANCE_PLAYBOOK="$SYNTHRAN_PRIVATE_DIR/ansible/playbooks/acceptance.yml"
+if [[ ! -f "$ACCEPTANCE_PLAYBOOK" ]]; then
+  echo "Staged accepted-testbed verification playbook is missing: $ACCEPTANCE_PLAYBOOK" >&2
+  mark_failed "accepted-testbed-probe" 2 "staged acceptance playbook is missing"
+  exit 2
+fi
+
+ACCEPTANCE_COMMAND=()
+ACCEPTANCE_SKIP_NEXT=false
+for arg in "${DEPLOYMENT_COMMAND[@]}"; do
+  if [[ "$ACCEPTANCE_SKIP_NEXT" == true ]]; then
+    ACCEPTANCE_SKIP_NEXT=false
+    continue
+  fi
+  case "$arg" in
+    --start-at-task)
+      ACCEPTANCE_SKIP_NEXT=true
+      continue
+      ;;
+    --start-at-task=*)
+      continue
+      ;;
+  esac
+  ACCEPTANCE_COMMAND+=("$arg")
+done
+
+ACCEPTANCE_REPLACED=false
+for ((i = 0; i < ${#ACCEPTANCE_COMMAND[@]}; i++)); do
+  case "${ACCEPTANCE_COMMAND[$i]}" in
+    "$SYNTHRAN_PRIVATE_DIR"/ansible/playbooks/*.yml)
+      ACCEPTANCE_COMMAND[$i]="$ACCEPTANCE_PLAYBOOK"
+      ACCEPTANCE_REPLACED=true
+      break
+      ;;
+  esac
+done
+if [[ "$ACCEPTANCE_REPLACED" != true ]]; then
+  echo "Accepted-testbed verification cannot locate the staged deployment playbook argument." >&2
+  mark_failed "accepted-testbed-probe" 2 "deployment playbook argument could not be replaced"
+  exit 2
+fi
+
+echo "Running path-specific accepted-testbed UE/session/user-plane verification."
+ACCEPTANCE_ANSIBLE_RC=0
+run_step "${ACCEPTANCE_COMMAND[@]}" </dev/null >>"$RUN_DIR/ansible.log" 2>&1 || ACCEPTANCE_ANSIBLE_RC=$?
+if (( ACCEPTANCE_ANSIBLE_RC != 0 )); then
+  echo "Accepted-testbed live verification failed with status $ACCEPTANCE_ANSIBLE_RC; deployment was not published for reuse." >&2
+  mark_failed "accepted-testbed-probe" "$ACCEPTANCE_ANSIBLE_RC" "path-specific UE/session/user-plane verification failed"
+  collect_failure_diagnostics "accepted-testbed live verification failure"
+  exit "$ACCEPTANCE_ANSIBLE_RC"
+fi
+
 ACTIVE_DEPLOYMENT_ENDPOINT="$PWD/.synthran/active-deployment.json"
 ACCEPT_RC=0
 run_step "$SYNTHRAN_PYTHON" -m synthran.acceptance accept \
