@@ -1,20 +1,21 @@
 ---
-- name: Read the deployed RFSIM srsUE pod
+- name: Read the deployed RFSIM srsUE workload
   kubernetes.core.k8s_info:
     kind: Pod
     namespace: "{{ ran_ns }}"
-    name: "{{ ue_pod_name }}"
+    label_selectors: "{{ srs_ue_label_selectors }}"
   register: synthran_srsue_live_pod
   changed_when: false
 
-- name: Require the reference-deployed RFSIM UE pod to still exist
+- name: Require one unambiguous reference-deployed RFSIM UE pod
   ansible.builtin.assert:
     quiet: true
     that:
       - synthran_srsue_live_pod.resources | length == 1
+      - synthran_srsue_live_pod.resources[0].metadata.name == ue_pod_name
     fail_msg: >-
-      The reference-deployed RFSIM srsUE pod disappeared before runtime
-      verification.
+      The reference-deployed RFSIM srsUE workload is missing, ambiguous, or no
+      longer matches the pod selected by the pinned lifecycle.
 
 - name: Resolve configured and live srsUE container identity
   ansible.builtin.set_fact:
