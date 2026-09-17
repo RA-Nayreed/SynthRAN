@@ -64,6 +64,28 @@ def _slice_map(network_profile: dict) -> dict[str, dict]:
     return result
 
 
+def _address_cidr(core: str, selected_slice: dict) -> str:
+    """Return the UE session network actually configured by the selected core.
+
+    The profile owns three IPv4 prefix octets (for example ``12.1.1``), while
+    the retained core adapters own the session-network width. OAI and Free5GC
+    consume that value as a /24 pool; the retained Open5GS adapter deliberately
+    configures a /16 session network. Keep the deployment identity aligned with
+    those backend contracts instead of applying one global mask.
+    """
+
+    prefix_lengths = {"oai": 24, "free5gc": 24, "open5gs": 16}
+    try:
+        prefix_length = prefix_lengths[core]
+    except KeyError as error:
+        raise ValueError(f"no UE session-network identity rule for core {core!r}") from error
+    prefix = str(selected_slice["ip_prefix"])
+    # Profile validation already requires exactly three octets. Re-parse here so
+    # deployment identity construction cannot silently widen a malformed prefix.
+    ipaddress.ip_network(prefix + ".0/24", strict=True)
+    return f"{prefix}.0/{prefix_length}"
+
+
 def _software_tunnel(ran: str, core: str, device: str, index: int) -> dict:
     if ran == "srsran":
         return {
@@ -157,13 +179,32 @@ def bindings_match_deployment(deployment: dict, bindings: list[dict]) -> bool:
             return False
         cidr = contract.get("address_cidr")
         address = live.get("address")
+        network = None
         if cidr:
             if not address:
                 return False
             try:
-                if ipaddress.ip_address(str(address)) not in ipaddress.ip_network(str(cidr), strict=False):
+                network = ipaddress.ip_network(str(cidr), strict=False)
+                if ipaddress.ip_address(str(address)) not in network:
                     return False
             except ValueError:
+                return False
+        if deployment.get("platform") == "r2lab":
+            user_plane = live.get("user_plane")
+            if not isinstance(user_plane, dict) or user_plane.get("verified") is not True:
+                return False
+            if user_plane.get("method") != "icmp_echo":
+                return False
+            if user_plane.get("source_interface") != _transport_value(contract, "interface"):
+                return False
+            if user_plane.get("source_address") != address:
+                return False
+            if network is None:
+                return False
+            expected_target = str(network.network_address + 1)
+            if user_plane.get("target_address") != expected_target:
+                return False
+            if not isinstance(user_plane.get("observed_at"), str) or not user_plane.get("observed_at"):
                 return False
     return True
 
@@ -233,7 +274,7 @@ def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
             "sst": str(selected_slice["sst"]),
             "sd": str(selected_slice["sd"]),
             "dnn": selected_slice["dnn"],
-            "address_cidr": f"{selected_slice['ip_prefix']}.0/16",
+            "address_cidr": _address_cidr(core, selected_slice),
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
