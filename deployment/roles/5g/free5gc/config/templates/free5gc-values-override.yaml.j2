@@ -2,8 +2,7 @@
 
 {#
   free5gc-values-override.yaml.j2
-  Generates a Helm values override file from the 5G profile.
-  Inject with: helm upgrade -i free5gc ... -f values-profile-override.yaml
+  Generates a Helm values override file from the effective SynthRAN profile.
 #}
 {# ── helpers ──────────────────────────────────────────────── #}
 {%- set serving_plmn_id = profile.plmn.mcc ~ profile.plmn.mnc -%}
@@ -15,11 +14,6 @@
 {%- macro snssai_key(sst, sd) -%}
   {{- "0%02x%s" | format(sst | int, resolve_sd(sd)) -}}
 {%- endmacro -%}
-
-
-# ============================================================
-# Global: activate NGAP NodePort service (needed when ipvlan/eth0 is DOWN)
-# ============================================================
 
 {% set multinode = (core_node_name is defined and ran_node_name is defined and core_node_name != ran_node_name) %}
 {% set transport = synthran_topology.transport.workload_interfaces.core %}
@@ -37,6 +31,10 @@ global:
 {% if multinode %}
     subnetIP: "{{ chart_networks.n2.subnet_ip }}"
     cidr: "{{ chart_networks.n2.cidr }}"
+    gatewayIP: ""
+{% else %}
+    # The legacy role edited the pinned chart in place for this case. Keep the
+    # same behavior in the one authoritative rendered values adapter instead.
     gatewayIP: ""
 {% endif %}
   n3network:
@@ -100,32 +98,34 @@ free5gc-amf:
           - namf-oam
         servedGuamiList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             amfId: cafe00
         supportTaiList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             tac: {{ "%06d" | format(profile.plmn.tac | int) }}
         plmnSupportList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
-          s_nssai:
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
+            snssaiList:
 {% for slice in profile.slices %}
-            - sst: {{ slice.sst }}
-              sd: {{ "FFFFFF" if slice.sd == "EMPTY" else slice.sd }}
+              - sst: {{ slice.sst | int }}
+                sd: "{{ resolve_sd(slice.sd) }}"
+{% endfor %}
+        supportDnnList:
+{% for slice in profile.slices %}
+          - {{ slice.dnn }}
 {% endfor %}
         security:
-          integrity_order: [ NIA2, NIA1, NIA0 ]
-          ciphering_order: [ NEA0, NEA1, NEA2 ]
-        network_name:
-          full: Open5GS
-        amf_name: open5gs-amf0
-
-        t3512:
-          value: 540
+          integrityOrder: [ NIA2, NIA1, NIA0 ]
+          cipheringOrder: [ NEA0, NEA1, NEA2 ]
+        networkName:
+          full: free5GC
+          short: free
+        t3512Value: 540
 
 # ============================================================
 # SMF
@@ -139,7 +139,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
           - sNssai:
               sst: {{ slice.sst | int }}
-              sd: {{ resolve_sd(slice.sd) }}
+              sd: "{{ resolve_sd(slice.sd) }}"
             dnnInfos:
               - dnn: {{ slice.dnn }}
                 dns:
@@ -157,8 +157,8 @@ free5gc-smf:
 {% endif %}
 {% endfor %}
         plmnList:
-          - mcc: {{ profile.plmn.mcc }}
-            mnc: {{ profile.plmn.mnc }}
+          - mcc: "{{ profile.plmn.mcc }}"
+            mnc: "{{ profile.plmn.mnc }}"
         userplaneInformation:
           upNodes:
             gNB1:
@@ -170,7 +170,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
 {% if slice.sd == "EMPTY" %}
@@ -203,7 +203,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
                       pools:
@@ -233,7 +233,7 @@ free5gc-smf:
 {% for slice in profile.slices %}
                 - sNssai:
                     sst: {{ slice.sst | int }}
-                    sd: {{ resolve_sd(slice.sd) }}
+                    sd: "{{ resolve_sd(slice.sd) }}"
                   dnnUpfInfoList:
                     - dnn: {{ slice.dnn }}
                       pools:
@@ -297,16 +297,16 @@ free5gc-nssf:
       configuration: |-
         nssfName: NSSF
         supportedPlmnList:
-          - mcc: {{ profile.plmn.mcc }}
-            mnc: {{ profile.plmn.mnc }}
+          - mcc: "{{ profile.plmn.mcc }}"
+            mnc: "{{ profile.plmn.mnc }}"
         supportedNssaiInPlmnList:
           - plmnId:
-              mcc: {{ profile.plmn.mcc }}
-              mnc: {{ profile.plmn.mnc }}
+              mcc: "{{ profile.plmn.mcc }}"
+              mnc: "{{ profile.plmn.mnc }}"
             supportedSnssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
-                sd: {{ resolve_sd(slice.sd) }}
+                sd: "{{ resolve_sd(slice.sd) }}"
 {% if slice.sd == "EMPTY" %}
               - sst: {{ slice.sst | int }}
                 sd: ""
@@ -316,14 +316,14 @@ free5gc-nssf:
         taList:
           - tai:
               plmnId:
-                mcc: {{ profile.plmn.mcc }}
-                mnc: {{ profile.plmn.mnc }}
+                mcc: "{{ profile.plmn.mcc }}"
+                mnc: "{{ profile.plmn.mnc }}"
               tac: {{ profile.plmn.tac | int }}
             accessType: 3GPP_ACCESS
             supportedSnssaiList:
 {% for slice in profile.slices %}
               - sst: {{ slice.sst | int }}
-                sd: {{ resolve_sd(slice.sd) }}
+                sd: "{{ resolve_sd(slice.sd) }}"
 {% if slice.sd == "EMPTY" %}
               - sst: {{ slice.sst | int }}
                 sd: ""
