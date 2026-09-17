@@ -33,6 +33,13 @@ def text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def named_task(tasks: list[dict], name: str) -> dict:
+    for task in tasks:
+        if task.get("name") == name:
+            return task
+    raise SystemExit(f"missing required task: {name}")
+
+
 def main() -> None:
     require(not RFSIM_HARDEN.exists(), "duplicate deploy-stage RFSIM hardening owner returned")
     require(not LEGACY_DEPLOY_PATCH.exists(), "deploy-stage RFSIM chart mutation owner returned")
@@ -115,6 +122,9 @@ def main() -> None:
 
     rfsim = text(RFSIM_VERIFY)
     for needle in (
+        'label_selectors: "{{ srs_ue_label_selectors }}"',
+        "synthran_srsue_live_pod.resources | length == 1",
+        "synthran_srsue_live_pod.resources[0].metadata.name == ue_pod_name",
         "synthran_srsue_image_reference",
         "imageID",
         "synthran_srsue_live_digest",
@@ -140,14 +150,17 @@ def main() -> None:
     )
 
     broker = text(START_BROKER)
+    broker_tasks = yaml.safe_load(broker)
     for forbidden in (
         "pkill -9 python3",
+        "pkill -9 srsue",
         "ue_indices",
         "add_route.sh",
         "gnb_pod_name_result",
         "tee /var/log/gnu_multi_ue.log",
         "tee /var/log/ue",
         "PDU Session Establishment successful",
+        "-c gnb-logs",
     ):
         require(forbidden not in broker, f"buggy RFSIM startup/evidence code returned: {forbidden}")
     for needle in (
@@ -156,12 +169,23 @@ def main() -> None:
         "synthran_gnb_logging_pod",
         ".console.log",
         "ip -4 -o addr show dev tun_srsue",
+        "set -euo pipefail",
         "Require the gNB cell to activate",
         "Require the GNU Radio broker to start",
         "Require the gNB to establish NGAP with the AMF",
         "Require every configured UE to establish a PDU-session tunnel",
+        "Require the GNU Radio broker to remain alive after UE establishment",
     ):
         require(needle in broker, f"RFSIM startup contract lost: {needle}")
+    broker_start = named_task(broker_tasks, "Start GNU Radio broker in tmux window 'gnu'")
+    require("failed_when" not in broker_start, "GNU Radio startup mutation must fail immediately")
+    tunnel_wait = named_task(broker_tasks, "Wait for all configured UE tunnels")
+    require(
+        tunnel_wait.get("retries") == 60 and tunnel_wait.get("delay") == 2,
+        "outer RFSIM tunnel wait must cover the 100-second in-pod startup window",
+    )
+    live_addresses = named_task(broker_tasks, "Read live UE tunnel addresses")
+    require("failed_when" not in live_addresses, "final live tunnel evidence must be strict")
 
     logging = text(VERIFY_LOGGING)
     for needle in (
