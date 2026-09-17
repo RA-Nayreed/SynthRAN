@@ -1,0 +1,105 @@
+name: Research Roadmap
+description: Capture the research direction, experiments, sequencing, infrastructure, milestones, and expected outcomes in one authoritative roadmap.
+title: "Research Roadmap"
+labels:
+  - research
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue as the authoritative working roadmap for the coming months.
+
+        Please write the plan in as much technical and scientific detail as is useful. Bullet points are completely fine. The section structure below is only there to make important details easier to capture; feel free to rename, combine, reorder, remove, or add sections.
+
+        The goal is to preserve enough detail that the work can proceed from this issue without repeatedly reconstructing the decisions, intended experiments, dependencies, infrastructure choices, or expected outcomes from the meeting.
+
+  - type: textarea
+    id: roadmap
+    attributes:
+      label: Research Roadmap
+      description: Describe the complete plan. Please explain the reasoning behind the sequence and decisions wherever that context matters.
+      value: |
+        ## Overall objective and intended outcome
+        <!-- What should this work achieve over the next approximately six months? What would a strong end-state look like? -->
+
+        
+
+        ## Research questions and scientific goals
+        <!-- What questions should the work answer? Which mechanisms, comparisons, or claims are worth investigating? -->
+
+        
+
+        ## Architecture and meeting sketch
+        <!-- Explain the architecture/topology discussed in the meeting and what each component, connection, number, stage, UE, BS, sensor/gateway, radio/network element, and grouping represents. Clarify which parts are modeled, emulated, or physically measured, and how the Ambient-IoT side relates to the 5G/6G transport side. -->
+
+        
+
+        ## Proposed experiments and studies
+        <!-- For each experiment or study, describe its purpose, setup, variables/treatments, controls, fixed conditions, comparisons, expected observations, measurements/KPIs, and what result would be scientifically meaningful. -->
+
+        
+
+        ## Sequence, phases, and timing
+        <!-- In what order should the work be done, and why? Describe phases or approximate timing where useful. Include decision points that determine whether the next phase should proceed or change direction. -->
+
+        
+
+        ## Implementation and integration work
+        <!-- What needs to be built, modified, integrated, validated, or removed before each research stage can happen? Distinguish implementation work from scientific validation. -->
+
+        
+
+        ## Testbeds, infrastructure, and resources
+        <!-- Which environments and resources should be used for which parts of the work? Where relevant, explain the role of SLICES/R2Lab, 5GTN, 6GTN, 6GTN+, OAI, srsRAN, N300/N320 or other radios, UE hardware, servers/nodes, core/RAN choices, slices/QoS, traffic generators, collectors, or other infrastructure. -->
+
+        
+
+        ## Scaling and topology plan
+        <!-- Explain the intended scale points and mappings: sensor counts, gateway UE counts, physical UE counts, BS/RAN configuration, traffic/load levels, 1-to-N / N-to-1 / N-to-N relationships, and why particular scale points matter. -->
+
+        
+
+        ## Measurements, evidence, and evaluation
+        <!-- What should be measured? Which KPIs, traces, logs, datasets, baselines, repetitions, statistical comparisons, or acceptance criteria matter? What evidence would support, weaken, or reject the intended conclusions? -->
+
+        
+
+        ## Milestones and deliverables
+        <!-- What should exist at the end of each major stage: implementation, validated setup, dataset, plots/results, methodology, paper material, thesis material, documentation, or other outputs? -->
+
+        
+
+        ## Success criteria
+        <!-- What would count as a successful six-month outcome? What minimum result would still be scientifically useful? -->
+
+        
+
+        ## Dependencies, access, and collaboration
+        <!-- What must happen before later stages can begin? Include infrastructure access, hardware availability, software dependencies, permissions, people/groups to coordinate with, and prerequisite experiments or results. -->
+
+        
+
+        ## References and technical direction
+        <!-- List papers, standards, repositories, prior experiments, algorithms, protocols, datasets, implementations, or other material that should guide the work. -->
+
+        
+
+        ## Constraints, risks, and out-of-scope directions
+        <!-- What should be avoided? What could make the work scientifically invalid, unnecessarily complex, misleading, or outside the intended scope? Note important technical risks or confounders. -->
+
+        
+
+        ## Priorities if time is limited
+        <!-- If everything cannot be completed in the available period, what should be prioritized first? What can be postponed or dropped? -->
+
+        
+
+        ## Longer-term direction
+        <!-- What should this work prepare for after this roadmap period: later experiments, publication, thesis work, larger infrastructure studies, or follow-on research? -->
+
+        
+
+        ## Anything else
+        <!-- Add any decisions, expectations, caveats, or instructions that are important but do not fit above. -->
+    validations:
+      required: true
