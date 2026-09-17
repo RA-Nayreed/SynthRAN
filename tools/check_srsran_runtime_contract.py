@@ -75,6 +75,12 @@ def main() -> None:
         "python3-pip",
         "python3-venv",
         "CAP_NET_ADMIN",
+        "apt update",
+        "apt-get update",
+        "apt install",
+        "apt-get install",
+        "iputils-ping",
+        "iperf3",
     ):
         require(forbidden not in prepared, f"obsolete/buggy RFSIM chart code returned: {forbidden}")
     require(
@@ -115,10 +121,19 @@ def main() -> None:
         "synthran_srsue_expected_digest",
         "synthran_srsue_configured_images[0] == synthran_srsue_image_reference",
         "synthran_srsue_live_digest | length > 0",
+        "Verify baked RFSIM runtime prerequisites",
+        "command -v tmux",
+        "command -v python3",
+        "command -v ip",
+        "from gnuradio import gr, zeromq, blocks",
+        "tmux new-session -d -s ran",
+        "tmux has-session -t ran",
+        "runtime_prerequisites_verified",
+        "tmux_session_verified",
         "srsran-rfsim-ue-runtime.json",
         "selected_ues",
     ):
-        require(needle in rfsim, f"RFSIM live-image/evidence contract lost: {needle}")
+        require(needle in rfsim, f"RFSIM live-image/runtime evidence contract lost: {needle}")
     require(
         "synthran_srsue_live_digest == synthran_srsue_expected_digest" not in rfsim,
         "RFSIM verifier incorrectly equates an OCI index digest with a platform-manifest imageID",
