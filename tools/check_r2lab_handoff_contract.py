@@ -107,6 +107,9 @@ def main() -> int:
     connect_role = (
         ROOT / "deployment/roles/r2lab/ue/connect/tasks/main.yml"
     ).read_text(encoding="utf-8")
+    qmi_role = (
+        ROOT / "deployment/roles/r2lab/ue/connect/tasks/qmi.yml"
+    ).read_text(encoding="utf-8")
     verify_role = (
         ROOT / "deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml"
     ).read_text(encoding="utf-8")
@@ -156,33 +159,52 @@ def main() -> int:
     )
     require("ue_mode == 'qmi'" in stop, "selected QMI UE detach behavior is missing")
 
-    # The mutating connect role is the authoritative owner of attachment. A
-    # failed start, missing wwan0 address, bad link, or route failure must stop
-    # there instead of being swallowed and rediscovered by the read-only gate.
+    # Sub 09 makes the selected deployment contract the sole attachment input.
+    # The handoff must fail closed at the mutating owner; the later verifier is
+    # deliberately read-only and may not become a repair path.
     require(
-        "ignore_task_errors: false" in connect_playbook,
-        "SynthRAN no longer requires the R2Lab connect owner to fail closed",
+        "any_errors_fatal: true" in connect_playbook,
+        "R2Lab UE attachment orchestration no longer fails closed",
     )
     require(
-        "ignore_task_errors: true" not in connect_playbook,
-        "SynthRAN R2Lab handoff returned to best-effort attachment",
-    )
-    for task_name in (
-        "Retrieve wwan0 IP for {{ ue_item }}",
-        "Wait until wwan0 interface is fully up",
-        "Add route to UPF IP when wwan0 is ready",
-    ):
-        require(task_name in connect_role, f"required UE connect task disappeared: {task_name}")
-    require(
-        connect_role.count("ignore_errors: true") == 1
-        and "Check wwan0 connectivity on {{ ue_item }} by pinging UPF" in connect_role,
-        "required UE attachment tasks can silently ignore failure",
+        'loop: "{{ synthran_ue_map }}"' in connect_playbook
+        and 'synthran_r2lab_ue: "{{ item }}"' in connect_playbook
+        and 'ue_item: "{{ item.device }}"' in connect_playbook,
+        "R2Lab UE attachment no longer iterates exact selected contract entries",
     )
     require(
-        connect_role.count(
-            'ignore_errors: "{{ ignore_task_errors | default(true) }}"'
-        ) >= 8,
-        "R2Lab connect role no longer exposes strict failure control to SynthRAN",
+        "ignore_task_errors" not in connect_playbook,
+        "R2Lab UE handoff reintroduced a best-effort compatibility knob",
+    )
+    require(
+        "network_profile_file" not in connect_role and "fiveg." not in connect_role,
+        "R2Lab connect owner reintroduced independent profile reconstruction",
+    )
+    require(
+        "Attach the selected MBIM context with the installed R2Lab helpers" in connect_role
+        and "stop.sh; start.sh -F {{ mbim_access_string }}" in connect_role
+        and "Require the selected MBIM helper to complete" in connect_role,
+        "selected MBIM attachment is no longer explicit and fail closed",
+    )
+    require(
+        "Wait for the selected UE IPv4 session on its modem interface" in connect_role
+        and "Wait for the selected modem interface to be operational" in connect_role
+        and "Route the selected UPF endpoint through the modem interface" in connect_role,
+        "required selected UE address/link/route handoff tasks disappeared",
+    )
+    require(
+        "ignore_errors" not in connect_role,
+        "selected UE attachment can silently ignore a main-path failure",
+    )
+    require(
+        "synthran_qmi_manager_acceptable" in qmi_role
+        and "Require the selected QMI attachment procedure to complete" in qmi_role
+        and "not wwan0_up or synthran_qmi_existing.rc == 0" in qmi_role,
+        "selected QMI handoff no longer rejects ambiguous or stale live manager identity",
+    )
+    require(
+        "ignore_errors" not in qmi_role,
+        "selected QMI attachment can silently ignore a lifecycle failure",
     )
     require(
         "that: synthran_r2lab_probe.rc == 0" in verify_role
