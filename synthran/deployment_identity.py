@@ -14,6 +14,7 @@ from .deployment_state import content_hash
 ROOT = Path(__file__).resolve().parents[1]
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_EXECUTION_MANIFEST_SCHEMA = 1
 
 
 def _json_object(path: str | Path, label: str) -> dict[str, Any]:
@@ -47,76 +48,110 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _iter_files(entries: Iterable[Path]) -> list[Path]:
-    files: set[Path] = set()
+def _files(entries: Iterable[Path]) -> list[Path]:
+    result: set[Path] = set()
     for entry in entries:
         if entry.is_file():
-            files.add(entry.resolve())
+            result.add(entry.resolve())
         elif entry.is_dir():
             for path in entry.rglob("*"):
-                if path.is_file() and ".git" not in path.parts and "__pycache__" not in path.parts:
-                    files.add(path.resolve())
-    return sorted(files, key=lambda path: str(path.relative_to(ROOT)))
+                if path.is_file() and "__pycache__" not in path.parts:
+                    result.add(path.resolve())
+    return sorted(result)
 
 
-def selected_adapter_identity(deployment: dict[str, Any]) -> dict[str, Any]:
-    """Hash executable files that can change the selected deployment/acceptance path."""
-
+def _selected_staged_entries(deployment: dict[str, Any], staged_root: Path) -> list[Path]:
     core = str(deployment.get("core", "")).lower()
     ran = str(deployment.get("ran", "")).lower()
     platform = str(deployment.get("platform", "")).lower()
     ran_path = "srsRAN" if ran == "srsran" else ran
-
     entries = [
-        ROOT / "pyproject.toml",
-        ROOT / "deploy.sh",
-        ROOT / "deployment/ansible.cfg",
-        ROOT / "deployment/collections/requirements.yml",
-        ROOT / "deployment/scripts/run_deployment.sh",
-        ROOT / "deployment/scripts/collect_cluster_snapshot.py",
-        ROOT / "deployment/playbooks/site.yml",
-        ROOT / "deployment/playbooks/acceptance.yml",
-        ROOT / "deployment/playbooks/provision_nodes.yml",
-        ROOT / "deployment/playbooks/provision_r2lab.yml",
-        ROOT / "deployment/playbooks/bootstrap_nodes.yml",
-        ROOT / "deployment/playbooks/network.yml",
-        ROOT / "deployment/playbooks/attest_transport.yml",
-        ROOT / "deployment/playbooks/attest_deployment.yml",
-        ROOT / "deployment/playbooks/connect_ues.yml",
-        ROOT / "deployment/playbooks/provenance.yml",
-        ROOT / "deployment/topology.yml",
-        ROOT / "deployment/group_vars/all/all.yml",
-        ROOT / "deployment/roles/setup",
-        ROOT / "deployment/roles/5g" / core,
-        ROOT / "deployment/roles/5g" / ran_path,
-        ROOT / "synthran/scenario.py",
-        ROOT / "synthran/profile_validation.py",
-        ROOT / "synthran/inventory.py",
-        ROOT / "synthran/deployment_state.py",
-        ROOT / "synthran/cluster_identity.py",
-        ROOT / "synthran/deployment_identity.py",
-        ROOT / "synthran/acceptance.py",
+        staged_root / "playbooks",
+        staged_root / "group_vars/all/all.yml",
+        staged_root / "roles/setup",
+        staged_root / "roles/5g" / core,
+        staged_root / "roles/5g" / ran_path,
+        staged_root / "scripts/collect_cluster_snapshot.py",
+        staged_root / "reference/EXECUTION_REFERENCE.json",
     ]
     if platform == "r2lab":
         entries.extend(
             [
-                ROOT / "deployment/scripts/probe_r2lab_ue.py",
-                ROOT / "deployment/roles/r2lab",
-                ROOT / "deployment/roles/synthran/r2lab_ue_verify",
-                ROOT / "synthran/r2lab.py",
+                staged_root / "roles/r2lab",
+                staged_root / "roles/synthran/r2lab_ue_verify",
+                staged_root / "scripts/probe_r2lab_ue.py",
+                staged_root / "scripts/secure_ssh_wrapper.py",
             ]
         )
     elif platform == "rfsim":
-        entries.append(ROOT / "deployment/scripts/probe_software_ues.py")
+        entries.append(staged_root / "scripts/probe_software_ues.py")
+    return entries
 
-    files = _iter_files(entries)
+
+def _repository_path(staged_root: Path, path: Path) -> str:
+    relative = path.relative_to(staged_root)
+    if relative.parts[0] == "reference":
+        return "third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json"
+    return str(Path("deployment") / relative)
+
+
+def build_execution_manifest(
+    deployment: dict[str, Any], staged_root: str | Path
+) -> dict[str, Any]:
+    """Describe the exact selected Ansible inputs staged for this run."""
+
+    staged_root = Path(staged_root).resolve()
+    files = _files(_selected_staged_entries(deployment, staged_root))
     if not files:
-        raise ValueError("selected deployment adapter identity contains no files")
+        raise ValueError("selected staged execution context contains no files")
     records = [
-        {"path": str(path.relative_to(ROOT)), "sha256": _sha256_file(path)}
+        {"path": _repository_path(staged_root, path), "sha256": _sha256_file(path)}
         for path in files
     ]
-    return {"sha256": content_hash(records), "file_count": len(records)}
+    return {
+        "schema_version": _EXECUTION_MANIFEST_SCHEMA,
+        "file_count": len(records),
+        "sha256": content_hash(records),
+        "files": records,
+    }
+
+
+def write_execution_manifest(
+    deployment: dict[str, Any], staged_root: str | Path, output: str | Path
+) -> dict[str, Any]:
+    manifest = build_execution_manifest(deployment, staged_root)
+    output = Path(output)
+    output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _execution_manifest(run_dir: Path) -> dict[str, Any]:
+    value = _json_object(run_dir / "execution-manifest.json", "staged execution manifest")
+    files = value.get("files")
+    if value.get("schema_version") != _EXECUTION_MANIFEST_SCHEMA or not isinstance(files, list):
+        raise ValueError("staged execution manifest schema is unsupported")
+    if value.get("file_count") != len(files) or value.get("sha256") != content_hash(files):
+        raise ValueError("staged execution manifest failed its integrity check")
+    return value
+
+
+def validate_current_execution_inputs(manifest: dict[str, Any]) -> None:
+    """Reject reuse when any file that was actually staged for the run changed."""
+
+    for record in manifest["files"]:
+        if not isinstance(record, dict):
+            raise ValueError("staged execution manifest contains a malformed file record")
+        relative = str(record.get("path", ""))
+        expected = str(record.get("sha256", ""))
+        path = (ROOT / relative).resolve()
+        try:
+            path.relative_to(ROOT)
+        except ValueError as exc:
+            raise ValueError("staged execution manifest contains a path outside the repository") from exc
+        if not path.is_file() or _sha256_file(path) != expected:
+            raise ValueError(
+                f"current deployment input {relative!r} differs from the accepted staged execution context"
+            )
 
 
 def execution_reference() -> dict[str, str]:
@@ -204,17 +239,15 @@ def controller_source_provenance(run_dir: Path) -> dict[str, Any]:
 def validate_current_implementation_inputs(
     identity: dict[str, Any], run_dir: str | Path
 ) -> None:
-    """Reject reuse when current deployment-affecting code/source pins changed."""
-
     deployment = identity.get("deployment")
     implementation = identity.get("implementation")
     if not isinstance(deployment, dict) or not isinstance(implementation, dict):
         raise ValueError("accepted deployment identity is missing implementation inputs")
     run_dir = Path(run_dir).resolve()
-    if selected_adapter_identity(deployment) != implementation.get("selected_adapter"):
-        raise ValueError(
-            "current deployment/acceptance implementation differs from the accepted-testbed identity; redeploy before reuse"
-        )
+    manifest = _execution_manifest(run_dir)
+    if manifest.get("sha256") != implementation.get("execution_context", {}).get("sha256"):
+        raise ValueError("accepted execution manifest differs from the sealed implementation identity")
+    validate_current_execution_inputs(manifest)
     if selected_source_pins(deployment, run_dir) != implementation.get("reviewed_sources"):
         raise ValueError(
             "current immutable deployment source pins differ from the accepted-testbed identity; redeploy before reuse"
@@ -281,10 +314,15 @@ def build_implementation_identity(
     if not isinstance(deployment, dict):
         raise ValueError("candidate deployment identity has no deployment mapping")
     run_dir = Path(run_dir).resolve()
+    execution = _execution_manifest(run_dir)
+    validate_current_execution_inputs(execution)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "execution_context": {
+            "sha256": execution["sha256"],
+            "file_count": execution["file_count"],
+        },
         "reviewed_sources": selected_source_pins(deployment, run_dir),
-        "selected_adapter": selected_adapter_identity(deployment),
         "selected_runtime": selected_runtime_refs(deployment, run_dir),
         "cluster_runtime": selected_cluster_runtime_identity(deployment, run_dir),
     }
