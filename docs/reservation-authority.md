@@ -1,6 +1,6 @@
 # Resource acquisition and POS preparation
 
-SynthRAN is the single authority for external testbed acquisition and POS host preparation. This boundary is deliberately retained even as downstream host, Kubernetes, transport, core and RAN provisioning move toward the pinned 5g-Ansible implementation.
+SynthRAN is the single authority for external testbed acquisition and POS host preparation. This boundary is deliberately retained even as downstream host, Kubernetes, transport, core and RAN provisioning selectively delegates reviewed task files from the pinned original `sopnode/5g_ansible` execution reference.
 
 The resolved deployment snapshot must contain explicit, independent policy for provider context, POS calendar acquisition, host preparation and R2Lab acquisition **before any remote mutation occurs**. `synthran.scenario` canonicalizes older `enabled` booleans into these fields when loading a source scenario; the private resolved scenario written by `deploy.sh` is therefore explicit before `synthran.reservation` runs. Interactive deployment exposes the same explicit choices in the wizard rather than deciding policy later inside the reservation engine.
 
@@ -71,8 +71,8 @@ When provider mode is enabled, the order is:
 
 After allocation authority is proven for the complete selected resource set, phase 2 prepares each exact node in this order:
 
-1. select the resolved scenario image with the reference staging mechanic;
-2. apply the pinned 5g-Ansible SOP/N3xx boot parameters;
+1. select the resolved scenario image with the reviewed upstream staging mechanic;
+2. apply the pinned original-upstream SOP/N3xx boot parameters;
 3. perform a blocking POS reset;
 4. prove SSH readiness with a bounded retry.
 
@@ -106,21 +106,17 @@ Every reservation pass writes `results/<run>/reservation-authority.json` increme
 
 ## Downstream 5g-Ansible boundary
 
-A future pinned 5g-Ansible invocation after this layer must always use:
+The pinned execution/comparison authority is the original `sopnode/5g_ansible@b73fccf87f55060484b3759e9cb347222253534b`. Pure upstream does **not** provide the fork-only provider/reservation machine API or a `pos_manage_allocation=false` suppression switch. Its POS role frees and allocates before the `no_boot` guard, and `playbooks/deploy_r2lab.yml` also owns cleanup, RRU and UE preparation.
 
-```yaml
-provider:
-  manage: false
-reservation:
-  enabled: false
-  r2lab_mode: none
-deployment:
-  pos_manage_allocation: false
-  extra_vars:
-    no_boot: true
+Therefore, after SynthRAN has acquired or prepared external resources, these full upstream entrypoints are forbidden:
+
+```text
+playbooks/deploy.yml
+playbooks/deploy_r2lab.yml
+playbooks/run_pos.yml
 ```
 
-`tools/check_resource_authority_contract.py` proves that the pinned reference still honors this suppression boundary. This prevents a second provider, calendar, R2Lab, allocation or boot engine from becoming active later in the call graph.
+Downstream delegation is limited to task files explicitly reviewed in `third_party/sopnode-5g-ansible/EXECUTION_REFERENCE.json`. `tools/check_resource_authority_contract.py` proves both sides of this boundary: the original upstream still owns/reacquires external state through its full entrypoints, and SynthRAN runtime code does not invoke those entrypoints from the pinned checkout. This prevents a second provider, calendar, R2Lab, allocation or boot engine from becoming active later in the call graph.
 
 ## Validation boundary
 
