@@ -212,7 +212,9 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - item in (open5gs_subscriber_listing.stdout | default(''))
+      - >-
+        item in ((open5gs_subscriber_listing.stdout | default('')) ~
+                 (open5gs_subscriber_listing.stderr | default('')))
     fail_msg: >-
       A selected Open5GS subscriber was not found after database reconciliation.
   loop: "{{ fiveg.ues | list }}"
