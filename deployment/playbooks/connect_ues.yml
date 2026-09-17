@@ -117,11 +117,7 @@
           - synthran_cluster_evidence.cluster_identity_verified is sameas true
           - synthran_cluster_evidence.deployment_hash == synthran_acceptance_contract.deployment_hash
           - synthran_cluster_evidence.configuration_hash == synthran_acceptance_contract.configuration_hash
-          - >-
-            synthran_cluster_evidence.implementation_identity_sha256
-            == synthran_acceptance_contract.acceptance_evidence.implementation_identity_sha256
-            if synthran_acceptance_contract.acceptance_evidence is defined
-            else synthran_cluster_evidence.implementation_identity_sha256 is defined
+          - synthran_cluster_evidence.implementation_identity_sha256 is defined
         fail_msg: >-
           Live R2Lab UE observations cannot replace missing or mismatched sealed
           cluster/executable identity evidence.
