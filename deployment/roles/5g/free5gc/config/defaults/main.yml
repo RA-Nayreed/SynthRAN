@@ -2,7 +2,7 @@
 free5gc_repo_url: "https://github.com/sopnode/free5gc-helm.git"
 free5gc_repo_dest: "/root/free5gc-helm"
 free5gc_repo_branch: "499ad3d6b0c0c8879f49edcc174f306ee72a4ff4"
-free5gc_root: "{{ repo_dest }}/charts/free5gc"
+free5gc_root: "{{ free5gc_repo_dest }}/charts/free5gc"
 core_ns: "free5gc"
 free5gc_prepare_node: true
 
