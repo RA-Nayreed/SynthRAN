@@ -8,7 +8,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .deployment_identity import build_implementation_identity, validate_current_cluster_runtime
+from .deployment_identity import (
+    build_implementation_identity,
+    validate_current_cluster_runtime,
+    validate_retained_execution_context,
+)
 from .deployment_state import bindings_match_deployment, content_hash, read_json
 
 ACCEPTANCE_SCHEMA_VERSION = 1
@@ -84,6 +88,7 @@ def seal_provisioning(
     candidate_path: str | Path,
     evidence_path: str | Path,
     run_dir: str | Path,
+    private_dir: str | Path,
 ) -> dict[str, Any]:
     candidate_path = Path(candidate_path)
     evidence_path = Path(evidence_path)
@@ -97,7 +102,7 @@ def seal_provisioning(
     if evidence.get("deployment_hash") != configuration_hash:
         raise ValueError("live evidence does not match the provisioned configuration identity")
 
-    implementation = build_implementation_identity(candidate, run_dir)
+    implementation = build_implementation_identity(candidate, run_dir, private_dir)
     implementation_hash = content_hash(implementation)
     candidate["acceptance_schema_version"] = ACCEPTANCE_SCHEMA_VERSION
     candidate["configuration_hash"] = configuration_hash
@@ -241,14 +246,7 @@ def accept(
     evidence = validate_live_evidence(candidate_path, evidence_path, max_age_seconds=300)
     validate_current_cluster_runtime(identity, cluster_snapshot_path)
     validate_prerequisite_evidence(identity, candidate_path.parent)
-
-    required_private = [private_dir / "inventory.yml", private_dir / "deployment-vars.yml"]
-    missing = [str(path) for path in required_private if not path.is_file()]
-    if missing:
-        raise ValueError(
-            "cannot publish accepted deployment endpoint; missing private execution files: "
-            + ", ".join(missing)
-        )
+    validate_retained_execution_context(identity, candidate_path.parent, private_dir)
 
     cluster_snapshot = read_json(cluster_snapshot_path)
     cluster_observed_at = _parse_observed_at(
@@ -305,6 +303,7 @@ def _parser() -> argparse.ArgumentParser:
     provisioned.add_argument("--candidate", required=True)
     provisioned.add_argument("--evidence", required=True)
     provisioned.add_argument("--run-dir", required=True)
+    provisioned.add_argument("--private-dir", required=True)
 
     accepted = commands.add_parser("accept")
     accepted.add_argument("--candidate", required=True)
@@ -326,7 +325,7 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     try:
         if args.command == "provisioning-complete":
-            seal_provisioning(args.candidate, args.evidence, args.run_dir)
+            seal_provisioning(args.candidate, args.evidence, args.run_dir, args.private_dir)
         elif args.command == "accept":
             accept(
                 args.candidate,
