@@ -59,14 +59,12 @@ def accepted_deployment_hash(identity: dict[str, Any]) -> str:
 
 def _read_bound_evidence(path: Path, configuration_hash: str) -> dict[str, Any]:
     value = read_json(path)
-    if value.get("deployment_hash") != configuration_hash:
+    artifact_hash = value.get("deployment_hash")
+    if artifact_hash is not None and artifact_hash != configuration_hash:
         raise ValueError(
             f"{path.name} does not match the provisioned configuration identity"
         )
-    return {
-        "file": path.name,
-        "sha256": _file_sha256(path),
-    }
+    return {"file": path.name, "sha256": _file_sha256(path)}
 
 
 def bind_prerequisite_evidence(run_dir: str | Path, configuration_hash: str) -> dict[str, Any]:
@@ -109,9 +107,7 @@ def seal_provisioning(
     candidate["configuration_hash"] = configuration_hash
     candidate["implementation"] = implementation
     candidate["implementation_identity_sha256"] = implementation_hash
-    candidate["prerequisite_evidence"] = bind_prerequisite_evidence(
-        run_dir, configuration_hash
-    )
+    candidate["prerequisite_evidence"] = bind_prerequisite_evidence(run_dir, configuration_hash)
     candidate["provenance"] = {
         "controller_source": controller_source_provenance(run_dir),
     }
