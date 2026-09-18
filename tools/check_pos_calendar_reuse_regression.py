@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regression checks for reuse of an active exact POS reservation.
 
-Physical validation on 2026-09-16 exposed a rolling-duration bug: a 120-minute
-reservation stopped qualifying for reuse as soon as wall-clock time elapsed, so
-SynthRAN attempted to create an overlapping reservation and POS returned -1.
+Create mode may reuse an exact active reservation, but only when the event still
+covers the requested interval from the current time. An almost-expired booking
+must fail closed rather than being accepted from its original booked length or
+triggering an overlapping create.
 """
 
 from __future__ import annotations
@@ -75,10 +76,13 @@ def main() -> int:
 
     try:
         active_120 = event("6536", start=start, duration_minutes=120, nodes=selected)
+
+        # Seven minutes have elapsed, leaving 113 minutes. A 110-minute request
+        # is safe to reuse and must not create an overlapping event.
         fake = CalendarOnlyFake([active_120])
         reservation.run = fake
         record = reservation.acquire_calendar(
-            {"mode": "create", "duration_minutes": 120},
+            {"mode": "create", "duration_minutes": 110},
             selected=selected,
             owner="ci-user",
             now=now,
@@ -88,8 +92,23 @@ def main() -> int:
         if any(call[:3] == ["pos", "calendar", "create"] for call in fake.calls):
             raise CheckError("create mode attempted a second overlapping reservation")
 
-        # require-existing remains a remaining-coverage promise. Seven elapsed
-        # minutes means this same event no longer covers a fresh 120-minute window.
+        # The original 120-minute booked length is not enough to satisfy a new
+        # 120-minute request once seven minutes have elapsed.
+        insufficient = CalendarOnlyFake([active_120])
+        reservation.run = insufficient
+        expect_error(
+            lambda: reservation.acquire_calendar(
+                {"mode": "create", "duration_minutes": 120},
+                selected=selected,
+                owner="ci-user",
+                now=now,
+            ),
+            "remaining coverage",
+        )
+        if any(call[:3] == ["pos", "calendar", "create"] for call in insufficient.calls):
+            raise CheckError("insufficient active reservation triggered overlapping create")
+
+        # require-existing is also a remaining-coverage promise.
         strict = CalendarOnlyFake([active_120])
         reservation.run = strict
         expect_error(
@@ -117,7 +136,7 @@ def main() -> int:
                 owner="ci-user",
                 now=now,
             ),
-            "shorter than requested",
+            "remaining coverage",
         )
         if any(call[:3] == ["pos", "calendar", "create"] for call in short.calls):
             raise CheckError("short active reservation triggered overlapping create")
