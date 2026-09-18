@@ -98,6 +98,8 @@ def static_contract() -> None:
         "--no-hooks",
         "Remove a known orphaned incompatible Deployment",
         "Remove any known orphaned incompatible pods and wait for CNI teardown",
+        "Recheck incompatible pods before releasing the RU attachment definition",
+        "Refuse to delete an RU NAD while an incompatible pod is still present",
         "Remove an incompatible RU NAD only after its pods are gone",
         "Prove exclusive pre-launch ownership for the selected RAN",
         "ran-transition.json",
@@ -105,6 +107,7 @@ def static_contract() -> None:
         require(needle in role, f"transition lost required contract surface: {needle}")
 
     require("--all-namespaces" not in role, "transition must not touch unrelated namespaces")
+    require("--cascade=foreground" in role, "orphan Deployment cleanup must wait for dependent pods")
     require("!= 'uninstalled'" in role, "Helm history is no longer distinguished from live ownership")
 
     for forbidden in (

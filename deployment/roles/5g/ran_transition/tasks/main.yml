@@ -196,6 +196,7 @@
       - --namespace
       - "{{ synthran_ran_transition_namespace }}"
       - --ignore-not-found=true
+      - --cascade=foreground
       - --wait=true
       - "--timeout={{ synthran_ran_transition_timeout }}"
   loop: "{{ synthran_ran_transition_targets }}"
@@ -220,6 +221,36 @@
   loop_control:
     label: "{{ item.item.pod_selector }}"
   when: item.stdout_lines | length > 0
+
+- name: Recheck incompatible pods before releasing the RU attachment definition
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pods
+      - --namespace
+      - "{{ synthran_ran_transition_namespace }}"
+      - --selector
+      - "{{ item.pod_selector }}"
+      - --output
+      - name
+  loop: "{{ synthran_ran_transition_targets }}"
+  loop_control:
+    label: "{{ item.pod_selector }}"
+  register: synthran_ran_transition_pods_before_nad_delete
+  changed_when: false
+
+- name: Refuse to delete an RU NAD while an incompatible pod is still present
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.stdout_lines | length == 0
+    fail_msg: >-
+      Incompatible RAN pods still exist for selector {{ item.item.pod_selector }};
+      refusing to remove the RU NAD before pod/CNI teardown is complete.
+  loop: "{{ synthran_ran_transition_pods_before_nad_delete.results }}"
+  loop_control:
+    label: "{{ item.item.pod_selector }}"
 
 - name: Remove an incompatible RU NAD only after its pods are gone
   ansible.builtin.command:
