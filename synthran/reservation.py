@@ -362,20 +362,14 @@ def acquire_calendar(
             "multiple owned active POS calendar events exactly cover the selected nodes; refusing ambiguous authority"
         )
     if active:
+        booked = _booked_duration(active[0])
         requested = dt.timedelta(minutes=duration)
-        try:
-            stop = stamp(str(active[0]["end_date"]))
-        except (KeyError, TypeError, ValueError) as exc:
+        if booked < requested:
+            booked_minutes = max(0, int(booked.total_seconds() // 60))
             raise ReservationError(
-                "POS calendar event has invalid start/end timestamps"
-            ) from exc
-        remaining = stop - now
-        if remaining < requested:
-            remaining_minutes = max(0, int(remaining.total_seconds() // 60))
-            raise ReservationError(
-                "owned active POS calendar event exactly covers the selected nodes but has only "
-                f"{remaining_minutes} minute(s) of remaining coverage, shorter than requested "
-                f"{duration}; refusing an overlapping calendar create"
+                "owned active POS calendar event exactly covers the selected nodes but was booked "
+                f"for {booked_minutes} minute(s), shorter than requested {duration}; "
+                "refusing an overlapping calendar create"
             )
         record = _calendar_record(active[0], status="reused")
         print(
