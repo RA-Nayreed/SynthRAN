@@ -191,14 +191,22 @@ def check_static_boundaries() -> None:
     require("ignore_errors" not in cleanup, "selected cleanup still ignores failures")
     require("ignore_errors" not in stop, "selected UE stop still ignores failures")
     require(
-        "ignore_unreachable: true" in stop,
-        "selected UE stop does not retain delegated UNREACHABLE results for phase classification",
+        "ignore_unreachable" not in stop,
+        "selected UE stop still depends on Ansible unreachable suppression",
+    )
+    require(
+        "synthran_stop_ssh_argv" in stop
+        and "StrictHostKeyChecking=accept-new" in stop
+        and "UserKnownHostsFile=" in stop
+        and "ConnectTimeout=5" in stop,
+        "selected UE stop no longer uses bounded Faraday-side SSH with explicit trust",
     )
     require(
         "'already-unreachable'" in stop
         and "'failed-unreachable'" in stop
-        and "synthran_stop_phase == 'predeploy'" in stop,
-        "selected UE stop no longer distinguishes predeploy-unreachable from teardown failure",
+        and "synthran_stop_phase == 'predeploy'" in stop
+        and "== 255" in stop,
+        "selected UE stop no longer distinguishes predeploy SSH transport failure from teardown failure",
     )
     require(
         "r2lab_inventory_ues | difference(r2lab_selected_ues)" not in cleanup,
@@ -307,6 +315,42 @@ if [[ "${SYNTHRAN_FAIL_UE:-}" == "${SYNTHRAN_STOP_DEVICE:-}" ]]; then exit 31; f
     )
     executable(fake / "qhat-check", "#!/usr/bin/env bash\nexit 0\n")
     executable(
+        fake / "ssh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+target=""
+command=()
+for arg in "$@"; do
+  if [[ -z "$target" && "$arg" == root@* ]]; then
+    target="${arg#root@}"
+    continue
+  fi
+  if [[ -n "$target" ]]; then
+    command+=("$arg")
+  fi
+done
+[[ -n "$target" ]] || exit 64
+if [[ "${SYNTHRAN_UNREACHABLE_UE:-}" == "$target" ]]; then
+  printf 'ssh: connect to host %s port 22: Connection refused\\n' "$target" >&2
+  exit 255
+fi
+case "${command[0]:-}" in
+  stop.sh)
+    SYNTHRAN_STOP_DEVICE="$target" stop.sh
+    ;;
+  qhat-check)
+    qhat-check
+    ;;
+  python3)
+    exit 0
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+""",
+    )
+    executable(
         fake / "rhubarbe-pdu",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -377,7 +421,7 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     require("helper_rc=31" in ue_fail_text, "reachable UE helper failure rc was not retained")
 
     ssh_inv = tmp / "inventory-ssh-fail.yml"
-    inventory(ssh_inv, ssh_failure=True)
+    inventory(ssh_inv)
 
     if stop_log.exists():
         stop_log.unlink()
@@ -389,9 +433,10 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     predeploy_vars = tmp / "vars-predeploy-ssh-unreachable.yml"
     variables(predeploy_vars, predeploy_dir, fake / "kubectl")
     predeploy_playbook = tmp / "predeploy-cleanup.yml"
+    unreachable_env = env | {"SYNTHRAN_UNREACHABLE_UE": "qhat03"}
     predeploy = run(
         predeploy_command(ansible, ssh_inv, predeploy_vars, predeploy_playbook),
-        env=env,
+        env=unreachable_env,
     )
     require(
         predeploy.returncode == 0,
@@ -424,7 +469,10 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     ssh_dir.mkdir()
     ssh_vars = tmp / "vars-teardown-ssh-unreachable.yml"
     variables(ssh_vars, ssh_dir, fake / "kubectl")
-    ssh_failed = run(ansible_command(ansible, ssh_inv, ssh_vars, "resources"), env=env)
+    ssh_failed = run(
+        ansible_command(ansible, ssh_inv, ssh_vars, "resources"),
+        env=unreachable_env,
+    )
     ssh_output = ssh_failed.stdout + ssh_failed.stderr
     require(ssh_failed.returncode != 0, "teardown selected UE SSH failure was masked")
     ssh_evidence = ssh_dir / "r2lab-ue-qhat03-teardown-stop.log"
