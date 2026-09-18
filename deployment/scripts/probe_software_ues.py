@@ -586,6 +586,7 @@ def _candidate_from_runtime(
     successful_exec = 0
     interface_matches: list[tuple[str, subprocess.CompletedProcess[str]]] = []
     exec_errors: dict[str, Any] = {}
+    observed_links: dict[str, str] = {}
     for container in summary["containers"]:
         result = _run(
             [
@@ -601,13 +602,17 @@ def _candidate_from_runtime(
                 "-o",
                 "link",
                 "show",
-                "dev",
-                interface,
             ]
         )
         if result.returncode == 0:
             successful_exec += 1
-            if result.stdout.strip():
+            observed_links[container] = _bounded(result.stdout)
+            interfaces = []
+            for line in result.stdout.splitlines():
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    interfaces.append(parts[1].strip().split("@", 1)[0])
+            if interface in interfaces:
                 interface_matches.append((container, result))
         else:
             exec_errors[container] = {
@@ -627,7 +632,11 @@ def _candidate_from_runtime(
             stage=stage,
             device=device,
             detail=detail,
-            evidence={"pod": summary, "exec_errors": exec_errors},
+            evidence={
+                "pod": summary,
+                "exec_errors": exec_errors,
+                "observed_links": observed_links,
+            },
         )
     if len(interface_matches) != 1:
         raise ProbeFailure(
