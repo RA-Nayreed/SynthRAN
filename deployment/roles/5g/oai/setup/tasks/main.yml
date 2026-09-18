@@ -311,3 +311,9 @@
     fail_msg: >-
       OAI configuration did not produce a complete runnable deployment tree.
       Inspect /tmp/output-prepare-demo-oai.txt on {{ inventory_hostname }}.
+
+- name: Make selected OAI RFSIM UE charts follow the sealed deployment contract
+  ansible.builtin.include_tasks: rfsim_ue_contract.yml
+  when:
+    - platform == 'rfsim'
+    - ran | lower == 'oai'
