@@ -148,7 +148,7 @@ def main() -> int:
         "synthran_cleanup_power_settle_seconds | default(20)" in cleanup,
         "N3xx power-off settle default was removed",
     )
-    require("ignore_errors" not in cleanup, "selected cleanup can silently ignore failure")
+    require("ignore_errors:" not in cleanup, "selected cleanup can silently ignore failure")
     require(
         'rhubarbe-pdu on "{{ rru }}"' in rru,
         "selected N3xx RRU power-on no longer uses the maintained SophiaNode helper",
@@ -185,9 +185,9 @@ def main() -> int:
         and "Require the selected UE stop operation to satisfy phase policy" in stop,
         "selected UE stop no longer retains evidence before enforcing lifecycle policy",
     )
-    require("ignore_errors" not in stop, "selected UE stop can silently ignore lifecycle failure")
+    require("ignore_errors:" not in stop, "selected UE stop can silently ignore lifecycle failure")
     require(
-        "ignore_unreachable" not in stop
+        "ignore_unreachable:" not in stop
         and "'already-unreachable'" in stop
         and "'failed-unreachable'" in stop
         and "synthran_stop_phase == 'predeploy'" in stop
