@@ -169,9 +169,11 @@ def main() -> int:
         "UE stop role no longer consumes one exact selected contract entry",
     )
     require(
-        "ansible.builtin.command: stop.sh" in stop
-        and 'delegate_to: "{{ synthran_stop_device }}"' in stop,
-        "selected MBIM UE stop is no longer direct and contract-selected",
+        "synthran_stop_ssh_argv" in stop
+        and "StrictHostKeyChecking=accept-new" in stop
+        and "UserKnownHostsFile=" in stop
+        and "root@{{ synthran_stop_device }}" in stop,
+        "selected UE stop is no longer contract-selected Faraday-side SSH",
     )
     require(
         "/usr/local/bin/ci_ctl_qtel.py" in stop
@@ -185,11 +187,12 @@ def main() -> int:
     )
     require("ignore_errors" not in stop, "selected UE stop can silently ignore lifecycle failure")
     require(
-        "ignore_unreachable: true" in stop
+        "ignore_unreachable" not in stop
         and "'already-unreachable'" in stop
         and "'failed-unreachable'" in stop
-        and "synthran_stop_phase == 'predeploy'" in stop,
-        "selected UE stop no longer classifies predeploy-unreachable separately from teardown failure",
+        and "synthran_stop_phase == 'predeploy'" in stop
+        and "== 255" in stop,
+        "selected UE stop no longer classifies Faraday SSH transport failure by lifecycle phase",
     )
     require(
         "synthran_stop_helper_unreachable" in stop
