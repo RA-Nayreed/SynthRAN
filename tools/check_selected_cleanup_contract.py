@@ -213,6 +213,11 @@ def check_static_boundaries() -> None:
         "cleanup rejects unrelated inventory UEs instead of preserving them",
     )
     require("loop: \"{{ synthran_ue_map }}\"" in cleanup, "cleanup is not contract-selected")
+    require(
+        "selected_rru_power_off.rc == 1" in cleanup
+        and "rhubarbe_status_contract=0:ON,1:OFF,255:failure" in cleanup,
+        "selected RRU cleanup no longer honors Rhubarbe OFF success status",
+    )
     require("synthran_delete_namespace" in TEARDOWN_PLAYBOOK.read_text(), "namespace opt-in is missing")
     for forbidden in ("rhubarbe-pdu", "r2lab/cleanup", "teardown.yml", "pos calendar"):
         require(
@@ -355,7 +360,10 @@ esac
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"$SYNTHRAN_PDU_LOG"
-if [[ "${SYNTHRAN_FAIL_RRU:-0}" == 1 ]]; then exit 41; fi
+if [[ "${SYNTHRAN_FAIL_RRU:-0}" == 1 ]]; then exit 255; fi
+if [[ "$1" == "off" ]]; then exit 1; fi
+if [[ "$1" == "on" ]]; then exit 0; fi
+exit 255
 """,
     )
     executable(
@@ -405,7 +413,7 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     require(failed.returncode != 0, "RRU power-off failure was masked")
     rru_evidence = fail_dir / "r2lab-rru-n320-teardown-stop.log"
     require(rru_evidence.is_file(), "RRU failure evidence was not retained")
-    require("rc=41" in rru_evidence.read_text(encoding="utf-8"), "RRU failure rc was not retained")
+    require("rc=255" in rru_evidence.read_text(encoding="utf-8"), "RRU failure rc was not retained")
 
     ue_fail_dir = tmp / "run-ue-helper-fail"
     ue_fail_dir.mkdir()
