@@ -179,11 +179,23 @@ def main() -> int:
         "selected QMI UE detach behavior is missing",
     )
     require(
-        "Retain selected UE stop evidence before enforcing success" in stop
-        and "Require the selected UE stop operation to complete" in stop,
-        "selected UE stop no longer retains evidence and fails closed",
+        "Retain selected UE stop evidence before enforcing phase policy" in stop
+        and "Require the selected UE stop operation to satisfy phase policy" in stop,
+        "selected UE stop no longer retains evidence before enforcing lifecycle policy",
     )
     require("ignore_errors" not in stop, "selected UE stop can silently ignore lifecycle failure")
+    require(
+        "ignore_unreachable: true" in stop
+        and "'already-unreachable'" in stop
+        and "'failed-unreachable'" in stop
+        and "synthran_stop_phase == 'predeploy'" in stop,
+        "selected UE stop no longer classifies predeploy-unreachable separately from teardown failure",
+    )
+    require(
+        "synthran_stop_helper_unreachable" in stop
+        and "synthran_stop_helper_succeeded" in stop,
+        "selected UE stop phase policy no longer distinguishes connection failure from helper failure",
+    )
     require(
         'ue: "{{ ue | default(ue_item) }}"' not in stop
         and "r2lab_stop_target" not in stop,
