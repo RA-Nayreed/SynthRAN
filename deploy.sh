@@ -365,6 +365,7 @@ if ! $NO_INPUT && { ! $CONFIG_EXPLICIT || $INTERACTIVE; }; then
   DEFAULT_POS_IMAGE=ubuntu-jammy
   DEFAULT_R2LAB_USERNAME=${R2LAB_USERNAME:-}
   DEFAULT_R2LAB_RESERVE=true
+  DEFAULT_R2LAB_MODE=book
   DEFAULT_R2LAB_DURATION=120
 
   if [[ -n "$BASE_CONFIG" ]]; then
@@ -377,13 +378,16 @@ n = d.get('nodes', {}); r = d.get('reservation', {}); rr = d.get('r2lab_reservat
 enabled = bool(r.get('enabled', True))
 mode = r.get('mode', 'create' if enabled else 'disabled')
 preparation = r.get('host_preparation', 'fresh' if mode != 'disabled' else 'preserve')
+rr_enabled = bool(rr.get('enabled', True))
+rr_mode = rr.get('mode', 'book' if rr_enabled else 'disabled')
 values = [
     d.get('core','open5gs'), d.get('ran','srsran'), d.get('platform','rfsim'), d.get('ru','rfsim'),
     n.get('core','sopnode-f2'), n.get('ran','sopnode-f3'), n.get('broker',n.get('core','sopnode-f2')),
     d.get('network_profile','default'), ','.join(d.get('ues',[])), str(enabled).lower(), mode, preparation,
     str(r.get('duration_minutes',120)), r.get('image','ubuntu-jammy'), d.get('r2lab_username',''),
-    str(rr.get('enabled',True)).lower(), str(rr.get('duration_minutes',120)),
-    d.get('network_profile_file',''), d.get('ue_catalog_file','deployment/group_vars/all/ue_catalog.yaml')
+    str(rr_enabled).lower(), str(rr.get('duration_minutes',120)),
+    d.get('network_profile_file',''), d.get('ue_catalog_file','deployment/group_vars/all/ue_catalog.yaml'),
+    rr_mode
 ]
 print('\n'.join(str(value) for value in values))
 PY
@@ -407,6 +411,7 @@ PY
     DEFAULT_R2LAB_DURATION=${SCENARIO_DEFAULTS[16]}
     BASE_NETWORK_PROFILE_FILE=${SCENARIO_DEFAULTS[17]}
     UE_CATALOG_FILE=${SCENARIO_DEFAULTS[18]}
+    DEFAULT_R2LAB_MODE=${SCENARIO_DEFAULTS[19]}
   fi
 
   echo
@@ -503,19 +508,33 @@ BANNER
     [[ -n "$SELECTED_R2LAB_USERNAME" ]] || { echo "R2Lab username is required" >&2; exit 2; }
     export R2LAB_USERNAME="$SELECTED_R2LAB_USERNAME"
 
-    [[ "$DEFAULT_R2LAB_RESERVE" == true ]] && R2LAB_RESERVE_PROMPT="Y/n" || R2LAB_RESERVE_PROMPT="y/N"
-    read -r -p "Reserve the R2Lab testbed? [$R2LAB_RESERVE_PROMPT]: " R2LAB_RESERVE_CHOICE
-    SELECTED_R2LAB_RESERVE=$DEFAULT_R2LAB_RESERVE
+    case "$DEFAULT_R2LAB_MODE" in
+      require-existing) DEFAULT_R2LAB_MODE_CHOICE=1 ;;
+      book) DEFAULT_R2LAB_MODE_CHOICE=2 ;;
+      disabled) DEFAULT_R2LAB_MODE_CHOICE=3 ;;
+      *) DEFAULT_R2LAB_MODE_CHOICE=2 ;;
+    esac
+    echo
+    echo "How should SynthRAN use the R2Lab booking?"
+    echo "1) Use my existing booking and verify it covers this run"
+    echo "2) Ensure a booking exists (reuse/extend/book as needed)"
+    echo "3) Do not manage or verify an R2Lab booking"
+    read -r -p "Enter choice [1-3] [$DEFAULT_R2LAB_MODE_CHOICE]: " R2LAB_MODE_CHOICE
+    case "${R2LAB_MODE_CHOICE:-$DEFAULT_R2LAB_MODE_CHOICE}" in
+      1) SELECTED_R2LAB_MODE=require-existing; SELECTED_R2LAB_RESERVE=true ;;
+      2) SELECTED_R2LAB_MODE=book; SELECTED_R2LAB_RESERVE=true ;;
+      3) SELECTED_R2LAB_MODE=disabled; SELECTED_R2LAB_RESERVE=false ;;
+      *) echo "Invalid R2Lab booking choice" >&2; exit 2 ;;
+    esac
     SELECTED_R2LAB_DURATION=$DEFAULT_R2LAB_DURATION
-    [[ "${R2LAB_RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_R2LAB_RESERVE=true
-    [[ "${R2LAB_RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_R2LAB_RESERVE=false
-    if $SELECTED_R2LAB_RESERVE; then
-      read -r -p "R2Lab reservation duration in minutes [$DEFAULT_R2LAB_DURATION]: " SELECTED_R2LAB_DURATION
+    if [[ "$SELECTED_R2LAB_MODE" != disabled ]]; then
+      read -r -p "Required R2Lab coverage in minutes [$DEFAULT_R2LAB_DURATION]: " SELECTED_R2LAB_DURATION
       SELECTED_R2LAB_DURATION=${SELECTED_R2LAB_DURATION:-$DEFAULT_R2LAB_DURATION}
       [[ "$SELECTED_R2LAB_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "R2Lab duration must be a positive integer" >&2; exit 2; }
     fi
   else
     SELECTED_R2LAB_USERNAME=""
+    SELECTED_R2LAB_MODE=disabled
     SELECTED_R2LAB_RESERVE=false
     SELECTED_R2LAB_DURATION=120
   fi
@@ -596,22 +615,30 @@ BANNER
   done
   SELECTED_UE_SLICE_SPEC=$(IFS=,; echo "${UE_SLICE_ASSIGNMENTS[*]}")
 
-  [[ "$DEFAULT_RESERVE" == true ]] && RESERVE_PROMPT="Y/n" || RESERVE_PROMPT="y/N"
-  read -r -p "Ensure selected SOP nodes are reserved? [$RESERVE_PROMPT]: " RESERVE_CHOICE
-  SELECTED_RESERVE=$DEFAULT_RESERVE
-  [[ "${RESERVE_CHOICE:-}" =~ ^[Yy]$ ]] && SELECTED_RESERVE=true
-  [[ "${RESERVE_CHOICE:-}" =~ ^[Nn]$ ]] && SELECTED_RESERVE=false
+  case "$DEFAULT_RESERVATION_MODE" in
+    require-existing) DEFAULT_RESERVATION_CHOICE=1 ;;
+    create) DEFAULT_RESERVATION_CHOICE=2 ;;
+    disabled) DEFAULT_RESERVATION_CHOICE=3 ;;
+    *) DEFAULT_RESERVATION_CHOICE=2 ;;
+  esac
+  echo
+  echo "How should SynthRAN use the SOP reservation?"
+  echo "1) Use my existing exact reservation and verify remaining coverage"
+  echo "2) Ensure an exact reservation exists (reuse/create as needed)"
+  echo "3) Do not manage or verify a SOP reservation"
+  read -r -p "Enter choice [1-3] [$DEFAULT_RESERVATION_CHOICE]: " RESERVATION_CHOICE
+  case "${RESERVATION_CHOICE:-$DEFAULT_RESERVATION_CHOICE}" in
+    1) SELECTED_RESERVATION_MODE=require-existing; SELECTED_RESERVE=true ;;
+    2) SELECTED_RESERVATION_MODE=create; SELECTED_RESERVE=true ;;
+    3) SELECTED_RESERVATION_MODE=disabled; SELECTED_RESERVE=false ;;
+    *) echo "Invalid SOP reservation choice" >&2; exit 2 ;;
+  esac
 
   SELECTED_DURATION=$DEFAULT_DURATION
   SELECTED_POS_IMAGE=$DEFAULT_POS_IMAGE
   SELECTED_HOST_PREPARATION=preserve
-  if $SELECTED_RESERVE; then
-    if [[ "$DEFAULT_RESERVATION_MODE" == require-existing ]]; then
-      SELECTED_RESERVATION_MODE=require-existing
-    else
-      SELECTED_RESERVATION_MODE=create
-    fi
-    read -r -p "Reservation duration in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION
+  if [[ "$SELECTED_RESERVATION_MODE" != disabled ]]; then
+    read -r -p "Required SOP coverage in minutes [$DEFAULT_DURATION]: " SELECTED_DURATION
     SELECTED_DURATION=${SELECTED_DURATION:-$DEFAULT_DURATION}
     [[ "$SELECTED_DURATION" =~ ^[1-9][0-9]*$ ]] || { echo "Duration must be a positive integer" >&2; exit 2; }
 
@@ -635,11 +662,11 @@ BANNER
       SELECTED_POS_IMAGE=${SELECTED_POS_IMAGE:-$DEFAULT_POS_IMAGE}
     fi
   else
-    SELECTED_RESERVATION_MODE=disabled
+    echo "SOP reservation authority disabled; host preparation is preserve-only."
   fi
 
   CONFIG="$RUN_DIR/interactive-scenario.yml"
-  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_NETWORK_PROFILE" "$SELECTED_UES" "$SELECTED_UE_SLICE_SPEC" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_RESERVATION_MODE" "$SELECTED_HOST_PREPARATION" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_DURATION" <<'PY'
+  "$SYNTHRAN_PYTHON" - "$BASE_CONFIG" "$CONFIG" "$SELECTED_CORE" "$SELECTED_RAN" "$SELECTED_PLATFORM" "$SELECTED_RU" "$SELECTED_CORE_NODE" "$SELECTED_RAN_NODE" "$SELECTED_BROKER_NODE" "$SELECTED_NETWORK_PROFILE" "$SELECTED_UES" "$SELECTED_UE_SLICE_SPEC" "$SELECTED_R2LAB_USERNAME" "$SELECTED_RESERVE" "$SELECTED_RESERVATION_MODE" "$SELECTED_HOST_PREPARATION" "$SELECTED_DURATION" "$SELECTED_POS_IMAGE" "$SELECTED_R2LAB_RESERVE" "$SELECTED_R2LAB_MODE" "$SELECTED_R2LAB_DURATION" <<'PY'
 import copy
 import sys
 from pathlib import Path
@@ -648,7 +675,7 @@ import yaml
 (
     source, output, core, ran, platform, ru, core_node, ran_node, broker_node,
     network_profile, ue_csv, ue_slice_spec, r2lab_username, reserve,
-    reservation_mode, host_preparation, duration, pos_image, r2_reserve, r2_duration,
+    reservation_mode, host_preparation, duration, pos_image, r2_reserve, r2lab_mode, r2_duration,
 ) = sys.argv[1:]
 source_data = {}
 if source:
@@ -687,7 +714,11 @@ dep['reservation'] = {
     'duration_minutes': int(duration),
     'image': pos_image,
 }
-dep['r2lab_reservation'] = {'enabled': r2_reserve == 'true', 'duration_minutes': int(r2_duration)}
+dep['r2lab_reservation'] = {
+    'enabled': r2_reserve == 'true',
+    'mode': r2lab_mode,
+    'duration_minutes': int(r2_duration),
+}
 for legacy in ('profile', 'profile_file', 'ue_profiles', 'r2lab_experiment_nodes'):
     dep.pop(legacy, None)
 if r2lab_username:
@@ -708,14 +739,14 @@ PY
   describe_ue_slice_assignments "$SELECTED_NETWORK_PROFILE" "$SELECTED_UE_SLICE_SPEC"
   if $SELECTED_RESERVE; then
     if [[ "$SELECTED_HOST_PREPARATION" == fresh ]]; then
-      echo "  POS:             true, ${SELECTED_DURATION}m, image $SELECTED_POS_IMAGE"
+      echo "  POS:             $SELECTED_RESERVATION_MODE, ${SELECTED_DURATION}m coverage, fresh image $SELECTED_POS_IMAGE"
     else
-      echo "  POS:             true, ${SELECTED_DURATION}m, reuse current host state"
+      echo "  POS:             $SELECTED_RESERVATION_MODE, ${SELECTED_DURATION}m coverage, preserve host state"
     fi
   else
-    echo "  POS:             false"
+    echo "  POS:             disabled, preserve host state"
   fi
-  [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:           $SELECTED_R2LAB_RESERVE, ${SELECTED_R2LAB_DURATION}m"
+  [[ "$SELECTED_PLATFORM" == r2lab ]] && echo "  R2Lab:           $SELECTED_R2LAB_MODE, ${SELECTED_R2LAB_DURATION}m coverage"
   read -r -p "Continue? [Y/n]: " CONFIRM_DEPLOY
   [[ ! "${CONFIRM_DEPLOY:-y}" =~ ^[Nn]$ ]] || exit 0
 fi
