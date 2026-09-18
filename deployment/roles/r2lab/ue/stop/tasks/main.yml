@@ -19,6 +19,11 @@
     synthran_stop_mode: "{{ synthran_r2lab_ue.tunnel.mode }}"
     synthran_stop_phase: "{{ synthran_cleanup_phase | default('predeploy') }}"
 
+# A selected UE may legitimately be powered off or otherwise unreachable before
+# deployment. The subsequent setup role is the authority that powers, initializes,
+# and verifies the selected UE. Keep Ansible UNREACHABLE as retained evidence here
+# so predeploy can classify that state without aborting before setup. Teardown
+# remains fail-closed on the same condition at the final assertion below.
 - name: Stop the selected MBIM UE
   ansible.builtin.command: stop.sh
   delegate_to: "{{ synthran_stop_device }}"
@@ -27,6 +32,7 @@
   register: synthran_stop_mbim
   changed_when: true
   failed_when: false
+  ignore_unreachable: true
   when: synthran_stop_mode == 'mbim'
 
 - name: Detect the selected QMI UE AT control port
@@ -54,6 +60,7 @@
   register: synthran_stop_at_detect
   changed_when: false
   failed_when: false
+  ignore_unreachable: true
   when:
     - synthran_stop_mode == 'qmi'
     - hostvars[synthran_stop_device].at_port is not defined
@@ -78,9 +85,35 @@
   register: synthran_stop_qmi
   changed_when: true
   failed_when: false
+  ignore_unreachable: true
   when:
     - synthran_stop_mode == 'qmi'
     - synthran_stop_qmi_at_port | default('') | length > 0
+
+- name: Classify selected UE stop reachability and helper result
+  ansible.builtin.set_fact:
+    synthran_stop_helper_unreachable: >-
+      {{
+        (synthran_stop_mbim.unreachable | default(false) | bool)
+        or (synthran_stop_at_detect.unreachable | default(false) | bool)
+        or (synthran_stop_qmi.unreachable | default(false) | bool)
+      }}
+    synthran_stop_helper_succeeded: >-
+      {{
+        (
+          synthran_stop_mode == 'mbim'
+          and not (synthran_stop_mbim.unreachable | default(false) | bool)
+          and (synthran_stop_mbim.rc | default(1) | int) == 0
+        )
+        or
+        (
+          synthran_stop_mode == 'qmi'
+          and not (synthran_stop_at_detect.unreachable | default(false) | bool)
+          and not (synthran_stop_qmi.unreachable | default(false) | bool)
+          and (synthran_stop_qmi_at_port | default('') | length > 0)
+          and (synthran_stop_qmi.rc | default(1) | int) == 0
+        )
+      }}
 
 - name: Read selected UE diagnostics after the stop attempt
   ansible.builtin.command: qhat-check
@@ -90,23 +123,42 @@
   register: synthran_stop_check
   changed_when: false
   failed_when: false
+  ignore_unreachable: true
+  when: not synthran_stop_helper_unreachable
 
-- name: Retain selected UE stop evidence before enforcing success
+- name: Classify selected UE stop outcome
+  ansible.builtin.set_fact:
+    synthran_stop_outcome: >-
+      {{
+        'already-unreachable'
+        if synthran_stop_phase == 'predeploy' and synthran_stop_helper_unreachable
+        else 'failed-unreachable'
+        if synthran_stop_helper_unreachable
+        else 'stopped'
+        if synthran_stop_helper_succeeded
+        else 'failed-helper'
+      }}
+
+- name: Retain selected UE stop evidence before enforcing phase policy
   ansible.builtin.copy:
     content: |
       phase={{ synthran_stop_phase }}
       device={{ synthran_stop_device }}
       mode={{ synthran_stop_mode }}
+      outcome={{ synthran_stop_outcome }}
       interface={{ synthran_r2lab_ue.tunnel.interface }}
       mbim_session={{ synthran_r2lab_ue.tunnel.mbim_session | default('') }}
       helper_command={{ 'stop.sh' if synthran_stop_mode == 'mbim' else ('python3 /usr/local/bin/ci_ctl_qtel.py ' ~ (synthran_stop_qmi_at_port | default('')) ~ ' detach') }}
-      helper_rc={{ synthran_stop_mbim.rc | default(synthran_stop_qmi.rc | default('not-run')) }}
+      helper_unreachable={{ synthran_stop_helper_unreachable }}
+      helper_rc={{ synthran_stop_mbim.rc | default(synthran_stop_qmi.rc | default('unreachable' if synthran_stop_helper_unreachable else 'not-run')) }}
+      helper_msg={{ synthran_stop_mbim.msg | default(synthran_stop_at_detect.msg | default(synthran_stop_qmi.msg | default(''))) }}
       helper_stdout={{ synthran_stop_mbim.stdout | default(synthran_stop_qmi.stdout | default('')) }}
       helper_stderr={{ synthran_stop_mbim.stderr | default(synthran_stop_qmi.stderr | default('')) }}
       qmi_at_port={{ synthran_stop_qmi_at_port | default('') }}
-      qmi_at_probe_rc={{ synthran_stop_at_detect.rc | default('not-run') }}
+      qmi_at_probe_rc={{ synthran_stop_at_detect.rc | default('unreachable' if (synthran_stop_at_detect.unreachable | default(false) | bool) else 'not-run') }}
       qmi_at_probe_stdout={{ synthran_stop_at_detect.stdout | default('') }}
       qmi_at_probe_stderr={{ synthran_stop_at_detect.stderr | default('') }}
+      qhat_check_unreachable={{ synthran_stop_check.unreachable | default(false) }}
       qhat_check_rc={{ synthran_stop_check.rc | default('unavailable') }}
       qhat_check_stdout={{ synthran_stop_check.stdout | default('') }}
       qhat_check_stderr={{ synthran_stop_check.stderr | default('') }}
@@ -114,21 +166,20 @@
   delegate_to: localhost
   become: false
 
-- name: Require the selected UE stop operation to complete
+- name: Require the selected UE stop operation to satisfy phase policy
   ansible.builtin.assert:
     quiet: true
     that:
       - >-
-        synthran_stop_mode != 'mbim' or
-        (synthran_stop_mbim.rc | default(1)) == 0
+        not synthran_stop_helper_unreachable
+        or synthran_stop_phase == 'predeploy'
       - >-
-        synthran_stop_mode != 'qmi' or
-        (synthran_stop_qmi_at_port | default('') | length > 0)
-      - >-
-        synthran_stop_mode != 'qmi' or
-        (synthran_stop_qmi.rc | default(1)) == 0
+        synthran_stop_helper_unreachable
+        or synthran_stop_helper_succeeded
     fail_msg: >-
       Selected R2Lab UE stop failed for {{ synthran_stop_device }} during
-      {{ synthran_stop_phase }} cleanup. See
-      r2lab-ue-{{ synthran_stop_device }}-{{ synthran_stop_phase }}-stop.log;
-      the failure is not ignored or replaced by a global cleanup command.
+      {{ synthran_stop_phase }} cleanup with outcome {{ synthran_stop_outcome }}.
+      See r2lab-ue-{{ synthran_stop_device }}-{{ synthran_stop_phase }}-stop.log.
+      Predeploy permits only an explicitly retained UNREACHABLE selected UE because
+      the following setup stage is authoritative for power/readiness; teardown and
+      reachable helper failures remain fail-closed. No global cleanup fallback is used.
