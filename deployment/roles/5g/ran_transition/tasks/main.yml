@@ -1,0 +1,353 @@
+---
+- name: Normalize the selected cross-RAN transition policy
+  ansible.builtin.set_fact:
+    synthran_ran_transition_selected: "{{ ran | string | trim | lower }}"
+
+- name: Require a supported cross-RAN transition target
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_ran_transition_selected in ['oai', 'srsran']
+      - ran_node_name is defined
+      - ran_node_name | string | trim | length > 0
+      - helm_version is defined
+      - helm_version | string | trim | length > 0
+    fail_msg: >-
+      The shared RAN transition boundary requires selected OAI/srsRAN,
+      an explicit Kubernetes RAN node name, and the pinned Helm runtime.
+
+- name: Select only the non-selected RAN release family
+  ansible.builtin.set_fact:
+    synthran_ran_transition_incompatible_releases: >-
+      {{
+        ['srsran-gnb', 'srsran-ue']
+        if synthran_ran_transition_selected == 'oai'
+        else [
+          'oai-flexric',
+          'oai-gnb',
+          'oai-du',
+          'oai-cu',
+          'oai-cu-up',
+          'oai-cu-cp',
+          'oai-nr-ue',
+          'oai-nr-ue2',
+          'oai-nr-ue3'
+        ]
+      }}
+    synthran_ran_transition_incompatible_nads: >-
+      {{
+        ['ru-network']
+        if synthran_ran_transition_selected == 'oai'
+        else ['oai-gnb-ru', 'oai-du-ru']
+      }}
+    synthran_ran_transition_incompatible_pod_pattern: >-
+      {{
+        '^(?:srsran-gnb|srsran-ue)(?:-|$)'
+        if synthran_ran_transition_selected == 'oai'
+        else '^(?:oai-flexric|oai-gnb|oai-du|oai-cu|oai-cu-up|oai-cu-cp|oai-nr-ue|oai-nr-ue2|oai-nr-ue3)(?:-|$)'
+      }}
+
+- name: Verify the centrally pinned Helm runtime before transition
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: synthran_ran_transition_helm_version
+  changed_when: false
+
+- name: Refuse an unexpected Helm runtime at the transition boundary
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "('v' ~ helm_version) in synthran_ran_transition_helm_version.stdout"
+    fail_msg: >-
+      Cross-RAN transition requires the checksum-pinned Helm v{{ helm_version }}
+      runtime already established by SynthRAN.
+
+- name: Discover Helm releases across every namespace before transition
+  ansible.builtin.command:
+    argv: [helm, list, --all-namespaces, --all, --output, json]
+  register: synthran_ran_transition_helm_before
+  changed_when: false
+
+- name: Initialize incompatible release evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_release_candidates: []
+
+- name: Record active incompatible Helm releases
+  ansible.builtin.set_fact:
+    synthran_ran_transition_release_candidates: >-
+      {{
+        synthran_ran_transition_release_candidates +
+        [{
+          'name': item.name,
+          'namespace': item.namespace,
+          'status': item.status | default('unknown')
+        }]
+      }}
+  loop: "{{ synthran_ran_transition_helm_before.stdout | from_json }}"
+  loop_control:
+    label: "{{ item.namespace | default('?') }}/{{ item.name | default('?') }}"
+  when:
+    - item.name in synthran_ran_transition_incompatible_releases
+    - (item.status | default('') | lower) != 'uninstalled'
+
+- name: Capture incompatible RAN pods on the selected RAN node before transition
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pods
+      - --all-namespaces
+      - --field-selector
+      - "spec.nodeName={{ ran_node_name }}"
+      - --output
+      - json
+  register: synthran_ran_transition_pods_before
+  changed_when: false
+
+- name: Initialize incompatible pod evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_pre_pods: []
+
+- name: Record incompatible RAN pods before transition
+  ansible.builtin.set_fact:
+    synthran_ran_transition_pre_pods: >-
+      {{
+        synthran_ran_transition_pre_pods +
+        [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name,
+          'network_status': (
+            (item.metadata.annotations | default({}))
+            .get('k8s.v1.cni.cncf.io/network-status', '')
+          )
+        }]
+      }}
+  loop: "{{ (synthran_ran_transition_pods_before.stdout | from_json).items | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+  when: item.metadata.name is match(synthran_ran_transition_incompatible_pod_pattern)
+
+- name: Capture RU NetworkAttachmentDefinitions before transition
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - network-attachment-definitions.k8s.cni.cncf.io
+      - --all-namespaces
+      - --output
+      - json
+  register: synthran_ran_transition_nads_before
+  changed_when: false
+
+- name: Initialize incompatible RU attachment evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_pre_nads: []
+
+- name: Record incompatible RU NetworkAttachmentDefinitions before transition
+  ansible.builtin.set_fact:
+    synthran_ran_transition_pre_nads: >-
+      {{
+        synthran_ran_transition_pre_nads +
+        [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name
+        }]
+      }}
+  loop: "{{ (synthran_ran_transition_nads_before.stdout | from_json).items | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+  when: item.metadata.name in synthran_ran_transition_incompatible_nads
+
+- name: Remove only non-selected RAN releases
+  ansible.builtin.command:
+    argv:
+      - helm
+      - uninstall
+      - "{{ item.name }}"
+      - --namespace
+      - "{{ item.namespace }}"
+      - --cascade
+      - foreground
+      - --wait
+      - --timeout
+      - 120s
+  loop: "{{ synthran_ran_transition_release_candidates }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
+  register: synthran_ran_transition_uninstalls
+  changed_when: true
+
+- name: Wait for incompatible RAN pods and RU attachments to disappear
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    pods="$(kubectl get pods --all-namespaces       --field-selector 'spec.nodeName={{ ran_node_name }}'       --output jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+    if printf '%s\n' "$pods" | grep -Eq '{{ synthran_ran_transition_incompatible_pod_pattern }}'; then
+      printf 'incompatible RAN pods still present on %s:\n%s\n' '{{ ran_node_name }}' "$pods" >&2
+      exit 1
+    fi
+
+    nads="$(kubectl get network-attachment-definitions.k8s.cni.cncf.io       --all-namespaces       --output jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+    while IFS= read -r nad; do
+      [ -n "$nad" ] || continue
+      case "$nad" in
+        {% for name in synthran_ran_transition_incompatible_nads %}
+        {{ name }}) printf 'incompatible RU NAD still present: %s\n' "$nad" >&2; exit 1 ;;
+        {% endfor %}
+      esac
+    done <<< "$nads"
+  args:
+    executable: /bin/bash
+  register: synthran_ran_transition_exclusive_wait
+  changed_when: false
+  failed_when: false
+  retries: 30
+  delay: 2
+  until: synthran_ran_transition_exclusive_wait.rc == 0
+
+- name: Require the incompatible live RAN state to be gone
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_ran_transition_exclusive_wait.rc == 0
+    fail_msg: >-
+      The non-selected RAN still owns a workload or RU attachment after its
+      known Helm release was removed. Refusing to force-delete unexplained
+      orphan state before {{ synthran_ran_transition_selected }} starts.
+
+- name: Rediscover Helm releases after transition
+  ansible.builtin.command:
+    argv: [helm, list, --all-namespaces, --all, --output, json]
+  register: synthran_ran_transition_helm_after
+  changed_when: false
+
+- name: Initialize post-transition release evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_releases: []
+
+- name: Record any active incompatible Helm release that survived transition
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_releases: >-
+      {{
+        synthran_ran_transition_remaining_releases +
+        [{
+          'name': item.name,
+          'namespace': item.namespace,
+          'status': item.status | default('unknown')
+        }]
+      }}
+  loop: "{{ synthran_ran_transition_helm_after.stdout | from_json }}"
+  loop_control:
+    label: "{{ item.namespace | default('?') }}/{{ item.name | default('?') }}"
+  when:
+    - item.name in synthran_ran_transition_incompatible_releases
+    - (item.status | default('') | lower) != 'uninstalled'
+
+- name: Capture final selected-node pod state
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pods
+      - --all-namespaces
+      - --field-selector
+      - "spec.nodeName={{ ran_node_name }}"
+      - --output
+      - json
+  register: synthran_ran_transition_pods_after
+  changed_when: false
+
+- name: Initialize post-transition incompatible pod evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_pods: []
+
+- name: Record any incompatible RAN pod that survived transition
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_pods: >-
+      {{
+        synthran_ran_transition_remaining_pods +
+        [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name
+        }]
+      }}
+  loop: "{{ (synthran_ran_transition_pods_after.stdout | from_json).items | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+  when: item.metadata.name is match(synthran_ran_transition_incompatible_pod_pattern)
+
+- name: Capture final RU NetworkAttachmentDefinitions
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - network-attachment-definitions.k8s.cni.cncf.io
+      - --all-namespaces
+      - --output
+      - json
+  register: synthran_ran_transition_nads_after
+  changed_when: false
+
+- name: Initialize post-transition incompatible RU attachment evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_nads: []
+
+- name: Record any incompatible RU NetworkAttachmentDefinition that survived transition
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_nads: >-
+      {{
+        synthran_ran_transition_remaining_nads +
+        [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name
+        }]
+      }}
+  loop: "{{ (synthran_ran_transition_nads_after.stdout | from_json).items | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+  when: item.metadata.name in synthran_ran_transition_incompatible_nads
+
+- name: Prove exclusive pre-launch ownership for the selected RAN
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_ran_transition_remaining_releases | length == 0
+      - synthran_ran_transition_remaining_pods | length == 0
+      - synthran_ran_transition_remaining_nads | length == 0
+    fail_msg: >-
+      Cross-RAN transition did not reach an exclusive pre-launch state.
+      releases={{ synthran_ran_transition_remaining_releases }},
+      pods={{ synthran_ran_transition_remaining_pods }},
+      nads={{ synthran_ran_transition_remaining_nads }}.
+
+- name: Ensure the run provenance directory exists for transition evidence
+  ansible.builtin.file:
+    path: "{{ run_dir }}/provenance"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Retain cross-RAN transition evidence
+  ansible.builtin.copy:
+    dest: "{{ run_dir }}/provenance/ran-transition.json"
+    mode: '0644'
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'selected_ran': synthran_ran_transition_selected,
+           'selected_ran_node': ran_node_name,
+           'selected_namespace': core,
+           'host_preparation': synthran_host_preparation | default('unknown'),
+           'incompatible_release_names': synthran_ran_transition_incompatible_releases,
+           'incompatible_ru_nads': synthran_ran_transition_incompatible_nads,
+           'release_candidates_before': synthran_ran_transition_release_candidates,
+           'incompatible_pods_before': synthran_ran_transition_pre_pods,
+           'incompatible_ru_nads_before': synthran_ran_transition_pre_nads,
+           'remaining_releases': synthran_ran_transition_remaining_releases,
+           'remaining_pods': synthran_ran_transition_remaining_pods,
+           'remaining_ru_nads': synthran_ran_transition_remaining_nads,
+           'exclusive_prelaunch': true
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false

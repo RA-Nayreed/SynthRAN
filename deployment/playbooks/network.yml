@@ -6,6 +6,16 @@
   roles:
     - role: setup/gre_tunnel
 
+- name: Establish exclusive ownership before switching RAN implementations
+  hosts: ran_node
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Remove only the non-selected RAN implementation
+      ansible.builtin.include_role:
+        name: 5g/ran_transition
+      when: ran | string | trim | lower in ['oai', 'srsran']
+
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
   any_errors_fatal: true
