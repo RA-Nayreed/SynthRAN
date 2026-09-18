@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable contract for the shared #60 cross-RAN transition boundary."""
+"""Executable contract for the shared #60 physical cross-RAN transition."""
 
 from __future__ import annotations
 
@@ -12,9 +12,14 @@ import subprocess
 import sys
 import tempfile
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 NETWORK = ROOT / "deployment/playbooks/network.yml"
+DEFAULTS = ROOT / "deployment/roles/5g/ran_transition/defaults/main.yml"
 ROLE = ROOT / "deployment/roles/5g/ran_transition/tasks/main.yml"
+OAI_RAN = ROOT / "deployment/roles/5g/oai/ran/tasks/main.yml"
+SRSRAN_GNB = ROOT / "deployment/roles/5g/srsRAN/deploy/tasks/deploy_gnb.yml"
 
 
 def require(condition: bool, message: str) -> None:
@@ -38,37 +43,74 @@ def make_executable(path: Path) -> None:
 def static_contract() -> None:
     network = text(NETWORK)
     role = text(ROLE)
+    defaults_text = text(DEFAULTS)
+    defaults = yaml.safe_load(defaults_text)
 
-    include = "name: 5g/ran_transition"
-    require(network.count(include) == 1, "network.yml must invoke exactly one shared RAN transition owner")
     require(
-        network.index(include) < network.index('- name: "Deploy the {{ core | upper }} core"'),
-        "shared RAN transition must run before core/RAN workload deployment",
+        network.count("name: 5g/ran_transition") == 1,
+        "network.yml must invoke exactly one shared RAN transition owner",
     )
+    transition_index = network.index("name: 5g/ran_transition")
+    require(
+        transition_index > network.index("name: 5g/oai/core"),
+        "transition must run after optional OAI core deployment",
+    )
+    require(
+        transition_index < network.index("name: 5g/oai/ran"),
+        "transition must run before OAI RAN lifecycle",
+    )
+    require(
+        transition_index < network.index("name: 5g/srsRAN/config"),
+        "transition must run before srsRAN configuration/lifecycle",
+    )
+    for gate in (
+        "platform | string | trim | lower == 'r2lab'",
+        "rru | string | trim | lower in ['n300', 'n320']",
+        "ran | string | trim | lower in ['oai', 'srsran']",
+    ):
+        require(gate in network, f"network transition lost physical scope gate: {gate}")
+
+    catalog = defaults["synthran_ran_transition_catalog"]
+    require(
+        [item["release"] for item in catalog["oai"]]
+        == ["oai-gnb", "oai-du", "oai-cu", "oai-cu-up", "oai-cu-cp"],
+        "OAI transition catalog drifted from the known RAN release family",
+    )
+    require(
+        [item["release"] for item in catalog["srsran"]] == ["srsran-gnb"],
+        "srsRAN transition catalog must own only the physical gNB release",
+    )
+    require(catalog["oai"][0]["ru_nad"] == "oai-gnb-ru", "OAI gNB RU NAD changed")
+    require(catalog["oai"][1]["ru_nad"] == "oai-du-ru", "OAI DU RU NAD changed")
+    require(catalog["srsran"][0]["ru_nad"] == "ru-network", "srsRAN RU NAD changed")
+
+    for forbidden in ("oai-flexric", "oai-nr-ue", "srsran-ue"):
+        require(
+            forbidden not in defaults_text,
+            f"transition expanded outside RAN ownership into {forbidden}",
+        )
 
     for needle in (
-        "helm, list, --all-namespaces, --all, --output, json",
-        "Remove only non-selected RAN releases",
+        "--namespace",
         "--cascade",
         "foreground",
         "--wait",
-        "Wait for incompatible RAN pods and RU attachments to disappear",
-        "network-attachment-definitions.k8s.cni.cncf.io",
+        "--no-hooks",
+        "Remove a known orphaned incompatible Deployment",
+        "Remove any known orphaned incompatible pods and wait for CNI teardown",
+        "Recheck incompatible pods before releasing the RU attachment definition",
+        "Refuse to delete an RU NAD while an incompatible pod is still present",
+        "Remove an incompatible RU NAD only after its pods are gone",
         "Prove exclusive pre-launch ownership for the selected RAN",
         "ran-transition.json",
-        "srsran-gnb",
-        "srsran-ue",
-        "oai-gnb",
-        "oai-du",
-        "oai-cu",
-        "oai-cu-up",
-        "oai-cu-cp",
-        "oai-flexric",
     ):
-        require(needle in role, f"shared transition lost contract surface: {needle}")
+        require(needle in role, f"transition lost required contract surface: {needle}")
+
+    require("--all-namespaces" not in role, "transition must not touch unrelated namespaces")
+    require("--cascade=foreground" in role, "orphan Deployment cleanup must wait for dependent pods")
+    require("!= 'uninstalled'" in role, "Helm history is no longer distinguished from live ownership")
 
     for forbidden in (
-        "kubectl delete",
         "kubeadm reset",
         "helm upgrade",
         "helm install",
@@ -76,23 +118,14 @@ def static_contract() -> None:
         "192.168.235.105",
         "192.168.235.106",
     ):
-        require(forbidden not in role, f"shared transition crossed its ownership boundary: {forbidden}")
+        require(forbidden not in role, f"transition crossed its ownership boundary: {forbidden}")
 
-    require(
-        "if synthran_ran_transition_selected == 'oai'" in role,
-        "shared transition no longer distinguishes selected/non-selected RAN ownership",
-    )
-    require(
-        "item.name in synthran_ran_transition_incompatible_releases" in role,
-        "release discovery is no longer fail-closed against the explicit incompatible set",
-    )
-    require(
-        "item.metadata.name is match(synthran_ran_transition_incompatible_pod_pattern)" in role,
-        "selected-node stale workload proof is missing",
-    )
+    require("srsran-gnb" not in text(OAI_RAN), "OAI backend reintroduced srsRAN cleanup")
+    for marker in ("oai-gnb", "oai-du", "oai-cu"):
+        require(marker not in text(SRSRAN_GNB), f"srsRAN backend reintroduced OAI cleanup: {marker}")
 
 
-HELM_FAKE = r'''#!/usr/bin/env python3
+HELM = r'''#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -102,12 +135,21 @@ root = Path(os.environ["SYNTHRAN_RAN_TRANSITION_FIXTURE"])
 
 
 def load(name):
-    path = root / name
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads((root / name).read_text(encoding="utf-8"))
 
 
 def save(name, value):
     (root / name).write_text(json.dumps(value), encoding="utf-8")
+
+
+def ns_arg(args):
+    return args[args.index("--namespace") + 1]
+
+
+def selector_for(release):
+    if release == "srsran-gnb":
+        return {"app": "srsran", "component": "gnb"}
+    return {"app.kubernetes.io/instance": release}
 
 
 args = sys.argv[1:]
@@ -116,70 +158,76 @@ if args[:2] == ["version", "--short"]:
     raise SystemExit(0)
 
 if args and args[0] == "list":
-    print(json.dumps(load("releases.json")))
+    namespace = ns_arg(args)
+    print(json.dumps([
+        item for item in load("releases.json")
+        if item.get("namespace") == namespace
+    ]))
     raise SystemExit(0)
 
 if args and args[0] == "uninstall":
-    name = args[1]
-    try:
-        namespace = args[args.index("--namespace") + 1]
-    except (ValueError, IndexError):
-        print("missing --namespace", file=sys.stderr)
-        raise SystemExit(2)
-
+    release = args[1]
+    namespace = ns_arg(args)
     releases = load("releases.json")
-    matched = [
+    matches = [
         item for item in releases
-        if item.get("name") == name
+        if item.get("name") == release
         and item.get("namespace") == namespace
         and item.get("status") != "uninstalled"
     ]
-    if len(matched) != 1:
-        print(f"release not uniquely active: {namespace}/{name}", file=sys.stderr)
+    if len(matches) != 1:
+        print(f"release not uniquely active: {namespace}/{release}", file=sys.stderr)
         raise SystemExit(1)
 
-    save(
-        "releases.json",
-        [
-            item for item in releases
-            if not (item.get("name") == name and item.get("namespace") == namespace)
-        ],
-    )
-
-    pods = load("pods.json")
-    kept = []
-    for pod in pods.get("items", []):
-        metadata = pod.get("metadata", {})
-        labels = metadata.get("labels", {}) or {}
-        owned = (
-            metadata.get("namespace") == namespace
-            and labels.get("app.kubernetes.io/instance") == name
+    save("releases.json", [
+        item for item in releases
+        if not (
+            item.get("name") == release
+            and item.get("namespace") == namespace
+            and item.get("status") != "uninstalled"
         )
-        if not owned:
-            kept.append(pod)
-    pods["items"] = kept
+    ])
+
+    deployments = load("deployments.json")
+    deployments["items"] = [
+        item for item in deployments["items"]
+        if not (
+            item["metadata"]["namespace"] == namespace
+            and item["metadata"]["name"] == release
+        )
+    ]
+    save("deployments.json", deployments)
+
+    wanted = selector_for(release)
+    pods = load("pods.json")
+    pods["items"] = [
+        item for item in pods["items"]
+        if not (
+            item["metadata"]["namespace"] == namespace
+            and all(item["metadata"].get("labels", {}).get(k) == v for k, v in wanted.items())
+        )
+    ]
     save("pods.json", pods)
 
-    nad_by_release = {
+    nad_map = {
         "oai-gnb": "oai-gnb-ru",
         "oai-du": "oai-du-ru",
         "srsran-gnb": "ru-network",
     }
-    nad_name = nad_by_release.get(name)
-    if nad_name:
+    if release in nad_map:
         nads = load("nads.json")
         nads["items"] = [
-            item for item in nads.get("items", [])
+            item for item in nads["items"]
             if not (
-                item.get("metadata", {}).get("namespace") == namespace
-                and item.get("metadata", {}).get("name") == nad_name
+                item["metadata"]["namespace"] == namespace
+                and item["metadata"]["name"] == nad_map[release]
             )
         ]
         save("nads.json", nads)
 
     with (root / "uninstalls.log").open("a", encoding="utf-8") as handle:
-        handle.write(f"{namespace}/{name} {' '.join(args[2:])}\n")
-    print(f"release {name} uninstalled")
+        handle.write(" ".join(args) + "\n")
+    print(f"release {release} uninstalled")
     raise SystemExit(0)
 
 print(f"unsupported fake helm invocation: {args!r}", file=sys.stderr)
@@ -187,7 +235,7 @@ raise SystemExit(2)
 '''
 
 
-KUBECTL_FAKE = r'''#!/usr/bin/env python3
+KUBECTL = r'''#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -201,52 +249,115 @@ def load(name):
     return json.loads((root / name).read_text(encoding="utf-8"))
 
 
-if len(args) >= 2 and args[0] == "get" and args[1] == "pods":
-    data = load("pods.json")
-    node = None
-    if "--field-selector" in args:
-        selector = args[args.index("--field-selector") + 1]
-        if selector.startswith("spec.nodeName="):
-            node = selector.split("=", 1)[1]
-    if node:
-        data["items"] = [
-            item for item in data.get("items", [])
-            if item.get("spec", {}).get("nodeName") == node
-        ]
-elif len(args) >= 2 and args[0] == "get" and args[1].startswith("network-attachment-definitions"):
-    data = load("nads.json")
-else:
-    print(f"unsupported fake kubectl invocation: {args!r}", file=sys.stderr)
-    raise SystemExit(2)
+def save(name, value):
+    (root / name).write_text(json.dumps(value), encoding="utf-8")
 
-output = "json"
-if "--output" in args:
-    output = args[args.index("--output") + 1]
-if output == "json":
+
+def namespace():
+    if "--namespace" in args:
+        return args[args.index("--namespace") + 1]
+    return None
+
+
+def selector():
+    if "--selector" not in args:
+        return {}
+    raw = args[args.index("--selector") + 1]
+    return dict(part.split("=", 1) for part in raw.split(",") if "=" in part)
+
+
+def labels_match(item, wanted):
+    labels = item.get("metadata", {}).get("labels", {}) or {}
+    return all(labels.get(k) == v for k, v in wanted.items())
+
+
+if args[:2] == ["get", "namespace"]:
+    name = args[2]
+    if name not in load("namespaces.json"):
+        raise SystemExit(1)
+    print(f"namespace/{name}")
+    raise SystemExit(0)
+
+if args[:2] == ["get", "pods"]:
+    ns = namespace()
+    wanted = selector()
+    items = [
+        item for item in load("pods.json")["items"]
+        if item["metadata"]["namespace"] == ns and labels_match(item, wanted)
+    ]
+    print("\n".join(f"pod/{item['metadata']['name']}" for item in items))
+    raise SystemExit(0)
+
+if args[:2] == ["get", "deployments"]:
+    ns = namespace()
+    data = load("deployments.json")
+    data["items"] = [item for item in data["items"] if item["metadata"]["namespace"] == ns]
     print(json.dumps(data))
-elif output.startswith("jsonpath="):
-    for item in data.get("items", []):
-        print(item.get("metadata", {}).get("name", ""))
-else:
-    print(f"unsupported fake kubectl output: {output!r}", file=sys.stderr)
-    raise SystemExit(2)
+    raise SystemExit(0)
+
+if args[:2] == ["get", "network-attachment-definitions.k8s.cni.cncf.io"]:
+    ns = namespace()
+    data = load("nads.json")
+    data["items"] = [item for item in data["items"] if item["metadata"]["namespace"] == ns]
+    print(json.dumps(data))
+    raise SystemExit(0)
+
+if args[:2] == ["delete", "deployment"]:
+    name = args[2]
+    ns = namespace()
+    data = load("deployments.json")
+    data["items"] = [
+        item for item in data["items"]
+        if not (item["metadata"]["namespace"] == ns and item["metadata"]["name"] == name)
+    ]
+    save("deployments.json", data)
+    print(f"deployment.apps/{name} deleted")
+    raise SystemExit(0)
+
+if args[:2] == ["delete", "pods"]:
+    ns = namespace()
+    wanted = selector()
+    data = load("pods.json")
+    data["items"] = [
+        item for item in data["items"]
+        if not (item["metadata"]["namespace"] == ns and labels_match(item, wanted))
+    ]
+    save("pods.json", data)
+    print("pod deleted")
+    raise SystemExit(0)
+
+if args[:2] == ["delete", "network-attachment-definitions.k8s.cni.cncf.io"]:
+    name = args[2]
+    ns = namespace()
+    data = load("nads.json")
+    data["items"] = [
+        item for item in data["items"]
+        if not (item["metadata"]["namespace"] == ns and item["metadata"]["name"] == name)
+    ]
+    save("nads.json", data)
+    print(f"network-attachment-definition.k8s.cni.cncf.io/{name} deleted")
+    raise SystemExit(0)
+
+print(f"unsupported fake kubectl invocation: {args!r}", file=sys.stderr)
+raise SystemExit(2)
 '''
 
 
 PLAYBOOK = """---
-- name: Exercise the production cross-RAN transition role
+- name: Exercise production cross-RAN transition
   hosts: ran_node
   gather_facts: false
-  any_errors_fatal: true
   environment:
     PATH: "{{ fixture_bin }}:{{ lookup('env', 'PATH') }}"
     SYNTHRAN_RAN_TRANSITION_FIXTURE: "{{ fixture_state }}"
   vars:
+    platform: r2lab
+    rru: n320
     ran: "{{ fixture_ran }}"
-    core: "{{ fixture_core }}"
+    core: oai
     ran_node_name: ran-ci
     helm_version: "3.22.0"
-    run_dir: "{{ fixture_run_dir }}"
+    run_dir: "{{ fixture_run }}"
     synthran_host_preparation: preserve
   roles:
     - role: 5g/ran_transition
@@ -264,103 +375,66 @@ all:
 """
 
 
-def pod(namespace: str, name: str, release: str, node: str = "ran-ci", network: str = "") -> dict:
-    annotations = {}
-    if network:
-        annotations["k8s.v1.cni.cncf.io/network-status"] = network
-    return {
-        "metadata": {
-            "namespace": namespace,
-            "name": name,
-            "labels": {"app.kubernetes.io/instance": release},
-            "annotations": annotations,
-        },
-        "spec": {"nodeName": node},
-    }
+def deployment(namespace: str, name: str) -> dict:
+    return {"metadata": {"namespace": namespace, "name": name}}
+
+
+def pod(namespace: str, name: str, labels: dict[str, str]) -> dict:
+    return {"metadata": {"namespace": namespace, "name": name, "labels": labels}}
 
 
 def nad(namespace: str, name: str) -> dict:
     return {"metadata": {"namespace": namespace, "name": name}}
 
 
-def prepare_fixture(
-    root: Path,
-    releases: list[dict],
-    pods: list[dict],
-    nads: list[dict],
-) -> tuple[Path, Path, Path]:
-    state = root / "state"
-    fake_bin = root / "bin"
-    run_dir = root / "result"
-    state.mkdir()
-    fake_bin.mkdir()
-    run_dir.mkdir()
-    write_json(state / "releases.json", releases)
-    write_json(state / "pods.json", {"items": pods})
-    write_json(state / "nads.json", {"items": nads})
-    (state / "uninstalls.log").write_text("", encoding="utf-8")
-    (fake_bin / "helm").write_text(HELM_FAKE, encoding="utf-8")
-    (fake_bin / "kubectl").write_text(KUBECTL_FAKE, encoding="utf-8")
-    make_executable(fake_bin / "helm")
-    make_executable(fake_bin / "kubectl")
-    return state, fake_bin, run_dir
-
-
-def run_role(
-    *,
-    selected: str,
-    core: str,
-    releases: list[dict],
-    pods: list[dict],
-    nads: list[dict],
-    expect_success: bool,
-) -> tuple[dict, list[dict], dict, str]:
+def run_fixture(selected: str, state: dict[str, object]) -> tuple[dict, dict[str, object], str]:
     ansible = shutil.which("ansible-playbook")
-    require(ansible is not None, "ansible-playbook is required for the transition contract")
+    require(ansible is not None, "ansible-playbook is required for transition contract")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        roles = root / "roles"
-        shutil.copytree(ROOT / "deployment/roles/5g/ran_transition", roles / "5g/ran_transition")
-        shortened = roles / "5g/ran_transition/tasks/main.yml"
-        source = shortened.read_text(encoding="utf-8")
-        require(source.count("retries: 30") == 1, "production transition wait retry shape changed")
-        require(source.count("delay: 2") == 1, "production transition wait delay shape changed")
-        shortened.write_text(
-            source.replace("retries: 30", "retries: 1").replace("delay: 2", "delay: 0"),
-            encoding="utf-8",
+        shutil.copytree(
+            ROOT / "deployment/roles/5g/ran_transition",
+            root / "roles/5g/ran_transition",
         )
+        fake_bin = root / "bin"
+        fake_bin.mkdir(parents=True)
+        (fake_bin / "helm").write_text(HELM, encoding="utf-8")
+        (fake_bin / "kubectl").write_text(KUBECTL, encoding="utf-8")
+        make_executable(fake_bin / "helm")
+        make_executable(fake_bin / "kubectl")
 
-        state, fake_bin, run_dir = prepare_fixture(root, releases, pods, nads)
+        state_dir = root / "state"
+        state_dir.mkdir()
+        for name in ("namespaces", "releases", "deployments", "pods", "nads"):
+            write_json(state_dir / f"{name}.json", state[name])
+        (state_dir / "uninstalls.log").write_text("", encoding="utf-8")
+
+        run_dir = root / "run"
+        run_dir.mkdir()
         inventory = root / "inventory.yml"
-        inventory.write_text(
-            INVENTORY.replace("__PYTHON__", sys.executable),
-            encoding="utf-8",
-        )
+        inventory.write_text(INVENTORY.replace("__PYTHON__", sys.executable), encoding="utf-8")
         playbook = root / "playbook.yml"
         playbook.write_text(PLAYBOOK, encoding="utf-8")
 
         env = os.environ.copy()
-        env["ANSIBLE_ROLES_PATH"] = str(roles)
+        env["ANSIBLE_ROLES_PATH"] = str(root / "roles")
         env["ANSIBLE_NOCOLOR"] = "1"
-        command = [
-            ansible,
-            "-i",
-            str(inventory),
-            str(playbook),
-            "-e",
-            f"fixture_ran={selected}",
-            "-e",
-            f"fixture_core={core}",
-            "-e",
-            f"fixture_state={state}",
-            "-e",
-            f"fixture_bin={fake_bin}",
-            "-e",
-            f"fixture_run_dir={run_dir}",
-        ]
         result = subprocess.run(
-            command,
+            [
+                ansible,
+                "-i",
+                str(inventory),
+                str(playbook),
+                "-e",
+                f"fixture_ran={selected}",
+                "-e",
+                f"fixture_state={state_dir}",
+                "-e",
+                f"fixture_bin={fake_bin}",
+                "-e",
+                f"fixture_run={run_dir}",
+            ],
             cwd=ROOT,
             env=env,
             text=True,
@@ -368,128 +442,143 @@ def run_role(
             stderr=subprocess.STDOUT,
             check=False,
         )
-        if expect_success:
-            require(result.returncode == 0, f"{selected} transition fixture failed:\n{result.stdout}")
-            evidence_path = run_dir / "provenance/ran-transition.json"
-            require(evidence_path.is_file(), "successful transition did not retain evidence")
-            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        else:
-            require(result.returncode != 0, "orphan incompatible state was incorrectly accepted")
-            evidence = {}
+        require(result.returncode == 0, f"{selected} transition fixture failed:\n{result.stdout}")
 
-        final_releases = json.loads((state / "releases.json").read_text(encoding="utf-8"))
-        final_pods = json.loads((state / "pods.json").read_text(encoding="utf-8"))
-        log = (state / "uninstalls.log").read_text(encoding="utf-8")
-        return evidence, final_releases, final_pods, log
+        evidence = json.loads(
+            (run_dir / "provenance/ran-transition.json").read_text(encoding="utf-8")
+        )
+        final = {
+            name: json.loads((state_dir / f"{name}.json").read_text(encoding="utf-8"))
+            for name in ("namespaces", "releases", "deployments", "pods", "nads")
+        }
+        log = (state_dir / "uninstalls.log").read_text(encoding="utf-8")
+        return evidence, final, log
+
+
+def base_state() -> dict[str, object]:
+    return {
+        "namespaces": ["oai", "other"],
+        "releases": [],
+        "deployments": {"items": []},
+        "pods": {"items": []},
+        "nads": {"items": []},
+    }
 
 
 def check_oai_to_srsran() -> None:
-    evidence, releases, pods, log = run_role(
-        selected="srsran",
-        core="oai",
-        releases=[
-            {"name": "oai-5g-basic", "namespace": "oai", "status": "deployed"},
-            {"name": "oai-gnb", "namespace": "legacy-oai", "status": "deployed"},
-            {"name": "oai-flexric", "namespace": "legacy-oai", "status": "deployed"},
-        ],
-        pods=[
-            pod(
-                "legacy-oai",
-                "oai-gnb-fixture",
-                "oai-gnb",
-                network='[{"name":"legacy-oai/oai-gnb-ru","interface":"ru"}]',
-            ),
-            pod("legacy-oai", "oai-flexric-fixture", "oai-flexric"),
-        ],
-        nads=[nad("legacy-oai", "oai-gnb-ru")],
-        expect_success=True,
-    )
-    require({item["name"] for item in releases} == {"oai-5g-basic"}, "OAI core release was disturbed")
-    require(pods["items"] == [], "old OAI RAN pods survived OAI -> srsRAN transition")
-    require("legacy-oai/oai-gnb" in log and "legacy-oai/oai-flexric" in log, "old OAI releases were not removed")
-    require("--cascade foreground" in log and "--wait" in log, "Helm foreground/wait semantics were lost")
-    require(evidence["selected_ran"] == "srsran", "wrong selected RAN evidence")
-    require(evidence["remaining_releases"] == [], "incompatible release survived evidence")
-    require(evidence["remaining_pods"] == [], "incompatible pod survived evidence")
-    require(evidence["remaining_ru_nads"] == [], "incompatible RU NAD survived evidence")
+    state = base_state()
+    state["releases"] = [
+        {"name": "oai-5g-basic", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-gnb", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-du", "namespace": "oai", "status": "uninstalled"},
+        {"name": "srsran-gnb", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-flexric", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-nr-ue", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-gnb", "namespace": "other", "status": "deployed"},
+    ]
+    state["deployments"]["items"] = [
+        deployment("oai", "oai-gnb"),
+        deployment("oai", "srsran-gnb"),
+        deployment("other", "oai-gnb"),
+    ]
+    state["pods"]["items"] = [
+        pod("oai", "oai-gnb-old", {"app.kubernetes.io/instance": "oai-gnb"}),
+        pod("oai", "srsran-gnb-selected", {"app": "srsran", "component": "gnb"}),
+        pod("oai", "oai-flexric", {"app.kubernetes.io/instance": "oai-flexric"}),
+        pod("oai", "oai-nr-ue", {"app.kubernetes.io/instance": "oai-nr-ue"}),
+        pod("other", "oai-gnb-other", {"app.kubernetes.io/instance": "oai-gnb"}),
+    ]
+    state["nads"]["items"] = [
+        nad("oai", "oai-gnb-ru"),
+        nad("oai", "ru-network"),
+        nad("other", "oai-gnb-ru"),
+    ]
+
+    evidence, final, log = run_fixture("srsran", state)
+    release_keys = {(item["namespace"], item["name"], item["status"]) for item in final["releases"]}
+    require(("oai", "oai-gnb", "deployed") not in release_keys, "old OAI gNB release survived")
+    for expected in (
+        ("oai", "oai-5g-basic", "deployed"),
+        ("oai", "oai-du", "uninstalled"),
+        ("oai", "srsran-gnb", "deployed"),
+        ("oai", "oai-flexric", "deployed"),
+        ("oai", "oai-nr-ue", "deployed"),
+        ("other", "oai-gnb", "deployed"),
+    ):
+        require(expected in release_keys, f"transition removed unrelated/history release {expected}")
+    require("uninstall oai-gnb --namespace oai" in log, "OAI gNB was not uninstalled")
+    require("uninstall oai-du" not in log, "uninstalled Helm history was treated as live ownership")
+    require("--cascade foreground" in log and "--wait" in log and "--no-hooks" in log,
+            "bounded Helm deletion semantics were lost")
+    require(evidence["selected_ran"] == "srsran" and evidence["incompatible_ran"] == "oai",
+            "wrong OAI->srsRAN evidence identity")
 
 
 def check_srsran_to_oai() -> None:
-    evidence, releases, pods, log = run_role(
-        selected="oai",
-        core="oai",
-        releases=[
-            {"name": "oai-5g-basic", "namespace": "oai", "status": "deployed"},
-            {"name": "srsran-gnb", "namespace": "legacy-open5gs", "status": "deployed"},
-            {"name": "srsran-ue", "namespace": "legacy-open5gs", "status": "deployed"},
-        ],
-        pods=[
-            pod(
-                "legacy-open5gs",
-                "srsran-gnb-fixture",
-                "srsran-gnb",
-                network='[{"name":"legacy-open5gs/ru-network","interface":"ru1"}]',
-            ),
-            pod("legacy-open5gs", "srsran-ue-fixture", "srsran-ue"),
-        ],
-        nads=[nad("legacy-open5gs", "ru-network")],
-        expect_success=True,
-    )
-    require({item["name"] for item in releases} == {"oai-5g-basic"}, "unrelated core release was disturbed")
-    require(pods["items"] == [], "old srsRAN pods survived srsRAN -> OAI transition")
-    require("legacy-open5gs/srsran-gnb" in log and "legacy-open5gs/srsran-ue" in log, "old srsRAN releases were not removed")
-    require(evidence["selected_ran"] == "oai", "wrong selected RAN evidence")
+    state = base_state()
+    state["releases"] = [
+        {"name": "oai-5g-basic", "namespace": "oai", "status": "deployed"},
+        {"name": "oai-gnb", "namespace": "oai", "status": "deployed"},
+        {"name": "srsran-gnb", "namespace": "oai", "status": "deployed"},
+        {"name": "srsran-ue", "namespace": "oai", "status": "deployed"},
+        {"name": "srsran-gnb", "namespace": "other", "status": "deployed"},
+    ]
+    state["deployments"]["items"] = [
+        deployment("oai", "oai-gnb"),
+        deployment("oai", "srsran-gnb"),
+        deployment("other", "srsran-gnb"),
+    ]
+    state["pods"]["items"] = [
+        pod("oai", "oai-gnb-selected", {"app.kubernetes.io/instance": "oai-gnb"}),
+        pod("oai", "srsran-gnb-old", {"app": "srsran", "component": "gnb"}),
+        pod("oai", "srsran-ue", {"app": "srsran", "component": "ue"}),
+        pod("other", "srsran-gnb-other", {"app": "srsran", "component": "gnb"}),
+    ]
+    state["nads"]["items"] = [
+        nad("oai", "oai-gnb-ru"),
+        nad("oai", "ru-network"),
+        nad("other", "ru-network"),
+    ]
+
+    evidence, final, log = run_fixture("oai", state)
+    release_keys = {(item["namespace"], item["name"]) for item in final["releases"]}
+    require(("oai", "srsran-gnb") not in release_keys, "old srsRAN gNB release survived")
+    for expected in (
+        ("oai", "oai-5g-basic"),
+        ("oai", "oai-gnb"),
+        ("oai", "srsran-ue"),
+        ("other", "srsran-gnb"),
+    ):
+        require(expected in release_keys, f"transition removed unrelated release {expected}")
+    require("uninstall srsran-gnb --namespace oai" in log, "srsRAN gNB was not uninstalled")
+    require(evidence["selected_ran"] == "oai" and evidence["incompatible_ran"] == "srsran",
+            "wrong srsRAN->OAI evidence identity")
 
 
-def check_same_stack_is_not_stolen() -> None:
-    evidence, releases, pods, log = run_role(
-        selected="srsran",
-        core="oai",
-        releases=[
-            {"name": "srsran-gnb", "namespace": "oai", "status": "deployed"},
-            {"name": "srsran-ue", "namespace": "oai", "status": "deployed"},
-        ],
-        pods=[
-            pod("oai", "srsran-gnb-fixture", "srsran-gnb"),
-            pod("oai", "srsran-ue-fixture", "srsran-ue"),
-        ],
-        nads=[nad("oai", "ru-network")],
-        expect_success=True,
-    )
-    require({item["name"] for item in releases} == {"srsran-gnb", "srsran-ue"}, "shared boundary stole selected srsRAN lifecycle")
-    require(len(pods["items"]) == 2, "shared boundary deleted selected-stack pods")
-    require(log == "", "same-stack rerun unexpectedly uninstalled a selected release")
-    require(evidence["release_candidates_before"] == [], "selected-stack release was classified incompatible")
+def check_orphan_cleanup() -> None:
+    state = base_state()
+    state["deployments"]["items"] = [deployment("oai", "oai-gnb")]
+    state["pods"]["items"] = [
+        pod("oai", "oai-gnb-orphan", {"app.kubernetes.io/instance": "oai-gnb"})
+    ]
+    state["nads"]["items"] = [nad("oai", "oai-gnb-ru")]
 
-
-def check_orphan_fails_closed() -> None:
-    _, releases, pods, log = run_role(
-        selected="srsran",
-        core="oai",
-        releases=[],
-        pods=[
-            pod(
-                "orphaned",
-                "oai-gnb-orphan",
-                "oai-gnb",
-                network='[{"name":"orphaned/oai-gnb-ru","interface":"ru"}]',
-            )
-        ],
-        nads=[nad("orphaned", "oai-gnb-ru")],
-        expect_success=False,
-    )
-    require(releases == [], "orphan fixture unexpectedly gained Helm ownership")
-    require(len(pods["items"]) == 1, "orphan workload was force-deleted instead of failing closed")
-    require(log == "", "orphan fixture unexpectedly invoked Helm uninstall")
+    evidence, final, log = run_fixture("srsran", state)
+    require(log == "", "orphan cleanup unexpectedly required Helm ownership")
+    require(final["deployments"]["items"] == [], "orphan deployment survived")
+    require(final["pods"]["items"] == [], "orphan pod survived")
+    require(final["nads"]["items"] == [], "orphan RU NAD survived")
+    require(evidence["remaining_deployments"] == [], "orphan deployment survived evidence")
+    require(evidence["remaining_pods"] == [], "orphan pod survived evidence")
+    require(evidence["remaining_ru_nads"] == [], "orphan NAD survived evidence")
 
 
 def main() -> None:
     static_contract()
     check_oai_to_srsran()
     check_srsran_to_oai()
-    check_same_stack_is_not_stolen()
-    check_orphan_fails_closed()
-    print("shared cross-RAN transition contract OK")
+    check_orphan_cleanup()
+    print("shared physical cross-RAN transition contract OK")
 
 
 if __name__ == "__main__":

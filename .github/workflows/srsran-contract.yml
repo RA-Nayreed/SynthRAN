@@ -65,6 +65,7 @@ jobs:
           import yaml
 
           paths = [
+              Path("deployment/roles/5g/ran_transition/defaults/main.yml"),
               Path("deployment/roles/5g/ran_transition/tasks/main.yml"),
               Path("deployment/roles/5g/srsRAN/config/tasks/main.yml"),
               Path("deployment/roles/5g/srsRAN/config/tasks/apply_network_profile.yaml"),

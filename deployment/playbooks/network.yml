@@ -6,16 +6,6 @@
   roles:
     - role: setup/gre_tunnel
 
-- name: Establish exclusive ownership before switching RAN implementations
-  hosts: ran_node
-  gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Remove only the non-selected RAN implementation
-      ansible.builtin.include_role:
-        name: 5g/ran_transition
-      when: ran | string | trim | lower in ['oai', 'srsran']
-
 - name: "Deploy the {{ core | upper }} core"
   hosts: core_node
   any_errors_fatal: true
@@ -98,6 +88,15 @@
       ansible.builtin.include_role:
         name: 5g/oai/core
       when: core == 'oai'
+
+    - name: Enforce exclusive physical RAN ownership before backend startup
+      ansible.builtin.include_role:
+        name: 5g/ran_transition
+      when:
+        - platform | string | trim | lower == 'r2lab'
+        - rru | string | trim | lower in ['n300', 'n320']
+        - ran | string | trim | lower in ['oai', 'srsran']
+
     - name: Deploy the OAI RAN
       ansible.builtin.include_role:
         name: 5g/oai/ran
