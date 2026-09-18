@@ -141,6 +141,11 @@ def main() -> int:
         "selected N3xx RRU cleanup no longer uses the maintained SophiaNode helper",
     )
     require(
+        "selected_rru_power_off.rc == 1" in cleanup
+        and "rhubarbe_status_contract=0:ON,1:OFF,255:failure" in cleanup,
+        "selected N3xx RRU cleanup no longer honors Rhubarbe OFF status semantics",
+    )
+    require(
         'rhubarbe pdu off "{{ rru }}"' not in cleanup,
         "obsolete pinned-reference N3xx RRU power-off command returned",
     )
