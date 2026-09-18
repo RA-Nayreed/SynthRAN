@@ -1,0 +1,40 @@
+---
+- name: Require the current pinned OAI RFSIM chart-slot boundary
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_ue_map | length > 0
+      - synthran_ue_map | length <= 3
+      - (synthran_ue_map | map(attribute='index') | list) == (range(1, (synthran_ue_map | length) + 1) | list)
+    fail_msg: >-
+      The pinned OAI RFSIM helper exposes exactly three positional NR-UE chart
+      slots. #114 makes those existing slots contract-authoritative; arbitrary
+      software-UE population/remapping belongs to roadmap #112.
+
+- name: Initialize selected OAI RFSIM chart evidence
+  ansible.builtin.set_fact:
+    synthran_oai_rfsim_chart_contracts: []
+
+- name: Make every selected OAI RFSIM chart follow the sealed UE contract
+  ansible.builtin.include_tasks: rfsim_ue_contract_one.yml
+  loop: "{{ synthran_ue_map }}"
+  loop_control:
+    loop_var: synthran_rfsim_ue
+    label: >-
+      {{ synthran_rfsim_ue.device }} -> slot {{ synthran_rfsim_ue.index }} /
+      {{ synthran_rfsim_ue.slice }}
+
+- name: Retain the selected OAI RFSIM chart contract
+  ansible.builtin.copy:
+    mode: '0644'
+    dest: "{{ run_dir }}/oai-rfsim-ue-contract.json"
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'authority': 'synthran_ue_map',
+           'helper_revision': tag_oai5g_rru,
+           'charts_revision': oai_charts_revision.stdout | trim,
+           'ues': synthran_oai_rfsim_chart_contracts
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false
