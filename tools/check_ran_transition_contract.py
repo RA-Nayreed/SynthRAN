@@ -65,7 +65,8 @@ def static_contract() -> None:
     for required in (
         "--all-namespaces",
         "spec.nodeName={{ ran_node_name }}",
-        "Add old namespaces only when an exact incompatible pod is live on the selected RAN node",
+        "Add an old namespace only when an exact incompatible pod is live on the selected RAN node",
+        "Expand each proven stale namespace to the complete non-selected RAN family",
         "--cascade",
         "foreground",
         "--wait",
@@ -217,11 +218,12 @@ def check_cross_namespace_oai_to_srsran():
     s=base()
     s["releases"]=[
         {"name":"oai-gnb","namespace":"oai","status":"deployed"},
+        {"name":"oai-cu","namespace":"oai","status":"deployed"},
         {"name":"srsran-gnb","namespace":"open5gs","status":"deployed"},
         {"name":"oai-flexric","namespace":"oai","status":"deployed"},
         {"name":"oai-gnb","namespace":"other","status":"deployed"},
     ]
-    s["deployments"]["items"]=[dep("oai","oai-gnb"),dep("open5gs","srsran-gnb"),dep("other","oai-gnb")]
+    s["deployments"]["items"]=[dep("oai","oai-gnb"),dep("oai","oai-cu"),dep("open5gs","srsran-gnb"),dep("other","oai-gnb")]
     s["pods"]["items"]=[
         pod("oai","old-oai",{"app.kubernetes.io/instance":"oai-gnb"}),
         pod("open5gs","selected-srs",{"app":"srsran","component":"gnb"}),
@@ -230,11 +232,13 @@ def check_cross_namespace_oai_to_srsran():
     s["nads"]["items"]=[nad("oai","oai-gnb-ru"),nad("open5gs","ru-network"),nad("other","oai-gnb-ru")]
     e,f,log=run_fixture("srsran","open5gs",s)
     keys={(x["namespace"],x["name"]) for x in f["releases"]}
-    require(("oai","oai-gnb") not in keys,"old cross-core OAI RAN survived")
+    require(("oai","oai-gnb") not in keys,"old cross-core OAI gNB survived")
+    require(("oai","oai-cu") not in keys,"stale OAI RAN family was only partially cleaned")
     require(("other","oai-gnb") in keys,"unrelated-node namespace was mutated")
     require(("oai","oai-flexric") in keys,"FlexRIC was stolen by RAN transition")
     require(("open5gs","srsran-gnb") in keys,"selected stack was removed")
-    require("uninstall oai-gnb --namespace oai" in log,"old namespace release not removed")
+    require("uninstall oai-gnb --namespace oai" in log,"old namespace gNB release not removed")
+    require("uninstall oai-cu --namespace oai" in log,"full stale RAN family was not cleaned")
     require(e["exclusive_prelaunch"] is True,"missing exclusivity evidence")
 
 def check_srsran_to_oai_and_nonran_preservation():

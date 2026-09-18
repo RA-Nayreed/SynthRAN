@@ -86,22 +86,15 @@
   register: synthran_ran_transition_node_pods
   changed_when: false
 
-- name: Seed transition candidates in the selected workload namespace
+- name: Seed bounded transition namespaces with the selected workload namespace
   ansible.builtin.set_fact:
-    synthran_ran_transition_candidates: >-
-      {{ (synthran_ran_transition_candidates | default([])) + [
-           item | combine({'namespace': synthran_ran_transition_namespace})
-         ] }}
-  loop: "{{ synthran_ran_transition_targets }}"
-  loop_control:
-    label: "{{ synthran_ran_transition_namespace }}/{{ item.release }}"
+    synthran_ran_transition_candidate_namespaces:
+      - "{{ synthran_ran_transition_namespace }}"
 
-- name: Add old namespaces only when an exact incompatible pod is live on the selected RAN node
+- name: Add an old namespace only when an exact incompatible pod is live on the selected RAN node
   ansible.builtin.set_fact:
-    synthran_ran_transition_candidates: >-
-      {{ synthran_ran_transition_candidates + [
-           item.0.item | combine({'namespace': item.1})
-         ] }}
+    synthran_ran_transition_candidate_namespaces: >-
+      {{ synthran_ran_transition_candidate_namespaces + [item.1] }}
   loop: >-
     {{ query(
          'subelements',
@@ -113,7 +106,20 @@
     label: "{{ item.1 }}/{{ item.0.item.release }}"
   when:
     - item.1 | string | trim | length > 0
-    - (item.0.item | combine({'namespace': item.1})) not in synthran_ran_transition_candidates
+    - item.1 not in synthran_ran_transition_candidate_namespaces
+
+- name: Expand each proven stale namespace to the complete non-selected RAN family
+  ansible.builtin.set_fact:
+    synthran_ran_transition_candidates: >-
+      {{ (synthran_ran_transition_candidates | default([])) + [
+           item.0 | combine({'namespace': item.1})
+         ] }}
+  loop: >-
+    {{ synthran_ran_transition_targets
+       | product(synthran_ran_transition_candidate_namespaces)
+       | list }}
+  loop_control:
+    label: "{{ item.1 }}/{{ item.0.release }}"
 
 - name: Inspect incompatible Helm ownership for each bounded candidate
   ansible.builtin.command:
