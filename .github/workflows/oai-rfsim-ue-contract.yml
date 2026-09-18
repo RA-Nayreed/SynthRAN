@@ -38,4 +38,6 @@ jobs:
             tools/check_oai_rfsim_ue_contract.py
 
       - name: Validate selected OAI RFSIM UE authority
+        env:
+          PYTHONPATH: .
         run: python tools/check_oai_rfsim_ue_contract.py
