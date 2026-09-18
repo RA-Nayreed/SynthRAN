@@ -78,7 +78,8 @@
       - --selector
       - "{{ item.pod_selector }}"
       - --output
-      - "jsonpath={range .items[*]}{.metadata.namespace}{'\n'}{end}"
+      - "custom-columns=NS:.metadata.namespace"
+      - --no-headers
   loop: "{{ synthran_ran_transition_targets }}"
   loop_control:
     label: "{{ item.pod_selector }}"
