@@ -31,6 +31,52 @@
   loop: "{{ selected_qhats }}"
   register: qhat_off_jobs
 
+- name: Wait for selected QHAT power-off completion
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: qhat_off_status
+  until: qhat_off_status.finished
+  retries: 60
+  delay: 5
+  failed_when: false
+  changed_when: false
+  loop: "{{ qhat_off_jobs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default(item.ansible_job_id) }}"
+
+- name: Retain selected QHAT power-off evidence
+  ansible.builtin.copy:
+    content: |
+      device={{ item.item.item | default('unknown') }}
+      command=rhubarbe pdu off {{ item.item.item | default('unknown') }}
+      rhubarbe_status_contract=0:ON,1:OFF,255:failure
+      expected_rc=1
+      finished={{ item.finished | default(false) }}
+      rc={{ item.rc | default('not-finished') }}
+      stdout={{ item.stdout | default('') }}
+      stderr={{ item.stderr | default('') }}
+    dest: "{{ run_dir }}/r2lab-ue-{{ item.item.item | default('unknown') }}-setup-power-off.log"
+  delegate_to: localhost
+  become: false
+  loop: "{{ qhat_off_status.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item | default('selected-qhat') }}"
+
+- name: Require every selected QHAT to reach the OFF terminal state
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.finished | default(false) | bool
+      - (item.rc | default(255) | int) == 1
+    fail_msg: >-
+      Selected QHAT {{ item.item.item | default('unknown') }} did not complete
+      its Rhubarbe power-off transition. Rhubarbe device actions use
+      0=ON, 1=OFF, 255=failure; refusing to power the UE back on until the
+      selected device has reached the OFF terminal state.
+  loop: "{{ qhat_off_status.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item | default('selected-qhat') }}"
+
 - name: Power OFF selected QFIT UEs
   ansible.builtin.shell: qfit off {{ selected_qfits | join(' ') }}
   delegate_to: faraday.inria.fr
@@ -38,7 +84,7 @@
   failed_when: false
   changed_when: false
 
-- name: Wait for selected UE power-off
+- name: Allow selected UE power rails to settle after confirmed power-off
   ansible.builtin.pause:
     seconds: 20
   when: all_ues | length > 0

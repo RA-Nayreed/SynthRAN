@@ -130,11 +130,26 @@ def check_local_structure() -> None:
         "synthran_ue_map",
         "selected_qhats",
         "selected_qfits",
+        "Wait for selected QHAT power-off completion",
+        "qhat_off_status.finished",
+        "rhubarbe_status_contract=0:ON,1:OFF,255:failure",
+        "expected_rc=1",
+        "Require every selected QHAT to reach the OFF terminal state",
         "Wait for every selected UE SSH endpoint",
         "timeout: 120",
         "include_tasks: prepare_one.yml",
     ):
         require(needle in setup, f"selected UE PREPARE contract lost: {needle}")
+    require(
+        setup.index("Wait for selected QHAT power-off completion")
+        < setup.index("Allow selected UE power rails to settle after confirmed power-off")
+        < setup.index("Power ON selected QHAT UEs"),
+        "selected QHAT lifecycle can power ON before the asynchronous OFF transition completes",
+    )
+    require(
+        "(item.rc | default(255) | int) == 1" in setup,
+        "selected QHAT OFF completion no longer enforces Rhubarbe rc=1 terminal state",
+    )
     require("ignore_errors: true" not in setup, "selected UE power/readiness path became fail-open")
     require("failed_ues" not in setup, "ping-only failed_ues authority was reintroduced")
 
