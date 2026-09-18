@@ -9,9 +9,10 @@
       - synthran_r2lab_ue.tunnel.interface == 'wwan0'
       - synthran_r2lab_ue.tunnel.mode in ['mbim', 'qmi']
       - (synthran_cleanup_phase | default('predeploy')) in ['predeploy', 'teardown']
+      - synthran_r2lab_stop_known_hosts | string | length > 0
     fail_msg: >-
       Selected R2Lab cleanup must consume exactly one qhat/qfit deployment-contract
-      entry on the supported wwan0 MBIM/QMI lifecycle.
+      entry on the supported wwan0 MBIM/QMI lifecycle with a run-scoped SSH trust file.
 
 - name: Resolve selected UE stop identity
   ansible.builtin.set_fact:
@@ -19,48 +20,58 @@
     synthran_stop_mode: "{{ synthran_r2lab_ue.tunnel.mode }}"
     synthran_stop_phase: "{{ synthran_cleanup_phase | default('predeploy') }}"
 
-# A selected UE may legitimately be powered off or otherwise unreachable before
-# deployment. The subsequent setup role is the authority that powers, initializes,
-# and verifies the selected UE. Keep Ansible UNREACHABLE as retained evidence here
-# so predeploy can classify that state without aborting before setup. Teardown
-# remains fail-closed on the same condition at the final assertion below.
-- name: Stop the selected MBIM UE
-  ansible.builtin.command: stop.sh
-  delegate_to: "{{ synthran_stop_device }}"
+# Run the nested UE SSH operation from Faraday, matching the R2Lab topology used
+# by the reference implementation. A controller-side delegate_to can terminate an
+# included role immediately on UNREACHABLE before evidence can be retained. Here
+# SSH transport failure is an ordinary rc=255, so the selected-resource lifecycle
+# can record it and then apply different predeploy versus teardown policy without
+# using ignore_errors, ignore_unreachable, or a global cleanup fallback.
+- name: Resolve the bounded Faraday-to-UE SSH command
+  ansible.builtin.set_fact:
+    synthran_stop_ssh_argv:
+      - ssh
+      - -o
+      - ConnectTimeout=5
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=accept-new
+      - -o
+      - "UserKnownHostsFile={{ synthran_r2lab_stop_known_hosts }}"
+      - "root@{{ synthran_stop_device }}"
+    synthran_stop_qmi_probe_code: |
+      import glob
+      import serial
+      import sys
+
+      for port in sorted(glob.glob('/dev/ttyUSB*')):
+          try:
+              with serial.Serial(port, 115200, timeout=0.4) as modem:
+                  modem.write(b'AT\r')
+                  response = modem.read(64)
+              if b'OK' in response:
+                  print(port)
+                  sys.exit(0)
+          except Exception:
+              pass
+      sys.exit(1)
+
+- name: Stop the selected MBIM UE from Faraday
+  ansible.builtin.command:
+    argv: "{{ synthran_stop_ssh_argv + ['stop.sh'] }}"
   environment:
     SYNTHRAN_STOP_DEVICE: "{{ synthran_stop_device }}"
   register: synthran_stop_mbim
-  changed_when: true
+  changed_when: (synthran_stop_mbim.rc | default(1) | int) == 0
   failed_when: false
-  ignore_unreachable: true
   when: synthran_stop_mode == 'mbim'
 
-- name: Detect the selected QMI UE AT control port
-  ansible.builtin.shell: |
-    python3 - <<'PYEOF'
-    import glob
-    import serial
-    import sys
-
-    for port in sorted(glob.glob('/dev/ttyUSB*')):
-        try:
-            with serial.Serial(port, 115200, timeout=0.4) as modem:
-                modem.write(b'AT\r')
-                response = modem.read(64)
-            if b'OK' in response:
-                print(port)
-                sys.exit(0)
-        except Exception:
-            pass
-    sys.exit(1)
-    PYEOF
-  args:
-    executable: /bin/bash
-  delegate_to: "{{ synthran_stop_device }}"
+- name: Detect the selected QMI UE AT control port from Faraday
+  ansible.builtin.command:
+    argv: "{{ synthran_stop_ssh_argv + ['python3', '-c', synthran_stop_qmi_probe_code] }}"
   register: synthran_stop_at_detect
   changed_when: false
   failed_when: false
-  ignore_unreachable: true
   when:
     - synthran_stop_mode == 'qmi'
     - hostvars[synthran_stop_device].at_port is not defined
@@ -72,58 +83,56 @@
          default(synthran_stop_at_detect.stdout | default('') | trim, true) }}
   when: synthran_stop_mode == 'qmi'
 
-- name: Detach the selected QMI UE
+- name: Detach the selected QMI UE from Faraday
   ansible.builtin.command:
-    argv:
-      - python3
-      - /usr/local/bin/ci_ctl_qtel.py
-      - "{{ synthran_stop_qmi_at_port }}"
-      - detach
-  delegate_to: "{{ synthran_stop_device }}"
+    argv: >-
+      {{
+        synthran_stop_ssh_argv
+        + [
+            'python3',
+            '/usr/local/bin/ci_ctl_qtel.py',
+            synthran_stop_qmi_at_port,
+            'detach'
+          ]
+      }}
   environment:
     SYNTHRAN_STOP_DEVICE: "{{ synthran_stop_device }}"
   register: synthran_stop_qmi
-  changed_when: true
+  changed_when: (synthran_stop_qmi.rc | default(1) | int) == 0
   failed_when: false
-  ignore_unreachable: true
   when:
     - synthran_stop_mode == 'qmi'
     - synthran_stop_qmi_at_port | default('') | length > 0
 
-- name: Classify selected UE stop reachability and helper result
+- name: Classify selected UE SSH reachability and helper result
   ansible.builtin.set_fact:
     synthran_stop_helper_unreachable: >-
       {{
-        (synthran_stop_mbim.unreachable | default(false) | bool)
-        or (synthran_stop_at_detect.unreachable | default(false) | bool)
-        or (synthran_stop_qmi.unreachable | default(false) | bool)
+        (synthran_stop_mbim.rc | default(0) | int) == 255
+        or (synthran_stop_at_detect.rc | default(0) | int) == 255
+        or (synthran_stop_qmi.rc | default(0) | int) == 255
       }}
     synthran_stop_helper_succeeded: >-
       {{
         (
           synthran_stop_mode == 'mbim'
-          and not (synthran_stop_mbim.unreachable | default(false) | bool)
           and (synthran_stop_mbim.rc | default(1) | int) == 0
         )
         or
         (
           synthran_stop_mode == 'qmi'
-          and not (synthran_stop_at_detect.unreachable | default(false) | bool)
-          and not (synthran_stop_qmi.unreachable | default(false) | bool)
+          and (synthran_stop_at_detect.rc | default(1) | int) != 255
           and (synthran_stop_qmi_at_port | default('') | length > 0)
           and (synthran_stop_qmi.rc | default(1) | int) == 0
         )
       }}
 
-- name: Read selected UE diagnostics after the stop attempt
-  ansible.builtin.command: qhat-check
-  delegate_to: "{{ synthran_stop_device }}"
-  environment:
-    SYNTHRAN_STOP_DEVICE: "{{ synthran_stop_device }}"
+- name: Read selected UE diagnostics from Faraday after the stop attempt
+  ansible.builtin.command:
+    argv: "{{ synthran_stop_ssh_argv + ['qhat-check'] }}"
   register: synthran_stop_check
   changed_when: false
   failed_when: false
-  ignore_unreachable: true
   when: not synthran_stop_helper_unreachable
 
 - name: Classify selected UE stop outcome
@@ -148,17 +157,18 @@
       outcome={{ synthran_stop_outcome }}
       interface={{ synthran_r2lab_ue.tunnel.interface }}
       mbim_session={{ synthran_r2lab_ue.tunnel.mbim_session | default('') }}
+      ssh_origin=faraday
+      ssh_known_hosts={{ synthran_r2lab_stop_known_hosts }}
       helper_command={{ 'stop.sh' if synthran_stop_mode == 'mbim' else ('python3 /usr/local/bin/ci_ctl_qtel.py ' ~ (synthran_stop_qmi_at_port | default('')) ~ ' detach') }}
       helper_unreachable={{ synthran_stop_helper_unreachable }}
-      helper_rc={{ synthran_stop_mbim.rc | default(synthran_stop_qmi.rc | default('unreachable' if synthran_stop_helper_unreachable else 'not-run')) }}
-      helper_msg={{ synthran_stop_mbim.msg | default(synthran_stop_at_detect.msg | default(synthran_stop_qmi.msg | default(''))) }}
-      helper_stdout={{ synthran_stop_mbim.stdout | default(synthran_stop_qmi.stdout | default('')) }}
-      helper_stderr={{ synthran_stop_mbim.stderr | default(synthran_stop_qmi.stderr | default('')) }}
+      helper_rc={{ (synthran_stop_mbim.rc | default('not-run')) if synthran_stop_mode == 'mbim' else (synthran_stop_qmi.rc | default(synthran_stop_at_detect.rc | default('not-run'))) }}
+      helper_stdout={{ (synthran_stop_mbim.stdout | default('')) if synthran_stop_mode == 'mbim' else (synthran_stop_qmi.stdout | default(synthran_stop_at_detect.stdout | default(''))) }}
+      helper_stderr={{ (synthran_stop_mbim.stderr | default('')) if synthran_stop_mode == 'mbim' else (synthran_stop_qmi.stderr | default(synthran_stop_at_detect.stderr | default(''))) }}
       qmi_at_port={{ synthran_stop_qmi_at_port | default('') }}
-      qmi_at_probe_rc={{ synthran_stop_at_detect.rc | default('unreachable' if (synthran_stop_at_detect.unreachable | default(false) | bool) else 'not-run') }}
+      qmi_at_probe_rc={{ synthran_stop_at_detect.rc | default('not-run') }}
       qmi_at_probe_stdout={{ synthran_stop_at_detect.stdout | default('') }}
       qmi_at_probe_stderr={{ synthran_stop_at_detect.stderr | default('') }}
-      qhat_check_unreachable={{ synthran_stop_check.unreachable | default(false) }}
+      qhat_check_unreachable={{ (synthran_stop_check.rc | default(0) | int) == 255 }}
       qhat_check_rc={{ synthran_stop_check.rc | default('unavailable') }}
       qhat_check_stdout={{ synthran_stop_check.stdout | default('') }}
       qhat_check_stderr={{ synthran_stop_check.stderr | default('') }}
@@ -180,6 +190,6 @@
       Selected R2Lab UE stop failed for {{ synthran_stop_device }} during
       {{ synthran_stop_phase }} cleanup with outcome {{ synthran_stop_outcome }}.
       See r2lab-ue-{{ synthran_stop_device }}-{{ synthran_stop_phase }}-stop.log.
-      Predeploy permits only an explicitly retained UNREACHABLE selected UE because
+      Predeploy permits only an explicitly retained SSH transport failure because
       the following setup stage is authoritative for power/readiness; teardown and
       reachable helper failures remain fail-closed. No global cleanup fallback is used.
