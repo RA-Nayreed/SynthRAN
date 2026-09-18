@@ -428,7 +428,10 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     ssh_output = ssh_failed.stdout + ssh_failed.stderr
     require(ssh_failed.returncode != 0, "teardown selected UE SSH failure was masked")
     ssh_evidence = ssh_dir / "r2lab-ue-qhat03-teardown-stop.log"
-    require(ssh_evidence.is_file(), "teardown unreachable UE evidence was not retained")
+    require(
+        ssh_evidence.is_file(),
+        "teardown unreachable UE evidence was not retained:\n" + ssh_output,
+    )
     require(
         "outcome=failed-unreachable" in ssh_evidence.read_text(encoding="utf-8"),
         "teardown unreachable UE was not classified as a terminal failure",
