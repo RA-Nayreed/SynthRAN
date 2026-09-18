@@ -1,9 +1,11 @@
 ---
-- name: Cleanup R2Lab
+- name: Cleanup selected R2Lab resources before provisioning
   hosts: faraday
   gather_facts: false
   roles:
     - role: r2lab/cleanup
+      vars:
+        synthran_cleanup_phase: predeploy
       when:
         - platform == 'r2lab'
         - not no_r2lab_cleanup | default(false)
