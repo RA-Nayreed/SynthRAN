@@ -37,11 +37,64 @@
           - /tmp/synthran-probe-software-ues.py
           - --expected
           - /tmp/synthran-accepted-deployment.json
+          - --evidence
+          - /tmp/synthran-software-ue-acceptance-failure.json
       register: synthran_live_software_probe
       changed_when: false
+      failed_when: false
       retries: 6
       delay: 5
       until: synthran_live_software_probe.rc == 0
+      when: platform == 'rfsim'
+
+    - name: Check for retained software UE acceptance failure evidence
+      ansible.builtin.stat:
+        path: /tmp/synthran-software-ue-acceptance-failure.json
+      register: synthran_live_software_failure_file
+      when:
+        - platform == 'rfsim'
+        - synthran_live_software_probe.rc != 0
+
+    - name: Retain structured software UE acceptance failure evidence
+      ansible.builtin.fetch:
+        src: /tmp/synthran-software-ue-acceptance-failure.json
+        dest: "{{ run_dir }}/software-ue-acceptance-failure.json"
+        flat: true
+      when:
+        - platform == 'rfsim'
+        - synthran_live_software_probe.rc != 0
+        - synthran_live_software_failure_file.stat.exists | default(false)
+
+    - name: Retain fallback software UE acceptance failure evidence
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: "{{ run_dir }}/software-ue-acceptance-failure.json"
+        content: >-
+          {{ {
+               'schema_version': 1,
+               'stage': 'probe-process-failed',
+               'returncode': synthran_live_software_probe.rc,
+               'stdout': synthran_live_software_probe.stdout | default(''),
+               'stderr': synthran_live_software_probe.stderr | default('')
+             } | to_nice_json }}
+      delegate_to: localhost
+      become: false
+      when:
+        - platform == 'rfsim'
+        - synthran_live_software_probe.rc != 0
+        - not (synthran_live_software_failure_file.stat.exists | default(false))
+
+    - name: Require the complete read-only software UE acceptance probe
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - synthran_live_software_probe.rc == 0
+        fail_msg: >-
+          {{ synthran_live_software_probe.stderr
+             | default(synthran_live_software_probe.stdout, true)
+             | default('software UE acceptance probe failed', true) }}
+          Retained evidence:
+          {{ run_dir }}/software-ue-acceptance-failure.json
       when: platform == 'rfsim'
 
     - name: Decode fresh software UE bindings

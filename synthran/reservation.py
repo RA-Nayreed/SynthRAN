@@ -433,7 +433,11 @@ def _allocation_state(node: str, result: subprocess.CompletedProcess[str]) -> st
 
 def _probe_allocation_for_fresh(node: str) -> str:
     print(f"[POS allocation] Probing {node}", flush=True)
-    result = run_visible(["pos", "allocations", "allocate", node], check=False)
+    # POS logs a provider-level ERROR before returning its expected
+    # "already allocated" state. Capture the probe so that known existing
+    # allocation state is classified here instead of emitted as a false-red
+    # operator error. Real failures are still surfaced by _allocation_state().
+    result = run(["pos", "allocations", "allocate", node], check=False)
     state = _allocation_state(node, result)
     if state == "new":
         print(f"[POS allocation] {node}: fresh allocation acquired", flush=True)

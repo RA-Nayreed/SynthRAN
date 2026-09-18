@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import importlib.util
 import io
@@ -297,6 +298,46 @@ def pos_checks() -> dict[str, str]:
         reservation.run = original
 
 
+def allocation_probe_output_checks() -> dict[str, str]:
+    original = reservation.run
+    try:
+        def already_allocated(argv, _stdin, _n):
+            if argv[:3] == ["pos", "allocations", "allocate"]:
+                return done(
+                    argv,
+                    rc=1,
+                    err="ERROR pos Unable to POST /allocations/allocate\nNodes are already allocated: sopnode-f3",
+                )
+            raise CheckError(f"unexpected POS command {argv}")
+
+        reservation.run = Fake(already_allocated)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            state = reservation._probe_allocation_for_fresh("sopnode-f3")
+        captured = out.getvalue()
+        assert state == "already-active"
+        assert "existing allocation detected" in captured
+        assert "Unable to POST" not in captured
+        assert "Nodes are already allocated" not in captured
+
+        def real_failure(argv, _stdin, _n):
+            if argv[:3] == ["pos", "allocations", "allocate"]:
+                return done(argv, rc=7, err="provider unavailable")
+            raise CheckError(f"unexpected POS command {argv}")
+
+        reservation.run = Fake(real_failure)
+        expect_error(
+            lambda: reservation._probe_allocation_for_fresh("sopnode-f3"),
+            "provider unavailable",
+        )
+        return {
+            "known_existing_quiet": "passed",
+            "unexpected_failure_visible": "passed",
+        }
+    finally:
+        reservation.run = original
+
+
 def preparation_checks() -> dict[str, str]:
     original = reservation.run
     old_attempts = os.environ.get("SYNTHRAN_POS_READY_ATTEMPTS")
@@ -583,6 +624,7 @@ def main() -> int:
         "policy": policy_checks(),
         "provider": provider_checks(),
         "pos_calendar": pos_checks(),
+        "allocation_probe_output": allocation_probe_output_checks(),
         "host_preparation": preparation_checks(),
         "r2lab": r2lab_checks(),
         "noninteractive": no_input_checks(),
