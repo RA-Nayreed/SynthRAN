@@ -42,9 +42,9 @@
       }}
     synthran_ran_transition_incompatible_pod_pattern: >-
       {{
-        '^(?:srsran-gnb|srsran-ue)(?:-|$)'
+        '^(srsran-gnb|srsran-ue)(-|$)'
         if synthran_ran_transition_selected == 'oai'
-        else '^(?:oai-flexric|oai-gnb|oai-du|oai-cu|oai-cu-up|oai-cu-cp|oai-nr-ue|oai-nr-ue2|oai-nr-ue3)(?:-|$)'
+        else '^(oai-flexric|oai-gnb|oai-du|oai-cu|oai-cu-up|oai-cu-cp|oai-nr-ue|oai-nr-ue2|oai-nr-ue3)(-|$)'
       }}
 
 - name: Verify the centrally pinned Helm runtime before transition
@@ -116,10 +116,9 @@
         [{
           'namespace': item.metadata.namespace,
           'name': item.metadata.name,
-          'network_status': (
-            (item.metadata.annotations | default({}))
-            .get('k8s.v1.cni.cncf.io/network-status', '')
-          )
+          'network_status': ((item.metadata.annotations | default({})).get(
+            'k8s.v1.cni.cncf.io/network-status', ''
+          ))
         }]
       }}
   loop: "{{ (synthran_ran_transition_pods_before.stdout | from_json).items | default([]) }}"
