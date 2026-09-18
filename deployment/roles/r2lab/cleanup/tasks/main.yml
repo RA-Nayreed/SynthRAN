@@ -56,7 +56,9 @@
   args:
     executable: /bin/bash
   register: selected_rru_power_off
-  changed_when: selected_rru_power_off.rc == 0
+  # Rhubarbe PDU action status is 0=ON, 1=OFF, 255=failure. For the
+  # 'off' action, rc=1 is therefore the successful terminal state.
+  changed_when: selected_rru_power_off.rc == 1
   failed_when: false
   when: rru | default('rfsim') != 'rfsim'
 
@@ -66,6 +68,8 @@
       phase={{ r2lab_cleanup_phase }}
       rru={{ rru }}
       command=rhubarbe-pdu off {{ rru }}
+      rhubarbe_status_contract=0:ON,1:OFF,255:failure
+      expected_rc=1
       rc={{ selected_rru_power_off.rc | default('not-run') }}
       stdout={{ selected_rru_power_off.stdout | default('') }}
       stderr={{ selected_rru_power_off.stderr | default('') }}
@@ -78,7 +82,7 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - selected_rru_power_off.rc == 0
+      - selected_rru_power_off.rc == 1
     fail_msg: >-
       Selected RRU power-off failed for {{ rru }} during {{ r2lab_cleanup_phase }}
       cleanup. See r2lab-rru-{{ rru }}-{{ r2lab_cleanup_phase }}-stop.log;
