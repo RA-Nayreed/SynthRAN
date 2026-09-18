@@ -99,7 +99,9 @@
   loop: "{{ synthran_ran_transition_helm_before.stdout | from_json }}"
   loop_control:
     label: "{{ item.name | default('?') }}"
-  when: item.name | default('') in synthran_ran_transition_target_release_names
+  when:
+    - (item.name | default('')) in synthran_ran_transition_target_release_names
+    - (item.status | default('') | lower) != 'uninstalled'
 
 - name: Capture incompatible pods before transition
   ansible.builtin.command:
@@ -310,14 +312,23 @@
     label: "{{ item.item.pod_selector }}"
   when: item.stdout_lines | length > 0
 
-- name: Resolve remaining incompatible cluster state
+- name: Initialize remaining incompatible release evidence
+  ansible.builtin.set_fact:
+    synthran_ran_transition_remaining_releases: []
+
+- name: Record active incompatible Helm releases that survived transition
   ansible.builtin.set_fact:
     synthran_ran_transition_remaining_releases: >-
-      {{
-        (synthran_ran_transition_helm_after.stdout | from_json
-         | map(attribute='name') | list)
-        | intersect(synthran_ran_transition_target_release_names)
-      }}
+      {{ synthran_ran_transition_remaining_releases + [item.name] }}
+  loop: "{{ synthran_ran_transition_helm_after.stdout | from_json }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+  when:
+    - (item.name | default('')) in synthran_ran_transition_target_release_names
+    - (item.status | default('') | lower) != 'uninstalled'
+
+- name: Resolve remaining incompatible Kubernetes state
+  ansible.builtin.set_fact:
     synthran_ran_transition_remaining_deployments: >-
       {{
         (
