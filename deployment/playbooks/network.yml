@@ -88,6 +88,15 @@
       ansible.builtin.include_role:
         name: 5g/oai/core
       when: core == 'oai'
+
+    - name: Enforce exclusive physical RAN ownership before backend startup
+      ansible.builtin.include_role:
+        name: 5g/ran_transition
+      when:
+        - platform | string | trim | lower == 'r2lab'
+        - rru | string | trim | lower in ['n300', 'n320']
+        - ran | string | trim | lower in ['oai', 'srsran']
+
     - name: Deploy the OAI RAN
       ansible.builtin.include_role:
         name: 5g/oai/ran
