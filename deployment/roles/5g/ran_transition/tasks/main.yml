@@ -121,7 +121,7 @@
           ))
         }]
       }}
-  loop: "{{ (synthran_ran_transition_pods_before.stdout | from_json).items | default([]) }}"
+  loop: "{{ (synthran_ran_transition_pods_before.stdout | from_json)['items'] | default([]) }}"
   loop_control:
     label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
   when: item.metadata.name is match(synthran_ran_transition_incompatible_pod_pattern)
@@ -152,7 +152,7 @@
           'name': item.metadata.name
         }]
       }}
-  loop: "{{ (synthran_ran_transition_nads_before.stdout | from_json).items | default([]) }}"
+  loop: "{{ (synthran_ran_transition_nads_before.stdout | from_json)['items'] | default([]) }}"
   loop_control:
     label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
   when: item.metadata.name in synthran_ran_transition_incompatible_nads
@@ -270,7 +270,7 @@
           'name': item.metadata.name
         }]
       }}
-  loop: "{{ (synthran_ran_transition_pods_after.stdout | from_json).items | default([]) }}"
+  loop: "{{ (synthran_ran_transition_pods_after.stdout | from_json)['items'] | default([]) }}"
   loop_control:
     label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
   when: item.metadata.name is match(synthran_ran_transition_incompatible_pod_pattern)
@@ -301,7 +301,7 @@
           'name': item.metadata.name
         }]
       }}
-  loop: "{{ (synthran_ran_transition_nads_after.stdout | from_json).items | default([]) }}"
+  loop: "{{ (synthran_ran_transition_nads_after.stdout | from_json)['items'] | default([]) }}"
   loop_control:
     label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
   when: item.metadata.name in synthran_ran_transition_incompatible_nads
