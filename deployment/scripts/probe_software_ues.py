@@ -200,13 +200,23 @@ def _probe_user_plane(candidate: dict, ue: dict) -> dict:
     }
 
 
-def resolve_bindings(manifest: dict, discovered: list[dict]) -> list[dict]:
+def resolve_bindings(
+    manifest: dict,
+    discovered: list[dict],
+    device: str | None = None,
+) -> list[dict]:
     deployment = manifest.get("deployment", {})
     if deployment.get("platform") != "rfsim":
         raise ValueError("software UE validation requires an rfsim deployment")
     expected = deployment.get("ues", [])
     if not expected:
         raise ValueError("deployment identity contains no UEs")
+    if device is not None:
+        expected = [ue for ue in expected if str(ue.get("device")) == device]
+        if len(expected) != 1:
+            raise ValueError(
+                f"deployment identity must contain exactly one selected UE named {device!r}"
+            )
     bindings: list[dict] = []
     used: set[tuple[str, str, str]] = set()
 
@@ -261,11 +271,15 @@ def resolve_bindings(manifest: dict, discovered: list[dict]) -> list[dict]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected", required=True)
+    parser.add_argument(
+        "--device",
+        help="validate only one selected logical UE while preserving the full deployment identity",
+    )
     args = parser.parse_args(argv)
     manifest = json.loads(Path(args.expected).read_text(encoding="utf-8"))
     namespace = manifest["deployment"]["topology"]["namespace"]
     try:
-        bindings = resolve_bindings(manifest, discover(namespace))
+        bindings = resolve_bindings(manifest, discover(namespace), device=args.device)
     except (KeyError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         raise SystemExit(f"live software UE acceptance check failed: {exc}") from exc
     print(json.dumps(bindings, sort_keys=True))
