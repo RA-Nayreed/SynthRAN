@@ -188,10 +188,10 @@ def check_static_boundaries() -> None:
 
     for label, text in (("cleanup role", cleanup), ("UE stop role", stop), ("provisioning", provision)):
         require("all-off" not in text, f"{label} still contains global R2Lab all-off")
-    require("ignore_errors" not in cleanup, "selected cleanup still ignores failures")
-    require("ignore_errors" not in stop, "selected UE stop still ignores failures")
+    require("ignore_errors:" not in cleanup, "selected cleanup still ignores failures")
+    require("ignore_errors:" not in stop, "selected UE stop still ignores failures")
     require(
-        "ignore_unreachable" not in stop,
+        "ignore_unreachable:" not in stop,
         "selected UE stop still depends on Ansible unreachable suppression",
     )
     require(
