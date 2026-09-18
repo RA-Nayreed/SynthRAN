@@ -149,6 +149,34 @@ def ansible_command(ansible: str, inv: Path, vars_file: Path, tag: str, *extra: 
     ]
 
 
+def predeploy_command(
+    ansible: str,
+    inv: Path,
+    vars_file: Path,
+    playbook: Path,
+) -> list[str]:
+    playbook.write_text(
+        """---
+- name: Exercise selected predeploy cleanup
+  hosts: faraday
+  gather_facts: false
+  roles:
+    - role: r2lab/cleanup
+      vars:
+        synthran_cleanup_phase: predeploy
+""",
+        encoding="utf-8",
+    )
+    return [
+        ansible,
+        "-i",
+        str(inv),
+        "-e",
+        "@" + str(vars_file),
+        str(playbook),
+    ]
+
+
 def check_static_boundaries() -> None:
     cleanup = (ROOT / "deployment/roles/r2lab/cleanup/tasks/main.yml").read_text()
     stop = (ROOT / "deployment/roles/r2lab/ue/stop/tasks/main.yml").read_text()
@@ -162,6 +190,16 @@ def check_static_boundaries() -> None:
         require("all-off" not in text, f"{label} still contains global R2Lab all-off")
     require("ignore_errors" not in cleanup, "selected cleanup still ignores failures")
     require("ignore_errors" not in stop, "selected UE stop still ignores failures")
+    require(
+        "ignore_unreachable: true" in stop,
+        "selected UE stop does not retain delegated UNREACHABLE results for phase classification",
+    )
+    require(
+        "'already-unreachable'" in stop
+        and "'failed-unreachable'" in stop
+        and "synthran_stop_phase == 'predeploy'" in stop,
+        "selected UE stop no longer distinguishes predeploy-unreachable from teardown failure",
+    )
     require(
         "r2lab_inventory_ues | difference(r2lab_selected_ues)" not in cleanup,
         "cleanup rejects unrelated inventory UEs instead of preserving them",
@@ -325,18 +363,79 @@ printf 'namespace/%s deleted\\n' "${3:-unknown}"
     require(rru_evidence.is_file(), "RRU failure evidence was not retained")
     require("rc=41" in rru_evidence.read_text(encoding="utf-8"), "RRU failure rc was not retained")
 
+    ue_fail_dir = tmp / "run-ue-helper-fail"
+    ue_fail_dir.mkdir()
+    ue_fail_vars = tmp / "vars-ue-helper-fail.yml"
+    variables(ue_fail_vars, ue_fail_dir, fake / "kubectl")
+    ue_fail_env = env | {"SYNTHRAN_FAIL_UE": "qhat03"}
+    ue_failed = run(ansible_command(ansible, inv, ue_fail_vars, "resources"), env=ue_fail_env)
+    require(ue_failed.returncode != 0, "reachable selected UE helper failure was masked")
+    ue_fail_evidence = ue_fail_dir / "r2lab-ue-qhat03-teardown-stop.log"
+    require(ue_fail_evidence.is_file(), "reachable UE helper failure evidence was not retained")
+    ue_fail_text = ue_fail_evidence.read_text(encoding="utf-8")
+    require("outcome=failed-helper" in ue_fail_text, "reachable UE helper failure was misclassified")
+    require("helper_rc=31" in ue_fail_text, "reachable UE helper failure rc was not retained")
+
     ssh_inv = tmp / "inventory-ssh-fail.yml"
-    ssh_dir = tmp / "run-ssh-fail"
-    ssh_dir.mkdir()
-    ssh_vars = tmp / "vars-ssh-fail.yml"
     inventory(ssh_inv, ssh_failure=True)
+
+    if stop_log.exists():
+        stop_log.unlink()
+    if pdu_log.exists():
+        pdu_log.unlink()
+
+    predeploy_dir = tmp / "run-predeploy-ssh-unreachable"
+    predeploy_dir.mkdir()
+    predeploy_vars = tmp / "vars-predeploy-ssh-unreachable.yml"
+    variables(predeploy_vars, predeploy_dir, fake / "kubectl")
+    predeploy_playbook = tmp / "predeploy-cleanup.yml"
+    predeploy = run(
+        predeploy_command(ansible, ssh_inv, predeploy_vars, predeploy_playbook),
+        env=env,
+    )
+    require(
+        predeploy.returncode == 0,
+        "predeploy rejected an initially unreachable selected UE:\n"
+        + predeploy.stdout
+        + predeploy.stderr,
+    )
+    predeploy_stopped = stop_log.read_text(encoding="utf-8").splitlines()
+    require(predeploy_stopped.count("qhat01") == 1, "reachable predeploy UE was not stopped once")
+    require("qhat03" not in predeploy_stopped, "unreachable predeploy UE unexpectedly executed stop.sh")
+    require("qhat99" not in predeploy_stopped, "unselected sentinel was touched during predeploy")
+    predeploy_evidence = predeploy_dir / "r2lab-ue-qhat03-predeploy-stop.log"
+    require(predeploy_evidence.is_file(), "predeploy unreachable UE evidence was not retained")
+    predeploy_text = predeploy_evidence.read_text(encoding="utf-8")
+    require(
+        "outcome=already-unreachable" in predeploy_text,
+        "predeploy unreachable UE was not classified as already-unreachable",
+    )
+    require(
+        "helper_unreachable=True" in predeploy_text
+        or "helper_unreachable=true" in predeploy_text,
+        "predeploy unreachable UE did not retain the unreachable result",
+    )
+    require(
+        pdu_log.read_text(encoding="utf-8").splitlines() == ["off n320"],
+        "predeploy unreachable UE changed selected-RRU cleanup semantics",
+    )
+
+    ssh_dir = tmp / "run-teardown-ssh-unreachable"
+    ssh_dir.mkdir()
+    ssh_vars = tmp / "vars-teardown-ssh-unreachable.yml"
     variables(ssh_vars, ssh_dir, fake / "kubectl")
     ssh_failed = run(ansible_command(ansible, ssh_inv, ssh_vars, "resources"), env=env)
     ssh_output = ssh_failed.stdout + ssh_failed.stderr
-    require(ssh_failed.returncode != 0, "selected UE SSH failure was masked")
+    require(ssh_failed.returncode != 0, "teardown selected UE SSH failure was masked")
+    ssh_evidence = ssh_dir / "r2lab-ue-qhat03-teardown-stop.log"
+    require(ssh_evidence.is_file(), "teardown unreachable UE evidence was not retained")
     require(
-        "UNREACHABLE" in ssh_output or "Failed to connect" in ssh_output or "Connection refused" in ssh_output,
-        "selected UE SSH failure was not visible in Ansible output",
+        "outcome=failed-unreachable" in ssh_evidence.read_text(encoding="utf-8"),
+        "teardown unreachable UE was not classified as a terminal failure",
+    )
+    require(
+        "Selected R2Lab UE stop failed" in ssh_output,
+        "teardown unreachable UE failure was not visible at the phase-policy assertion",
     )
 
     if kubectl_log.exists():
