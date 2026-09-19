@@ -34,6 +34,17 @@ flannel_chart_version: "v0.28.9"
 # reference to this immutable Docker Official Image index before Helm renders.
 synthran_log_sidecar_image: "busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0"
 
+# OAI RFSIM is intentionally decoupled from the physical N3xx image baseline.
+# The helper's 2026.w26 NR-UE contains OAI's later-fixed PRACH amplitude defect
+# (bad commit 611bbb...; fixed by 568ed... in integration 2026.w33).
+# Keep N300/N320 on the physically proven helper pin; override only software
+# RF simulation and retain the actual pulled imageID digest at runtime.
+synthran_oai_rfsim_release: "2026.w33"
+synthran_oai_rfsim_upstream_revision: "2b69bde6aeafe892cda1531a0f0cbba2e37792cd"
+synthran_oai_rfsim_prach_fix_revision: "568ed052348947dc5ece1d408887c50afe3c8e6a"
+synthran_oai_rfsim_gnb_repository: "docker.io/oaisoftwarealliance/oai-gnb"
+synthran_oai_rfsim_ue_repository: "docker.io/oaisoftwarealliance/oai-nr-ue"
+
 # #52 normalizes this field to fresh|preserve in the resolved scenario. This
 # policy remains controller-owned and is never inferred from live host state.
 synthran_host_preparation: >-
