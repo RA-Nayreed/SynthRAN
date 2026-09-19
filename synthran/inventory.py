@@ -14,7 +14,12 @@ import socket
 import yaml
 
 from .deployment_identity import write_execution_manifest
-from .deployment_state import build_manifest, build_ue_map, content_hash
+from .deployment_state import (
+    build_manifest,
+    build_ue_map,
+    content_hash,
+    resolve_user_plane_targets,
+)
 from .profile_validation import validate_network_profile, validate_ue_catalog
 from .r2lab import access, ssh_options
 from .scenario import redacted
@@ -198,6 +203,18 @@ def main(argv=None):
         controller_known_hosts.resolve(),
         faraday_known_hosts,
     )
+
+    node_addresses: dict[str, str] = {}
+    for group in ("core_node", "ran_node", "broker_node"):
+        for name, host in raw_inventory["all"]["children"][group]["hosts"].items():
+            address = host.get("ip")
+            if not address:
+                raise SystemExit(
+                    f"selected node {name!r} has no resolved IPv4 address in inventory"
+                )
+            node_addresses[name] = str(address)
+    ue_map = resolve_user_plane_targets(c, profile, ue_map, node_addresses)
+
     private_inventory_path = private_dir / "inventory.yml"
     private_inventory_path.write_text(yaml.safe_dump(raw_inventory, sort_keys=False))
     private_inventory_path.chmod(0o600)
