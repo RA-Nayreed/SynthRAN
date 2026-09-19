@@ -194,7 +194,9 @@ def check_ansible_contract() -> None:
         'synthran_oai_rfsim_upstream_revision: "2b69bde6aeafe892cda1531a0f0cbba2e37792cd"',
         'synthran_oai_rfsim_prach_fix_revision: "568ed052348947dc5ece1d408887c50afe3c8e6a"',
         'synthran_oai_rfsim_gnb_repository: "docker.io/oaisoftwarealliance/oai-gnb"',
+        'synthran_oai_rfsim_gnb_index_digest: "sha256:0dd2bd5507ccbbe08600a6df33a32f7861eaa4034c9d63750d5a3a8754686d16"',
         'synthran_oai_rfsim_ue_repository: "docker.io/oaisoftwarealliance/oai-nr-ue"',
+        'synthran_oai_rfsim_ue_index_digest: "sha256:18b7a553088e98187de38e363ebe389ece45db6b54c0ce568c60f681762515c8"',
     ):
         require(marker in all_vars, f"reviewed RFSIM runtime pin lost marker: {marker}")
 
@@ -209,7 +211,8 @@ def check_ansible_contract() -> None:
         "authority': 'synthran_ue_map'",
         "oai-rfsim-ue-contract.json",
         ".nfimage.repository = strenv(SYNTHRAN_RFSIM_GNB_REPOSITORY)",
-        ".nfimage.version = strenv(SYNTHRAN_RFSIM_RUNTIME_RELEASE)",
+        ".nfimage.version = strenv(SYNTHRAN_RFSIM_GNB_VERSION)",
+        "synthran_oai_rfsim_gnb_index_digest",
         "synthran_oai_rfsim_prach_fix_revision",
         "gnb_rendered",
     ):
@@ -217,7 +220,8 @@ def check_ansible_contract() -> None:
 
     for marker in (
         ".nfimage.repository = strenv(SYNTHRAN_RFSIM_UE_REPOSITORY)",
-        ".nfimage.version = strenv(SYNTHRAN_RFSIM_RUNTIME_RELEASE)",
+        ".nfimage.version = strenv(SYNTHRAN_RFSIM_UE_VERSION)",
+        "synthran_oai_rfsim_ue_index_digest",
         ".config.fullImsi = strenv(SYNTHRAN_UE_IMSI)",
         ".config.dnn = strenv(SYNTHRAN_UE_DNN)",
         ".config.sst = strenv(SYNTHRAN_UE_SST)",
@@ -247,7 +251,9 @@ def check_ansible_contract() -> None:
         "synthran_oai_rfsim_probe.rc == 0",
         "synthran_oai_rfsim_ue_repository",
         "synthran_oai_rfsim_runtime_release",
+        "synthran_oai_rfsim_ue_index_digest",
         "'runtime_release': synthran_oai_rfsim_runtime_release",
+        "'index_digest': synthran_oai_rfsim_ue_index_digest",
         "'@sha256:'",
         "'image_id': synthran_oai_rfsim_status_container.imageID",
         "user_plane.verified",
@@ -261,6 +267,8 @@ def check_ansible_contract() -> None:
         "synthran_oai_rfsim_upstream_revision",
         "synthran_oai_rfsim_prach_fix_revision",
         "synthran_oai_rfsim_runtime_release",
+        "synthran_oai_rfsim_gnb_index_digest",
+        "synthran_oai_rfsim_ue_index_digest",
         "'@sha256:'",
     ):
         require(marker in ran_main, f"live RFSIM runtime attestation lost marker: {marker}")
