@@ -204,17 +204,6 @@ def main(argv=None):
         faraday_known_hosts,
     )
 
-    node_addresses: dict[str, str] = {}
-    for group in ("core_node", "ran_node", "broker_node"):
-        for name, host in raw_inventory["all"]["children"][group]["hosts"].items():
-            address = host.get("ip")
-            if not address:
-                raise SystemExit(
-                    f"selected node {name!r} has no resolved IPv4 address in inventory"
-                )
-            node_addresses[name] = str(address)
-    ue_map = resolve_user_plane_targets(c, profile, ue_map, node_addresses)
-
     private_inventory_path = private_dir / "inventory.yml"
     private_inventory_path.write_text(yaml.safe_dump(raw_inventory, sort_keys=False))
     private_inventory_path.chmod(0o600)
@@ -249,6 +238,7 @@ def main(argv=None):
         n2.pop("amf_ip_split")
 
     topology["contract_version"] = topologies["schema_version"]
+    ue_map = resolve_user_plane_targets(c, profile, ue_map, topology)
     manifest = build_manifest(c, profile, ue_map, topology)
     selected = manifest["deployment"]
     for key in ("ansible_vars", "host_vars"):
