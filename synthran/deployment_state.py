@@ -84,41 +84,43 @@ def resolve_user_plane_targets(
     scenario: dict,
     network_profile: dict,
     ue_map: list[dict],
-    node_addresses: dict[str, str],
+    topology: dict,
 ) -> list[dict]:
     """Seal backend-appropriate user-plane probe endpoints into the UE map.
 
-    OAI's multi-DNN UPF does not own `<pdu-subnet>.1` for every configured DNN.
-    Its deployment acceptance therefore probes a real N6-side endpoint: the
-    selected broker node's resolved IPv4 address. Other retained cores keep the
-    existing per-session-network gateway contract until their topology adapters
-    provide a stronger explicit N6 endpoint.
+    OAI basic mode exposes one UPF TUN anchor (tun0) for the primary session
+    network and routes additional DNN pools through that same anchor. The OAI
+    topology therefore owns one shared UPF probe identity instead of deriving a
+    fictitious `<each-dnn>.1` address. Other retained cores keep the existing
+    per-session-network gateway contract until their topology adapters define a
+    stronger explicit endpoint.
     """
 
     deployment = scenario["deployment"]
     core = str(deployment["core"]).lower()
-    slices = _slice_map(network_profile)
+    slices = network_profile.get("slices", [])
     resolved = copy.deepcopy(ue_map)
 
     if core == "oai":
-        nodes = deployment["nodes"]
-        broker = str(nodes.get("broker", nodes["core"]))
-        target = node_addresses.get(broker)
-        if not target:
+        transport = topology.get("transport", {})
+        probe_contract = transport.get("user_plane_probe", {})
+        if probe_contract.get("kind") != "oai-upf-tun0":
             raise ValueError(
-                f"no resolved IPv4 address for selected N6 broker node {broker!r}"
+                "OAI topology must define user_plane_probe kind 'oai-upf-tun0'"
             )
         try:
-            target = str(ipaddress.ip_address(str(target)))
-        except ValueError as error:
+            session_index = int(probe_contract["session_index"])
+            selected_slice = slices[session_index]
+        except (KeyError, TypeError, ValueError, IndexError) as error:
             raise ValueError(
-                f"invalid resolved IPv4 address for selected N6 broker node {broker!r}: "
-                f"{target!r}"
+                "OAI topology user-plane probe must select a valid session_index"
             ) from error
+        target = _session_gateway_target(selected_slice)
+        interface = str(probe_contract.get("interface", "tun0"))
         probe = {
-            "kind": "n6-node-ipv4",
-            "role": "broker",
-            "node": broker,
+            "kind": "oai-upf-tun0",
+            "interface": interface,
+            "session_index": session_index,
             "address": target,
         }
         for entry in resolved:
@@ -126,8 +128,9 @@ def resolve_user_plane_targets(
             entry["user_plane_target"] = target
         return resolved
 
+    slice_by_name = _slice_map(network_profile)
     for entry in resolved:
-        selected_slice = slices[entry["slice"]]
+        selected_slice = slice_by_name[entry["slice"]]
         target = _session_gateway_target(selected_slice)
         entry["user_plane_probe"] = {
             "kind": "session-network-gateway",
@@ -135,7 +138,6 @@ def resolve_user_plane_targets(
         }
         entry["user_plane_target"] = target
     return resolved
-
 
 def expected_user_plane_target(contract: dict) -> str | None:
     """Return the sealed user-plane target, with legacy-contract compatibility."""
@@ -250,7 +252,7 @@ def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
     if isinstance(probe, dict):
         if user_plane.get("target_kind") != probe.get("kind"):
             return False
-        if probe.get("node") is not None and user_plane.get("target_node") != probe.get("node"):
+        if probe.get("interface") is not None and user_plane.get("target_interface") != probe.get("interface"):
             return False
     return True
 
