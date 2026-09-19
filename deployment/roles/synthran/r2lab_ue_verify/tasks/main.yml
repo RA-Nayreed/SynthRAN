@@ -19,10 +19,16 @@
   ansible.builtin.set_fact:
     synthran_r2lab_contract_ue: "{{ synthran_r2lab_contract_matches | first }}"
 
-- name: Resolve the R2Lab transport from the deployment contract
+- name: Resolve the R2Lab transport and user-plane probe from the deployment contract
   ansible.builtin.set_fact:
     synthran_r2lab_interface: "{{ synthran_r2lab_contract_ue.tunnel.interface }}"
-    synthran_r2lab_upf_address: "{{ synthran_r2lab_contract_ue.user_plane_target }}"
+    synthran_r2lab_user_plane_address: "{{ synthran_r2lab_contract_ue.user_plane_target }}"
+    synthran_r2lab_user_plane_kind: >-
+      {{ synthran_r2lab_contract_ue.user_plane_probe.kind
+         | default('legacy-user-plane-target') }}
+    synthran_r2lab_user_plane_node: >-
+      {{ synthran_r2lab_contract_ue.user_plane_probe.node
+         | default(none) }}
 
 - name: Require the supported upstream R2Lab transport
   ansible.builtin.assert:
@@ -32,7 +38,7 @@
       - synthran_r2lab_interface == 'wwan0'
       - synthran_r2lab_contract_ue.tunnel.mode == (mode | default('mbim'))
       - (mode | default('mbim')) != 'mbim' or synthran_r2lab_contract_ue.tunnel.mbim_session | int == 0
-      - synthran_r2lab_upf_address | length > 0
+      - synthran_r2lab_user_plane_address | length > 0
     fail_msg: The R2Lab contract must use the upstream wwan0 modem transport and an explicit user-plane target.
 
 - name: Read the live R2Lab SIM, DNN configuration, and modem session
@@ -70,7 +76,7 @@
   ansible.builtin.set_fact:
     synthran_r2lab_binding: "{{ (synthran_r2lab_probe.stdout | from_json).binding }}"
 
-- name: Require interface-bound R2Lab user-plane reachability to the selected UPF
+- name: Require interface-bound R2Lab user-plane reachability to the sealed endpoint
   ansible.builtin.command:
     argv:
       - ping
@@ -80,7 +86,7 @@
       - '1'
       - -W
       - '3'
-      - "{{ synthran_r2lab_upf_address }}"
+      - "{{ synthran_r2lab_user_plane_address }}"
   register: synthran_r2lab_upf_probe
   changed_when: false
   retries: 5
@@ -90,8 +96,10 @@
 - name: Retain the source-bound R2Lab user-plane probe log
   ansible.builtin.copy:
     content: |
-      command: ping -I {{ synthran_r2lab_interface }} -c 1 -W 3 {{ synthran_r2lab_upf_address }}
+      command: ping -I {{ synthran_r2lab_interface }} -c 1 -W 3 {{ synthran_r2lab_user_plane_address }}
       source_address: {{ synthran_r2lab_binding.address }}
+      target_kind: {{ synthran_r2lab_user_plane_kind }}
+      target_node: {{ synthran_r2lab_user_plane_node | default('') }}
       return_code: {{ synthran_r2lab_upf_probe.rc }}
       attempts: {{ synthran_r2lab_upf_probe.attempts | default(1) }}
       stdout:
@@ -111,6 +119,8 @@
              'method': 'icmp_echo',
              'source_interface': synthran_r2lab_interface,
              'source_address': synthran_r2lab_binding.address,
-             'target_address': synthran_r2lab_upf_address,
+             'target_address': synthran_r2lab_user_plane_address,
+             'target_kind': synthran_r2lab_user_plane_kind,
+             'target_node': synthran_r2lab_user_plane_node,
              'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
            }}, recursive=true) }}
