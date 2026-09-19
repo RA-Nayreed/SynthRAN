@@ -271,7 +271,7 @@
     quiet: true
     that:
       - synthran_oai_rfsim_gnb_pod.status.phase == 'Running'
-      - synthran_oai_rfsim_gnb_spec_container.image == synthran_oai_rfsim_gnb_repository ~ ':' ~ synthran_oai_rfsim_release
+      - synthran_oai_rfsim_gnb_spec_container.image == synthran_oai_rfsim_gnb_repository ~ ':' ~ synthran_oai_rfsim_runtime_release
       - synthran_oai_rfsim_gnb_status_container.ready | default(false) | bool
       - "'@sha256:' in (synthran_oai_rfsim_gnb_status_container.imageID | default(''))"
     fail_msg: >-
@@ -289,7 +289,7 @@
     content: >-
       {{ {
            'schema_version': 1,
-           'release': synthran_oai_rfsim_release,
+           'release': synthran_oai_rfsim_runtime_release,
            'upstream_revision': synthran_oai_rfsim_upstream_revision,
            'prach_fix_revision': synthran_oai_rfsim_prach_fix_revision,
            'gnb': {
@@ -299,7 +299,7 @@
              'image_id': synthran_oai_rfsim_gnb_status_container.imageID,
              'restart_count': synthran_oai_rfsim_gnb_status_container.restartCount | default(0)
            },
-           'expected_ue_image': synthran_oai_rfsim_ue_repository ~ ':' ~ synthran_oai_rfsim_release
+           'expected_ue_image': synthran_oai_rfsim_ue_repository ~ ':' ~ synthran_oai_rfsim_runtime_release
          } | to_nice_json }}
   delegate_to: localhost
   become: false

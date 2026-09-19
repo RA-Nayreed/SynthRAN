@@ -39,7 +39,7 @@ synthran_log_sidecar_image: "busybox@sha256:9db7b59979c38555a39def84a31fb98b5296
 # (bad commit 611bbb...; fixed by 568ed... in integration 2026.w33).
 # Keep N300/N320 on the physically proven helper pin; override only software
 # RF simulation and retain the actual pulled imageID digest at runtime.
-synthran_oai_rfsim_release: "2026.w33"
+synthran_oai_rfsim_runtime_release: "2026.w33"
 synthran_oai_rfsim_upstream_revision: "2b69bde6aeafe892cda1531a0f0cbba2e37792cd"
 synthran_oai_rfsim_prach_fix_revision: "568ed052348947dc5ece1d408887c50afe3c8e6a"
 synthran_oai_rfsim_gnb_repository: "docker.io/oaisoftwarealliance/oai-gnb"

@@ -35,7 +35,7 @@
       - -i
       - >-
         .nfimage.repository = strenv(SYNTHRAN_RFSIM_UE_REPOSITORY) |
-        .nfimage.version = strenv(SYNTHRAN_RFSIM_RELEASE) |
+        .nfimage.version = strenv(SYNTHRAN_RFSIM_RUNTIME_RELEASE) |
         .config.fullImsi = strenv(SYNTHRAN_UE_IMSI) |
         .config.dnn = strenv(SYNTHRAN_UE_DNN) |
         .config.sst = strenv(SYNTHRAN_UE_SST)
@@ -43,7 +43,7 @@
         {{ charts_base }}/oai-5g-ran/{{ synthran_oai_rfsim_release }}/values.yaml
   environment:
     SYNTHRAN_RFSIM_UE_REPOSITORY: "{{ synthran_oai_rfsim_ue_repository }}"
-    SYNTHRAN_RFSIM_RELEASE: "{{ synthran_oai_rfsim_release }}"
+    SYNTHRAN_RFSIM_RUNTIME_RELEASE: "{{ synthran_oai_rfsim_runtime_release }}"
     SYNTHRAN_UE_IMSI: "{{ synthran_rfsim_ue.imsi }}"
     SYNTHRAN_UE_DNN: "{{ synthran_rfsim_ue.dnn }}"
     SYNTHRAN_UE_SST: "{{ synthran_rfsim_ue.sst | string }}"
@@ -114,7 +114,7 @@
       - synthran_oai_rfsim_rendered.sst | string == synthran_rfsim_ue.sst | string
       - synthran_oai_rfsim_rendered.sd | string == synthran_oai_rfsim_expected_sd | string
       - synthran_oai_rfsim_image.repository == synthran_oai_rfsim_ue_repository
-      - synthran_oai_rfsim_image.version | string == synthran_oai_rfsim_release
+      - synthran_oai_rfsim_image.version | string == synthran_oai_rfsim_runtime_release
     fail_msg: >-
       OAI RFSIM chart {{ synthran_oai_rfsim_release }} does not match the
       sealed deployment identity for {{ synthran_rfsim_ue.device }}; refusing

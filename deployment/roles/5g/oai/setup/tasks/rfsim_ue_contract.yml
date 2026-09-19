@@ -15,65 +15,9 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - synthran_oai_rfsim_release == '2026.w33'
-      - synthran_oai_rfsim_upstream_revision is match('^[0-9a-f]{40}
-- name: Make every selected OAI RFSIM chart follow the sealed UE contract
-  ansible.builtin.include_tasks: rfsim_ue_contract_one.yml
-  loop: "{{ synthran_ue_map }}"
-  loop_control:
-    loop_var: synthran_rfsim_ue
-    label: >-
-      {{ synthran_rfsim_ue.device }} -> slot {{ synthran_rfsim_ue.index }} /
-      {{ synthran_rfsim_ue.slice }}
-
-- name: Retain the selected OAI RFSIM chart contract
-  ansible.builtin.copy:
-    mode: '0644'
-    dest: "{{ run_dir }}/oai-rfsim-ue-contract.json"
-    content: >-
-      {{ {
-           'schema_version': 1,
-           'authority': 'synthran_ue_map',
-           'helper_revision': tag_oai5g_rru,
-           'charts_revision': oai_charts_revision.stdout | trim,
-           'runtime': {
-             'release': synthran_oai_rfsim_release,
-             'upstream_revision': synthran_oai_rfsim_upstream_revision,
-             'prach_fix_revision': synthran_oai_rfsim_prach_fix_revision,
-             'gnb_repository': synthran_oai_rfsim_gnb_repository,
-             'ue_repository': synthran_oai_rfsim_ue_repository,
-             'gnb_rendered': synthran_oai_rfsim_gnb_image
-           },
-           'ues': synthran_oai_rfsim_chart_contracts
-         } | to_nice_json }}
-  delegate_to: localhost
-  become: false
-)
-      - synthran_oai_rfsim_prach_fix_revision is match('^[0-9a-f]{40}
-- name: Make every selected OAI RFSIM chart follow the sealed UE contract
-  ansible.builtin.include_tasks: rfsim_ue_contract_one.yml
-  loop: "{{ synthran_ue_map }}"
-  loop_control:
-    loop_var: synthran_rfsim_ue
-    label: >-
-      {{ synthran_rfsim_ue.device }} -> slot {{ synthran_rfsim_ue.index }} /
-      {{ synthran_rfsim_ue.slice }}
-
-- name: Retain the selected OAI RFSIM chart contract
-  ansible.builtin.copy:
-    mode: '0644'
-    dest: "{{ run_dir }}/oai-rfsim-ue-contract.json"
-    content: >-
-      {{ {
-           'schema_version': 1,
-           'authority': 'synthran_ue_map',
-           'helper_revision': tag_oai5g_rru,
-           'charts_revision': oai_charts_revision.stdout | trim,
-           'ues': synthran_oai_rfsim_chart_contracts
-         } | to_nice_json }}
-  delegate_to: localhost
-  become: false
-)
+      - synthran_oai_rfsim_runtime_release == '2026.w33'
+      - synthran_oai_rfsim_upstream_revision is match('^[0-9a-f]{40}$')
+      - synthran_oai_rfsim_prach_fix_revision is match('^[0-9a-f]{40}$')
       - synthran_oai_rfsim_gnb_repository == 'docker.io/oaisoftwarealliance/oai-gnb'
       - synthran_oai_rfsim_ue_repository == 'docker.io/oaisoftwarealliance/oai-nr-ue'
     fail_msg: >-
@@ -102,11 +46,11 @@
       - -i
       - >-
         .nfimage.repository = strenv(SYNTHRAN_RFSIM_GNB_REPOSITORY) |
-        .nfimage.version = strenv(SYNTHRAN_RFSIM_RELEASE)
+        .nfimage.version = strenv(SYNTHRAN_RFSIM_RUNTIME_RELEASE)
       - "{{ charts_base }}/oai-5g-ran/oai-gnb/values.yaml"
   environment:
     SYNTHRAN_RFSIM_GNB_REPOSITORY: "{{ synthran_oai_rfsim_gnb_repository }}"
-    SYNTHRAN_RFSIM_RELEASE: "{{ synthran_oai_rfsim_release }}"
+    SYNTHRAN_RFSIM_RUNTIME_RELEASE: "{{ synthran_oai_rfsim_runtime_release }}"
   changed_when: true
 
 - name: Read back the selected OAI RFSIM gNB image contract
@@ -128,10 +72,10 @@
     quiet: true
     that:
       - synthran_oai_rfsim_gnb_image.repository == synthran_oai_rfsim_gnb_repository
-      - synthran_oai_rfsim_gnb_image.version | string == synthran_oai_rfsim_release
+      - synthran_oai_rfsim_gnb_image.version | string == synthran_oai_rfsim_runtime_release
     fail_msg: >-
       Rendered OAI RFSIM gNB image does not match the reviewed corrected
-      {{ synthran_oai_rfsim_release }} runtime.
+      {{ synthran_oai_rfsim_runtime_release }} runtime.
 
 - name: Initialize selected OAI RFSIM chart evidence
   ansible.builtin.set_fact:
@@ -156,6 +100,14 @@
            'authority': 'synthran_ue_map',
            'helper_revision': tag_oai5g_rru,
            'charts_revision': oai_charts_revision.stdout | trim,
+           'runtime': {
+             'release': synthran_oai_rfsim_runtime_release,
+             'upstream_revision': synthran_oai_rfsim_upstream_revision,
+             'prach_fix_revision': synthran_oai_rfsim_prach_fix_revision,
+             'gnb_repository': synthran_oai_rfsim_gnb_repository,
+             'ue_repository': synthran_oai_rfsim_ue_repository,
+             'gnb_rendered': synthran_oai_rfsim_gnb_image
+           },
            'ues': synthran_oai_rfsim_chart_contracts
          } | to_nice_json }}
   delegate_to: localhost
