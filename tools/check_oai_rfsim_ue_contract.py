@@ -66,21 +66,28 @@ def physical_regression_contract() -> tuple[dict, list[dict]]:
             },
         }
     }
+    topology = {
+        "namespace": "oai",
+        "transport": {
+            "user_plane_probe": {
+                "kind": "oai-upf-tun0",
+                "session_index": 0,
+                "interface": "tun0",
+            }
+        },
+    }
     ue_map = build_ue_map(scenario, effective)
     ue_map = resolve_user_plane_targets(
         scenario,
         effective,
         ue_map,
-        {
-            "sopnode-f2": "192.0.2.20",
-            "sopnode-f3": "192.0.2.30",
-        },
+        topology,
     )
     manifest = build_manifest(
         scenario,
         effective,
         ue_map,
-        topology={"namespace": "oai"},
+        topology=topology,
     )
     return manifest, ue_map
 
@@ -106,21 +113,21 @@ def check_resolved_mapping() -> None:
     )
     require(
         [ue["user_plane_target"] for ue in ue_map]
-        == ["192.0.2.20", "192.0.2.20", "192.0.2.20"],
-        "OAI acceptance must use the selected N6 broker endpoint for every DNN",
+        == ["12.1.1.1", "12.1.1.1", "12.1.1.1"],
+        "OAI acceptance must use the shared live UPF tun0 endpoint for every DNN",
     )
     require(
         all(
             ue["user_plane_probe"]
             == {
-                "kind": "n6-node-ipv4",
-                "role": "broker",
-                "node": "sopnode-f2",
-                "address": "192.0.2.20",
+                "kind": "oai-upf-tun0",
+                "interface": "tun0",
+                "session_index": 0,
+                "address": "12.1.1.1",
             }
             for ue in ue_map
         ),
-        "OAI N6 probe identity is not sealed to the selected broker node",
+        "OAI user-plane probe identity is not sealed to the shared UPF tun0 endpoint",
     )
     require(
         ue_map[2]["user_plane_target"] != "14.1.1.1",
@@ -173,7 +180,13 @@ def check_single_device_probe() -> None:
         "source_address": candidate["address"],
         "target_address": ue["user_plane_target"],
         "target_kind": ue["user_plane_probe"]["kind"],
-        "target_node": ue["user_plane_probe"].get("node"),
+        "target_interface": ue["user_plane_probe"].get("interface"),
+        "target_runtime": {
+            "pod": "oai-upf-fixture",
+            "container": "upf",
+            "interface": "tun0",
+            "address": ue["user_plane_target"],
+        },
         "observed_at": "fixture",
     }
     binding = probe.resolve_bindings(
@@ -219,6 +232,7 @@ def check_ansible_contract() -> None:
     final = text("deployment/playbooks/verify_live_testbed.yml")
     env = text("deployment/roles/5g/oai/config/templates/5g-env.sh.j2")
     inventory = text("synthran/inventory.py")
+    topology = text("deployment/topology.yml")
     state = text("synthran/deployment_state.py")
     probe = text("deployment/scripts/probe_software_ues.py")
     r2lab = text("deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml")
@@ -329,28 +343,38 @@ def check_ansible_contract() -> None:
         "OAI subscriber generation no longer receives selected UE/slice mapping",
     )
     for marker in (
-        "resolve_user_plane_targets",
-        'for group in ("core_node", "ran_node", "broker_node")',
-        "node_addresses[name] = str(address)",
+        "resolve_user_plane_targets(c, profile, ue_map, topology)",
+        "manifest = build_manifest(c, profile, ue_map, topology)",
     ):
-        require(marker in inventory, f"inventory no longer seals resolved N6 target: {marker}")
+        require(marker in inventory, f"inventory no longer seals topology-owned probe identity: {marker}")
     for marker in (
-        '"kind": "n6-node-ipv4"',
-        '"role": "broker"',
+        "kind: oai-upf-tun0",
+        "session_index: 0",
+        "interface: tun0",
+    ):
+        require(marker in topology, f"OAI topology lost shared UPF probe marker: {marker}")
+    for marker in (
+        '"kind": "oai-upf-tun0"',
+        '"interface": interface',
         '"kind": "session-network-gateway"',
-        "entry[\"user_plane_target\"] = target",
+        'entry["user_plane_target"] = target',
     ):
         require(marker in state, f"user-plane target contract lost marker: {marker}")
     for marker in (
+        "_verify_oai_upf_probe",
+        "app.kubernetes.io/name=oai-upf",
         "selected user-plane endpoint",
         '"target_kind": target_kind',
-        '"target_node": target_node',
+        '"target_interface": target_interface',
+        '"target_runtime": target_runtime',
     ):
         require(marker in probe, f"software UE probe lost endpoint identity marker: {marker}")
     for marker in (
         "synthran_r2lab_user_plane_kind",
+        "synthran_r2lab_user_plane_interface",
+        "Attest the sealed OAI UPF endpoint",
         "'target_kind': synthran_r2lab_user_plane_kind",
-        "'target_node': synthran_r2lab_user_plane_node",
+        "'target_interface': synthran_r2lab_user_plane_interface",
     ):
         require(marker in r2lab, f"R2Lab evidence lost endpoint identity marker: {marker}")
 
