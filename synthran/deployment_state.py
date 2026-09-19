@@ -73,22 +73,76 @@ def _address_cidr(core: str, selected_slice: dict) -> str:
     return f"{prefix}.0/{prefix_length}"
 
 
-def _user_plane_target(selected_slice: dict) -> str:
+def _session_gateway_target(selected_slice: dict) -> str:
     prefix = str(selected_slice["ip_prefix"])
     target = prefix + ".1"
     ipaddress.ip_address(target)
     return target
 
 
-def expected_user_plane_target(contract: dict) -> str | None:
-    """Return the resolved UPF target, with legacy-contract compatibility.
+def resolve_user_plane_targets(
+    scenario: dict,
+    network_profile: dict,
+    ue_map: list[dict],
+    node_addresses: dict[str, str],
+) -> list[dict]:
+    """Seal backend-appropriate user-plane probe endpoints into the UE map.
 
-    New manifests carry ``user_plane_target`` explicitly. Older validation
-    fixtures predate that field, so derive it once here from the literal
-    three-octet session prefix rather than duplicating that rule in probes.
+    OAI's multi-DNN UPF does not own `<pdu-subnet>.1` for every configured DNN.
+    Its deployment acceptance therefore probes a real N6-side endpoint: the
+    selected broker node's resolved IPv4 address. Other retained cores keep the
+    existing per-session-network gateway contract until their topology adapters
+    provide a stronger explicit N6 endpoint.
     """
 
-    target = contract.get("user_plane_target")
+    deployment = scenario["deployment"]
+    core = str(deployment["core"]).lower()
+    slices = _slice_map(network_profile)
+    resolved = copy.deepcopy(ue_map)
+
+    if core == "oai":
+        nodes = deployment["nodes"]
+        broker = str(nodes.get("broker", nodes["core"]))
+        target = node_addresses.get(broker)
+        if not target:
+            raise ValueError(
+                f"no resolved IPv4 address for selected N6 broker node {broker!r}"
+            )
+        try:
+            target = str(ipaddress.ip_address(str(target)))
+        except ValueError as error:
+            raise ValueError(
+                f"invalid resolved IPv4 address for selected N6 broker node {broker!r}: "
+                f"{target!r}"
+            ) from error
+        probe = {
+            "kind": "n6-node-ipv4",
+            "role": "broker",
+            "node": broker,
+            "address": target,
+        }
+        for entry in resolved:
+            entry["user_plane_probe"] = copy.deepcopy(probe)
+            entry["user_plane_target"] = target
+        return resolved
+
+    for entry in resolved:
+        selected_slice = slices[entry["slice"]]
+        target = _session_gateway_target(selected_slice)
+        entry["user_plane_probe"] = {
+            "kind": "session-network-gateway",
+            "address": target,
+        }
+        entry["user_plane_target"] = target
+    return resolved
+
+
+def expected_user_plane_target(contract: dict) -> str | None:
+    """Return the sealed user-plane target, with legacy-contract compatibility."""
+
+    probe = contract.get("user_plane_probe")
+    target = probe.get("address") if isinstance(probe, dict) else None
+    target = target or contract.get("user_plane_target")
     if target:
         try:
             return str(ipaddress.ip_address(str(target)))
@@ -192,6 +246,12 @@ def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
         return False
     if expected_target is None or user_plane.get("target_address") != expected_target:
         return False
+    probe = contract.get("user_plane_probe")
+    if isinstance(probe, dict):
+        if user_plane.get("target_kind") != probe.get("kind"):
+            return False
+        if probe.get("node") is not None and user_plane.get("target_node") != probe.get("node"):
+            return False
     return True
 
 
@@ -250,7 +310,6 @@ def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
             "sd": str(selected_slice["sd"]),
             "dnn": selected_slice["dnn"],
             "address_cidr": _address_cidr(core, selected_slice),
-            "user_plane_target": _user_plane_target(selected_slice),
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
@@ -268,6 +327,12 @@ def build_manifest(
     ue_map: list[dict],
     topology: dict | None = None,
 ) -> dict:
+    for ue in ue_map:
+        if expected_user_plane_target(ue) is None:
+            raise ValueError(
+                f"UE {ue.get('device', '<unknown>')} has no resolved user-plane probe target"
+            )
+
     clean_scenario = copy.deepcopy(scenario)
     clean_scenario.pop("_source_directory", None)
     deployment = clean_scenario["deployment"]
