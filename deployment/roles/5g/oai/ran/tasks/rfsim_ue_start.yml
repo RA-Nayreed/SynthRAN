@@ -172,7 +172,7 @@
       - synthran_oai_rfsim_launch.rc == 0
       - synthran_oai_rfsim_release_ready | bool
       - synthran_oai_rfsim_pod_ready | bool
-      - synthran_oai_rfsim_spec_container.image | default('') == synthran_oai_rfsim_ue_repository ~ ':' ~ synthran_oai_rfsim_runtime_release
+      - synthran_oai_rfsim_spec_container.image | default('') == synthran_oai_rfsim_ue_repository ~ ':' ~ synthran_oai_rfsim_runtime_release ~ '@' ~ synthran_oai_rfsim_ue_index_digest
       - "'@sha256:' in (synthran_oai_rfsim_status_container.imageID | default(''))"
       - synthran_oai_rfsim_probe.rc == 0
     fail_msg: >-
@@ -213,6 +213,7 @@
              'address': synthran_oai_rfsim_binding.address,
              'interface': synthran_oai_rfsim_binding.interface,
              'runtime_release': synthran_oai_rfsim_runtime_release,
+             'index_digest': synthran_oai_rfsim_ue_index_digest,
              'image': synthran_oai_rfsim_spec_container.image,
              'image_id': synthran_oai_rfsim_status_container.imageID,
              'restart_count': synthran_oai_rfsim_status_container.restartCount | default(0),
