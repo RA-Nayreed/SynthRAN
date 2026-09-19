@@ -244,7 +244,7 @@ def check_local_structure() -> None:
         "'source_address': synthran_r2lab_binding.address",
         "'target_address': synthran_r2lab_user_plane_address",
         "'target_kind': synthran_r2lab_user_plane_kind",
-        "'target_node': synthran_r2lab_user_plane_node",
+        "'target_interface': synthran_r2lab_user_plane_interface",
     ):
         require(needle in verifier, f"read-only UE verifier lost retained source-bound N6 proof: {needle}")
 
