@@ -379,13 +379,24 @@ def _check_config(ue: dict, candidate: dict) -> None:
 
 
 def _probe_user_plane(candidate: dict, ue: dict) -> dict:
-    target = str(ue.get("user_plane_target", ""))
+    probe = ue.get("user_plane_probe", {})
+    target = (
+        str(probe.get("address", ""))
+        if isinstance(probe, dict)
+        else ""
+    ) or str(ue.get("user_plane_target", ""))
     try:
         ipaddress.ip_address(target)
     except ValueError as exc:
         raise ValueError(
             f"invalid user-plane target in deployment contract for {ue['device']}: {target!r}"
         ) from exc
+    target_kind = (
+        str(probe.get("kind", "legacy-user-plane-target"))
+        if isinstance(probe, dict)
+        else "legacy-user-plane-target"
+    )
+    target_node = probe.get("node") if isinstance(probe, dict) else None
     command = [
         "kubectl",
         "exec",
@@ -408,7 +419,7 @@ def _probe_user_plane(candidate: dict, ue: dict) -> dict:
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise ValueError(
-            f"{ue['device']} cannot reach selected UPF {target} from "
+            f"{ue['device']} cannot reach selected user-plane endpoint {target} from "
             f"{candidate['interface']}: {detail}"
         )
     return {
@@ -417,6 +428,8 @@ def _probe_user_plane(candidate: dict, ue: dict) -> dict:
         "source_interface": candidate["interface"],
         "source_address": candidate["address"],
         "target_address": target,
+        "target_kind": target_kind,
+        "target_node": target_node,
         "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
