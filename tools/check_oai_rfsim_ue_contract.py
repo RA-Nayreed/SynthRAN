@@ -9,7 +9,11 @@ from pathlib import Path
 
 import yaml
 
-from synthran.deployment_state import build_manifest, build_ue_map
+from synthran.deployment_state import (
+    build_manifest,
+    build_ue_map,
+    resolve_user_plane_targets,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +67,15 @@ def physical_regression_contract() -> tuple[dict, list[dict]]:
         }
     }
     ue_map = build_ue_map(scenario, effective)
+    ue_map = resolve_user_plane_targets(
+        scenario,
+        effective,
+        ue_map,
+        {
+            "sopnode-f2": "192.0.2.20",
+            "sopnode-f3": "192.0.2.30",
+        },
+    )
     manifest = build_manifest(
         scenario,
         effective,
@@ -90,6 +103,28 @@ def check_resolved_mapping() -> None:
         [ue["tunnel"]["pod_name_prefix"] for ue in ue_map]
         == ["oai-nr-ue-", "oai-nr-ue2-", "oai-nr-ue3-"],
         "OAI RFSIM release-slot identity changed",
+    )
+    require(
+        [ue["user_plane_target"] for ue in ue_map]
+        == ["192.0.2.20", "192.0.2.20", "192.0.2.20"],
+        "OAI acceptance must use the selected N6 broker endpoint for every DNN",
+    )
+    require(
+        all(
+            ue["user_plane_probe"]
+            == {
+                "kind": "n6-node-ipv4",
+                "role": "broker",
+                "node": "sopnode-f2",
+                "address": "192.0.2.20",
+            }
+            for ue in ue_map
+        ),
+        "OAI N6 probe identity is not sealed to the selected broker node",
+    )
+    require(
+        ue_map[2]["user_plane_target"] != "14.1.1.1",
+        "streaming PDU subnet must not manufacture a nonexistent OAI UPF .1 target",
     )
 
 
@@ -137,6 +172,8 @@ def check_single_device_probe() -> None:
         "source_interface": candidate["interface"],
         "source_address": candidate["address"],
         "target_address": ue["user_plane_target"],
+        "target_kind": ue["user_plane_probe"]["kind"],
+        "target_node": ue["user_plane_probe"].get("node"),
         "observed_at": "fixture",
     }
     binding = probe.resolve_bindings(
@@ -163,6 +200,7 @@ def check_yaml_task_files_parse() -> None:
         "deployment/roles/5g/oai/setup/tasks/rfsim_ue_contract_one.yml",
         "deployment/roles/5g/oai/ran/tasks/main.yml",
         "deployment/roles/5g/oai/ran/tasks/rfsim_ue_start.yml",
+        "deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml",
     ):
         try:
             parsed = yaml.safe_load(text(path))
@@ -180,6 +218,10 @@ def check_ansible_contract() -> None:
     start = text("deployment/roles/5g/oai/ran/tasks/rfsim_ue_start.yml")
     final = text("deployment/playbooks/verify_live_testbed.yml")
     env = text("deployment/roles/5g/oai/config/templates/5g-env.sh.j2")
+    inventory = text("synthran/inventory.py")
+    state = text("synthran/deployment_state.py")
+    probe = text("deployment/scripts/probe_software_ues.py")
+    r2lab = text("deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml")
 
     require(
         "include_tasks: rfsim_ue_contract.yml" in setup_main,
@@ -286,6 +328,31 @@ def check_ansible_contract() -> None:
         "UE_SLICE_MAP=(" in env,
         "OAI subscriber generation no longer receives selected UE/slice mapping",
     )
+    for marker in (
+        "resolve_user_plane_targets",
+        'for group in ("core_node", "ran_node", "broker_node")',
+        "node_addresses[name] = str(address)",
+    ):
+        require(marker in inventory, f"inventory no longer seals resolved N6 target: {marker}")
+    for marker in (
+        '"kind": "n6-node-ipv4"',
+        '"role": "broker"',
+        '"kind": "session-network-gateway"',
+        "entry[\"user_plane_target\"] = target",
+    ):
+        require(marker in state, f"user-plane target contract lost marker: {marker}")
+    for marker in (
+        "selected user-plane endpoint",
+        '"target_kind": target_kind',
+        '"target_node": target_node',
+    ):
+        require(marker in probe, f"software UE probe lost endpoint identity marker: {marker}")
+    for marker in (
+        "synthran_r2lab_user_plane_kind",
+        "'target_kind': synthran_r2lab_user_plane_kind",
+        "'target_node': synthran_r2lab_user_plane_node",
+    ):
+        require(marker in r2lab, f"R2Lab evidence lost endpoint identity marker: {marker}")
 
 
 def main() -> int:
