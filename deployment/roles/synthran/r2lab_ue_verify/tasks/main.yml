@@ -26,8 +26,8 @@
     synthran_r2lab_user_plane_kind: >-
       {{ synthran_r2lab_contract_ue.user_plane_probe.kind
          | default('legacy-user-plane-target') }}
-    synthran_r2lab_user_plane_node: >-
-      {{ synthran_r2lab_contract_ue.user_plane_probe.node
+    synthran_r2lab_user_plane_interface: >-
+      {{ synthran_r2lab_contract_ue.user_plane_probe.interface
          | default(none) }}
 
 - name: Require the supported upstream R2Lab transport
@@ -76,6 +76,22 @@
   ansible.builtin.set_fact:
     synthran_r2lab_binding: "{{ (synthran_r2lab_probe.stdout | from_json).binding }}"
 
+- name: Attest the sealed OAI UPF endpoint before physical UE probing
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mapfile -t pods < <(
+      kubectl -n {{ core | quote }} get pods         -l app.kubernetes.io/name=oai-upf         -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+    )
+    test "${#pods[@]}" -eq 1
+    kubectl -n {{ core | quote }} exec "${pods[0]}" -c upf --       ip -4 -o addr show dev {{ synthran_r2lab_user_plane_interface | quote }}       | grep -Eq '(^|[[:space:]])inet[[:space:]]+{{ synthran_r2lab_user_plane_address | regex_escape }}/'
+  args:
+    executable: /bin/bash
+  register: synthran_r2lab_user_plane_target_attestation
+  changed_when: false
+  delegate_to: "{{ core_node_name }}"
+  become: true
+  when: synthran_r2lab_user_plane_kind == 'oai-upf-tun0'
+
 - name: Require interface-bound R2Lab user-plane reachability to the sealed endpoint
   ansible.builtin.command:
     argv:
@@ -99,7 +115,7 @@
       command: ping -I {{ synthran_r2lab_interface }} -c 1 -W 3 {{ synthran_r2lab_user_plane_address }}
       source_address: {{ synthran_r2lab_binding.address }}
       target_kind: {{ synthran_r2lab_user_plane_kind }}
-      target_node: {{ synthran_r2lab_user_plane_node | default('') }}
+      target_interface: {{ synthran_r2lab_user_plane_interface | default('') }}
       return_code: {{ synthran_r2lab_upf_probe.rc }}
       attempts: {{ synthran_r2lab_upf_probe.attempts | default(1) }}
       stdout:
@@ -121,6 +137,6 @@
              'source_address': synthran_r2lab_binding.address,
              'target_address': synthran_r2lab_user_plane_address,
              'target_kind': synthran_r2lab_user_plane_kind,
-             'target_node': synthran_r2lab_user_plane_node,
+             'target_interface': synthran_r2lab_user_plane_interface,
              'observed_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
            }}, recursive=true) }}
