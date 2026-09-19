@@ -6,12 +6,14 @@ on:
       - rework
     paths:
       - 'synthran/deployment_state.py'
+      - 'synthran/inventory.py'
       - 'deployment/group_vars/all/network_profile_default.yaml'
       - 'deployment/group_vars/all/ue_catalog.yaml'
       - 'deployment/group_vars/all/all.yml'
       - 'deployment/roles/5g/oai/**'
       - 'deployment/scripts/probe_software_ues.py'
       - 'deployment/playbooks/verify_live_testbed.yml'
+      - 'deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml'
       - 'tools/check_oai_rfsim_ue_contract.py'
       - '.github/workflows/oai-rfsim-ue-contract.yml'
 
@@ -35,6 +37,7 @@ jobs:
         run: |
           python -m py_compile \
             synthran/deployment_state.py \
+            synthran/inventory.py \
             deployment/scripts/probe_software_ues.py \
             tools/check_oai_rfsim_ue_contract.py
 
