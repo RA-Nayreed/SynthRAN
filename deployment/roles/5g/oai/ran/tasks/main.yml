@@ -212,6 +212,103 @@
       evidence-backed R2Lab N320 readiness timeout; all other launch failures
       remain fatal.
 
+- name: Read the live OAI RFSIM gNB pod set
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - pods
+      - --namespace
+      - "{{ core }}"
+      - --selector
+      - app.kubernetes.io/instance=oai-gnb
+      - --output
+      - json
+  register: synthran_oai_rfsim_gnb_pods_raw
+  changed_when: false
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
+- name: Decode the live OAI RFSIM gNB pod set
+  ansible.builtin.set_fact:
+    synthran_oai_rfsim_gnb_pods: >-
+      {{ (synthran_oai_rfsim_gnb_pods_raw.stdout | from_json).get('items', []) }}
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
+- name: Require exactly one live OAI RFSIM gNB pod
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_oai_rfsim_gnb_pods | length == 1
+    fail_msg: >-
+      OAI RFSIM requires exactly one selected gNB pod before software UE launch.
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
+- name: Resolve the live OAI RFSIM gNB container identity
+  ansible.builtin.set_fact:
+    synthran_oai_rfsim_gnb_pod: "{{ synthran_oai_rfsim_gnb_pods | first }}"
+    synthran_oai_rfsim_gnb_spec_container: >-
+      {{ (synthran_oai_rfsim_gnb_pods | first).spec.containers
+         | selectattr('name', 'equalto', 'gnb') | list | first | default({}) }}
+    synthran_oai_rfsim_gnb_status_container: >-
+      {{ (synthran_oai_rfsim_gnb_pods | first).status.containerStatuses
+         | default([]) | selectattr('name', 'equalto', 'gnb') | list | first | default({}) }}
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
+- name: Require the corrected OAI RFSIM gNB runtime and immutable pulled digest
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - synthran_oai_rfsim_gnb_pod.status.phase == 'Running'
+      - synthran_oai_rfsim_gnb_spec_container.image == synthran_oai_rfsim_gnb_repository ~ ':' ~ synthran_oai_rfsim_runtime_release ~ '@' ~ synthran_oai_rfsim_gnb_index_digest
+      - synthran_oai_rfsim_gnb_status_container.ready | default(false) | bool
+      - "'@sha256:' in (synthran_oai_rfsim_gnb_status_container.imageID | default(''))"
+    fail_msg: >-
+      Live OAI RFSIM gNB does not match the reviewed corrected runtime or
+      lacks an immutable pulled image digest.
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
+- name: Retain the live OAI RFSIM gNB runtime identity
+  ansible.builtin.copy:
+    mode: '0644'
+    dest: "{{ run_dir }}/oai-rfsim-runtime.json"
+    content: >-
+      {{ {
+           'schema_version': 1,
+           'release': synthran_oai_rfsim_runtime_release,
+           'upstream_revision': synthran_oai_rfsim_upstream_revision,
+           'prach_fix_revision': synthran_oai_rfsim_prach_fix_revision,
+           'gnb': {
+             'pod': synthran_oai_rfsim_gnb_pod.metadata.name,
+             'pod_uid': synthran_oai_rfsim_gnb_pod.metadata.uid,
+             'image': synthran_oai_rfsim_gnb_spec_container.image,
+             'index_digest': synthran_oai_rfsim_gnb_index_digest,
+             'image_id': synthran_oai_rfsim_gnb_status_container.imageID,
+             'restart_count': synthran_oai_rfsim_gnb_status_container.restartCount | default(0)
+           },
+           'expected_ue_image': synthran_oai_rfsim_ue_repository ~ ':' ~ synthran_oai_rfsim_runtime_release ~ '@' ~ synthran_oai_rfsim_ue_index_digest
+         } | to_nice_json }}
+  delegate_to: localhost
+  become: false
+  when:
+    - platform == 'rfsim'
+    - rru == 'rfsim'
+    - ran | lower == 'oai'
+
 - name: Verify N3xx gNB RF-device readiness
   block:
     - name: Set RAN pod selector and container based on OAI mode

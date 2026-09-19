@@ -8,6 +8,7 @@ on:
       - 'synthran/deployment_state.py'
       - 'deployment/group_vars/all/network_profile_default.yaml'
       - 'deployment/group_vars/all/ue_catalog.yaml'
+      - 'deployment/group_vars/all/all.yml'
       - 'deployment/roles/5g/oai/**'
       - 'deployment/scripts/probe_software_ues.py'
       - 'deployment/playbooks/verify_live_testbed.yml'
