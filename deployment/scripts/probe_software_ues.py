@@ -755,7 +755,10 @@ def probe_selected_bindings(
                     stage = "slice-address-mismatch"
                 elif "does not match its expected" in detail or "cannot read" in detail:
                     stage = "identity-mismatch"
-                elif "cannot reach selected UPF" in detail:
+                elif (
+                    "cannot reach selected UPF" in detail
+                    or "cannot reach selected user-plane endpoint" in detail
+                ):
                     stage = "user-plane-failed"
                 else:
                     stage = "binding-validation-failed"
