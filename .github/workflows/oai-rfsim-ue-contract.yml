@@ -13,6 +13,7 @@ on:
       - 'deployment/roles/5g/oai/**'
       - 'deployment/scripts/probe_software_ues.py'
       - 'deployment/playbooks/verify_live_testbed.yml'
+      - 'deployment/topology.yml'
       - 'deployment/roles/synthran/r2lab_ue_verify/tasks/main.yml'
       - 'tools/check_oai_rfsim_ue_contract.py'
       - '.github/workflows/oai-rfsim-ue-contract.yml'
