@@ -73,22 +73,78 @@ def _address_cidr(core: str, selected_slice: dict) -> str:
     return f"{prefix}.0/{prefix_length}"
 
 
-def _user_plane_target(selected_slice: dict) -> str:
+def _session_gateway_target(selected_slice: dict) -> str:
     prefix = str(selected_slice["ip_prefix"])
     target = prefix + ".1"
     ipaddress.ip_address(target)
     return target
 
 
-def expected_user_plane_target(contract: dict) -> str | None:
-    """Return the resolved UPF target, with legacy-contract compatibility.
+def resolve_user_plane_targets(
+    scenario: dict,
+    network_profile: dict,
+    ue_map: list[dict],
+    topology: dict,
+) -> list[dict]:
+    """Seal backend-appropriate user-plane probe endpoints into the UE map.
 
-    New manifests carry ``user_plane_target`` explicitly. Older validation
-    fixtures predate that field, so derive it once here from the literal
-    three-octet session prefix rather than duplicating that rule in probes.
+    OAI basic mode exposes one UPF TUN anchor (tun0) for the primary session
+    network and routes additional DNN pools through that same anchor. The OAI
+    topology therefore owns one shared UPF probe identity instead of deriving a
+    fictitious `<each-dnn>.1` address. Other retained cores keep the existing
+    per-session-network gateway contract until their topology adapters define a
+    stronger explicit endpoint.
     """
 
-    target = contract.get("user_plane_target")
+    deployment = scenario["deployment"]
+    core = str(deployment["core"]).lower()
+    slices = network_profile.get("slices", [])
+    resolved = copy.deepcopy(ue_map)
+
+    if core == "oai":
+        transport = topology.get("transport", {})
+        probe_contract = transport.get("user_plane_probe", {})
+        if probe_contract.get("kind") != "oai-upf-tun0":
+            raise ValueError(
+                "OAI topology must define user_plane_probe kind 'oai-upf-tun0'"
+            )
+        try:
+            session_index = int(probe_contract["session_index"])
+            selected_slice = slices[session_index]
+        except (KeyError, TypeError, ValueError, IndexError) as error:
+            raise ValueError(
+                "OAI topology user-plane probe must select a valid session_index"
+            ) from error
+        target = _session_gateway_target(selected_slice)
+        interface = str(probe_contract.get("interface", "tun0"))
+        probe = {
+            "kind": "oai-upf-tun0",
+            "interface": interface,
+            "session_index": session_index,
+            "address": target,
+        }
+        for entry in resolved:
+            entry["user_plane_probe"] = copy.deepcopy(probe)
+            entry["user_plane_target"] = target
+        return resolved
+
+    slice_by_name = _slice_map(network_profile)
+    for entry in resolved:
+        selected_slice = slice_by_name[entry["slice"]]
+        target = _session_gateway_target(selected_slice)
+        entry["user_plane_probe"] = {
+            "kind": "session-network-gateway",
+            "address": target,
+        }
+        entry["user_plane_target"] = target
+    return resolved
+
+def expected_user_plane_target(contract: dict) -> str | None:
+    """Return the sealed user-plane target, with legacy-contract compatibility."""
+
+    probe = contract.get("user_plane_probe")
+    target = probe.get("address") if isinstance(probe, dict) else None
+    target = target or contract.get("user_plane_target")
     if target:
         try:
             return str(ipaddress.ip_address(str(target)))
@@ -192,6 +248,12 @@ def _user_plane_matches_contract(contract: dict, live: dict) -> bool:
         return False
     if expected_target is None or user_plane.get("target_address") != expected_target:
         return False
+    probe = contract.get("user_plane_probe")
+    if isinstance(probe, dict):
+        if user_plane.get("target_kind") != probe.get("kind"):
+            return False
+        if probe.get("interface") is not None and user_plane.get("target_interface") != probe.get("interface"):
+            return False
     return True
 
 
@@ -250,7 +312,6 @@ def build_ue_map(scenario: dict, network_profile: dict) -> list[dict]:
             "sd": str(selected_slice["sd"]),
             "dnn": selected_slice["dnn"],
             "address_cidr": _address_cidr(core, selected_slice),
-            "user_plane_target": _user_plane_target(selected_slice),
         }
         if platform == "rfsim":
             entry["tunnel"] = _software_tunnel(ran, core, device, index)
@@ -268,6 +329,12 @@ def build_manifest(
     ue_map: list[dict],
     topology: dict | None = None,
 ) -> dict:
+    for ue in ue_map:
+        if expected_user_plane_target(ue) is None:
+            raise ValueError(
+                f"UE {ue.get('device', '<unknown>')} has no resolved user-plane probe target"
+            )
+
     clean_scenario = copy.deepcopy(scenario)
     clean_scenario.pop("_source_directory", None)
     deployment = clean_scenario["deployment"]

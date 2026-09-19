@@ -30,6 +30,13 @@ transport_profiles:
       amf_ngap_ip: &open5gs_amf_ngap 10.10.3.200
 
   oai: &transport_oai
+    # OAI basic mode exposes one UPF TUN anchor for the primary session
+    # network. Additional DNN pools are routed through the same tun0 endpoint,
+    # so acceptance must not derive a separate <dnn>.1 target per slice.
+    user_plane_probe:
+      kind: oai-upf-tun0
+      session_index: 0
+      interface: tun0
     bridges:
       core: [n3br]
       ran: [n3br]

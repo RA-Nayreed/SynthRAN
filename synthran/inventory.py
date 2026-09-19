@@ -14,7 +14,12 @@ import socket
 import yaml
 
 from .deployment_identity import write_execution_manifest
-from .deployment_state import build_manifest, build_ue_map, content_hash
+from .deployment_state import (
+    build_manifest,
+    build_ue_map,
+    content_hash,
+    resolve_user_plane_targets,
+)
 from .profile_validation import validate_network_profile, validate_ue_catalog
 from .r2lab import access, ssh_options
 from .scenario import redacted
@@ -198,6 +203,7 @@ def main(argv=None):
         controller_known_hosts.resolve(),
         faraday_known_hosts,
     )
+
     private_inventory_path = private_dir / "inventory.yml"
     private_inventory_path.write_text(yaml.safe_dump(raw_inventory, sort_keys=False))
     private_inventory_path.chmod(0o600)
@@ -232,6 +238,7 @@ def main(argv=None):
         n2.pop("amf_ip_split")
 
     topology["contract_version"] = topologies["schema_version"]
+    ue_map = resolve_user_plane_targets(c, profile, ue_map, topology)
     manifest = build_manifest(c, profile, ue_map, topology)
     selected = manifest["deployment"]
     for key in ("ansible_vars", "host_vars"):

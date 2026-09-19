@@ -378,14 +378,119 @@ def _check_config(ue: dict, candidate: dict) -> None:
         )
 
 
+def _verify_oai_upf_probe(namespace: str, probe: dict, device: str) -> dict:
+    target = str(probe.get("address", ""))
+    interface = str(probe.get("interface", "tun0"))
+    pods = _run_json(
+        [
+            "kubectl",
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "-l",
+            "app.kubernetes.io/name=oai-upf",
+            "-o",
+            "json",
+        ],
+        stage="user-plane-target-absent",
+        device=device,
+    ).get("items", [])
+    if len(pods) != 1:
+        raise ProbeFailure(
+            stage="user-plane-target-ambiguous",
+            device=device,
+            detail=f"expected exactly one OAI UPF pod, found {len(pods)}",
+            evidence={"matching_pods": [_pod_summary(pod) for pod in pods]},
+        )
+    pod = pods[0]
+    summary = _pod_summary(pod)
+    if summary["phase"] != "Running" or not summary["ready"]:
+        raise ProbeFailure(
+            stage="user-plane-target-not-ready",
+            device=device,
+            detail=f"OAI UPF pod {summary['name']} is not Running/Ready",
+            evidence={"pod": summary},
+        )
+    container = "upf" if "upf" in summary["containers"] else (summary["containers"][0] if summary["containers"] else "")
+    if not container:
+        raise ProbeFailure(
+            stage="user-plane-target-absent",
+            device=device,
+            detail=f"OAI UPF pod {summary['name']} has no executable container",
+            evidence={"pod": summary},
+        )
+    address_result = _run(
+        [
+            "kubectl",
+            "exec",
+            "-n",
+            namespace,
+            summary["name"],
+            "-c",
+            container,
+            "--",
+            "ip",
+            "-4",
+            "-o",
+            "addr",
+            "show",
+            "dev",
+            interface,
+        ]
+    )
+    addresses = re.findall(r"\binet\s+([0-9.]+)/", address_result.stdout)
+    if address_result.returncode or target not in addresses:
+        raise ProbeFailure(
+            stage="user-plane-target-mismatch",
+            device=device,
+            detail=(
+                f"sealed OAI UPF endpoint {target} is not owned by "
+                f"{summary['name']}:{interface}"
+            ),
+            evidence={
+                "pod": summary,
+                "interface": interface,
+                "returncode": address_result.returncode,
+                "stdout": _bounded(address_result.stdout),
+                "stderr": _bounded(address_result.stderr),
+                "addresses": addresses,
+            },
+        )
+    return {
+        "pod": summary["name"],
+        "container": container,
+        "interface": interface,
+        "address": target,
+    }
+
+
 def _probe_user_plane(candidate: dict, ue: dict) -> dict:
-    target = str(ue.get("user_plane_target", ""))
+    probe = ue.get("user_plane_probe", {})
+    target = (
+        str(probe.get("address", ""))
+        if isinstance(probe, dict)
+        else ""
+    ) or str(ue.get("user_plane_target", ""))
     try:
         ipaddress.ip_address(target)
     except ValueError as exc:
         raise ValueError(
             f"invalid user-plane target in deployment contract for {ue['device']}: {target!r}"
         ) from exc
+    target_kind = (
+        str(probe.get("kind", "legacy-user-plane-target"))
+        if isinstance(probe, dict)
+        else "legacy-user-plane-target"
+    )
+    target_interface = probe.get("interface") if isinstance(probe, dict) else None
+    target_runtime = None
+    if target_kind == "oai-upf-tun0":
+        target_runtime = _verify_oai_upf_probe(
+            candidate["namespace"],
+            probe,
+            str(ue["device"]),
+        )
     command = [
         "kubectl",
         "exec",
@@ -408,7 +513,7 @@ def _probe_user_plane(candidate: dict, ue: dict) -> dict:
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise ValueError(
-            f"{ue['device']} cannot reach selected UPF {target} from "
+            f"{ue['device']} cannot reach selected user-plane endpoint {target} from "
             f"{candidate['interface']}: {detail}"
         )
     return {
@@ -417,6 +522,9 @@ def _probe_user_plane(candidate: dict, ue: dict) -> dict:
         "source_interface": candidate["interface"],
         "source_address": candidate["address"],
         "target_address": target,
+        "target_kind": target_kind,
+        "target_interface": target_interface,
+        "target_runtime": target_runtime,
         "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
@@ -742,7 +850,10 @@ def probe_selected_bindings(
                     stage = "slice-address-mismatch"
                 elif "does not match its expected" in detail or "cannot read" in detail:
                     stage = "identity-mismatch"
-                elif "cannot reach selected UPF" in detail:
+                elif (
+                    "cannot reach selected UPF" in detail
+                    or "cannot reach selected user-plane endpoint" in detail
+                ):
                     stage = "user-plane-failed"
                 else:
                     stage = "binding-validation-failed"
